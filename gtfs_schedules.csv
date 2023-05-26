@@ -1,3 +1,7 @@
 agency,url
 "LACMTA_Rail",https://gitlab.com/LACMTA/gtfs_rail/raw/master/gtfs_rail.zip
 LACMTA,https://gitlab.com/LACMTA/gtfs_bus/raw/master/gtfs_bus.zip
+"OCTA",https://www.octa.net/current/google_transit.zip
+"Amtrak",https://content.amtrak.com/content/gtfs/GTFS.zip
+"Metrolink",https://metrolinktrains.com/globalassets/about/gtfs/gtfs.zip
+"LADOT",https://ladotbus.com/gtfs
