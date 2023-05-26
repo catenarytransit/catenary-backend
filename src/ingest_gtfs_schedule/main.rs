@@ -72,10 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         println!("save to file: {}", format!("./gtfs_schedules/{}.zip", agency.agency));
                     }
-                    Err(_) => println!("ERROR reading {}", path),
+                    Err(_) => eprintln!("ERROR reading {}", path),
                 }
             }
-            Err(_) => println!("ERROR downloading {}", path),
+            Err(_) => eprintln!("ERROR downloading {}", path),
         }
         Ok(())
     }));
