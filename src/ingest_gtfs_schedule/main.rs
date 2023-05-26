@@ -1,29 +1,33 @@
 use std::error::Error;
 use std::io::prelude::*;
 use csv::{ReaderBuilder};
-use serde::ser::StdError;
+//use serde::ser::StdError;
 use serde::Deserialize;
+use std::io::Cursor;
 
 use std::fs::File;
-use std::path::Path;
+//use std::path::Path;
 use reqwest;
 use tokio::task::JoinHandle;
 
+use gtfs_structures::Error as GtfsError;
+
 use std::io::{Read, Write};
-use std::net::TcpStream;
+//use std::net::TcpStream;
+use std::fs::copy;
 
 #[feature(async_await)]
 use futures::future::{join_all};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Agency {
     agency: String,
     url: String,
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<csv::Error>> {
-    let mut file = File::open("./gtfs_schedules.csv");
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let file = File::open("./gtfs_schedules.csv");
     let mut contents = String::new();
     file.expect("read zip file failed!").read_to_string(&mut contents);
 
@@ -33,19 +37,16 @@ async fn main() -> Result<(), Box<csv::Error>> {
 
     let mut agencies = Vec::new();
     for result in reader.deserialize() {
-        let record: Agency = match result {
-            Ok(record) => record,
-            Err(err) => {
-                    return Err(Box::new(err));
-            }
-        };
+        let record: Agency = result?;
         agencies.push(record);
     }
 
     // Iterate over the paths.
     let mut tasks: Vec<JoinHandle<Result<(), ()>>>= vec![];
 
-    for agency in agencies {
+    let firstagencies = agencies.clone();
+
+    for agency in firstagencies {
         // Copy each path into a new string
     // that can be consumed/captured by the task closure
     let path = agency.url.clone();
@@ -54,12 +55,22 @@ async fn main() -> Result<(), Box<csv::Error>> {
     tasks.push(tokio::spawn(async move {
         match reqwest::get(&path).await {
             Ok(resp) => {
-                match resp.text().await {
+                match resp.bytes().await {
                     Ok(text) => {
                         println!("RESPONSE: {} KB from {}", text.len()/1000, path);
 
-                        let gtfs = gtfs_structures::Gtfs::new(&path)?;
-                        println!("there are {} stops in the gtfs", gtfs.stops.len());
+                        //create folder if not exists 
+                        std::fs::create_dir_all("./gtfs_schedules").expect("create folder failed!");
+
+                        //save to file
+
+                        let mut file = File::create(format!("./gtfs_schedules/{}.zip", agency.agency)).expect("create file failed!");
+
+                         // Copy the response body into the file
+                         let mut content =  Cursor::new(text);
+                        std::io::copy(&mut content, &mut file);
+
+                        println!("save to file: {}", format!("./gtfs_schedules/{}.zip", agency.agency));
                     }
                     Err(_) => println!("ERROR reading {}", path),
                 }
@@ -73,6 +84,18 @@ async fn main() -> Result<(), Box<csv::Error>> {
     // Wait for them all to finish
     println!("Started {} tasks. Waiting...", tasks.len());
     join_all(tasks).await;
+
+    for agency in agencies {
+        println!("v2 agency: {}, url: {}", agency.agency, agency.url);
+
+        let gtfs = gtfs_structures::Gtfs::from_path(format!("./gtfs_schedules/{}.zip", agency.agency))?;
+
+        println!("Read duration read_duration: {:?}", gtfs.read_duration);
+
+        println!("there are {} stops in the gtfs", gtfs.stops.len());
+
+        println!("there are {} routes in the gtfs", gtfs.routes.len());
+    }
 
     Ok(())
 }
