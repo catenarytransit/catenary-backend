@@ -99,7 +99,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (shape_id,shape_vec) in &gtfs.shapes {
             println!("shape_id: {} has {} points", shape_id, shape_vec.len());
 
-            //get the routes associated with it
+            //get the trips associated with this shape_id
+
+            let mut trip_ids = Vec::new();
+            let mut route_ids = Vec::new();
+
+            for (trip_id, trip) in &gtfs.trips {
+
+                let cloned_shape_id = shape_id.clone();
+
+                if trip.shape_id == Some(cloned_shape_id) {
+                    trip_ids.push(trip_id.clone());
+                    route_ids.push(trip.route_id.clone());
+                }
+            }
+
+            route_ids.sort_unstable();
+            route_ids.dedup();
+
+            //list trips associated with this shape_id
+            //let result = trip_ids.join(",");
+            //println!("trip_id for shape: {}", result);
+
+            println!("there are {} trips for shape", trip_ids.len());
+            println!("the routes for shape {} are {:?}", shape_id, route_ids);
+
+
         }
     }
 
