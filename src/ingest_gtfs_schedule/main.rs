@@ -95,6 +95,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("there are {} stops in the gtfs", gtfs.stops.len());
 
         println!("there are {} routes in the gtfs", gtfs.routes.len());
+
+        for (shape_id,shape_vec) in &gtfs.shapes {
+            println!("shape_id: {} has {} points", shape_id, shape_vec.len());
+
+            //get the routes associated with it
+        }
     }
 
     Ok(())
