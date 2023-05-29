@@ -182,8 +182,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             //let result = trip_ids.join(",");
             //println!("trip_id for shape: {}", result);
 
-            println!("there are {} trips for shape", trip_ids.len());
-            println!("the routes for shape {} are {:?}", shape_id, route_ids);
+            //println!("there are {} trips for shape", trip_ids.len());
+            //println!("the routes for shape {} are {:?}", shape_id, route_ids);
         }
     }
 
