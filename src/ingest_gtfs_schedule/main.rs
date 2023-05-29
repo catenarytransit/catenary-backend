@@ -1,6 +1,6 @@
+use csv::ReaderBuilder;
 use std::error::Error;
 use std::io::prelude::*;
-use csv::{ReaderBuilder};
 //use serde::ser::StdError;
 use serde::Deserialize;
 use std::io::Cursor;
@@ -16,8 +16,10 @@ use std::io::{Read, Write};
 //use std::net::TcpStream;
 use std::fs::copy;
 
+use std::collections::HashMap;
+
 #[feature(async_await)]
-use futures::future::{join_all};
+use futures::future::join_all;
 
 #[derive(Debug, Deserialize, Clone)]
 struct Agency {
@@ -29,7 +31,8 @@ struct Agency {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file = File::open("./gtfs_schedules.csv");
     let mut contents = String::new();
-    file.expect("read zip file failed!").read_to_string(&mut contents);
+    file.expect("read zip file failed!")
+        .read_to_string(&mut contents);
 
     let mut reader = ReaderBuilder::new()
         .has_headers(true)
@@ -42,43 +45,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Iterate over the paths.
-    let mut tasks: Vec<JoinHandle<Result<(), ()>>>= vec![];
+    let mut tasks: Vec<JoinHandle<Result<(), ()>>> = vec![];
 
     let firstagencies = agencies.clone();
 
     for agency in firstagencies {
         // Copy each path into a new string
-    // that can be consumed/captured by the task closure
-    let path = agency.url.clone();
+        // that can be consumed/captured by the task closure
+        let path = agency.url.clone();
 
-    // Create a Tokio task for each path
-    tasks.push(tokio::spawn(async move {
-        match reqwest::get(&path).await {
-            Ok(resp) => {
-                match resp.bytes().await {
-                    Ok(text) => {
-                        println!("RESPONSE: {} KB from {}", text.len()/1000, path);
+        // Create a Tokio task for each path
+        tasks.push(tokio::spawn(async move {
+            match reqwest::get(&path).await {
+                Ok(resp) => {
+                    match resp.bytes().await {
+                        Ok(text) => {
+                            println!("RESPONSE: {} KB from {}", text.len() / 1000, path);
 
-                        //create folder if not exists 
-                        std::fs::create_dir_all("./gtfs_schedules").expect("create folder failed!");
+                            //create folder if not exists
+                            std::fs::create_dir_all("./gtfs_schedules")
+                                .expect("create folder failed!");
 
-                        //save to file
+                            //save to file
 
-                        let mut file = File::create(format!("./gtfs_schedules/{}.zip", agency.agency)).expect("create file failed!");
+                            let mut file =
+                                File::create(format!("./gtfs_schedules/{}.zip", agency.agency))
+                                    .expect("create file failed!");
 
-                         // Copy the response body into the file
-                         let mut content =  Cursor::new(text);
-                        std::io::copy(&mut content, &mut file);
+                            // Copy the response body into the file
+                            let mut content = Cursor::new(text);
+                            std::io::copy(&mut content, &mut file);
 
-                        println!("save to file: {}", format!("./gtfs_schedules/{}.zip", agency.agency));
+                            println!(
+                                "save to file: {}",
+                                format!("./gtfs_schedules/{}.zip", agency.agency)
+                            );
+                        }
+                        Err(_) => eprintln!("ERROR reading {}", path),
                     }
-                    Err(_) => eprintln!("ERROR reading {}", path),
                 }
+                Err(_) => eprintln!("ERROR downloading {}", path),
             }
-            Err(_) => eprintln!("ERROR downloading {}", path),
-        }
-        Ok(())
-    }));
+            Ok(())
+        }));
     }
 
     // Wait for them all to finish
@@ -88,7 +97,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for agency in agencies {
         println!("v2 agency: {}, url: {}", agency.agency, agency.url);
 
-        let gtfs = gtfs_structures::Gtfs::from_path(format!("./gtfs_schedules/{}.zip", agency.agency))?;
+        let gtfs =
+            gtfs_structures::Gtfs::from_path(format!("./gtfs_schedules/{}.zip", agency.agency))?;
 
         println!("Read duration read_duration: {:?}", gtfs.read_duration);
 
@@ -96,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("there are {} routes in the gtfs", gtfs.routes.len());
 
-        for (shape_id,shape_vec) in &gtfs.shapes {
+        for (shape_id, shape_vec) in &gtfs.shapes {
             println!("shape_id: {} has {} points", shape_id, shape_vec.len());
 
             //get the trips associated with this shape_id
@@ -105,12 +115,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut route_ids = Vec::new();
 
             for (trip_id, trip) in &gtfs.trips {
-
-                let cloned_shape_id = shape_id.clone();
+                let cloned_shape_id: String = shape_id.clone();
+                let cloned_shape_id_2: String = shape_id.clone();
 
                 if trip.shape_id == Some(cloned_shape_id) {
                     trip_ids.push(trip_id.clone());
                     route_ids.push(trip.route_id.clone());
+                }
+
+                if gtfs.agencies[0].id == Some(String::from("Metrolink")) {
+                    let mut shape_to_route = HashMap::new();
+
+                    let lines = ["91", "IEOC", "AV", "OC", "RIVER", "SB", "VT"];
+
+                    for line in lines.iter() {
+                        shape_to_route.insert(line.to_string(), format!("{} Line", line));
+                    }
+
+                    //check if shape_id is in the hashmap
+
+                    if shape_to_route.contains_key(&format!("{}{}",cloned_shape_id_2.clone(),"in")) || 
+                    shape_to_route.contains_key(&format!("{}{}",cloned_shape_id_2.clone(),"out"))
+                     {
+                        //println!("shape_id: {} has route_id: {}", shape_id, shape_to_route[shape_id]);
+                        //route_ids.push(shape_to_route[shape_id].to_string().clone());
+                        route_ids.push(
+                            shape_to_route[cloned_shape_id_2.as_str()]
+                                .to_string()
+                                .clone(),
+                        );
+                    }
                 }
             }
 
@@ -123,8 +157,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("there are {} trips for shape", trip_ids.len());
             println!("the routes for shape {} are {:?}", shape_id, route_ids);
-
-
         }
     }
 
