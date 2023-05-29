@@ -116,35 +116,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             for (trip_id, trip) in &gtfs.trips {
                 let cloned_shape_id: String = shape_id.clone();
-                let cloned_shape_id_2: String = shape_id.clone();
 
                 if trip.shape_id == Some(cloned_shape_id) {
                     trip_ids.push(trip_id.clone());
                     route_ids.push(trip.route_id.clone());
                 }
+            }
 
-                if gtfs.agencies[0].id == Some(String::from("Metrolink")) {
-                    let mut shape_to_route = HashMap::new();
+            let cloned_shape_id_2: String = shape_id.clone();
 
-                    let lines = ["91", "IEOC", "AV", "OC", "RIVER", "SB", "VT"];
+            if gtfs.agencies[0].id == Some(String::from("Metrolink")) {
+                let mut shape_to_route_pre = HashMap::new();
 
-                    for line in lines.iter() {
-                        shape_to_route.insert(line.to_string(), format!("{} Line", line));
-                    }
+                let lines = ["91", "IEOC", "AV", "OC", "RIVER", "SB", "VT"];
 
-                    //check if shape_id is in the hashmap
+                for line in lines.iter() {
+                    let value = match *line {
+                        "91" => "91 Line",
+                        "IEOC" => "Inland Emp.-Orange Co. Line",
+                        "AV" => "Antelope Valley Line",
+                        "OC" => "Orange County Line",
+                        "RIVER" => "Riverside Line",
+                        "SB" => "San Bernardino Line",
+                        "VT" => "Ventura County Line",
+                        _ => "",
+                    };
+                    shape_to_route_pre.insert(line.to_string(), value.to_string());
+                }
 
-                    if shape_to_route.contains_key(&format!("{}{}",cloned_shape_id_2.clone(),"in")) || 
-                    shape_to_route.contains_key(&format!("{}{}",cloned_shape_id_2.clone(),"out"))
-                     {
-                        //println!("shape_id: {} has route_id: {}", shape_id, shape_to_route[shape_id]);
-                        //route_ids.push(shape_to_route[shape_id].to_string().clone());
-                        route_ids.push(
-                            shape_to_route[cloned_shape_id_2.as_str()]
-                                .to_string()
-                                .clone(),
-                        );
-                    }
+                let mut shape_to_route = HashMap::new();
+
+                for preroute in shape_to_route_pre.iter() {
+                    //for each preroute, add "{key}in" and "keyout" to the hashmap
+
+                    let keyin = format!("{}in", preroute.0);
+                    let keyout: String = format!("{}out", preroute.0);
+
+                    shape_to_route.insert(keyin, preroute.1.clone());
+                    shape_to_route.insert(keyout, preroute.1.clone());
+                }
+
+                //check if shape_id is in the hashmap
+
+                //console hashmap
+
+                println!("shape_to_route: {:?}", shape_to_route);
+
+                //println!("shape_id: {}", cloned_shape_id_2.clone());
+
+                if shape_to_route.contains_key(&format!("{}", cloned_shape_id_2.clone())) {
+                    //println!("shape_id: {} has route_id: {}", shape_id, shape_to_route[shape_id]);
+                    //route_ids.push(shape_to_route[shape_id].to_string().clone());
+                    route_ids.push(
+                        shape_to_route[cloned_shape_id_2.as_str()]
+                            .to_string()
+                            .clone(),
+                    );
                 }
             }
 
