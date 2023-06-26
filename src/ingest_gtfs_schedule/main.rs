@@ -31,6 +31,14 @@ struct Agency {
     url: String,
 }
 
+use bigdecimal::BigDecimal;
+use sqlx::postgres::types::Numeric;
+
+fn convert_f64_to_numeric(f64: f64) -> Numeric {
+    let big_decimal = BigDecimal::from_f64(f64);
+    Numeric::from(big_decimal)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let postgresstring = arguments::parse(std::env::args())
@@ -325,10 +333,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &gtfs.agencies[0].phone,
                     &gtfs.agencies[0].fare_url,
                     &gtfs.agencies[0].email,
-                    &(least_lat.unwrap()),
-                    &(least_lon.unwrap()),
-                    &(most_lat.unwrap()),
-                    &(most_lon.unwrap()),
+                    &(convert_f64_to_numeric(least_lat.unwrap())),
+                    &(convert_f64_to_numeric(least_lon.unwrap())),
+                    &(convert_f64_to_numeric(most_lat.unwrap())),
+                    &(convert_f64_to_numeric(most_lon.unwrap())),
                 ],
             )
             .await?;
