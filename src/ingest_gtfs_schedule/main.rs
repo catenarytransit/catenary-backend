@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             onestop_feed_id text NOT NULL,
             shape_id text NOT NULL,
             linestring GEOMETRY(LINESTRING,4326) NOT NULL,
-            PRIMARY KEY (agency_id,shape_id)
+            PRIMARY KEY (onestop_feed_id,shape_id)
         );
         
         ",
