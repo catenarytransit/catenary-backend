@@ -18,12 +18,12 @@ use std::io::{Read, Write};
 use std::fs::copy;
 
 use std::collections::HashMap;
+use tokio_postgres::{Error as PostgresError, NoTls};
 
 #[feature(async_await)]
 use futures::future::join_all;
 
 use postgis::{ewkb, LineString};
-use postgres::{Client, NoTls};
 
 #[derive(Debug, Deserialize, Clone)]
 struct Agency {
@@ -33,6 +33,58 @@ struct Agency {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let postgresstring = arguments::parse(std::env::args())
+        .unwrap()
+        .get::<String>("postgres");
+
+    let postgresstring = match postgresstring {
+        Some(s) => s,
+        None => {
+            println!("Postgres string not avaliable, using default");
+            "host=localhost user=postgres".to_string()
+        }
+    };
+
+    // Connect to the database.
+    let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
+
+    // The connection object performs the actual communication with the database,
+    // so spawn it off to run on its own.
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+
+    client.batch_execute(
+        "
+        CREATE SCHEMA IF NOT EXISTS gtfs_static;
+        
+        CREATE TABLE IF NOT EXISTS gtfs_static.agency (
+            agency_id text PRIMARY KEY,
+            agency_name text NOT NULL,
+            agency_url text NOT NULL,
+            agency_timezone text NOT NULL,
+            agency_lang text NOT NULL,
+            agency_phone text NOT NULL,
+            agency_fare_url text NOT NULL,
+            agency_email text NOT NULL,
+            max_lat numeric NOT NULL,
+            max_lon numeric NOT NULL,
+            min_lat numeric NOT NULL,
+            min_lon numeric NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
+            agency_id text NOT NULL,
+            shape_id text NOT NULL,
+            geom geometry NOT NULL,
+            PRIMARY KEY (agency_id,shape_id)
+        );
+        
+        ",
+    );
+
     let file = File::open("./gtfs_schedules.csv");
     let mut contents = String::new();
     file.expect("read zip file failed!")
@@ -251,9 +303,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             //println!("there are {} trips for shape", trip_ids.len());
             //println!("the routes for shape {} are {:?}", shape_id, route_ids);
-
-            
         }
+
+        let _ = client.query(
+            "INSERT INTO agencies (agency, url, least_lat, least_lon, most_lat, most_lon) VALUES ($1, $2, $3, $4, $5, $6)",
+            &[&agency.agency, &agency.url, &least_lat.unwrap(), &least_lon.unwrap(), &most_lat.unwrap(), &most_lon.unwrap()]
+        ).await?;
     }
 
     Ok(())

@@ -18,6 +18,8 @@ gtfs-structures = "0.34"
 tungstenite = "0.19.0"
 postgres = "0.19.5"
 postgis = "0.9.0"
+arguments = "0.7.1"
+tokio-postgres = "0.7.8"
 
 [[bin]]
 name = "schedule_ingest"
