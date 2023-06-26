@@ -8,6 +8,7 @@ use std::io::Cursor;
 use std::fs::File;
 //use std::path::Path;
 use reqwest;
+use std::ops::Deref;
 use tokio::task::JoinHandle;
 
 use gtfs_structures::Error as GtfsError;
@@ -20,6 +21,9 @@ use std::collections::HashMap;
 
 #[feature(async_await)]
 use futures::future::join_all;
+
+use postgis::{ewkb, LineString};
+use postgres::{Client, NoTls};
 
 #[derive(Debug, Deserialize, Clone)]
 struct Agency {
@@ -106,8 +110,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("there are {} routes in the gtfs", gtfs.routes.len());
 
+        let mut least_lat: Option<f64> = None;
+        let mut least_lon: Option<f64> = None;
+
+        let mut most_lat: Option<f64> = None;
+        let mut most_lon: Option<f64> = None;
+
+        let timestarting = std::time::Instant::now();
+
+        for (stop_id, stop) in &gtfs.stops {
+            //check if least_lat has a value
+
+            if (*stop).deref().longitude.is_some() {
+                let stop_lon = (*stop).deref().longitude.unwrap();
+
+                if least_lon.is_some() {
+                    if stop_lon < least_lon.unwrap() {
+                        least_lon = Some(stop_lon);
+                    }
+                } else {
+                    least_lon = Some(stop_lon);
+                }
+
+                if most_lon.is_some() {
+                    if stop_lon > most_lon.unwrap() {
+                        most_lon = Some(stop_lon);
+                    }
+                } else {
+                    most_lon = Some(stop_lon);
+                }
+            }
+
+            if (*stop).deref().latitude.is_some() {
+                let stop_lat = (*stop).deref().latitude.unwrap();
+
+                if least_lat.is_some() {
+                    if stop_lat < least_lat.unwrap() {
+                        least_lat = Some(stop_lat);
+                    }
+                } else {
+                    least_lat = Some(stop_lat);
+                }
+
+                if most_lat.is_some() {
+                    if stop_lat > most_lat.unwrap() {
+                        most_lat = Some(stop_lat);
+                    }
+                } else {
+                    most_lat = Some(stop_lat);
+                }
+            }
+        }
+
+        println!(
+            "Found bounding box for {}, ({},{}) and ({},{})",
+            agency.agency,
+            least_lat.unwrap(),
+            least_lon.unwrap(),
+            most_lat.unwrap(),
+            most_lon.unwrap()
+        );
+
+        println!("That took {:?}", timestarting.elapsed());
+
         for (shape_id, shape_vec) in &gtfs.shapes {
-            println!("shape_id: {} has {} points", shape_id, shape_vec.len());
+            //println!("shape_id: {} has {} points", shape_id, shape_vec.len());
 
             //get the trips associated with this shape_id
 
