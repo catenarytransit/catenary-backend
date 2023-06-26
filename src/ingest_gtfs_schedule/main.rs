@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client
         .batch_execute(
             "
-            CREATE EXTENSION postgis;
+            CREATE EXTENSION IF NOT EXISTS postgis;
 
         CREATE SCHEMA IF NOT EXISTS gtfs_static;
         
