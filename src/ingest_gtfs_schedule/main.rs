@@ -64,14 +64,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         CREATE SCHEMA IF NOT EXISTS gtfs_static;
         
         CREATE TABLE IF NOT EXISTS gtfs_static.agencies (
-            agency_id text PRIMARY KEY,
-            agency_name text NOT NULL,
-            agency_url text NOT NULL,
-            agency_timezone text NOT NULL,
-            agency_lang text NOT NULL,
-            agency_phone text NOT NULL,
-            agency_fare_url text NOT NULL,
-            agency_email text NOT NULL,
+            id text PRIMARY KEY,
+            name text NOT NULL,
+            url text NOT NULL,
+            timezone text NOT NULL,
+            lang text,
+            phone text,
+            fare_url text,
+            email text,
             max_lat numeric NOT NULL,
             max_lon numeric NOT NULL,
             min_lat numeric NOT NULL,
@@ -310,10 +310,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             //println!("the routes for shape {} are {:?}", shape_id, route_ids);
         }
 
-        let _ = client.query(
-            "INSERT INTO gtfs_static.agencies (agency, url, least_lat, least_lon, most_lat, most_lon) VALUES ($1, $2, $3, $4, $5, $6)",
-            &[&agency.agency, &agency.url, &least_lat.unwrap(), &least_lon.unwrap(), &most_lat.unwrap(), &most_lon.unwrap()]
-        ).await?;
+        let _ = client
+            .query(
+                "INSERT INTO gtfs_static.agencies 
+            (id, name, url, timezone, lang, phone, fare_url, email, least_lat, least_lon, most_lat, most_lon)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                &[
+                    &gtfs.agencies[0].id,
+                    &gtfs.agencies[0].name,
+                    &gtfs.agencies[0].url,
+                    &gtfs.agencies[0].timezone,
+                    &gtfs.agencies[0].lang,
+                    &gtfs.agencies[0].phone,
+                    &gtfs.agencies[0].fare_url,
+                    &gtfs.agencies[0].email,
+                    &least_lat,
+                    &least_lon,
+                    &most_lat,
+                    &most_lon,
+                ],
+            )
+            .await?;
     }
 
     Ok(())
