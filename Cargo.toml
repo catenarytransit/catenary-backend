@@ -21,7 +21,7 @@ postgis = "0.9.0"
 arguments = "0.7.1"
 tokio-postgres = "0.7.8"
 rust_decimal = "1.30.0"
-sqlx = { version = "0.6.3", features = ["postgres"] }
+sqlx = { version = "0.6.3", features = ["postgres", "runtime-tokio-rustls"] }
 
 [[bin]]
 name = "schedule_ingest"
