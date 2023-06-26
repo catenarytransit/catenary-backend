@@ -69,6 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "
             CREATE EXTENSION IF NOT EXISTS postgis;
 
+            DROP SCHEMA IF EXISTS gtfs_static;
+
         CREATE SCHEMA IF NOT EXISTS gtfs_static;
         
         CREATE TABLE IF NOT EXISTS gtfs_static.agencies (
@@ -80,10 +82,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             phone text,
             fare_url text,
             email text,
-            max_lat numeric NOT NULL,
-            max_lon numeric NOT NULL,
-            min_lat numeric NOT NULL,
-            min_lon numeric NOT NULL
+            max_lat double precision NOT NULL,
+            max_lon double precision NOT NULL,
+            min_lat double precision NOT NULL,
+            min_lon double precision NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
@@ -333,10 +335,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &gtfs.agencies[0].phone,
                     &gtfs.agencies[0].fare_url,
                     &gtfs.agencies[0].email,
-                    &(convert_f64_to_numeric(least_lat.unwrap())),
-                    &(convert_f64_to_numeric(least_lon.unwrap())),
-                    &(convert_f64_to_numeric(most_lat.unwrap())),
-                    &(convert_f64_to_numeric(most_lon.unwrap())),
+                    &(least_lat.unwrap()),
+                    &(least_lon.unwrap()),
+                    &(most_lat.unwrap()),
+                    &(most_lon.unwrap()),
                 ],
             )
             .await?;
