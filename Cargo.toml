@@ -15,6 +15,9 @@ serde = "1.0"
 tokio = {version = "1.28",features = ["full"] }
 futures = "0.3"
 gtfs-structures = "0.34"
+tungstenite = "0.19.0"
+postgres = "0.19.5"
+postgis = "0.9.0"
 
 [[bin]]
 name = "schedule_ingest"
