@@ -313,7 +313,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = client
             .query(
                 "INSERT INTO gtfs_static.agencies 
-            (id, name, url, timezone, lang, phone, fare_url, email, least_lat, least_lon, most_lat, most_lon)
+            (id, name, url, timezone, lang, phone, fare_url, email, 
+                max_lat, min_lat, max_lon, min_lon)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
                 &[
                     &gtfs.agencies[0].id,
