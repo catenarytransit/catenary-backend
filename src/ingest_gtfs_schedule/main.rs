@@ -29,6 +29,8 @@ use postgis::{ewkb, LineString};
 struct Agency {
     agency: String,
     url: String,
+    feed_id: String,
+    operator_id: String,
 }
 
 #[tokio::main]
@@ -66,7 +68,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         CREATE SCHEMA IF NOT EXISTS gtfs_static;
         
         CREATE TABLE IF NOT EXISTS gtfs_static.agencies (
-            id text PRIMARY KEY,
+            onestop_feed_id text,
+            onestop_operator_id text,
+            gtfs_agency_id text,
             name text NOT NULL,
             url text NOT NULL,
             timezone text NOT NULL,
@@ -81,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
-            agency_id text NOT NULL,
+            onestop_feed_id text NOT NULL,
             shape_id text NOT NULL,
             linestring GEOMETRY(LINESTRING,4326) NOT NULL,
             PRIMARY KEY (agency_id,shape_id)
@@ -315,10 +319,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = client
             .query(
                 "INSERT INTO gtfs_static.agencies 
-            (id, name, url, timezone, lang, phone, fare_url, email, 
+            (onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
                 max_lat, min_lat, max_lon, min_lon)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
                 &[
+                    &agency.feed_id,
+                    &agency.operator_id,
                     &gtfs.agencies[0].id,
                     &gtfs.agencies[0].name,
                     &gtfs.agencies[0].url,

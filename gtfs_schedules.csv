@@ -1,7 +1,7 @@
-agency,url
-"LACMTA_Rail",https://developer.metro.net/wp-content/uploads/2023/06/230530-regional-connector-test-gtfs.zip
-LACMTA,https://gitlab.com/LACMTA/gtfs_bus/raw/master/gtfs_bus.zip
-"OCTA",https://www.octa.net/current/google_transit.zip
-"Metrolink",https://metrolinktrains.com/globalassets/about/gtfs/gtfs.zip
-"LADOT",https://ladotbus.com/gtfs
-"Anaheim",https://art.tripshot.com/v1/gtfs.zip?regionId=CA558DDC-D7F2-4B48-9CAC-DEEA1134F820
+agency,feed_id,operator_id,url
+"LACMTA_Rail",f-9q5-metro~losangeles~rail,o-9q5-metro~losangeles,https://developer.metro.net/wp-content/uploads/2023/06/230530-regional-connector-test-gtfs.zip
+LACMTA,f-9q5-metro~losangeles,o-9q5-metro~losangeles,https://gitlab.com/LACMTA/gtfs_bus/raw/master/gtfs_bus.zip
+"OCTA",f-9mu-orangecountytransportationauthority,o-9mu-orangecountytransportationauthority,https://www.octa.net/current/google_transit.zip
+"Metrolink",f-9qh-metrolinktrains,o-9qh-metrolinktrains,https://metrolinktrains.com/globalassets/about/gtfs/gtfs.zip
+"LADOT",f-9q5-ladot,o-9q5-ladot,https://ladotbus.com/gtfs
+"Anaheim",f-9qh0-anaheim~ca~us,o-9qh0-anaheimresorttransportation,https://art.tripshot.com/v1/gtfs.zip?regionId=CA558DDC-D7F2-4B48-9CAC-DEEA1134F820
