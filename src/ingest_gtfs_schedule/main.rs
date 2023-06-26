@@ -18,7 +18,7 @@ use std::io::{Read, Write};
 use std::fs::copy;
 
 use std::collections::HashMap;
-use tokio_postgres::{Error as PostgresError, NoTls};
+use tokio_postgres::{Error as PostgresError, NoTls, Numeric, Row};
 
 #[feature(async_await)]
 use futures::future::join_all;
@@ -325,10 +325,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &gtfs.agencies[0].phone,
                     &gtfs.agencies[0].fare_url,
                     &gtfs.agencies[0].email,
-                    &least_lat,
-                    &least_lon,
-                    &most_lat,
-                    &most_lon,
+                    &least_lat.unwrap(),
+                    &least_lon.unwrap(),
+                    &most_lat.unwrap(),
+                    &most_lon.unwrap(),
                 ],
             )
             .await?;
@@ -336,3 +336,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+/*
+
+fn convert_optional_f64_to_numeric(f64: Option<f64>) -> Option<Numeric> {
+    match f64 {
+        Some(f64) => Some(Numeric::from(f64)),
+        None => None,
+    }
+}
+ */
