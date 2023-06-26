@@ -56,8 +56,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    client.batch_execute(
-        "
+    client
+        .batch_execute(
+            "
         CREATE SCHEMA IF NOT EXISTS gtfs_static;
         
         CREATE TABLE IF NOT EXISTS gtfs_static.agencies (
@@ -83,7 +84,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         
         ",
-    );
+        )
+        .await
+        .unwrap();
 
     let file = File::open("./gtfs_schedules.csv");
     let mut contents = String::new();
