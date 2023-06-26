@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "
         CREATE SCHEMA IF NOT EXISTS gtfs_static;
         
-        CREATE TABLE IF NOT EXISTS gtfs_static.agency (
+        CREATE TABLE IF NOT EXISTS gtfs_static.agencies (
             agency_id text PRIMARY KEY,
             agency_name text NOT NULL,
             agency_url text NOT NULL,
