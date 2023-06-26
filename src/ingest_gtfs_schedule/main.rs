@@ -18,7 +18,7 @@ use std::io::{Read, Write};
 use std::fs::copy;
 
 use std::collections::HashMap;
-use tokio_postgres::{Error as PostgresError, NoTls, Numeric, Row};
+use tokio_postgres::{Error as PostgresError, NoTls, Row};
 
 #[feature(async_await)]
 use futures::future::join_all;
