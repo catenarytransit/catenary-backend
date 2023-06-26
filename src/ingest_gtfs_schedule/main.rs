@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "
             CREATE EXTENSION IF NOT EXISTS postgis;
 
-            DROP SCHEMA IF EXISTS gtfs_static;
+            DROP SCHEMA IF EXISTS gtfs_static CASCADE;
 
         CREATE SCHEMA IF NOT EXISTS gtfs_static;
         
