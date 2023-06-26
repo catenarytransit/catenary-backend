@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         CREATE SCHEMA IF NOT EXISTS gtfs_static;
         
         CREATE TABLE IF NOT EXISTS gtfs_static.agencies (
-            onestop_feed_id text,
+            onestop_feed_id text PRIMARY KEY,
             onestop_operator_id text,
             gtfs_agency_id text,
             name text NOT NULL,
