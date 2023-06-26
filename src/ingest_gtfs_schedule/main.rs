@@ -325,10 +325,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &gtfs.agencies[0].phone,
                     &gtfs.agencies[0].fare_url,
                     &gtfs.agencies[0].email,
-                    &least_lat.unwrap(),
-                    &least_lon.unwrap(),
-                    &most_lat.unwrap(),
-                    &most_lon.unwrap(),
+                    &(least_lat.unwrap()),
+                    &(least_lon.unwrap()),
+                    &(most_lat.unwrap()),
+                    &(most_lon.unwrap()),
                 ],
             )
             .await?;
