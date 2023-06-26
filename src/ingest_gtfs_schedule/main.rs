@@ -59,6 +59,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client
         .batch_execute(
             "
+            CREATE EXTENSION postgis;
+
         CREATE SCHEMA IF NOT EXISTS gtfs_static;
         
         CREATE TABLE IF NOT EXISTS gtfs_static.agencies (
@@ -79,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
             agency_id text NOT NULL,
             shape_id text NOT NULL,
-            geom geometry NOT NULL,
+            linestring GEOMETRY(LINESTRING,4326) NOT NULL,
             PRIMARY KEY (agency_id,shape_id)
         );
         
