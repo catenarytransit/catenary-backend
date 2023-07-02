@@ -12,3 +12,5 @@ Cargo.lock
 *.pdb
 
 gtfs_schedules/
+transitland-atlas/
+transitland-atlas

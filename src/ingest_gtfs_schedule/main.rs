@@ -18,21 +18,84 @@ use std::io::{Read, Write};
 use std::fs::copy;
 
 use std::collections::HashMap;
+use tokio_postgres::{Error as PostgresError, NoTls, Row};
 
 #[feature(async_await)]
 use futures::future::join_all;
 
 use postgis::{ewkb, LineString};
-use postgres::{Client, NoTls};
 
 #[derive(Debug, Deserialize, Clone)]
 struct Agency {
     agency: String,
     url: String,
+    feed_id: String,
+    operator_id: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let postgresstring = arguments::parse(std::env::args())
+        .unwrap()
+        .get::<String>("postgres");
+
+    let postgresstring = match postgresstring {
+        Some(s) => s,
+        None => {
+            println!("Postgres string not avaliable, using default");
+            "host=localhost user=postgres".to_string()
+        }
+    };
+
+    // Connect to the database.
+    let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
+
+    // The connection object performs the actual communication with the database,
+    // so spawn it off to run on its own.
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+
+    client
+        .batch_execute(
+            "
+            CREATE EXTENSION IF NOT EXISTS postgis;
+
+            DROP SCHEMA IF EXISTS gtfs_static CASCADE;
+
+        CREATE SCHEMA IF NOT EXISTS gtfs_static;
+        
+        CREATE TABLE IF NOT EXISTS gtfs_static.agencies (
+            onestop_feed_id text PRIMARY KEY,
+            onestop_operator_id text,
+            gtfs_agency_id text,
+            name text NOT NULL,
+            url text NOT NULL,
+            timezone text NOT NULL,
+            lang text,
+            phone text,
+            fare_url text,
+            email text,
+            max_lat double precision NOT NULL,
+            max_lon double precision NOT NULL,
+            min_lat double precision NOT NULL,
+            min_lon double precision NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
+            onestop_feed_id text NOT NULL,
+            shape_id text NOT NULL,
+            linestring GEOMETRY(LINESTRING,4326) NOT NULL,
+            PRIMARY KEY (onestop_feed_id,shape_id)
+        );
+        
+        ",
+        )
+        .await
+        .unwrap();
+
     let file = File::open("./gtfs_schedules.csv");
     let mut contents = String::new();
     file.expect("read zip file failed!")
@@ -251,10 +314,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             //println!("there are {} trips for shape", trip_ids.len());
             //println!("the routes for shape {} are {:?}", shape_id, route_ids);
-
-            
         }
+
+        let _ = client
+            .query(
+                "INSERT INTO gtfs_static.agencies 
+            (onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
+                max_lat, min_lat, max_lon, min_lon)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+                &[
+                    &agency.feed_id,
+                    &agency.operator_id,
+                    &gtfs.agencies[0].id,
+                    &gtfs.agencies[0].name,
+                    &gtfs.agencies[0].url,
+                    &gtfs.agencies[0].timezone,
+                    &gtfs.agencies[0].lang,
+                    &gtfs.agencies[0].phone,
+                    &gtfs.agencies[0].fare_url,
+                    &gtfs.agencies[0].email,
+                    &(least_lat.unwrap()),
+                    &(least_lon.unwrap()),
+                    &(most_lat.unwrap()),
+                    &(most_lon.unwrap()),
+                ],
+            )
+            .await?;
     }
 
     Ok(())
 }
+/*
+
+fn convert_optional_f64_to_numeric(f64: Option<f64>) -> Option<Numeric> {
+    match f64 {
+        Some(f64) => Some(Numeric::from(f64)),
+        None => None,
+    }
+}
+ */
