@@ -84,6 +84,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             min_lon double precision NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS gtfs_static.routes (
+            route_id text NOT NULL,
+            onestop_feed_id text NOT NULL,
+            short_name text NOT NULL,
+            long_name text NOT NULL,
+            desc text,
+            route_type int NOT NULL,
+            url text,
+            agency_id: text,
+            order: int,
+            color text,
+            text_color text,
+            continuous_pickup text,
+            continuous_drop_off text,
+        );
+
         CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
             onestop_feed_id text NOT NULL,
             shape_id text NOT NULL,
@@ -340,6 +356,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ],
             )
             .await?;
+
+        for route in routes {
+            let _ = client
+                .query(
+                    "INSERT INTO gtfs_static.routes 
+            (
+                route_id,
+                onestop_feed_id,
+                short_name,
+                long_name,
+                desc,
+                route_type,
+                url,
+                agency_id,
+                order,
+                color,
+                text_color,
+                continuous_pickup,
+                continuous_drop_off,
+            )
+            ",
+                    [
+                        &route.route_id,
+                        &agency.feed_id,
+                        &route.short_name,
+                        &route.long_name,
+                        &route.desc,
+                        &route.route_type,
+                        &route.url,
+                        &route.agency_id,
+                        &route.order,
+                        &route.color,
+                        &route.text_color,
+                        &route.continuous_pickup,
+                        &route.continuous_drop_off,
+                    ],
+                )
+                .await?;
+        }
     }
 
     Ok(())
