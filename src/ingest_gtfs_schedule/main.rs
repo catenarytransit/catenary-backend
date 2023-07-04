@@ -357,7 +357,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
 
-        for route in routes {
+        for route in &gtfs.routes {
             let _ = client
                 .query(
                     "INSERT INTO gtfs_static.routes 
