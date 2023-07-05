@@ -11,6 +11,7 @@ use reqwest;
 use std::ops::Deref;
 use tokio::task::JoinHandle;
 
+use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::Error as GtfsError;
 use gtfs_structures::PickupDropOffType;
 use gtfs_structures::RouteType;
