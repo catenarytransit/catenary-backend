@@ -405,8 +405,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &route.url,
                         &route.agency_id.unwrap_or_else(|| "".to_string()),
                         &route.order.unwrap_or_else(|| 0),
-                        &route.color,
-                        &route.text_color,
+                        &(route.color.to_string()),
+                        &(route.text_color.to_string()),
                         &((match route.continuous_pickup {
                             PickupDropOffType::Regular => 0,
                             PickupDropOffType::NotAvailable => 1,
