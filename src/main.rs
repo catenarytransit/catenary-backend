@@ -2,11 +2,7 @@ use std::net::TcpListener;
 use std::thread::spawn;
 use tungstenite::accept;
 
-<<<<<<< HEAD
-fn main () {
-=======
 fn main() {
->>>>>>> c29cf9165b7917f2053328b4cc1461322ad3e66d
     let server = TcpListener::bind("127.0.0.1:9090").unwrap();
     for stream in server.incoming() {
         spawn(move || {
