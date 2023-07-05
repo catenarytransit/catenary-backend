@@ -401,7 +401,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &route.long_name,
                         &route.desc.unwrap_or_else(|| "".to_string()),
                         &(route_type_number
-                            .to_sql(&tokio_postgres::types::Type::INT8, &mut BytesMut::new())),
+                            .to_sql(&tokio_postgres::types::Type::INT4, &mut BytesMut::new())),
                         &route.url,
                         &route.agency_id.unwrap_or_else(|| "".to_string()),
                         &route.order.unwrap_or_else(|| 0),
@@ -414,7 +414,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             PickupDropOffType::CoordinateWithDriver => 3,
                             PickupDropOffType::Unknown(i) => *i,
                         })
-                        .to_sql(&tokio_postgres::types::Type::INT8, &mut BytesMut::new())),
+                        .to_sql(&tokio_postgres::types::Type::INT4, &mut BytesMut::new())),
                         &((match route.continuous_drop_off {
                             PickupDropOffType::Regular => 0,
                             PickupDropOffType::NotAvailable => 1,
@@ -422,7 +422,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             PickupDropOffType::CoordinateWithDriver => 3,
                             PickupDropOffType::Unknown(i) => *i,
                         })
-                        .to_sql(&tokio_postgres::types::Type::INT8, &mut BytesMut::new())),
+                        .to_sql(&tokio_postgres::types::Type::INT4, &mut BytesMut::new())),
                     ],
                 )
                 .await?;
