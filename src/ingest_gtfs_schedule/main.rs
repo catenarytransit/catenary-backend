@@ -409,22 +409,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &route.order.unwrap_or_else(|| 0),
                         &(route.color.to_string()),
                         &(route.text_color.to_string()),
-                        &((match route.continuous_pickup {
+                        &(match route.continuous_pickup {
                             ContinuousPickupDropOff::Regular => 0,
                             ContinuousPickupDropOff::NotAvailable => 1,
                             ContinuousPickupDropOff::ArrangeByPhone => 2,
                             ContinuousPickupDropOff::CoordinateWithDriver => 3,
                             ContinuousPickupDropOff::Unknown(i) => i,
-                        })
-                        .to_sql(&tokio_postgres::types::Type::INT4, &mut BytesMut::new())),
-                        &((match route.continuous_drop_off {
+                        }),
+                        &(match route.continuous_drop_off {
                             ContinuousPickupDropOff::Regular => 0,
                             ContinuousPickupDropOff::NotAvailable => 1,
                             ContinuousPickupDropOff::ArrangeByPhone => 2,
                             ContinuousPickupDropOff::CoordinateWithDriver => 3,
                             ContinuousPickupDropOff::Unknown(i) => i,
-                        })
-                        .to_sql(&tokio_postgres::types::Type::INT4, &mut BytesMut::new())),
+                        }),
                     ],
                 )
                 .await?;
