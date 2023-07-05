@@ -392,16 +392,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continuous_drop_off,
             )
             ",
-                    [
+                    &[
                         &route_id,
                         &agency.feed_id,
                         &route.short_name,
                         &route.long_name,
-                        &route.desc.unwrap_or_else(|| None),
-                        &route_type_number,
+                        &route.desc.unwrap_or_else(|| "".to_string()),
+                        &route_type_number as &dyn ToSql,
                         &route.url,
-                        &route.agency_id.unwrap_or_else(|| None),
-                        &route.order.unwrap_or_else(|| None),
+                        &route.agency_id.unwrap_or_else(|| "".to_string()),
+                        &route.order.unwrap_or_else(|| 0),
                         &route.color,
                         &route.text_color,
                         &route.continuous_pickup,
