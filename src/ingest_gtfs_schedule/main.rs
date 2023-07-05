@@ -414,7 +414,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ContinuousPickupDropOff::NotAvailable => 1,
                             ContinuousPickupDropOff::ArrangeByPhone => 2,
                             ContinuousPickupDropOff::CoordinateWithDriver => 3,
-                            ContinuousPickupDropOff::Unknown(i) => *i,
+                            ContinuousPickupDropOff::Unknown(i) => i,
                         })
                         .to_sql(&tokio_postgres::types::Type::INT4, &mut BytesMut::new())),
                         &((match route.continuous_drop_off {
@@ -422,7 +422,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ContinuousPickupDropOff::NotAvailable => 1,
                             ContinuousPickupDropOff::ArrangeByPhone => 2,
                             ContinuousPickupDropOff::CoordinateWithDriver => 3,
-                            ContinuousPickupDropOff::Unknown(i) => *i,
+                            ContinuousPickupDropOff::Unknown(i) => i,
                         })
                         .to_sql(&tokio_postgres::types::Type::INT4, &mut BytesMut::new())),
                     ],
