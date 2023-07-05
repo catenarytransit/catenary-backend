@@ -98,8 +98,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             order: int,
             color text,
             text_color text,
-            continuous_pickup text,
-            continuous_drop_off text,
+            continuous_pickup int,
+            continuous_drop_off int,
         );
 
         CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
@@ -400,14 +400,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &route.short_name,
                         &route.long_name,
                         &route.desc.unwrap_or_else(|| "".to_string()),
-                        &(route_type_number.to_sql(tokio_postgres::types::Type::TEXT, _)),
+                        &(route_type_number
+                            .to_sql(&tokio_postgres::types::Type::TEXT, &mut BytesMut::new())),
                         &route.url,
                         &route.agency_id.unwrap_or_else(|| "".to_string()),
                         &route.order.unwrap_or_else(|| 0),
                         &route.color,
                         &route.text_color,
-                        &route.continuous_pickup,
-                        &route.continuous_drop_off,
+                        &((match route.continuous_pickup {
+                            PickupDropOffType::Regular => 0,
+                            PickupDropOffType::NotAvailable => 1,
+                            PickupDropOffType::ArrangeByPhone => 2,
+                            PickupDropOffType::CoordinateWithDriver => 3,
+                            PickupDropOffType::Unknown(i) => *i,
+                        })
+                        .to_sql(&tokio_postgres::types::Type::INT8, &mut BytesMut::new())),
+                        &((match route.continuous_drop_off {
+                            PickupDropOffType::Regular => 0,
+                            PickupDropOffType::NotAvailable => 1,
+                            PickupDropOffType::ArrangeByPhone => 2,
+                            PickupDropOffType::CoordinateWithDriver => 3,
+                            PickupDropOffType::Unknown(i) => *i,
+                        })
+                        .to_sql(&tokio_postgres::types::Type::INT8, &mut BytesMut::new())),
                     ],
                 )
                 .await?;
