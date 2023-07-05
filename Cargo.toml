@@ -19,7 +19,10 @@ tungstenite = "0.19.0"
 postgres = "0.19.5"
 postgis = "0.9.0"
 arguments = "0.7.1"
-tokio-postgres = "0.7.8"
+tokio-postgres = { version = "0.7.8", features = [
+    "array-impls",
+    "with-geo-types-0_7",
+] }
 rust_decimal = "1.30.0"
 sqlx = { version = "0.6.3", features = ["postgres", "runtime-tokio-rustls"] }
 
