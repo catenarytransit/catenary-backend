@@ -12,6 +12,7 @@ use std::ops::Deref;
 use tokio::task::JoinHandle;
 
 use gtfs_structures::Error as GtfsError;
+use gtfs_structures::RouteType;
 
 use std::io::{Read, Write};
 //use std::net::TcpStream;
