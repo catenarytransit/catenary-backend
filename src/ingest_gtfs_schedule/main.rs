@@ -2,7 +2,7 @@ use csv::ReaderBuilder;
 use std::error::Error;
 use std::io::prelude::*;
 //use serde::ser::StdError;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 
 use std::fs::File;
@@ -358,6 +358,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
 
         for (route_id, route) in &gtfs.routes {
+            let route_type_number = match &route.route_type {
+                RouteType::Tramway => 0,
+                RouteType::Subway => 1,
+                RouteType::Rail => 2,
+                RouteType::Bus => 3,
+                RouteType::Ferry => 4,
+                RouteType::CableCar => 5,
+                RouteType::Gondola => 6,
+                RouteType::Funicular => 7,
+                RouteType::Coach => 200,
+                RouteType::Air => 1100,
+                RouteType::Taxi => 1500,
+                RouteType::Other(i) => *i,
+            };
+
             let _ = client
                 .query(
                     "INSERT INTO gtfs_static.routes 
@@ -382,11 +397,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &agency.feed_id,
                         &route.short_name,
                         &route.long_name,
-                        &route.desc.unwrap_or(None),
-                        &route.route_type,
+                        &route.desc.unwrap_or_else(|| None),
+                        &route_type_number,
                         &route.url,
-                        &route.agency_id.unwrap_or(None),
-                        &route.order.unwrap_or(None),
+                        &route.agency_id.unwrap_or_else(|| None),
+                        &route.order.unwrap_or_else(|| None),
                         &route.color,
                         &route.text_color,
                         &route.continuous_pickup,
