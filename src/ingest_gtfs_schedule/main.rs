@@ -410,14 +410,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &(route.color.to_string()),
                         &(route.text_color.to_string()),
                         &(match route.continuous_pickup {
-                            ContinuousPickupDropOff::Regular => 0,
+                            ContinuousPickupDropOff::Continuous => 0,
                             ContinuousPickupDropOff::NotAvailable => 1,
                             ContinuousPickupDropOff::ArrangeByPhone => 2,
                             ContinuousPickupDropOff::CoordinateWithDriver => 3,
                             ContinuousPickupDropOff::Unknown(i) => i,
                         }),
                         &(match route.continuous_drop_off {
-                            ContinuousPickupDropOff::Regular => 0,
+                            ContinuousPickupDropOff::Continuous => 0,
                             ContinuousPickupDropOff::NotAvailable => 1,
                             ContinuousPickupDropOff::ArrangeByPhone => 2,
                             ContinuousPickupDropOff::CoordinateWithDriver => 3,
