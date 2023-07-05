@@ -19,6 +19,7 @@ use std::io::{Read, Write};
 use std::fs::copy;
 
 use std::collections::HashMap;
+use tokio_postgres::types::ToSql;
 use tokio_postgres::{Error as PostgresError, NoTls, Row};
 
 #[feature(async_await)]
