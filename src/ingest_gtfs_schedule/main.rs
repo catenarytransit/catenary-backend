@@ -400,8 +400,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &route.short_name,
                         &route.long_name,
                         &route.desc.unwrap_or_else(|| "".to_string()),
-                        &(route_type_number
-                            .to_sql(&tokio_postgres::types::Type::INT4, &mut BytesMut::new())),
+                        &route_type_number,
                         &route.url,
                         &route.agency_id.unwrap_or_else(|| "".to_string()),
                         &route.order.unwrap_or_else(|| 0),
