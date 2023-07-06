@@ -103,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             text_color text,
             continuous_pickup int,
             continuous_drop_off int,
+            shapes_list text[],
             PRIMARY KEY (onestop_feed_id, route_id)
         );
 
@@ -204,7 +205,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut most_lon: Option<f64> = None;
 
         let timestarting = std::time::Instant::now();
-        
+
         let mut shapes_per_route = HashMap::new();
 
         for (stop_id, stop) in &gtfs.stops {
@@ -335,10 +336,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             route_ids.dedup();
 
             for route_id in route_ids {
-                if shapes_per_route.contains_key(route_id) == true {
-                    let new_shapes_list_for_this_route = shapes_
+                if shapes_per_route.contains_key(&route_id) == true {
+                    let mut new_shapes_list_for_this_route = shapes_per_route[&route_id].clone();
+
+                    new_shapes_list_for_this_route.push(shape_id.clone());
+
+                    shapes_per_route.insert(&route_id, new_shapes_list_for_this_route);
                 } else {
-                    shapes_per_route.insert(route_id, vec![shape_id])
+                    shapes_per_route.insert(&route_id, vec![shape_id])
                 }
             }
 
@@ -411,7 +416,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 shapes_list
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 14
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
             )
             ",
                     &[
@@ -440,7 +445,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ContinuousPickupDropOff::CoordinateWithDriver => 3,
                             ContinuousPickupDropOff::Unknown(i) => i,
                         }),
-                        shapes_per_route.get(&route_id)
+                        shapes_per_route.get(&route_id).unwrap(),
                     ],
                 )
                 .await?;
