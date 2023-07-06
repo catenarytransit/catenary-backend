@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             color text,
             text_color text,
             continuous_pickup int,
-            continuous_drop_off int,
+            continuous_drop_off int
         );
 
         CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
@@ -394,7 +394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 color,
                 text_color,
                 continuous_pickup,
-                continuous_drop_off,
+                continuous_drop_off
             )
             ",
                     &[
