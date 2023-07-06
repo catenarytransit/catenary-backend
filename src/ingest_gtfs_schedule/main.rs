@@ -206,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let timestarting = std::time::Instant::now();
 
-        let mut shapes_per_route: Hashmap<String, Vec<String>> = HashMap::new();
+        let mut shapes_per_route: HashMap<String, Vec<String>> = HashMap::new();
 
         for (stop_id, stop) in &gtfs.stops {
             //check if least_lat has a value
