@@ -445,7 +445,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ContinuousPickupDropOff::CoordinateWithDriver => 3,
                             ContinuousPickupDropOff::Unknown(i) => i,
                         }),
-                        shapes_per_route.get(&route_id).unwrap(),
+                        match shapes_per_route.get(&route_id) {
+                            Some(shape_list) => shape_list,
+                            None => &vec![],
+                        },
                     ],
                 )
                 .await?;
