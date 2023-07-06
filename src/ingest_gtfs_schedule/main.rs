@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         CREATE SCHEMA IF NOT EXISTS gtfs_static;
         
-        CREATE TABLE IF NOT EXISTS gtfs_static.agencies (
+        CREATE TABLE IF NOT EXISTS gtfs_static.static_feeds (
             onestop_feed_id text PRIMARY KEY,
             onestop_operator_id text,
             gtfs_agency_id text,
@@ -357,7 +357,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let _ = client
             .query(
-                "INSERT INTO gtfs_static.agencies 
+                "INSERT INTO gtfs_static.static_feeds
             (onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
                 max_lat, min_lat, max_lon, min_lon)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
