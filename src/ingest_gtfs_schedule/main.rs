@@ -117,6 +117,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .unwrap();
 
+    println!("Finished making database");
+
     let file = File::open("./gtfs_schedules.csv");
     let mut contents = String::new();
     file.expect("read zip file failed!")
