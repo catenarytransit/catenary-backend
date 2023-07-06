@@ -343,7 +343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     shapes_per_route.insert(route_id, new_shapes_list_for_this_route);
                 } else {
-                    shapes_per_route.insert(route_id, vec![shape_id]);
+                    shapes_per_route.insert(route_id, vec![shape_id.clone()]);
                 }
             }
 
@@ -396,6 +396,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 RouteType::Other(i) => *i,
             };
 
+            let shape_id_array: Vec<String> = match shapes_per_route.get(route_id) {
+                Some(shape_list) => shape_list.clone(),
+                None => vec![],
+            };
+
             let _ = client
                 .query(
                     "INSERT INTO gtfs_static.routes 
@@ -445,10 +450,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ContinuousPickupDropOff::CoordinateWithDriver => 3,
                             ContinuousPickupDropOff::Unknown(i) => i,
                         }),
-                        match shapes_per_route.get(&route_id) {
-                            Some(shape_list) => shape_list,
-                            None => &vec![],
-                        },
+                        &shape_id_array,
                     ],
                 )
                 .await?;
