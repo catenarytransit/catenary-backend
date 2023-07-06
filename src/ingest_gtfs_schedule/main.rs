@@ -343,7 +343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     shapes_per_route.insert(route_id, new_shapes_list_for_this_route);
                 } else {
-                    shapes_per_route.insert(route_id, vec![shape_id])
+                    shapes_per_route.insert(route_id, vec![shape_id]);
                 }
             }
 
