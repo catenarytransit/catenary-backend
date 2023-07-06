@@ -411,7 +411,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &route_type_number,
                         &route.url,
                         &route.agency_id.clone().unwrap_or_else(|| "".to_string()),
-                        &route.order.unwrap_or_else(|| 0),
+                        &i32::try_from(route.order.unwrap_or_else(|| 0)).ok(),
                         &(route.color.to_string()),
                         &(route.text_color.to_string()),
                         &(match route.continuous_pickup {
