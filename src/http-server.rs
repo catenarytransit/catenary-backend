@@ -76,7 +76,7 @@ async fn getfeeds(req: HttpRequest) -> impl Responder {
                 .insert_header(("Server", "Kactus"))
                 .insert_header(("Content-Type", "application/json"))
                 .insert_header(("Access-Control-Allow-Origin", "*"))
-                .body(&json_string)
+                .body(json_string)
         }
         Err(e) => {
             println!("No results from postgres");
