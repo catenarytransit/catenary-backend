@@ -46,12 +46,12 @@ async fn getfeeds(req: HttpRequest) -> impl Responder {
     let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
 
     let postgresresult = client.query("SELECT onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
-    max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await?;
+    max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await;
 
     match postgresresult {
         Ok(postgresresult) => {
             let mut result: Vec<StaticFeed> = Vec::new();
-            for row in rows {
+            for row in postgresresult {
                 result.push(StaticFeed {
                     feed_id: row.get(0),
                     operator_id: row.get(1),
