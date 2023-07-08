@@ -49,7 +49,7 @@ async fn getfeeds(req: HttpRequest) -> impl Responder {
     max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await;
 
     match postgresresult {
-        Some(postgresresult) => {
+        Ok(postgresresult) => {
             let mut result: Vec<StaticFeed> = Vec::new();
             for row in postgresresult {
                 result.push(StaticFeed {
