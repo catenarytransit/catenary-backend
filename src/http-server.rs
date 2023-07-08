@@ -43,7 +43,9 @@ async fn getfeeds(req: HttpRequest) -> impl Responder {
     };
 
     // Connect to the database.
-    let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
+    let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls)
+        .await
+        .unwrap();
 
     let postgresresult = client.query("SELECT onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
     max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await;
