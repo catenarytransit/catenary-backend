@@ -49,7 +49,7 @@ async fn getfeeds(req: HttpRequest) -> impl Responder {
     max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await;
 
     match postgresresult {
-        Ok(postgresresult) => {
+        Some(postgresresult) => {
             let mut result: Vec<StaticFeed> = Vec::new();
             for row in postgresresult {
                 result.push(StaticFeed {
@@ -78,7 +78,7 @@ async fn getfeeds(req: HttpRequest) -> impl Responder {
                 .insert_header(("Access-Control-Allow-Origin", "*"))
                 .body(&json_string)
         }
-        None => {
+        Err => {
             println!("No results from postgres");
 
             HttpResponse::InternalServerError()
