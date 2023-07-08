@@ -78,7 +78,7 @@ async fn getfeeds(req: HttpRequest) -> impl Responder {
                 .insert_header(("Access-Control-Allow-Origin", "*"))
                 .body(&json_string)
         }
-        Err => {
+        Err(e) => {
             println!("No results from postgres");
 
             HttpResponse::InternalServerError()
