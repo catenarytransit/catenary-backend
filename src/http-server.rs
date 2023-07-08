@@ -4,6 +4,7 @@ use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{Error as PostgresError, NoTls, Row};
 
+#[derive(serde::ser::Serialize)]
 struct StaticFeed {
     feed_id: String,
     operator_id: String,
