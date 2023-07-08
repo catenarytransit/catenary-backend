@@ -30,30 +30,7 @@ async fn index(req: HttpRequest) -> impl Responder {
         .body("Hello world!")
 }
 
-async fn getfeeds(req: HttpRequest) -> impl Responder {
-    let postgresstring = arguments::parse(std::env::args())
-        .unwrap()
-        .get::<String>("postgres");
-
-    let postgresstring = match postgresstring {
-        Some(s) => s,
-        None => {
-            println!("Postgres string not avaliable, using default");
-            "host=localhost user=postgres".to_string()
-        }
-    };
-
-    // Connect to the database.
-    let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls)
-        .await
-        .unwrap();
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("connection error: {}", e);
-        }
-    });
-
+async fn getfeeds(req: HttpRequest, client: &Client) -> impl Responder {
     let postgresresult = client.query("SELECT onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
     max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await;
 
@@ -99,13 +76,59 @@ async fn getfeeds(req: HttpRequest) -> impl Responder {
     }
 }
 
+fn getroutesperagency(req: HttpRequest, client: &Client) -> impl Responder {
+    HttpResponse::Ok()
+        .insert_header(("Server", "Kactus"))
+        .insert_header(("Content-Type", "text/plain"))
+        .insert_header(("Access-Control-Allow-Origin", "*"))
+        .body("Hello world!")
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    let postgresstring = arguments::parse(std::env::args())
+        .unwrap()
+        .get::<String>("postgres");
+
+    let postgresstring = match postgresstring {
+        Some(s) => s,
+        None => {
+            println!("Postgres string not avaliable, using default");
+            "host=localhost user=postgres".to_string()
+        }
+    };
+
+    // Connect to the database.
+    let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls)
+        .await
+        .unwrap();
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+
     // Create a new HTTP server.
     let builder = HttpServer::new(|| {
         App::new()
             .route("/", web::get().to(index))
-            .route("/getfeeds", web::get().to(getfeeds))
+            .route(
+                "/getfeeds",
+                web::get().to(|req: HttpRequest| getfeeds(req, &client)),
+            )
+            .route(
+                "/getfeeds/",
+                web::get().to(|req: HttpRequest| getfeeds(req, &client)),
+            )
+            .route(
+                "/getroutesperagency/",
+                web::get().to(|req: HttpRequest| getroutesperagency(req, &client)),
+            )
+            .route(
+                "/getroutesperagency",
+                web::get().to(|req: HttpRequest| getroutesperagency(req, &client)),
+            )
     })
     .workers(4);
 
