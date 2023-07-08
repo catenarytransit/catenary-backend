@@ -48,14 +48,14 @@ async fn getfeeds(req: HttpRequest) -> impl Responder {
         .await
         .unwrap();
 
-    let postgresresult = client.query("SELECT onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
-    max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await;
-
     tokio::spawn(async move {
         if let Err(e) = connection.await {
             eprintln!("connection error: {}", e);
         }
     });
+
+    let postgresresult = client.query("SELECT onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
+    max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await;
 
     match postgresresult {
         Ok(postgresresult) => {
