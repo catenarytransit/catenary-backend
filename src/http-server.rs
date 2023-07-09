@@ -1,4 +1,4 @@
-use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use serde_json::{json, to_string_pretty};
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::ToSql;
@@ -24,9 +24,7 @@ struct StaticFeed {
 
 async fn index(req: HttpRequest) -> impl Responder {
     HttpResponse::Ok()
-        .insert_header(("Server", "Kactus"))
         .insert_header(("Content-Type", "text/plain"))
-        .insert_header(("Access-Control-Allow-Origin", "*"))
         .body("Hello world!")
 }
 
@@ -59,18 +57,14 @@ async fn getfeeds(req: HttpRequest, client: &Client) -> impl Responder {
             let json_string = to_string_pretty(&json!(result)).unwrap();
 
             HttpResponse::Ok()
-                .insert_header(("Server", "Kactus"))
                 .insert_header(("Content-Type", "application/json"))
-                .insert_header(("Access-Control-Allow-Origin", "*"))
                 .body(json_string)
         }
         Err(e) => {
             println!("No results from postgres");
 
             HttpResponse::InternalServerError()
-                .insert_header(("Server", "Kactus"))
                 .insert_header(("Content-Type", "text/plain"))
-                .insert_header(("Access-Control-Allow-Origin", "*"))
                 .body("Postgres Error")
         }
     }
@@ -78,9 +72,7 @@ async fn getfeeds(req: HttpRequest, client: &Client) -> impl Responder {
 
 fn getroutesperagency(req: HttpRequest, client: &Client) -> impl Responder {
     HttpResponse::Ok()
-        .insert_header(("Server", "Kactus"))
         .insert_header(("Content-Type", "text/plain"))
-        .insert_header(("Access-Control-Allow-Origin", "*"))
         .body("Hello world!")
 }
 
@@ -112,6 +104,11 @@ async fn main() -> std::io::Result<()> {
     // Create a new HTTP server.
     let builder = HttpServer::new(|| {
         App::new()
+            .wrap(
+                middleware::DefaultHeaders::new()
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Server", "KylerChinCatenary"),
+            )
             .route("/", web::get().to(index))
             .route(
                 "/getfeeds",
