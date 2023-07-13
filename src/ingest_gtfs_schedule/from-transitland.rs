@@ -25,7 +25,7 @@ fn main() {
                                 },
                                 Err(e) => {
                                     println!("Error parsing file: {}", e);
-                                    println!("Skipping file: {}", file_name)
+                                    println!("Skipping file: {}", file_name);
                                 }
                             }
 
