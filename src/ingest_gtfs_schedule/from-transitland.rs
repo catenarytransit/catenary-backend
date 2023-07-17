@@ -5,6 +5,9 @@ mod dmfr;
 
 fn main() {
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
+
+        let mut feeds: Vec<String> = Vec::new();
+
         for entry in entries {
             if let Ok(entry) = entry {
                 if let Some(file_name) = entry.file_name().to_str() {
@@ -17,7 +20,7 @@ fn main() {
 
                             let dmfrinfo: Result<dmfr::DistributedMobilityFeedRegistry, SerdeError> = serde_json::from_str(&contents);
 
-                            match dmfrinfo {
+                        match dmfrinfo {
                                 Ok(dmfrinfo) => {
                                     dmfrinfo.feeds.iter().for_each(|feed| {
                                         //println!("{}: {:?}", feed.id.clone(), feed.urls);
@@ -29,7 +32,7 @@ fn main() {
                                 }
                             }
 
-                           
+                            
                         }, 
                         Err(e) => {
                             println!("Error reading file: {}", e);
