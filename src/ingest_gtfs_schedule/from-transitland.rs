@@ -1,12 +1,14 @@
 use std::fs;
 use serde_json::{Error as SerdeError};
-
+use std::collections::HashMap;
 mod dmfr;
 
 fn main() {
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
 
-        let mut feeds: Vec<String> = Vec::new();
+        let mut feedhashmap: HashMap<String,dmfr::Feed> = HashMap::new();
+
+        let mut operator_to_feed_hashmap: HashMap<String,Vec<dmfr::OperatorAssociatedFeedsItem>> = HashMap::new();
 
         for entry in entries {
             if let Ok(entry) = entry {
@@ -23,7 +25,39 @@ fn main() {
                         match dmfrinfo {
                                 Ok(dmfrinfo) => {
                                     dmfrinfo.feeds.iter().for_each(|feed| {
-                                        //println!("{}: {:?}", feed.id.clone(), feed.urls);
+                                        println!("Feed {}: {:?}", feed.id.clone(), feed.urls);
+
+                                        if feedhashmap.contains_key(&feed.id) {
+                                            feedhashmap.insert(feed.id.clone(), feed.clone());
+                                        } else {
+                                            feedhashmap.insert(feed.id.clone(), feed.clone());
+                                        }
+
+                                    });
+
+                                    dmfrinfo.operators.iter().for_each(|operator| {
+                                        println!("Operator {}: {:?}", operator.onestop_id.clone(), operator.associated_feeds);
+
+                                        if operator_to_feed_hashmap.contains_key(&operator.onestop_id) {
+
+                                            //combine the feeds for this operator together
+                                            let mut existing_associated_feeds = operator_to_feed_hashmap.get(&operator.onestop_id).unwrap().clone();
+
+                                            let existing_feed_ids = operator_to_feed_hashmap.get(&operator.onestop_id).unwrap().iter().map(|associated_feed| {
+                                                String::try_from(associated_feed.feed_onestop_id.unwrap())
+                                            }).collect::<Vec<String>>();
+
+                                            operator.associated_feeds.iter().for_each(|associated_feed| {
+                                                if !existing_feed_ids.contains(&associated_feed.feed_onestop_id.unwrap()) {
+                                                    existing_associated_feeds.push(associated_feed.clone());
+                                                }
+                                            });
+
+                                            operator_to_feed_hashmap.insert(operator.onestop_id.clone(), existing_associated_feeds);
+                                        } else {
+                                            operator_to_feed_hashmap.insert(operator.onestop_id.clone(), operator.associated_feeds.clone());
+                                        }
+
                                     });
                                 },
                                 Err(e) => {
