@@ -8,6 +8,8 @@ fn main() {
 
         let mut feedhashmap: HashMap<String,dmfr::Feed> = HashMap::new();
 
+        let mut operatorhashmap: HashMap<String,dmfr::Operator> = HashMap::new();
+
         let mut operator_to_feed_hashmap: HashMap<String,Vec<dmfr::OperatorAssociatedFeedsItem>> = HashMap::new();
 
         for entry in entries {
@@ -36,6 +38,10 @@ fn main() {
                                         }
 
                                     });
+
+                                    dmfrinfo.operators.iter().for_each(|operator|) {
+                                        operatorhashmap.insert(operator.onestop_id.clone(), operator);
+                                    }
 
                                     dmfrinfo.operators.iter().for_each(|operator| {
                                         println!("Operator {}: {:?}", operator.onestop_id.clone(), operator.associated_feeds);
