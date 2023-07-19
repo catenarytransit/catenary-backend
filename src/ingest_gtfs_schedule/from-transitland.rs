@@ -24,8 +24,10 @@ fn main() {
 
                         match dmfrinfo {
                                 Ok(dmfrinfo) => {
+
+
                                     dmfrinfo.feeds.iter().for_each(|feed| {
-                                        println!("Feed {}: {:?}", feed.id.clone(), feed.urls);
+                                    println!("Feed {}: {:#?}", feed.id.clone(), feed);
 
                                         if feedhashmap.contains_key(&feed.id) {
                                             feedhashmap.insert(feed.id.clone(), feed.clone());
@@ -44,11 +46,11 @@ fn main() {
                                             let mut existing_associated_feeds = operator_to_feed_hashmap.get(&operator.onestop_id).unwrap().clone();
 
                                             let existing_feed_ids = operator_to_feed_hashmap.get(&operator.onestop_id).unwrap().iter().map(|associated_feed| {
-                                                String::try_from(associated_feed.feed_onestop_id.unwrap())
+                                                associated_feed.feed_onestop_id.clone().unwrap()
                                             }).collect::<Vec<String>>();
 
                                             operator.associated_feeds.iter().for_each(|associated_feed| {
-                                                if !existing_feed_ids.contains(&associated_feed.feed_onestop_id.unwrap()) {
+                                                if !existing_feed_ids.contains(&associated_feed.feed_onestop_id.clone().unwrap()) {
                                                     existing_associated_feeds.push(associated_feed.clone());
                                                 }
                                             });
@@ -76,5 +78,17 @@ fn main() {
                 }
             }
         }
+
+        for (key, value) in feedhashmap.into_iter() {
+         //   println!("{} / {:#?}", key, value);
+            
+        }
+
+        for (key, value) in operator_to_feed_hashmap.into_iter() {
+       //     println!("{} / {:#?}", key, value);
+            
+        }
+    } else {
+        println!("Failed to read transit feed directory, does the directory exist?")
     }
 }
