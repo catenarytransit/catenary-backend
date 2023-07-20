@@ -37,13 +37,40 @@ fn main() {
                                             feedhashmap.insert(feed.id.clone(), feed.clone());
                                         }
 
+                                        feed.operators.iter().for_each(|operator| 
+                                            {operatorhashmap.insert(operator.onestop_id.clone(), operator.clone());
+                                            
+                                            
+                                                if operator_to_feed_hashmap.contains_key(&operator.onestop_id) {
+
+                                                    //combine the feeds for this operator together
+                                                    let mut existing_associated_feeds = operator_to_feed_hashmap.get(&operator.onestop_id).unwrap().clone();
+        
+                                                    let existing_feed_ids = operator_to_feed_hashmap.get(&operator.onestop_id).unwrap().iter().map(|associated_feed| {
+                                                        associated_feed.feed_onestop_id.clone().unwrap()
+                                                    }).collect::<Vec<String>>();
+        
+                                                    operator.associated_feeds.iter().for_each(|associated_feed| {
+                                                        if !existing_feed_ids.contains(&associated_feed.feed_onestop_id.clone().unwrap_or_else(|| {feed.id.clone()})) {
+                                                            existing_associated_feeds.push(associated_feed.clone());
+                                                        }
+                                                    });
+
+                                                    operator_to_feed_hashmap.insert(operator.onestop_id.clone(), existing_associated_feeds);
+                                                } else {
+                                                    operator_to_feed_hashmap.insert(operator.onestop_id.clone(), operator.associated_feeds.clone());
+                                                }
+                                            
+                                            }
+
+
+                                        );
+
                                     });
 
-                                    dmfrinfo.operators.iter().for_each(|operator|) {
-                                        operatorhashmap.insert(operator.onestop_id.clone(), operator);
-                                    }
-
                                     dmfrinfo.operators.iter().for_each(|operator| {
+                                         operatorhashmap.insert(operator.onestop_id.clone(), operator.clone());
+                                        
                                         println!("Operator {}: {:?}", operator.onestop_id.clone(), operator.associated_feeds);
 
                                         if operator_to_feed_hashmap.contains_key(&operator.onestop_id) {
@@ -85,15 +112,39 @@ fn main() {
             }
         }
 
-        for (key, value) in feedhashmap.into_iter() {
+        
+        let mut number_of_static_feeds = 0;
+
+        for (key, feed) in feedhashmap.clone().into_iter() {
          //   println!("{} / {:#?}", key, value);
             
+            match feed.spec {
+                dmfr::FeedSpec::Gtfs => {
+                    //static schedule
+
+                    number_of_static_feeds = number_of_static_feeds + 1;
+                },
+                _ => {
+                    //do nothing
+                }
+            }
+        }
+
+        println!(
+        "number of static feeds: {}", 
+        number_of_static_feeds
+        );
+
+        for (feed_id, feed) in feedhashmap.clone().into_iter() {
+            //collapse into vec and download all files
         }
 
         for (key, value) in operator_to_feed_hashmap.into_iter() {
        //     println!("{} / {:#?}", key, value);
             
         }
+
+        
     } else {
         println!("Failed to read transit feed directory, does the directory exist?")
     }
