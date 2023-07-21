@@ -4,6 +4,7 @@ use serde_json::{Error as SerdeError};
 use std::collections::HashMap;
 mod dmfr;
 use std::io::Write;
+use std::ops::Deref;
 use std::io::copy;
 use std::fs::File;
 use futures;
@@ -13,8 +14,13 @@ use gtfs_structures::Error as GtfsError;
 use gtfs_structures::PickupDropOffType;
 use gtfs_structures::RouteType;
 
+use color_eyre::eyre::Result;
+
 #[tokio::main]
 async fn main() {
+
+    color_eyre::install().unwrap();
+
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
 
         let mut feedhashmap: HashMap<String,dmfr::Feed> = HashMap::new();
@@ -135,78 +141,87 @@ async fn main() {
                     match feed.urls.static_current {
                         Some(static_url) => {
 
-                            let gtfs = gtfs_structures::Gtfs::from_path(format!("./gtfs_uncompressed/{}.zip", &key))?;
+                            let gtfs = gtfs_structures::Gtfs::from_path(format!("./gtfs_uncompressed/{}.zip", &key));
 
-                            println!("Read duration read_duration: {:?}", gtfs.read_duration);
+                            match gtfs {
+                                Ok(gtfs) => {
+                                    println!("Read duration read_duration: {:?}", gtfs.read_duration);
 
-                            println!("there are {} stops in the gtfs", gtfs.stops.len());
-                    
-                            println!("there are {} routes in the gtfs", gtfs.routes.len());
-                    
-                            let mut least_lat: Option<f64> = None;
-                            let mut least_lon: Option<f64> = None;
-                    
-                            let mut most_lat: Option<f64> = None;
-                            let mut most_lon: Option<f64> = None;
-                    
-                            let timestarting = std::time::Instant::now();
-                    
-                            let mut shapes_per_route: HashMap<String, Vec<String>> = HashMap::new();
-                    
-                            for (stop_id, stop) in &gtfs.stops {
-                                //check if least_lat has a value
-                    
-                                if (*stop).deref().longitude.is_some() {
-                                    let stop_lon = (*stop).deref().longitude.unwrap();
-                    
-                                    if least_lon.is_some() {
-                                        if stop_lon < least_lon.unwrap() {
-                                            least_lon = Some(stop_lon);
+                                    println!("there are {} stops in the gtfs", gtfs.stops.len());
+                            
+                                    println!("there are {} routes in the gtfs", gtfs.routes.len());
+                            
+                                    let mut least_lat: Option<f64> = None;
+                                    let mut least_lon: Option<f64> = None;
+                            
+                                    let mut most_lat: Option<f64> = None;
+                                    let mut most_lon: Option<f64> = None;
+                            
+                                    let timestarting = std::time::Instant::now();
+                            
+                                    let mut shapes_per_route: HashMap<String, Vec<String>> = HashMap::new();
+                            
+                                    for (stop_id, stop) in &gtfs.stops {
+                                        //check if least_lat has a value
+                            
+                                        if (*stop).deref().longitude.is_some() {
+                                            let stop_lon = (*stop).deref().longitude.unwrap();
+                            
+                                            if least_lon.is_some() {
+                                                if stop_lon < least_lon.unwrap() {
+                                                    least_lon = Some(stop_lon);
+                                                }
+                                            } else {
+                                                least_lon = Some(stop_lon);
+                                            }
+                            
+                                            if most_lon.is_some() {
+                                                if stop_lon > most_lon.unwrap() {
+                                                    most_lon = Some(stop_lon);
+                                                }
+                                            } else {
+                                                most_lon = Some(stop_lon);
+                                            }
                                         }
-                                    } else {
-                                        least_lon = Some(stop_lon);
-                                    }
-                    
-                                    if most_lon.is_some() {
-                                        if stop_lon > most_lon.unwrap() {
-                                            most_lon = Some(stop_lon);
+                            
+                                        if (*stop).deref().latitude.is_some() {
+                                            let stop_lat = (*stop).deref().latitude.unwrap();
+                            
+                                            if least_lat.is_some() {
+                                                if stop_lat < least_lat.unwrap() {
+                                                    least_lat = Some(stop_lat);
+                                                }
+                                            } else {
+                                                least_lat = Some(stop_lat);
+                                            }
+                            
+                                            if most_lat.is_some() {
+                                                if stop_lat > most_lat.unwrap() {
+                                                    most_lat = Some(stop_lat);
+                                                }
+                                            } else {
+                                                most_lat = Some(stop_lat);
+                                            }
                                         }
-                                    } else {
-                                        most_lon = Some(stop_lon);
                                     }
-                                }
-                    
-                                if (*stop).deref().latitude.is_some() {
-                                    let stop_lat = (*stop).deref().latitude.unwrap();
-                    
-                                    if least_lat.is_some() {
-                                        if stop_lat < least_lat.unwrap() {
-                                            least_lat = Some(stop_lat);
-                                        }
-                                    } else {
-                                        least_lat = Some(stop_lat);
-                                    }
-                    
-                                    if most_lat.is_some() {
-                                        if stop_lat > most_lat.unwrap() {
-                                            most_lat = Some(stop_lat);
-                                        }
-                                    } else {
-                                        most_lat = Some(stop_lat);
-                                    }
+                            
+                                    println!(
+                                        "Found bounding box for {}, ({},{}) and ({},{})",
+                                        key,
+                                        least_lat.unwrap(),
+                                        least_lon.unwrap(),
+                                        most_lat.unwrap(),
+                                        most_lon.unwrap()
+                                    );
+                            
+                                    println!("That took {:?}", timestarting.elapsed());
+                                },
+                                Err(error) => {
+                                    println!("{:#?}", error)
                                 }
                             }
-                    
-                            println!(
-                                "Found bounding box for {}, ({},{}) and ({},{})",
-                                agency.agency,
-                                least_lat.unwrap(),
-                                least_lon.unwrap(),
-                                most_lat.unwrap(),
-                                most_lon.unwrap()
-                            );
-                    
-                            println!("That took {:?}", timestarting.elapsed());
+
+                         
                         },
                         _ => {
 
