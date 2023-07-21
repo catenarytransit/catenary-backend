@@ -1,9 +1,15 @@
 use std::fs;
+use futures::StreamExt;
 use serde_json::{Error as SerdeError};
 use std::collections::HashMap;
 mod dmfr;
+use std::io::Write;
+use std::io::copy;
+use std::fs::File;
+use futures;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
 
         let mut feedhashmap: HashMap<String,dmfr::Feed> = HashMap::new();
@@ -78,7 +84,9 @@ fn main() {
                                             //combine the feeds for this operator together
                                             let mut existing_associated_feeds = operator_to_feed_hashmap.get(&operator.onestop_id).unwrap().clone();
 
-                                            let existing_feed_ids = operator_to_feed_hashmap.get(&operator.onestop_id).unwrap().iter().map(|associated_feed| {
+                                            let existing_feed_ids = operator_to_feed_hashmap.get(&operator.onestop_id).unwrap().iter()
+                                            .filter(|associated_feed| associated_feed.feed_onestop_id.is_some())
+                                            .map(|associated_feed| {
                                                 associated_feed.feed_onestop_id.clone().unwrap()
                                             }).collect::<Vec<String>>();
 
@@ -112,8 +120,14 @@ fn main() {
             }
         }
 
+        struct staticfeedtodownload {
+            feed_id: String,
+            url: String,
+        }
         
         let mut number_of_static_feeds = 0;
+
+        let mut vecofstaticstrings: Vec<staticfeedtodownload> = vec![];
 
         for (key, feed) in feedhashmap.clone().into_iter() {
          //   println!("{} / {:#?}", key, value);
@@ -123,6 +137,17 @@ fn main() {
                     //static schedule
 
                     number_of_static_feeds = number_of_static_feeds + 1;
+
+                    match feed.urls.static_current {
+                        Some(static_url) => {
+                            
+                    vecofstaticstrings.push(staticfeedtodownload{feed_id: feed.id.clone(), url: static_url.to_string()});
+                        },
+                        _ => {
+
+                        }
+                    }
+
                 },
                 _ => {
                     //do nothing
@@ -135,9 +160,35 @@ fn main() {
         number_of_static_feeds
         );
 
-        for (feed_id, feed) in feedhashmap.clone().into_iter() {
-            //collapse into vec and download all files
-        }
+        println!("Downloading zip files now");
+
+        let static_fetches = futures::stream::iter(vecofstaticstrings.into_iter().map(|staticfeed| {
+           async move {
+            let response = reqwest::get(&staticfeed.url).await;
+
+            match response {
+                Ok(response) => {
+                    let mut out = File::create(format!("gtfs_static_zips/{}.zip", &staticfeed.feed_id)).expect("failed to create file");
+                  
+                    let bytes_result = response.bytes().await;
+
+                    if bytes_result.is_ok() {
+                        let _ = out.write(&(bytes_result.unwrap()));
+                        println!("Finished writing {}", &staticfeed.feed_id);
+                    }
+
+                    
+                    },
+                Err(error) => {
+                    println!("Error with downloading {}: {}", &staticfeed.url, &staticfeed.url);
+                }
+            }
+           }
+        })).buffer_unordered(10).collect::<Vec<()>>();
+
+        static_fetches.await;
+
+        println!("Done fetching all zip files");
 
         for (key, value) in operator_to_feed_hashmap.into_iter() {
        //     println!("{} / {:#?}", key, value);
