@@ -28,6 +28,7 @@ sqlx = { version = "0.6.3", features = ["postgres", "runtime-tokio-rustls"] }
 serde_json = "1.0.100"
 actix-web = "4.3.1"
 regress = "0.6.0"
+color-eyre = {version = "0.6.2", features = ["url", "issue-url"]}
 
 [[bin]]
 name = "schedule_ingest"
@@ -38,9 +39,16 @@ name = "http_server"
 path = "src/http-server.rs"
 
 [[bin]]
-name = "transitland"
+name = "transitlanddownload"
 path = "src/ingest_gtfs_schedule/from-transitland.rs"
 
+<<<<<<< HEAD
 [[bin]]
 name = "import"
 path = "src/ingest_gtfs_schedule/uncompressed-to-postgres.rs"
+=======
+
+[[bin]]
+name = "transitlandingest"
+path = "src/ingest_gtfs_schedule/unzip-and-import.rs"
+>>>>>>> 32e0b7966469a4c1b414fda550b7734e4c8ddcac
