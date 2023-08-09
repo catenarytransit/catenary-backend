@@ -45,3 +45,7 @@ path = "src/ingest_gtfs_schedule/from-transitland.rs"
 [[bin]]
 name = "import"
 path = "src/ingest_gtfs_schedule/uncompressed-to-postgres.rs"
+
+[[bin]]
+name = "flattenuncompressed"
+path = "src/ingest_gtfs_schedule/flatten.rs"

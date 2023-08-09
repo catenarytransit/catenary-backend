@@ -28,20 +28,11 @@ echo "Unzipping complete!"
 
 #flatten each feed
 cd ..
-cd "$destination_dir"
 
 # Loop through each subdirectory
-for subdirectory in */; do
-    echo "-----------"
-    echo working on $subdirectory
-
-    # Move the subdirectory contents to the source directory
-    #mv -f */* .
-
-done
+cargo run --bin flattenuncompressed
 
 # we also need to change the permissions bug
 # example is f-kauai 
 
-chmod -R +r $destination_folder
-
+chmod -R +r $destination_dir
