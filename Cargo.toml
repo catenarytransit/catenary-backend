@@ -42,13 +42,6 @@ path = "src/http-server.rs"
 name = "transitlanddownload"
 path = "src/ingest_gtfs_schedule/from-transitland.rs"
 
-<<<<<<< HEAD
 [[bin]]
 name = "import"
 path = "src/ingest_gtfs_schedule/uncompressed-to-postgres.rs"
-=======
-
-[[bin]]
-name = "transitlandingest"
-path = "src/ingest_gtfs_schedule/unzip-and-import.rs"
->>>>>>> 32e0b7966469a4c1b414fda550b7734e4c8ddcac
