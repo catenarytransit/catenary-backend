@@ -40,3 +40,7 @@ path = "src/http-server.rs"
 [[bin]]
 name = "transitland"
 path = "src/ingest_gtfs_schedule/from-transitland.rs"
+
+[[bin]]
+name = "import"
+path = "src/ingest_gtfs_schedule/uncompressed-to-postgres.rs"
