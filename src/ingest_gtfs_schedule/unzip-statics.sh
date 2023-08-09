@@ -19,43 +19,29 @@ for zip_file in *.zip; do
     fi
 
     # Unzip the file into the destination folder
-    unzip -f "$zip_file" -d "../$destination_folder"
+    unzip -o "$zip_file" -d "../$destination_folder"
     echo "Unzipped"
-done
+done &
+wait
 
 echo "Unzipping complete!"
+
+#flatten each feed
+cd ..
+cd "$destination_dir"
+
+# Loop through each subdirectory
+for subdirectory in */; do
+    echo "-----------"
+    echo working on $subdirectory
+
+    # Move the subdirectory contents to the source directory
+    #mv -f */* .
+
+done
 
 # we also need to change the permissions bug
 # example is f-kauai 
 
-cd ..
-cd "$destination_dir"
+chmod -R +r $destination_folder
 
-echo "finding and fixing read permissions"
-
-subdirectories=$(find -type d)
-
-# Loop through each subdirectory
-for subdirectory in $subdirectories; do
-
-  # Find all files in the subdirectory
-  files=$(find $subdirectory -type f)
-
-  # Loop through each file
-  for file in $files; do
-
-    # Check if the file has read permissions
-    if [ ! -r $file ]; then
-
-      # Add read permissions to the file
-      
-      echo "-----------------"
-      echo "$subdirectory"
-      echo "fixing missing read perms for $file"
-      chmod +r $subdirectory/$file
-
-    fi
-
-  done
-
-done
