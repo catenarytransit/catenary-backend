@@ -1,45 +1,40 @@
-use csv::ReaderBuilder;
-use std::error::Error;
-use std::io::prelude::*;
-//use serde::ser::StdError;
-use serde::{Deserialize, Serialize};
-use std::io::Cursor;
-
-use std::fs::File;
-//use std::path::Path;
-use reqwest;
-use std::ops::Deref;
-use tokio::task::JoinHandle;
-
+use futures::StreamExt;
+use serde_json::Error as SerdeError;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::fs;
+mod dmfr;
+use futures;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::Error as GtfsError;
 use gtfs_structures::PickupDropOffType;
+use clap::Parser;
 use gtfs_structures::RouteType;
-
-use std::io::{Read, Write};
-//use std::net::TcpStream;
-use std::fs::copy;
-
-use std::collections::HashMap;
-use tokio_postgres::types::private::BytesMut;
-use tokio_postgres::types::ToSql;
-use tokio_postgres::{Error as PostgresError, NoTls, Row};
-
-#[feature(async_await)]
-use futures::future::join_all;
-
 use postgis::{ewkb, LineString};
+use std::error::Error;
+use std::fs::File;
+use rgb::RGB;
+use std::io::copy;
+use std::io::Write;
+use std::ops::Deref;
+use tokio_postgres::Client;
+use tokio_postgres::{Error as PostgresError, NoTls};
 
-#[derive(Debug, Deserialize, Clone)]
-struct Agency {
-    agency: String,
-    url: String,
-    feed_id: String,
-    operator_id: String,
+pub fn path_exists(path: &str) -> bool {
+    fs::metadata(path).is_ok()
+}
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(long)]
+    postgres: String,
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn Error>> {
+
+    let args = Args::parse();
+
     let postgresstring = arguments::parse(std::env::args())
         .unwrap()
         .get::<String>("postgres");
@@ -47,8 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let postgresstring = match postgresstring {
         Some(s) => s,
         None => {
-            println!("Postgres string not avaliable, using default");
-            "host=localhost user=postgres".to_string()
+            panic!("You need a postgres string");
         }
     };
 
@@ -66,405 +60,523 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client
         .batch_execute(
             "
-            CREATE EXTENSION IF NOT EXISTS postgis;
+        CREATE EXTENSION IF NOT EXISTS postgis;
 
-            DROP SCHEMA IF EXISTS gtfs_static CASCADE;
+        DROP SCHEMA IF EXISTS gtfs_static CASCADE;
 
-        CREATE SCHEMA IF NOT EXISTS gtfs_static;
-        
-        CREATE TABLE IF NOT EXISTS gtfs_static.static_feeds (
-            onestop_feed_id text PRIMARY KEY,
-            onestop_operator_id text,
-            gtfs_agency_id text,
-            name text NOT NULL,
-            url text NOT NULL,
-            timezone text NOT NULL,
-            lang text,
-            phone text,
-            fare_url text,
-            email text,
-            max_lat double precision NOT NULL,
-            max_lon double precision NOT NULL,
-            min_lat double precision NOT NULL,
-            min_lon double precision NOT NULL
-        );
+    CREATE SCHEMA IF NOT EXISTS gtfs_static;
+    
+    CREATE TABLE IF NOT EXISTS gtfs_static.static_feeds (
+        onestop_feed_id text PRIMARY KEY,
+        onestop_operator_id text,
+        gtfs_agency_id text,
+        name text ,
+        url text ,
+        timezone text,
+        lang text,
+        phone text,
+        fare_url text,
+        email text,
+        max_lat double precision NOT NULL,
+        max_lon double precision NOT NULL,
+        min_lat double precision NOT NULL,
+        min_lon double precision NOT NULL
+    );
 
-        CREATE TABLE IF NOT EXISTS gtfs_static.routes (
-            route_id text NOT NULL,
-            onestop_feed_id text NOT NULL,
-            short_name text NOT NULL,
-            long_name text NOT NULL,
-            gtfs_desc text,
-            route_type int NOT NULL,
-            url text,
-            agency_id text,
-            gtfs_order int,
-            color text,
-            text_color text,
-            continuous_pickup int,
-            continuous_drop_off int,
-            shapes_list text[],
-            PRIMARY KEY (onestop_feed_id, route_id)
-        );
+    CREATE TABLE IF NOT EXISTS gtfs_static.routes (
+        route_id text NOT NULL,
+        onestop_feed_id text NOT NULL,
+        short_name text NOT NULL,
+        long_name text NOT NULL,
+        gtfs_desc text,
+        route_type int NOT NULL,
+        url text,
+        agency_id text,
+        gtfs_order int,
+        color text,
+        text_color text,
+        continuous_pickup int,
+        continuous_drop_off int,
+        shapes_list text[],
+        PRIMARY KEY (onestop_feed_id, route_id)
+    );
 
-        CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
-            onestop_feed_id text NOT NULL,
-            shape_id text NOT NULL,
-            linestring GEOMETRY(LINESTRING,4326) NOT NULL,
-            PRIMARY KEY (onestop_feed_id,shape_id)
-        );
-        
-        ",
+    CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
+        onestop_feed_id text NOT NULL,
+        shape_id text NOT NULL,
+        linestring GEOMETRY(LINESTRING,4326) NOT NULL,
+        color text,
+        PRIMARY KEY (onestop_feed_id,shape_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS gtfs_static.trips (
+        trip_id text NOT NULL,
+        onestop_feed_id text NOT NULL,
+        route_id text NOT NULL,
+        service_id text NOT NULL,
+        trip_headsign text,
+        trip_short_name text,
+        direction_id int,
+        block_id text,
+        shape_id text,
+        wheelchair_accessible int,
+        bikes_allowed int,
+        PRIMARY KEY (onestop_feed_id, trip_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON gtfs_static.shapes USING GIST (linestring);
+
+    CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON gtfs_static.shapes (onestop_feed_id);
+
+    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON gtfs_Static.routes (onestop_feed_id);
+    
+    ",
         )
         .await
         .unwrap();
 
     println!("Finished making database");
 
-    let file = File::open("./gtfs_schedules.csv");
-    let mut contents = String::new();
-    file.expect("read zip file failed!")
-        .read_to_string(&mut contents);
+    if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
+        let mut feedhashmap: BTreeMap<String, dmfr::Feed> = BTreeMap::new();
 
-    let mut reader = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(contents.as_bytes());
+        let mut operatorhashmap: BTreeMap<String, dmfr::Operator> = BTreeMap::new();
 
-    let mut agencies = Vec::new();
-    for result in reader.deserialize() {
-        let record: Agency = result?;
-        agencies.push(record);
-    }
+        let mut operator_to_feed_hashmap: BTreeMap<String, Vec<dmfr::OperatorAssociatedFeedsItem>> =
+            BTreeMap::new();
 
-    // Iterate over the paths.
-    let mut tasks: Vec<JoinHandle<Result<(), ()>>> = vec![];
+        for entry in entries {
+            if let Ok(entry) = entry {
+                if let Some(file_name) = entry.file_name().to_str() {
+                    println!("{}", file_name);
 
-    let firstagencies = agencies.clone();
+                    let contents =
+                        fs::read_to_string(format!("transitland-atlas/feeds/{}", file_name));
 
-    for agency in firstagencies {
-        // Copy each path into a new string
-        // that can be consumed/captured by the task closure
-        let path = agency.url.clone();
+                    match contents {
+                        Ok(contents) => {
+                            let dmfrinfo: Result<
+                                dmfr::DistributedMobilityFeedRegistry,
+                                SerdeError,
+                            > = serde_json::from_str(&contents);
 
-        // Create a Tokio task for each path
-        tasks.push(tokio::spawn(async move {
-            match reqwest::get(&path).await {
-                Ok(resp) => {
-                    match resp.bytes().await {
-                        Ok(text) => {
-                            println!("RESPONSE: {} KB from {}", text.len() / 1000, path);
+                            match dmfrinfo {
+                                Ok(dmfrinfo) => {
+                                    dmfrinfo.feeds.iter().for_each(|feed| {
+                                        //println!("Feed {}: {:#?}", feed.id.clone(), feed);
 
-                            //create folder if not exists
-                            std::fs::create_dir_all("./gtfs_schedules")
-                                .expect("create folder failed!");
+                                        if !feedhashmap.contains_key(&feed.id) {
+                                            //feedhashmap.insert(feed.id.clone(), feed.clone());
+                                            feedhashmap.insert(feed.id.clone(), feed.clone());
+                                        } 
 
-                            //save to file
+                                        feed.operators.iter().for_each(|operator| {
+                                            operatorhashmap.insert(
+                                                operator.onestop_id.clone(),
+                                                operator.clone(),
+                                            );
 
-                            let mut file =
-                                File::create(format!("./gtfs_schedules/{}.zip", agency.agency))
-                                    .expect("create file failed!");
+                                            if operator_to_feed_hashmap
+                                                .contains_key(&operator.onestop_id)
+                                            {
+                                                //combine the feeds for this operator together
+                                                let mut existing_associated_feeds =
+                                                    operator_to_feed_hashmap
+                                                        .get(&operator.onestop_id)
+                                                        .unwrap()
+                                                        .clone();
 
-                            // Copy the response body into the file
-                            let mut content = Cursor::new(text);
-                            std::io::copy(&mut content, &mut file);
+                                                let existing_feed_ids = operator_to_feed_hashmap
+                                                    .get(&operator.onestop_id)
+                                                    .unwrap()
+                                                    .iter()
+                                                    .map(|associated_feed| {
+                                                        associated_feed
+                                                            .feed_onestop_id
+                                                            .clone()
+                                                            .unwrap()
+                                                    })
+                                                    .collect::<Vec<String>>();
 
-                            println!(
-                                "save to file: {}",
-                                format!("./gtfs_schedules/{}.zip", agency.agency)
-                            );
+                                                operator.associated_feeds.iter().for_each(
+                                                    |associated_feed| {
+                                                        if !existing_feed_ids.contains(
+                                                            &associated_feed
+                                                                .feed_onestop_id
+                                                                .clone()
+                                                                .unwrap_or_else(|| feed.id.clone()),
+                                                        ) {
+                                                            existing_associated_feeds
+                                                                .push(associated_feed.clone());
+                                                        }
+                                                    },
+                                                );
+
+                                                operator_to_feed_hashmap.insert(
+                                                    operator.onestop_id.clone(),
+                                                    existing_associated_feeds,
+                                                );
+                                            } else {
+                                                operator_to_feed_hashmap.insert(
+                                                    operator.onestop_id.clone(),
+                                                    operator.associated_feeds.clone(),
+                                                );
+                                            }
+                                        });
+                                    });
+
+                                    dmfrinfo.operators.iter().for_each(|operator| {
+                                        operatorhashmap
+                                            .insert(operator.onestop_id.clone(), operator.clone());
+
+                                        println!(
+                                            "Operator {}: {:?}",
+                                            operator.onestop_id.clone(),
+                                            operator.associated_feeds
+                                        );
+
+                                        if operator_to_feed_hashmap
+                                            .contains_key(&operator.onestop_id)
+                                        {
+                                            //combine the feeds for this operator together
+                                            let mut existing_associated_feeds =
+                                                operator_to_feed_hashmap
+                                                    .get(&operator.onestop_id)
+                                                    .unwrap()
+                                                    .clone();
+
+                                            let existing_feed_ids = operator_to_feed_hashmap
+                                                .get(&operator.onestop_id)
+                                                .unwrap()
+                                                .iter()
+                                                .filter(|associated_feed| {
+                                                    associated_feed.feed_onestop_id.is_some()
+                                                })
+                                                .map(|associated_feed| {
+                                                    associated_feed.feed_onestop_id.clone().unwrap()
+                                                })
+                                                .collect::<Vec<String>>();
+
+                                            operator.associated_feeds.iter().for_each(
+                                                |associated_feed| {
+                                                    if !existing_feed_ids.contains(
+                                                        &associated_feed
+                                                            .feed_onestop_id
+                                                            .clone()
+                                                            .unwrap(),
+                                                    ) {
+                                                        existing_associated_feeds
+                                                            .push(associated_feed.clone());
+                                                    }
+                                                },
+                                            );
+
+                                            operator_to_feed_hashmap.insert(
+                                                operator.onestop_id.clone(),
+                                                existing_associated_feeds,
+                                            );
+                                        } else {
+                                            operator_to_feed_hashmap.insert(
+                                                operator.onestop_id.clone(),
+                                                operator.associated_feeds.clone(),
+                                            );
+                                        }
+                                    });
+                                }
+                                Err(e) => {}
+                            }
                         }
-                        Err(_) => eprintln!("ERROR reading {}", path),
+                        Err(e) => {}
                     }
                 }
-                Err(_) => eprintln!("ERROR downloading {}", path),
-            }
-            Ok(())
-        }));
-    }
 
-    // Wait for them all to finish
-    println!("Started {} tasks. Waiting...", tasks.len());
-    join_all(tasks).await;
 
-    for agency in agencies {
-        println!("v2 agency: {}, url: {}", agency.agency, agency.url);
-
-        let gtfs =
-            gtfs_structures::Gtfs::from_path(format!("./gtfs_schedules/{}.zip", agency.agency))?;
-
-        println!("Read duration read_duration: {:?}", gtfs.read_duration);
-
-        println!("there are {} stops in the gtfs", gtfs.stops.len());
-
-        println!("there are {} routes in the gtfs", gtfs.routes.len());
-
-        let mut least_lat: Option<f64> = None;
-        let mut least_lon: Option<f64> = None;
-
-        let mut most_lat: Option<f64> = None;
-        let mut most_lon: Option<f64> = None;
-
-        let timestarting = std::time::Instant::now();
-
-        let mut shapes_per_route: HashMap<String, Vec<String>> = HashMap::new();
-
-        for (stop_id, stop) in &gtfs.stops {
-            //check if least_lat has a value
-
-            if (*stop).deref().longitude.is_some() {
-                let stop_lon = (*stop).deref().longitude.unwrap();
-
-                if least_lon.is_some() {
-                    if stop_lon < least_lon.unwrap() {
-                        least_lon = Some(stop_lon);
-                    }
-                } else {
-                    least_lon = Some(stop_lon);
-                }
-
-                if most_lon.is_some() {
-                    if stop_lon > most_lon.unwrap() {
-                        most_lon = Some(stop_lon);
-                    }
-                } else {
-                    most_lon = Some(stop_lon);
-                }
-            }
-
-            if (*stop).deref().latitude.is_some() {
-                let stop_lat = (*stop).deref().latitude.unwrap();
-
-                if least_lat.is_some() {
-                    if stop_lat < least_lat.unwrap() {
-                        least_lat = Some(stop_lat);
-                    }
-                } else {
-                    least_lat = Some(stop_lat);
-                }
-
-                if most_lat.is_some() {
-                    if stop_lat > most_lat.unwrap() {
-                        most_lat = Some(stop_lat);
-                    }
-                } else {
-                    most_lat = Some(stop_lat);
-                }
+               
             }
         }
 
-        println!(
-            "Found bounding box for {}, ({},{}) and ({},{})",
-            agency.agency,
-            least_lat.unwrap(),
-            least_lon.unwrap(),
-            most_lat.unwrap(),
-            most_lon.unwrap()
-        );
+        for (key, feed) in feedhashmap.clone().into_iter() {
+           let mut dothetask = true;
 
-        println!("That took {:?}", timestarting.elapsed());
+           if key.contains("~jp") || key.contains("germany~urban~transport") {
+               dothetask = false;
+           }
 
-        for (shape_id, shape_vec) in &gtfs.shapes {
-            //println!("shape_id: {} has {} points", shape_id, shape_vec.len());
+           if dothetask {
+            match feed.spec {
+                dmfr::FeedSpec::Gtfs => {
+                    //println!("{:?}", feed.urls);
 
-            //get the trips associated with this shape_id
+                    if feed.urls.static_current.is_some() {
+                        //check if folder exists in the directory
 
-            let mut trip_ids = Vec::new();
-            let mut route_ids = Vec::new();
+                        //process and upload routes, stops, headways, and shapes etc into postgres
 
-            for (trip_id, trip) in &gtfs.trips {
-                let cloned_shape_id: String = shape_id.clone();
+                        //calculate the bounds of the feed,
 
-                if trip.shape_id == Some(cloned_shape_id) {
-                    trip_ids.push(trip_id.clone());
-                    route_ids.push(trip.route_id.clone());
+                        //upload the feed id metadata
+
+                        
+
+                        if path_exists(&format!("gtfs_uncompressed/{}/", key)) {
+                            //feed exists
+                            let gtfs = gtfs_structures::GtfsReader::default()
+                                .read_from_path(&format!("gtfs_uncompressed/{}/", key));
+
+                            if gtfs.is_ok() {
+                                let gtfs = gtfs.unwrap();
+
+                                println!("read_duration: {:?}ms", gtfs.read_duration);
+
+                                println!(
+                                    "there are {} stops in the gtfs",
+                                    gtfs.stops.len()
+                                );
+
+                                println!(
+                                    "there are {} routes in the gtfs",
+                                    gtfs.routes.len()
+                                );
+
+                                let mut least_lat: Option<f64> = None;
+                                let mut least_lon: Option<f64> = None;
+
+                                let mut most_lat: Option<f64> = None;
+                                let mut most_lon: Option<f64> = None;
+
+                                let timestarting = std::time::Instant::now();
+
+                                let mut shapes_per_route: HashMap<String, Vec<String>> =
+                                    HashMap::new();
+
+                                for (stop_id, stop) in &gtfs.stops {
+                                    //check if least_lat has a value
+
+                                    if (*stop).deref().longitude.is_some() {
+                                        let stop_lon = (*stop).deref().longitude.unwrap();
+
+                                        if least_lon.is_some() {
+                                            if stop_lon < least_lon.unwrap() {
+                                                least_lon = Some(stop_lon);
+                                            }
+                                        } else {
+                                            least_lon = Some(stop_lon);
+                                        }
+
+                                        if most_lon.is_some() {
+                                            if stop_lon > most_lon.unwrap() {
+                                                most_lon = Some(stop_lon);
+                                            }
+                                        } else {
+                                            most_lon = Some(stop_lon);
+                                        }
+                                    }
+
+                                    if (*stop).deref().latitude.is_some() {
+                                        let stop_lat = (*stop).deref().latitude.unwrap();
+
+                                        if least_lat.is_some() {
+                                            if stop_lat < least_lat.unwrap() {
+                                                least_lat = Some(stop_lat);
+                                            }
+                                        } else {
+                                            least_lat = Some(stop_lat);
+                                        }
+
+                                        if most_lat.is_some() {
+                                            if stop_lat > most_lat.unwrap() {
+                                                most_lat = Some(stop_lat);
+                                            }
+                                        } else {
+                                            most_lat = Some(stop_lat);
+                                        }
+                                    }
+                                }
+
+                                let mut shape_to_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
+
+                                for (trip_id, trip) in &gtfs.trips {
+                                    if trip.shape_id.is_some() {
+                                        if !shape_to_color_lookup
+                                            .contains_key(&trip.shape_id.as_ref().unwrap().clone())
+                                        {
+                                            if gtfs.routes.contains_key(&trip.route_id) {
+                                                let route = gtfs
+                                                    .routes
+                                                    .get(&trip.route_id)
+                                                    .unwrap();
+
+                                                let color = route.color.clone();
+
+                                                shape_to_color_lookup.insert(
+                                                trip.shape_id.as_ref().unwrap().clone(),
+                                                    color,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+
+                                for (shape_id, shape) in &gtfs.shapes {
+                                    let linestring = ewkb::LineStringT {
+                                        srid: Some(4326),
+                                        points: shape
+                                            .iter()
+                                            .map(|point| postgis::ewkb::Point {
+                                                x: point.longitude,
+                                                y: point.latitude,
+                                                srid: Some(4326),
+                                            })
+                                            .collect(),
+                                    };
+                                    /*
+                                      CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
+                                            onestop_feed_id text NOT NULL,
+                                            shape_id text NOT NULL,
+                                            linestring GEOMETRY(LINESTRING,4326) NOT NULL,
+                                            color text,
+                                            PRIMARY KEY (onestop_feed_id,shape_id)
+                                        );
+                                    */
+
+                                    let color_to_upload =
+                                        match shape_to_color_lookup.get(shape_id) {
+                                            Some(color) => format!(
+                                                "{:02x}{:02x}{:02x}",
+                                                color.r, color.g, color.b
+                                            ),
+                                            None => String::from("3a3a3a"),
+                                        };
+
+                                        println!("uploading {:?} {:?}", &feed.id, &shape_id);
+
+                                    let _ = client.query("INSERT INTO gtfs_static.shapes (onestop_feed_id, shape_id, linestring, color) VALUES ($1, $2, $3, $4)",
+                                 &[
+                                    &feed.id,
+                                    &shape_id, 
+                                 &linestring,
+                                 &color_to_upload
+                                 ]).await;
+                                }
+
+                                for (route_id, route) in &gtfs.routes {
+                                    let route_type_number = match &route.route_type {
+                                        RouteType::Tramway => 0,
+                                        RouteType::Subway => 1,
+                                        RouteType::Rail => 2,
+                                        RouteType::Bus => 3,
+                                        RouteType::Ferry => 4,
+                                        RouteType::CableCar => 5,
+                                        RouteType::Gondola => 6,
+                                        RouteType::Funicular => 7,
+                                        RouteType::Coach => 200,
+                                        RouteType::Air => 1100,
+                                        RouteType::Taxi => 1500,
+                                        RouteType::Other(i) => *i,
+                                    };
+
+                                    let shape_id_array: Vec<String> =
+                                        match shapes_per_route.get(route_id) {
+                                            Some(shape_list) => shape_list.clone(),
+                                            None => vec![],
+                                        };
+
+                                        println!("uploading {:?} {}", &feed.id , &route_id);
+
+                                    let _ = client
+                                    .query(
+                                        "INSERT INTO gtfs_static.routes
+                                (
+                                    route_id,
+                                    onestop_feed_id,
+                                    short_name,
+                                    long_name,
+                                    gtfs_desc,
+                                    route_type,
+                                    url,
+                                    agency_id,
+                                    gtfs_order,
+                                    color,
+                                    text_color,
+                                    continuous_pickup,
+                                    continuous_drop_off,
+                                    shapes_list
+                                )
+                                VALUES (
+                                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+                                )
+                                ",
+                                        &[
+                                            &route_id,
+                                            &feed.id,
+                                            &route.short_name,
+                                            &route.long_name,
+                                            &route.desc.clone().unwrap_or_else(|| "".to_string()),
+                                            &route_type_number,
+                                            &route.url,
+                                            &route.agency_id.clone().unwrap_or_else(|| "".to_string()),
+                                            &i32::try_from(route.order.unwrap_or_else(|| 0)).ok(),
+                                            &(route.color.to_string()),
+                                            &(route.text_color.to_string()),
+                                            &(match route.continuous_pickup {
+                                                ContinuousPickupDropOff::Continuous => 0,
+                                                ContinuousPickupDropOff::NotAvailable => 1,
+                                                ContinuousPickupDropOff::ArrangeByPhone => 2,
+                                                ContinuousPickupDropOff::CoordinateWithDriver => 3,
+                                                ContinuousPickupDropOff::Unknown(i) => i,
+                                            }),
+                                            &(match route.continuous_drop_off {
+                                                ContinuousPickupDropOff::Continuous => 0,
+                                                ContinuousPickupDropOff::NotAvailable => 1,
+                                                ContinuousPickupDropOff::ArrangeByPhone => 2,
+                                                ContinuousPickupDropOff::CoordinateWithDriver => 3,
+                                                ContinuousPickupDropOff::Unknown(i) => i,
+                                            }),
+                                            &shape_id_array,
+                                        ],
+                                    )
+                                    .await?;
+                                }
+
+                                //okay finally upload the feed metadata
+
+                                /*
+                                
+                                onestop_feed_id text PRIMARY KEY,
+        onestop_operator_id text,
+        gtfs_agency_id text,
+        name text ,
+        url text ,
+        timezone text,
+        lang text,
+        phone text,
+        fare_url text,
+        email text,
+        max_lat double precision NOT NULL,
+        max_lon double precision NOT NULL,
+        min_lat double precision NOT NULL,
+        min_lon double precision NOT NULL
+         */
+
+                                let _ = client.query("INSERT INTO gtfs_static.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon) VALUES ($1, $2, $3, $4, $5)", &[
+                                    &feed.id,
+                                    &least_lat,
+                                    &least_lon,
+                                    &least_lat,
+                                    &least_lon
+                                ]).await?;
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    //do nothing
+                    println!("skipping {}, does not match dmfr feed spec", &key);
                 }
             }
-
-            let cloned_shape_id_2: String = shape_id.clone();
-
-            if gtfs.agencies[0].id == Some(String::from("Metrolink")) {
-                let mut shape_to_route_pre = HashMap::new();
-
-                let lines = ["91", "IEOC", "AV", "OC", "RIVER", "SB", "VT"];
-
-                for line in lines.iter() {
-                    let value = match *line {
-                        "91" => "91 Line",
-                        "IEOC" => "Inland Emp.-Orange Co. Line",
-                        "AV" => "Antelope Valley Line",
-                        "OC" => "Orange County Line",
-                        "RIVER" => "Riverside Line",
-                        "SB" => "San Bernardino Line",
-                        "VT" => "Ventura County Line",
-                        _ => "",
-                    };
-                    shape_to_route_pre.insert(line.to_string(), value.to_string());
-                }
-
-                let mut shape_to_route = HashMap::new();
-
-                for preroute in shape_to_route_pre.iter() {
-                    //for each preroute, add "{key}in" and "keyout" to the hashmap
-
-                    let keyin = format!("{}in", preroute.0);
-                    let keyout: String = format!("{}out", preroute.0);
-
-                    shape_to_route.insert(keyin, preroute.1.clone());
-                    shape_to_route.insert(keyout, preroute.1.clone());
-                }
-
-                //check if shape_id is in the hashmap
-
-                //console hashmap
-
-                println!("shape_to_route: {:?}", shape_to_route);
-
-                //println!("shape_id: {}", cloned_shape_id_2.clone());
-
-                if shape_to_route.contains_key(&format!("{}", cloned_shape_id_2.clone())) {
-                    //println!("shape_id: {} has route_id: {}", shape_id, shape_to_route[shape_id]);
-                    //route_ids.push(shape_to_route[shape_id].to_string().clone());
-                    route_ids.push(
-                        shape_to_route[cloned_shape_id_2.as_str()]
-                            .to_string()
-                            .clone(),
-                    );
-                }
-            }
-
-            route_ids.sort_unstable();
-            route_ids.dedup();
-
-            for route_id in route_ids {
-                if shapes_per_route.contains_key(&route_id) == true {
-                    let mut new_shapes_list_for_this_route = shapes_per_route[&route_id].clone();
-
-                    new_shapes_list_for_this_route.push(shape_id.clone());
-
-                    shapes_per_route.insert(route_id, new_shapes_list_for_this_route);
-                } else {
-                    shapes_per_route.insert(route_id, vec![shape_id.clone()]);
-                }
-            }
-
-            //list trips associated with this shape_id
-            //let result = trip_ids.join(",");
-            //println!("trip_id for shape: {}", result);
-
-            //println!("there are {} trips for shape", trip_ids.len());
-            //println!("the routes for shape {} are {:?}", shape_id, route_ids);
         }
-
-        let _ = client
-            .query(
-                "INSERT INTO gtfs_static.static_feeds
-            (onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
-                max_lat, min_lat, max_lon, min_lon)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
-                &[
-                    &agency.feed_id,
-                    &agency.operator_id,
-                    &gtfs.agencies[0].id,
-                    &gtfs.agencies[0].name,
-                    &gtfs.agencies[0].url,
-                    &gtfs.agencies[0].timezone,
-                    &gtfs.agencies[0].lang,
-                    &gtfs.agencies[0].phone,
-                    &gtfs.agencies[0].fare_url,
-                    &gtfs.agencies[0].email,
-                    &(least_lat.unwrap()),
-                    &(least_lon.unwrap()),
-                    &(most_lat.unwrap()),
-                    &(most_lon.unwrap()),
-                ],
-            )
-            .await?;
-
-        for (route_id, route) in &gtfs.routes {
-            let route_type_number = match &route.route_type {
-                RouteType::Tramway => 0,
-                RouteType::Subway => 1,
-                RouteType::Rail => 2,
-                RouteType::Bus => 3,
-                RouteType::Ferry => 4,
-                RouteType::CableCar => 5,
-                RouteType::Gondola => 6,
-                RouteType::Funicular => 7,
-                RouteType::Coach => 200,
-                RouteType::Air => 1100,
-                RouteType::Taxi => 1500,
-                RouteType::Other(i) => *i,
-            };
-
-            let shape_id_array: Vec<String> = match shapes_per_route.get(route_id) {
-                Some(shape_list) => shape_list.clone(),
-                None => vec![],
-            };
-
-            let _ = client
-                .query(
-                    "INSERT INTO gtfs_static.routes 
-            (
-                route_id,
-                onestop_feed_id,
-                short_name,
-                long_name,
-                gtfs_desc,
-                route_type,
-                url,
-                agency_id,
-                gtfs_order,
-                color,
-                text_color,
-                continuous_pickup,
-                continuous_drop_off,
-                shapes_list
-            )
-            VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
-            )
-            ",
-                    &[
-                        &route_id,
-                        &agency.feed_id,
-                        &route.short_name,
-                        &route.long_name,
-                        &route.desc.clone().unwrap_or_else(|| "".to_string()),
-                        &route_type_number,
-                        &route.url,
-                        &route.agency_id.clone().unwrap_or_else(|| "".to_string()),
-                        &i32::try_from(route.order.unwrap_or_else(|| 0)).ok(),
-                        &(route.color.to_string()),
-                        &(route.text_color.to_string()),
-                        &(match route.continuous_pickup {
-                            ContinuousPickupDropOff::Continuous => 0,
-                            ContinuousPickupDropOff::NotAvailable => 1,
-                            ContinuousPickupDropOff::ArrangeByPhone => 2,
-                            ContinuousPickupDropOff::CoordinateWithDriver => 3,
-                            ContinuousPickupDropOff::Unknown(i) => i,
-                        }),
-                        &(match route.continuous_drop_off {
-                            ContinuousPickupDropOff::Continuous => 0,
-                            ContinuousPickupDropOff::NotAvailable => 1,
-                            ContinuousPickupDropOff::ArrangeByPhone => 2,
-                            ContinuousPickupDropOff::CoordinateWithDriver => 3,
-                            ContinuousPickupDropOff::Unknown(i) => i,
-                        }),
-                        &shape_id_array,
-                    ],
-                )
-                .await?;
-        }
+           }
     }
 
     Ok(())
 }
-/*
-
-fn convert_optional_f64_to_numeric(f64: Option<f64>) -> Option<Numeric> {
-    match f64 {
-        Some(f64) => Some(Numeric::from(f64)),
-        None => None,
-    }
-}
- */

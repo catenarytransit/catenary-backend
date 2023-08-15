@@ -234,7 +234,7 @@ async fn main() {
                     }
                 }
             }))
-            .buffer_unordered(10)
+            .buffer_unordered(20)
             .collect::<Vec<()>>();
 
         static_fetches.await;

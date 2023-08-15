@@ -2,6 +2,7 @@ use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Res
 use serde_json::{json, to_string_pretty};
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::ToSql;
+use tokio_postgres::Client;
 use tokio_postgres::{Error as PostgresError, NoTls, Row};
 
 #[derive(serde::Serialize)]
