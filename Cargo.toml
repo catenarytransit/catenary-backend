@@ -29,10 +29,13 @@ serde_json = "1.0.100"
 actix-web = "4.3.1"
 regress = "0.6.0"
 color-eyre = {version = "0.6.2", features = ["url", "issue-url"]}
-
-[[bin]]
-name = "schedule_ingest"
-path = "src/ingest_gtfs_schedule/main.rs"
+fasthash = "0.4.0"
+rgb = "0.8.36"
+clap = {version = "4.3.21", features = ["derive"]}
+itertools = "0.11.0"
+fs_extra = "1.3.0"
+r2d2 = "0.8.10"
+r2d2_postgres = "0.18.1"
 
 [[bin]]
 name = "http_server"
@@ -44,7 +47,7 @@ path = "src/ingest_gtfs_schedule/from-transitland.rs"
 
 [[bin]]
 name = "import"
-path = "src/ingest_gtfs_schedule/uncompressed-to-postgres.rs"
+path = "src/ingest_gtfs_schedule/main.rs"
 
 [[bin]]
 name = "flattenuncompressed"
