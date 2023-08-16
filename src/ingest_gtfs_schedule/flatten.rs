@@ -41,6 +41,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             for directory in listofdirectories.into_iter() {
                 println!("feed {:?}", feed);
                 println!("{:?} contents need to be moved!", directory);
+
+                //let _ = fs::rename("old_name.txt", "new_name.txt");
             }
             }
    
