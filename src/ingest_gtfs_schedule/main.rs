@@ -19,6 +19,8 @@ use std::io::Write;
 use std::ops::Deref;
 use tokio_postgres::Client;
 use tokio_postgres::{Error as PostgresError, NoTls};
+use r2d2_postgres::{PostgresConnectionManager};
+
 
 extern crate fs_extra;
 use fs_extra::dir::get_size;
@@ -59,6 +61,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             eprintln!("connection error: {}", e);
         }
     });
+
+    let manager = PostgresConnectionManager::new(
+        "host=localhost user=postgres".parse().unwrap(),
+        NoTls,
+    );
+    let pool = r2d2::Pool::new(manager).unwrap();
 
     client
         .batch_execute(
@@ -165,7 +173,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                             match dmfrinfo {
                                 Ok(dmfrinfo) => {
-                                    dmfrinfo.feeds.iter().for_each(|feed| {
+                  dmfrinfo.feeds.iter().for_each(|feed| {
                                         //println!("Feed {}: {:#?}", feed.id.clone(), feed);
 
                                         if !feedhashmap.contains_key(&feed.id) {
@@ -556,32 +564,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                 println!("Uploading {} trips", gtfs.trips.len());
 
-                                for (trip_id, trip) in &gtfs.trips {
-                                    /*
-                                     trip_id text NOT NULL,
-        onestop_feed_id text NOT NULL,
-        route_id text NOT NULL,
-        service_id text NOT NULL,
-        trip_headsign text,
-        trip_short_name text,
-        direction_id int,
-        block_id text,
-        shape_id text,
-        wheelchair_accessible int,
-        bikes_allowed int,
-        PRIMARY KEY (onestop_feed_id, trip_id)
-         */
 
-                                    let _ = client.query("INSERT INTO gtfs_static.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
-                                 &[
-                                    &feed.id,
-                                    &trip_id,
-                                    &trip.service_id,
-                                    &trip.route_id,
-                                    &trip.trip_headsign,
-                                    &trip.trip_short_name
-                                 ]).await?;
-                                }
+                            
+                                futures::stream::iter(gtfs.trips.clone().into_iter()
+                                    .map(|(trip_id, trip)| {
+                                        let pool = pool.clone();
+                                        let feed_id = feed.id.clone();
+                                        async move {
+                                            let mut client = pool.get().unwrap();
+
+                                            let insert_trips = client
+                                                .query(
+                                                    "INSERT INTO gtfs_static.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
+                                                    &[
+                                                        &feed_id,
+                                                        &trip_id,
+                                                        &trip.service_id,
+                                                        &trip.route_id,
+                                                        &trip.trip_headsign.unwrap_or_else(|| "".to_string()),
+                                                        &trip.trip_short_name.unwrap_or_else(|| "".to_string()),
+                                                    ],
+                                                );
+
+                                            match insert_trips {
+                                                Ok(_) => {}
+                                                Err(e) => {
+                                                    println!("Error inserting trip {} {}: {:?}", &feed_id, &trip_id, e);
+                                                }
+                                            }
+                                        }
+                                    }))
+                                    .buffer_unordered(100)
+                                    .collect::<Vec<()>>()
+                                    .await;
 
                                 //okay finally upload the feed metadata
 
