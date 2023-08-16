@@ -442,7 +442,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         srid: Some(4326),
                                         points: shape
                                             .iter()
-                                            .map(|point| postgis::ewkb::Point {
+                                            .map(|point| ewkb::Point {
                                                 x: point.longitude,
                                                 y: point.latitude,
                                                 srid: Some(4326),
