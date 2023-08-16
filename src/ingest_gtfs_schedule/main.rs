@@ -554,6 +554,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     .await?;
                                 }
 
+                                println!("Uploading {} trips", gtfs.trips.len());
+
+                                for (trip_id, trip) in &gtfs.trips {
+                                    /*
+                                     trip_id text NOT NULL,
+        onestop_feed_id text NOT NULL,
+        route_id text NOT NULL,
+        service_id text NOT NULL,
+        trip_headsign text,
+        trip_short_name text,
+        direction_id int,
+        block_id text,
+        shape_id text,
+        wheelchair_accessible int,
+        bikes_allowed int,
+        PRIMARY KEY (onestop_feed_id, trip_id)
+         */
+
+                                    let _ = client.query("INSERT INTO gtfs_static.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
+                                 &[
+                                    &feed.id,
+                                    &trip_id,
+                                    &trip.service_id,
+                                    &trip.route_id,
+                                    &trip.trip_headsign,
+                                    &trip.trip_short_name
+                                 ]).await?;
+                                }
+
                                 //okay finally upload the feed metadata
 
                                 /*
