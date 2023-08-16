@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     let manager = PostgresConnectionManager::new(
-        "host=localhost user=postgres".parse().unwrap(),
+        postgresstring.parse().unwrap(),
         NoTls,
     );
     let pool = r2d2::Pool::new(manager).unwrap();
@@ -566,12 +566,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 
                             
-                                futures::stream::iter(gtfs.trips.clone().into_iter()
+                                let trips_insertion_multithread = futures::stream::iter(gtfs.trips.clone().into_iter()
                                     .map(|(trip_id, trip)| {
                                         let pool = pool.clone();
+                                        let mut client = pool.get().unwrap();
                                         let feed_id = feed.id.clone();
                                         async move {
-                                            let mut client = pool.get().unwrap();
+                                           
 
                                             let insert_trips = client
                                                 .query(
@@ -587,7 +588,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 );
 
                                             match insert_trips {
-                                                Ok(_) => {}
+                                                Ok(_) => {},
                                                 Err(e) => {
                                                     println!("Error inserting trip {} {}: {:?}", &feed_id, &trip_id, e);
                                                 }
