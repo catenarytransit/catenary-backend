@@ -33,6 +33,7 @@ fasthash = "0.4.0"
 rgb = "0.8.36"
 clap = {version = "4.3.21", features = ["derive"]}
 itertools = "0.11.0"
+fs_extra = "1.3.0"
 
 [[bin]]
 name = "http_server"

@@ -20,6 +20,9 @@ use std::ops::Deref;
 use tokio_postgres::Client;
 use tokio_postgres::{Error as PostgresError, NoTls};
 
+extern crate fs_extra;
+use fs_extra::dir::get_size;
+
 pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
 }
@@ -298,7 +301,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         for (key, feed) in feedhashmap.clone().into_iter() {
            let mut dothetask = true;
 
-           if key.contains("~jp") || key.contains("germany~urban~transport") {
+           if key.contains("~jp") || key.contains("germany~urban~transport") || key.contains("~gov~uk") {
                dothetask = false;
            }
 
@@ -316,12 +319,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                         //upload the feed id metadata
 
-                        
+                        let file_path = format!("gtfs_uncompressed/{}/", key);
 
-                        if path_exists(&format!("gtfs_uncompressed/{}/", key)) {
+
+                        if path_exists(&file_path) {
+
                             //feed exists
+
+                            println!("Starting read for {}", &key);
+
+                            
+                        let folder_size = get_size(&file_path).unwrap();
+                        println!("size: {} kB", folder_size / 1000); 
+
                             let gtfs = gtfs_structures::GtfsReader::default()
-                                .read_from_path(&format!("gtfs_uncompressed/{}/", key));
+                                .read_from_path(&file_path);
 
                             if gtfs.is_ok() {
                                 let gtfs = gtfs.unwrap();
@@ -448,7 +460,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             None => String::from("3a3a3a"),
                                         };
 
-                                        println!("uploading {:?} {:?}", &feed.id, &shape_id);
+                                        println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
 
                                     let _ = client.query("INSERT INTO gtfs_static.shapes (onestop_feed_id, shape_id, linestring, color) VALUES ($1, $2, $3, $4)",
                                  &[
@@ -475,13 +487,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         RouteType::Other(i) => *i,
                                     };
 
-                                    let shape_id_array: Vec<String> =
+                                    let mut shape_id_array: Vec<String> =
                                         match shapes_per_route.get(route_id) {
                                             Some(shape_list) => shape_list.clone(),
                                             None => vec![],
                                         };
 
-                                        println!("uploading {:?} {}", &feed.id , &route_id);
+                                    shape_id_array.dedup();
+
+                                    let shape_id_array = shape_id_array;
+
+                                        println!("uploading route {:?} {}", &feed.id , &route_id);
 
                                     let _ = client
                                     .query(
@@ -558,13 +574,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         min_lon double precision NOT NULL
          */
 
-                                let _ = client.query("INSERT INTO gtfs_static.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon) VALUES ($1, $2, $3, $4, $5)", &[
+                                if gtfs.routes.len() > 0 as usize {
+                                    let _ = client.query("INSERT INTO gtfs_static.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon) VALUES ($1, $2, $3, $4, $5)", &[
                                     &feed.id,
                                     &least_lat,
                                     &least_lon,
                                     &least_lat,
                                     &least_lon
                                 ]).await?;
+                                }
                             }
                         }
                     }
