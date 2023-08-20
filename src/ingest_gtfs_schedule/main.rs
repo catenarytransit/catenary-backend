@@ -64,6 +64,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             "
         CREATE EXTENSION IF NOT EXISTS postgis;
+        CREATE EXTENSION hstore;
 
         DROP SCHEMA IF EXISTS gtfs CASCADE;
 
@@ -90,7 +91,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     CREATE TABLE IF NOT EXISTS gtfs.realtime_feeds (
         onestop_feed_id text PRIMARY KEY,
-        name text
+        name text,
+        operators text[],
     );
 
     CREATE TABLE IF NOT EXISTS gtfs.routes (
@@ -638,7 +640,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
                     }
-                }
+                },
+                dmfr::FeedSpec::GtfsRt => {
+                    
+                },
                 _ => {
                     //do nothing
                     println!("skipping {}, does not match dmfr feed spec", &key);
