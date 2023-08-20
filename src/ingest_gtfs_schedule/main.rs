@@ -72,27 +72,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     CREATE TABLE IF NOT EXISTS gtfs.static_feeds (
         onestop_feed_id text PRIMARY KEY,
-        onestop_operator_id text,
-        gtfs_agency_id text,
-        name text ,
-        url text ,
-        timezone text,
-        lang text,
-        phone text,
-        fare_url text,
-        email text,
         only_realtime_ref text,
         operators text[],
+        operators_to_gtfs_ids hstore,
+        realtime_onestop_ids text[],
+        realtime_onestop_ids_to_gtfs_ids hstore,
         max_lat double precision NOT NULL,
         max_lon double precision NOT NULL,
         min_lat double precision NOT NULL,
         min_lon double precision NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS gtfs.operators (
+        onestop_operator_id text PRIMARY KEY,
+        name text,
+        static_onestop_feeds_to_gtfs_ids hstore,
+        realtime_onestop_feeds_to_gtfs_ids hstore,
+    );
+
     CREATE TABLE IF NOT EXISTS gtfs.realtime_feeds (
         onestop_feed_id text PRIMARY KEY,
         name text,
-        operators text[],
+        operators_to_ids hstore,
     );
 
     CREATE TABLE IF NOT EXISTS gtfs.routes (
@@ -156,6 +157,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let mut operator_to_feed_hashmap: BTreeMap<String, Vec<dmfr::OperatorAssociatedFeedsItem>> =
             BTreeMap::new();
+
+        let feed_to_operator_hashmap: BTreeMap<String, String> = BTreeMap::new();
 
         for entry in entries {
             if let Ok(entry) = entry {
@@ -235,9 +238,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 );
                                             }
                                         });
+
+                                       
                                     });
 
                                     dmfrinfo.operators.iter().for_each(|operator| {
+                                        
+
                                         operatorhashmap
                                             .insert(operator.onestop_id.clone(), operator.clone());
 
