@@ -477,7 +477,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             None => String::from("3a3a3a"),
                                         };
 
-                                        println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
+                                       // println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
 
                                     let _ = client.query("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color) VALUES ($1, $2, $3, $4)",
                                  &[
@@ -514,7 +514,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                     let shape_id_array = shape_id_array;
 
-                                        println!("uploading route {:?} {}", &feed.id , &route_id);
+                                        //println!("uploading route {:?} {}", &feed.id , &route_id);
 
                                     let _ = client
                                     .query(
