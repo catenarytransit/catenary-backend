@@ -1,3 +1,9 @@
+## Install Dependencies
+
+```bash
+sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql
+```
+
 ### Running gtfs static ingest
 
 ```bash
