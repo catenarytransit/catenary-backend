@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     CREATE SCHEMA IF NOT EXISTS gtfs_static;
     
-    CREATE TABLE IF NOT EXISTS gtfs_static.static_feeds (
+    CREATE TABLE IF NOT EXISTS gtfs.static_feeds (
         onestop_feed_id text PRIMARY KEY,
         onestop_operator_id text,
         gtfs_agency_id text,
@@ -88,13 +88,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         phone text,
         fare_url text,
         email text,
+        only_realtime_ref text,
+        operators text[],
         max_lat double precision NOT NULL,
         max_lon double precision NOT NULL,
         min_lat double precision NOT NULL,
         min_lon double precision NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS gtfs_static.routes (
+    CREATE TABLE IF NOT EXISTS gtfs.realtime_feeds (
+        onestop_feed_id text PRIMARY KEY,
+        name text,
+        
+    );
+
+    CREATE TABLE IF NOT EXISTS gtfs.routes (
         route_id text NOT NULL,
         onestop_feed_id text NOT NULL,
         short_name text NOT NULL,
@@ -112,15 +120,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         PRIMARY KEY (onestop_feed_id, route_id)
     );
 
-    CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
+    CREATE TABLE IF NOT EXISTS gtfs.shapes (
         onestop_feed_id text NOT NULL,
         shape_id text NOT NULL,
         linestring GEOMETRY(LINESTRING,4326) NOT NULL,
         color text,
+        routes text[],
         PRIMARY KEY (onestop_feed_id,shape_id)
     );
 
-    CREATE TABLE IF NOT EXISTS gtfs_static.trips (
+    CREATE TABLE IF NOT EXISTS gtfs.trips (
         trip_id text NOT NULL,
         onestop_feed_id text NOT NULL,
         route_id text NOT NULL,
@@ -135,11 +144,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         PRIMARY KEY (onestop_feed_id, trip_id)
     );
 
-    CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON gtfs_static.shapes USING GIST (linestring);
+    CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
 
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON gtfs_static.shapes (onestop_feed_id);
+    CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON gtfs.shapes (onestop_feed_id);
 
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON gtfs_Static.routes (onestop_feed_id);
+    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON gtfs.routes (onestop_feed_id);
     
     ",
         )
@@ -450,7 +459,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             .collect(),
                                     };
                                     /*
-                                      CREATE TABLE IF NOT EXISTS gtfs_static.shapes (
+                                      CREATE TABLE IF NOT EXISTS gtfs.shapes (
                                             onestop_feed_id text NOT NULL,
                                             shape_id text NOT NULL,
                                             linestring GEOMETRY(LINESTRING,4326) NOT NULL,
@@ -470,7 +479,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                         println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
 
-                                    let _ = client.query("INSERT INTO gtfs_static.shapes (onestop_feed_id, shape_id, linestring, color) VALUES ($1, $2, $3, $4)",
+                                    let _ = client.query("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color) VALUES ($1, $2, $3, $4)",
                                  &[
                                     &feed.id,
                                     &shape_id, 
@@ -509,7 +518,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                     let _ = client
                                     .query(
-                                        "INSERT INTO gtfs_static.routes
+                                        "INSERT INTO gtfs.routes
                                 (
                                     route_id,
                                     onestop_feed_id,
@@ -569,6 +578,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 let trips_insertion_multithread = futures::stream::iter(gtfs.trips.clone().into_iter()
                                     .map(|(trip_id, trip)| {
                                         let pool = pool.clone();
+                                        let feed_id = feed_id.clone();
                                         //let mut client = pool.get().unwrap();
                                        // let feed_id = feed.id.clone();
                                         async move {
@@ -576,7 +586,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                             let insert_trips = client
                                                 .query(
-                                                    "INSERT INTO gtfs_static.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
+                                                    "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
                                                     &[
                                                         &feed_id,
                                                         &trip_id,
@@ -620,7 +630,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
          */
 
                                 if gtfs.routes.len() > 0 as usize {
-                                    let _ = client.query("INSERT INTO gtfs_static.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon) VALUES ($1, $2, $3, $4, $5)", &[
+                                    let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon) VALUES ($1, $2, $3, $4, $5)", &[
                                     &feed.id,
                                     &least_lat,
                                     &least_lon,
