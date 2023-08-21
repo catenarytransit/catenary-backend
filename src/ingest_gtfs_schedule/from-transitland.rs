@@ -10,6 +10,8 @@ use std::io::Write;
 
 #[tokio::main]
 async fn main() {
+    let _ = fs::create_dir("gtfs_static_zips");
+    let _ = fs::create_dir("gtfs_uncompressed");
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
         let mut feedhashmap: HashMap<String, dmfr::Feed> = HashMap::new();
 
