@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         DROP SCHEMA IF EXISTS gtfs_static CASCADE;
 
-    CREATE SCHEMA IF NOT EXISTS gtfs_static;
+    CREATE SCHEMA IF NOT EXISTS gtfs;
     
     CREATE TABLE IF NOT EXISTS gtfs.static_feeds (
         onestop_feed_id text PRIMARY KEY,
@@ -98,8 +98,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     CREATE TABLE IF NOT EXISTS gtfs.realtime_feeds (
         onestop_feed_id text PRIMARY KEY,
-        name text,
-        
+        name text
     );
 
     CREATE TABLE IF NOT EXISTS gtfs.routes (
@@ -314,9 +313,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                
             }
         }
+        
+        futures::stream::iter(feedhashmap.clone().iter().into_iter().map(|(key, feed)| {
+            let pool = pool.clone();
+            let mut client = pool.get().unwrap();
+        async move {
+            println!("Feed in future {}: {:#?}", key, feed);
 
-        for (key, feed) in feedhashmap.clone().into_iter() {
-           let mut dothetask = true;
+            let mut dothetask = true;
 
            if key.contains("~jp") || key.contains("germany~urban~transport") || key.contains("~gov~uk") {
                dothetask = false;
@@ -485,7 +489,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     &shape_id, 
                                  &linestring,
                                  &color_to_upload
-                                 ]).await;
+                                 ]);
                                 }
 
                                 for (route_id, route) in &gtfs.routes {
@@ -567,44 +571,44 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             }),
                                             &shape_id_array,
                                         ],
-                                    )
-                                    .await?;
+                                    );
                                 }
 
                                 println!("Uploading {} trips", gtfs.trips.len());
-                            
-                                let trips_insertion_multithread = futures::stream::iter(gtfs.trips.clone().into_iter()
-                                    .map(|(trip_id, trip)| {
-                                        let pool = pool.clone();
-                                        let mut client = pool.get().unwrap();
-                                        let feed_id = feed.id.clone();
-                                        async move {
-                                           
+                            /* 
+                                let trips_insertion_multithread = futures::stream::iter(gtfs.trips.clone().into_iter().map(|(trip_id, trip)| {
+                                    
+                                    let pool = pool.clone();
+                                    let mut client = pool.get().unwrap();
 
-                                            let insert_trips = client
-                                                .query(
-                                                    "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
-                                                    &[
-                                                        &feed_id,
-                                                        &trip_id,
-                                                        &trip.service_id,
-                                                        &trip.route_id,
-                                                        &trip.trip_headsign.unwrap_or_else(|| "".to_string()),
-                                                        &trip.trip_short_name.unwrap_or_else(|| "".to_string()),
-                                                    ],
-                                                );
+                                    let feed_id = feed.id.clone();
 
-                                            match insert_trips {
-                                                Ok(_) => {},
-                                                Err(e) => {
-                                                    println!("Error inserting trip {} {}: {:?}", &feed_id, &trip_id, e);
-                                                }
+                                   
+                                    async move {
+                                        
+                                        let insert_trips = client
+                                            .query(
+                                                "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
+                                                &[
+                                                    &feed_id,
+                                                    &trip_id,
+                                                    &trip.service_id,
+                                                    &trip.route_id,
+                                                    &trip.trip_headsign.unwrap_or_else(|| "".to_string()),
+                                                    &trip.trip_short_name.unwrap_or_else(|| "".to_string()),
+                                                ],
+                                            ); 
+
+                                        match insert_trips {
+                                            Ok(_) => {},
+                                            Err(e) => {
+                                                println!("Error inserting trip {} {}: {:?}", &feed_id, &trip_id, e);
                                             }
                                         }
-                                    }))
-                                    .buffer_unordered(100)
-                                    .collect::<Vec<()>>()
-                                    .await;
+                                    }
+                                }))
+                                .buffer_unordered(10)
+                                .collect::<Vec<()>>();*/
 
                                 //okay finally upload the feed metadata
 
@@ -633,7 +637,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     &least_lon,
                                     &least_lat,
                                     &least_lon
-                                ]).await?;
+                                ]);
                                 }
                             }
                         }
@@ -645,7 +649,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
-           }
+        }
+        })).buffer_unordered(1).collect::<Vec<()>>().await;
     }
 
     Ok(())
