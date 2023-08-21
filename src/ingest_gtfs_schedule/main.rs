@@ -563,14 +563,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 }
 
                                 println!("Uploading {} trips", gtfs.trips.len());
-
-
                             
                                 let trips_insertion_multithread = futures::stream::iter(gtfs.trips.clone().into_iter()
                                     .map(|(trip_id, trip)| {
                                         let pool = pool.clone();
-                                        //let mut client = pool.get().unwrap();
-                                       // let feed_id = feed.id.clone();
+                                        let mut client = pool.get().unwrap();
+                                        let feed_id = feed.id.clone();
                                         async move {
                                            
 
