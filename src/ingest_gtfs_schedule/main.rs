@@ -42,6 +42,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap()
         .get::<String>("postgres");
 
+        let threads = arguments::parse(std::env::args())
+        .unwrap()
+        .get::<usize>("threads");
+
+        let threadcount = threads.unwrap_or_else(|| 10);
+
     let postgresstring = match postgresstring {
         Some(s) => s,
         None => {
@@ -658,7 +664,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         }
-        })).buffer_unordered(8).collect::<Vec<()>>().await;
+        })).buffer_unordered(threadcount).collect::<Vec<()>>().await;
     }
 
     Ok(())
