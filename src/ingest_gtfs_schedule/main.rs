@@ -19,7 +19,7 @@ use std::io::Write;
 use std::ops::Deref;
 use tokio_postgres::Client;
 use tokio_postgres::{Error as PostgresError, NoTls};
-use r2d2_postgres::{PostgresConnectionManager};
+use bb8_postgres::{PostgresConnectionManager};
 
 
 extern crate fs_extra;
@@ -307,14 +307,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         
+        
         let manager = PostgresConnectionManager::new(
             postgresstring.parse().unwrap(),
             NoTls,
         );
 
-        let pool = r2d2::Pool::new(manager).unwrap();
+        let pool = bb8::Pool::builder().build(manager).await.unwrap();
 
-        let pool = pool.clone();
+
     }
 
     Ok(())
