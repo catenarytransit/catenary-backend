@@ -107,26 +107,10 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(
                 middleware::DefaultHeaders::new()
-                    .header("Access-Control-Allow-Origin", "*")
-                    .header("Server", "KylerChinCatenary"),
+                   // .add("Access-Control-Allow-Origin", "*")
+                    //.add("Server", "KylerChinCatenary"),
             )
             .route("/", web::get().to(index))
-            .route(
-                "/getfeeds",
-                web::get().to(|req: HttpRequest| getfeeds(req, &client)),
-            )
-            .route(
-                "/getfeeds/",
-                web::get().to(|req: HttpRequest| getfeeds(req, &client)),
-            )
-            .route(
-                "/getroutesperagency/",
-                web::get().to(|req: HttpRequest| getroutesperagency(req, &client)),
-            )
-            .route(
-                "/getroutesperagency",
-                web::get().to(|req: HttpRequest| getroutesperagency(req, &client)),
-            )
     })
     .workers(4);
 

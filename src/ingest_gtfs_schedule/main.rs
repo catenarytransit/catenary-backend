@@ -21,10 +21,9 @@ use std::ops::Deref;
 use tokio_postgres::Client;
 use tokio_postgres::{Error as PostgresError, NoTls};
 extern crate tokio_threadpool;
-use tokio_threadpool::ThreadPool;
 use std::sync::mpsc::channel;
 use tokio::runtime;
-
+use tokio_threadpool::ThreadPool;
 
 extern crate fs_extra;
 use fs_extra::dir::get_size;
@@ -49,11 +48,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap()
         .get::<String>("postgres");
 
-        let threads = arguments::parse(std::env::args())
+    let threads = arguments::parse(std::env::args())
         .unwrap()
         .get::<usize>("threads");
 
-        let threadcount = threads.unwrap_or_else(|| 10);
+    let threadcount = threads.unwrap_or_else(|| 10);
 
     let postgresstring = match postgresstring {
         Some(s) => s,
@@ -159,7 +158,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     ",
         )
-        .await.unwrap();
+        .await
+        .unwrap();
 
     println!("Finished making database");
 
@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut operator_to_feed_hashmap: BTreeMap<String, Vec<dmfr::OperatorAssociatedFeedsItem>> =
             BTreeMap::new();
 
-        let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();        
+        let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
         for entry in entries {
             if let Ok(entry) = entry {
@@ -195,7 +195,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             if feed_to_operator_hashmap.contains_key(&feed.id) {
                                                 feed_to_operator_hashmap.insert(
                                                     feed.id.clone(),
-                                                   feed_to_operator_hashmap.get(&feed.id).unwrap().clone().into_iter().chain(vec![eachoperator.onestop_id.clone()]).collect::<Vec<String>>(),
+                                                    feed_to_operator_hashmap
+                                                        .get(&feed.id)
+                                                        .unwrap()
+                                                        .clone()
+                                                        .into_iter()
+                                                        .chain(vec![eachoperator
+                                                            .onestop_id
+                                                            .clone()])
+                                                        .collect::<Vec<String>>(),
                                                 );
                                             } else {
                                                 feed_to_operator_hashmap.insert(
@@ -217,8 +225,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 operator.onestop_id.clone(),
                                                 operator.clone(),
                                             );
-
-                                            
 
                                             if operator_to_feed_hashmap
                                                 .contains_key(&operator.onestop_id)
@@ -267,13 +273,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 );
                                             }
                                         });
-
-                                       
                                     });
 
                                     dmfrinfo.operators.iter().for_each(|operator| {
-                                        
-
                                         operatorhashmap
                                             .insert(operator.onestop_id.clone(), operator.clone());
 
@@ -285,10 +287,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                         for feed in operator.associated_feeds.iter() {
                                             if feed.feed_onestop_id.is_some() {
-                                                if feed_to_operator_hashmap.contains_key(feed.feed_onestop_id.as_ref().unwrap().as_str()) {
+                                                if feed_to_operator_hashmap.contains_key(
+                                                    feed.feed_onestop_id.as_ref().unwrap().as_str(),
+                                                ) {
                                                     feed_to_operator_hashmap.insert(
                                                         feed.feed_onestop_id.clone().unwrap(),
-                                                        feed_to_operator_hashmap.get(feed.feed_onestop_id.as_ref().unwrap().as_str()).unwrap().clone().into_iter().chain(vec![operator.onestop_id.clone()]).collect::<Vec<String>>(),
+                                                        feed_to_operator_hashmap
+                                                            .get(
+                                                                feed.feed_onestop_id
+                                                                    .as_ref()
+                                                                    .unwrap()
+                                                                    .as_str(),
+                                                            )
+                                                            .unwrap()
+                                                            .clone()
+                                                            .into_iter()
+                                                            .chain(vec![operator
+                                                                .onestop_id
+                                                                .clone()])
+                                                            .collect::<Vec<String>>(),
                                                     );
                                                 } else {
                                                     feed_to_operator_hashmap.insert(
@@ -297,7 +314,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     );
                                                 }
                                             }
-                                            
                                         }
 
                                         if operator_to_feed_hashmap
@@ -359,20 +375,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let manager = PostgresConnectionManager::new(postgresstring.parse().unwrap(), NoTls);
 
-        let pool = bb8::Pool::builder().retry_connection(true).connection_timeout(std::time::Duration::from_secs(99990)).build(manager).await.unwrap();
+        let pool = bb8::Pool::builder()
+            .retry_connection(true)
+            .connection_timeout(std::time::Duration::from_secs(99990))
+            .build(manager)
+            .await
+            .unwrap();
 
         //let threadpool = ThreadPool::new(threadcount);
 
-        
         let threaded_rt = runtime::Builder::new_multi_thread()
-        .worker_threads(threadcount)
-        .enable_all()
-        .build()
-        .unwrap();
-
+            .worker_threads(threadcount)
+            .enable_all()
+            .build()
+            .unwrap();
 
         let mut handles = vec![];
-        
+
         for (key, feed) in feedhashmap.clone().into_iter() {
             let pool = pool.clone();
             handles.push(threaded_rt.spawn(async move 
