@@ -691,6 +691,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }))
                                         .buffer_unordered(10)
                                         .collect::<Vec<()>>();
+
+                                        trips_insertion_multithread.await;
         
                                         //okay finally upload the feed metadata
         
