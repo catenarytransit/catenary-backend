@@ -329,7 +329,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             
             let mut client = pool.get().await.unwrap();
 
-            println!("Feed in future {}: {:#?}", key, feed);
+            //println!("Feed in future {}: {:#?}", key, feed);
 
             let mut dothetask = true;
 
