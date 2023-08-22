@@ -38,6 +38,8 @@ r2d2 = "0.8.10"
 r2d2_postgres = "0.18.1"
 bb8-postgres = "0.8.1"
 bb8 = "0.8.1"
+threadpool = {version = "1.8.1"}
+tokio-threadpool = "0.1.18"
 
 [[bin]]
 name = "http_server"
@@ -54,3 +56,6 @@ path = "src/ingest_gtfs_schedule/main.rs"
 [[bin]]
 name = "flattenuncompressed"
 path = "src/ingest_gtfs_schedule/flatten.rs"
+
+[features]
+#![feature(async_closure)]
