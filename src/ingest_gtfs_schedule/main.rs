@@ -544,13 +544,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         
                                                // println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
         
-                                            let _ = client.query("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color) VALUES ($1, $2, $3, $4)",
+                                            client.query("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color) VALUES ($1, $2, $3, $4);",
                                          &[
                                             &feed.id,
                                             &shape_id, 
                                          &linestring,
                                          &color_to_upload
-                                         ]).await;
+                                         ]).await.unwrap();
                                         }
         
                                         for (route_id, route) in &gtfs.routes {
@@ -602,7 +602,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         )
                                         VALUES (
                                             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
-                                        )
+                                        );
                                         ",
                                                 &[
                                                     &route_id,
@@ -694,13 +694,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                  */
         
                                         if gtfs.routes.len() > 0 as usize {
-                                            let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon) VALUES ($1, $2, $3, $4, $5)", &[
+                                            let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon) VALUES ($1, $2, $3, $4, $5);", &[
                                             &feed.id,
                                             &least_lat,
                                             &least_lon,
                                             &least_lat,
                                             &least_lon
-                                        ]).await;
+                                        ]).await.unwrap();
                                         }
                                     }
                                 }
