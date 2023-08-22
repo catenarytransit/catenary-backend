@@ -321,7 +321,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let manager = PostgresConnectionManager::new(postgresstring.parse().unwrap(), NoTls);
 
-        let pool = bb8::Pool::builder().build(manager).await.unwrap();
+        let pool = bb8::Pool::builder().retry_connection(true).build(manager).await.unwrap();
 
         futures::stream::iter(feedhashmap.clone().iter().into_iter().map(|(key, feed)| {
             let pool = pool.clone();
