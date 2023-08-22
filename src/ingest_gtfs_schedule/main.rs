@@ -22,8 +22,6 @@ use tokio_postgres::Client;
 use tokio_postgres::{Error as PostgresError, NoTls};
 extern crate tokio_threadpool;
 use tokio_threadpool::ThreadPool;
-use futures::{Future, lazy};
-use futures::sync::oneshot;
 use std::sync::mpsc::channel;
 use tokio::runtime;
 
@@ -333,13 +331,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         //let threadpool = ThreadPool::new(threadcount);
 
         
-        let threaded_rt = runtime::Runtime::new()?;
+        let threaded_rt = runtime::Builder::new_multi_thread()
+        .worker_threads(threadcount)
+        .enable_all()
+        .build()
+        .unwrap();
 
         
-        for (key, feed) in feedhashmap.clone().iter().into_iter() {
-    
-            tokio::spawn(async move {
-                
+        for (key, feed) in feedhashmap.clone().into_iter() {
+            let pool = pool.clone();
+            threaded_rt.spawn(async move {
                     let mut client = pool.get().await.unwrap();
         
                     //println!("Feed in future {}: {:#?}", key, feed);
@@ -679,10 +680,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 
                 }
-            });
-
-            let pool = pool.clone();
             
+            });
         }
     }
 
