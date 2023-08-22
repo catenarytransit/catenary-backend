@@ -32,6 +32,8 @@ pub fn path_exists(path: &str) -> bool {
 struct Args {
     #[arg(long)]
     postgres: String,
+    #[arg(long, default_value = "10")]
+    threads: usize,
 }
 
 #[tokio::main]
