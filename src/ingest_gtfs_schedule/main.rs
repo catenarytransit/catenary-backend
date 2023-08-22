@@ -326,7 +326,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let manager = PostgresConnectionManager::new(postgresstring.parse().unwrap(), NoTls);
 
-        let pool = bb8::Pool::builder().retry_connection(true).build(manager).await.unwrap();
+        let pool = bb8::Pool::builder().retry_connection(true).connection_timeout(std::time::Duration::from_secs(99990)).build(manager).await.unwrap();
 
         //let threadpool = ThreadPool::new(threadcount);
 
@@ -342,7 +342,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         
         for (key, feed) in feedhashmap.clone().into_iter() {
             let pool = pool.clone();
-            handles.push(tokio::spawn(async move 
+            handles.push(threaded_rt.spawn(async move 
                 {
                     let mut client = pool.get().await.unwrap();
         
