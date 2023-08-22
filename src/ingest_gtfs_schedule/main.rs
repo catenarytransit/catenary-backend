@@ -337,10 +337,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .build()
         .unwrap();
 
+
+        let mut handles = vec![];
         
         for (key, feed) in feedhashmap.clone().into_iter() {
             let pool = pool.clone();
-            threaded_rt.spawn(async move {
+            handles.push(tokio::spawn(async move 
+                {
                     let mut client = pool.get().await.unwrap();
         
                     //println!("Feed in future {}: {:#?}", key, feed);
@@ -681,8 +684,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 
                 }
             
-            });
+        }));
         }
+
+        futures::future::join_all(handles).await;
     }
 
     Ok(())
