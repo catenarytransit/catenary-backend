@@ -100,13 +100,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         onestop_operator_id text PRIMARY KEY,
         name text,
         static_onestop_feeds_to_gtfs_ids hstore,
-        realtime_onestop_feeds_to_gtfs_ids hstore,
+        realtime_onestop_feeds_to_gtfs_ids hstore
     );
 
     CREATE TABLE IF NOT EXISTS gtfs.realtime_feeds (
         onestop_feed_id text PRIMARY KEY,
         name text,
-        operators_to_ids hstore,
+        operators_to_ids hstore
     );
 
     CREATE TABLE IF NOT EXISTS gtfs.routes (
