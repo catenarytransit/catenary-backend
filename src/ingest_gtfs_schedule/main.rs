@@ -73,11 +73,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    let _ = client
+    client
         .batch_execute(
             "
         CREATE EXTENSION IF NOT EXISTS postgis;
-        CREATE EXTENSION hstore;
+        CREATE EXTENSION IF NOT EXISTS hstore;
 
         DROP SCHEMA IF EXISTS gtfs CASCADE;
 
@@ -159,7 +159,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     ",
         )
-        .await;
+        .await.unwrap();
 
     println!("Finished making database");
 
@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut operator_to_feed_hashmap: BTreeMap<String, Vec<dmfr::OperatorAssociatedFeedsItem>> =
             BTreeMap::new();
 
-        let feed_to_operator_hashmap: BTreeMap<String, String> = BTreeMap::new();
+        let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();        
 
         for entry in entries {
             if let Ok(entry) = entry {
@@ -191,6 +191,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             match dmfrinfo {
                                 Ok(dmfrinfo) => {
                                     dmfrinfo.feeds.iter().for_each(|feed| {
+                                        for eachoperator in feed.operators.clone().into_iter() {
+                                            if feed_to_operator_hashmap.contains_key(&feed.id) {
+                                                feed_to_operator_hashmap.insert(
+                                                    feed.id.clone(),
+                                                   feed_to_operator_hashmap.get(&feed.id).unwrap().clone().into_iter().chain(vec![eachoperator.onestop_id.clone()]).collect::<Vec<String>>(),
+                                                );
+                                            } else {
+                                                feed_to_operator_hashmap.insert(
+                                                    feed.id.clone(),
+                                                    vec![eachoperator.onestop_id.clone()],
+                                                );
+                                            }
+                                        }
+
                                         //println!("Feed {}: {:#?}", feed.id.clone(), feed);
 
                                         if !feedhashmap.contains_key(&feed.id) {
@@ -203,6 +217,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 operator.onestop_id.clone(),
                                                 operator.clone(),
                                             );
+
+                                            
 
                                             if operator_to_feed_hashmap
                                                 .contains_key(&operator.onestop_id)
@@ -266,6 +282,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             operator.onestop_id.clone(),
                                             operator.associated_feeds
                                         );
+
+                                        for feed in operator.associated_feeds.iter() {
+                                            if feed.feed_onestop_id.is_some() {
+                                                if feed_to_operator_hashmap.contains_key(feed.feed_onestop_id.as_ref().unwrap().as_str()) {
+                                                    feed_to_operator_hashmap.insert(
+                                                        feed.feed_onestop_id.clone().unwrap(),
+                                                        feed_to_operator_hashmap.get(feed.feed_onestop_id.as_ref().unwrap().as_str()).unwrap().clone().into_iter().chain(vec![operator.onestop_id.clone()]).collect::<Vec<String>>(),
+                                                    );
+                                                } else {
+                                                    feed_to_operator_hashmap.insert(
+                                                        feed.feed_onestop_id.clone().unwrap(),
+                                                        vec![operator.onestop_id.clone()],
+                                                    );
+                                                }
+                                            }
+                                            
+                                        }
 
                                         if operator_to_feed_hashmap
                                             .contains_key(&operator.onestop_id)
