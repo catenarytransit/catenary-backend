@@ -668,25 +668,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         
                                            
         
-                                                let insert_trips = client
+                                               client
                                                     .query(
                                                         "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
                                                         &[
                                                             &feed_id,
-                                                               &trip_id,
+                                                               &trip.id,
                                                              &trip.service_id,
                                          &trip.route_id,
                                               &trip.trip_headsign.unwrap_or_else(|| "".to_string()),
                                                       &trip.trip_short_name.unwrap_or_else(|| "".to_string()),
                                                            ],
-                                                    ).await; 
-        
-                                                match insert_trips {
-                                                    Ok(_) => {},
-                                                    Err(e) => {
-                                                        println!("Error inserting trip {} {}: {:?}", &feed_id, &trip_id, e);
-                                                    }
-                                                }
+                                                    ).await.unwrap();
                                             }
                                         }))
                                         .buffer_unordered(10)
