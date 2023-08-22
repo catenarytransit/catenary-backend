@@ -581,7 +581,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         
                                                 //println!("uploading route {:?} {}", &feed.id , &route_id);
         
-                                            let _ = client
+                                            client
                                             .query(
                                                 "INSERT INTO gtfs.routes
                                         (
@@ -632,7 +632,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     }),
                                                     &shape_id_array,
                                                 ],
-                                            );
+                                            ).await.unwrap();
                                         }
         
                                         println!("Uploading {} trips", gtfs.trips.len());
