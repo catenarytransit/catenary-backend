@@ -655,7 +655,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }
         
                                         println!("Uploading {} trips", gtfs.trips.len());
+
+                                        for (trip_id, trip) in &gtfs.trips {
+                                            client
+                                                    .query(
+                                                        "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
+                                                        &[
+                                                            &feed.id,
+                                                               &trip.id,
+                                                             &trip.service_id,
+                                         &trip.route_id,
+                                              &trip.trip_headsign.clone().unwrap_or_else(|| "".to_string()),
+                                                      &trip.trip_short_name.clone().unwrap_or_else(|| "".to_string()),
+                                                           ],
+                                                    ).await.unwrap();
+                                        }
                                     
+                                    /* 
                                         let trips_insertion_multithread = futures::stream::iter(gtfs.trips.clone().into_iter().map(|(trip_id, trip)| {
                                             
                                             let pool = pool.clone();
@@ -685,7 +701,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         .buffer_unordered(10)
                                         .collect::<Vec<()>>();
 
-                                        trips_insertion_multithread.await;
+                                        trips_insertion_multithread.await;*/
         
                                         //okay finally upload the feed metadata
         
