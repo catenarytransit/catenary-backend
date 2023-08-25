@@ -1,9 +1,12 @@
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use serde_json::{json, to_string_pretty};
 use tokio_postgres::types::private::BytesMut;
+use actix_web::middleware::DefaultHeaders;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Client;
-use tokio_postgres::{Error as PostgresError, NoTls, Row};
+use tokio_postgres::{Error as PostgresError, Row};
+use r2d2::Pool;
+use r2d2_postgres::{postgres::NoTls, PostgresConnectionManager};
 
 #[derive(serde::Serialize)]
 struct StaticFeed {
@@ -71,10 +74,73 @@ async fn getfeeds(req: HttpRequest, client: &Client) -> impl Responder {
     }
 }
 
-fn getroutesperagency(req: HttpRequest, client: &Client) -> impl Responder {
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "text/plain"))
-        .body("Hello world!")
+#[derive(serde::Serialize)]
+struct RouteOutPostgres {
+    onestop_feed_id: String,
+    route_id: String,
+    short_name: String,
+    long_name: String,
+    desc: String,
+    route_type: i32,
+    url: String,
+    agency_id: String,
+    gtfs_order: i32,
+    color: String,
+    text_color: String,
+    continuous_pickup: i32,
+    continuous_drop_off: i32,
+    shapes_list: Vec<String>,
+}
+
+async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
+    let mut client = pool.get().unwrap();
+    
+    let postgresresult = client.query("SELECT onestop_feed_id, route_id,
+     short_name, long_name, gtfs_desc, route_type, url, agency_id,
+     gtfs_order,
+     color,
+     text_color,
+     continuous_pickup,
+     continuous_drop_off,
+     shapes_list FROM gtfs.routes;", &[
+     ]);
+
+     match postgresresult {
+        Ok(postgresresult) => {
+            let mut result: Vec<RouteOutPostgres> = Vec::new();
+            for row in postgresresult {
+                result.push(RouteOutPostgres {
+                    onestop_feed_id: row.get(0),
+                    route_id: row.get(1),
+                    short_name: row.get(2),
+                    long_name: row.get(3),
+                    desc: row.get(4),
+                    route_type: row.get(5),
+                    url: row.get(6),
+                    agency_id: row.get(7),
+                    gtfs_order: row.get(8),
+                    color: row.get(9),
+                    text_color: row.get(10),
+                    continuous_pickup: row.get(11),
+                    continuous_drop_off: row.get(12),
+                    shapes_list: row.get(13)
+                });
+            }
+
+            let json_string = to_string_pretty(&json!(result)).unwrap();
+
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/json"))
+                .body(json_string)
+        },
+        Err(e) => {
+            println!("No results from postgres");
+
+            HttpResponse::InternalServerError()
+                .insert_header(("Content-Type", "text/plain"))
+                .body("Postgres Error")
+        }
+     }
 }
 
 #[actix_web::main]
@@ -91,26 +157,25 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
-    // Connect to the database.
-    let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls)
-        .await
-        .unwrap();
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("connection error: {}", e);
-        }
-    });
+   // Connect to the database.
+let manager: PostgresConnectionManager<NoTls> = PostgresConnectionManager::new(
+    postgresstring.parse().unwrap(),
+    NoTls,
+);
+let pool: Pool<PostgresConnectionManager<NoTls>> = r2d2::Pool::new(manager).unwrap();
 
     // Create a new HTTP server.
-    let builder = HttpServer::new(|| {
+    let builder = HttpServer::new(move || {
         App::new()
-            .wrap(
-                middleware::DefaultHeaders::new()
-                   // .add("Access-Control-Allow-Origin", "*")
-                    //.add("Server", "KylerChinCatenary"),
-            )
+        .wrap(
+            DefaultHeaders::new()
+              .add(("Access-Control-Allow-Origin", "*"))
+              .add(("Server", "KylerChinCatenary"))
+              .add(("Access-Control-Allow-Origin","https://transitmap.kylerchin.com"))
+        )
+            .app_data(actix_web::web::Data::new(pool.clone()))
             .route("/", web::get().to(index))
+            .route("/getroutesperagency", web::get().to(getroutesperagency))
     })
     .workers(4);
 
