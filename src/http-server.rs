@@ -37,7 +37,7 @@ async fn getfeeds(pool: web::Data<Pool<PostgresConnectionManager<NoTls>>>, req: 
     let mut client = pool.get().unwrap();
     
     let postgresresult = client.query("SELECT onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
-    max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await;
+    max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]);
 
      match postgresresult {
         Ok(postgresresult) => {
