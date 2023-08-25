@@ -349,7 +349,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let gtfs = gtfs_structures::GtfsReader::default()
                                         .read_from_path(&file_path);
         
-                                    if gtfs.is_ok() {
+                                    if false {
                                         let gtfs = gtfs.unwrap();
         
                                         println!("read_duration: {:?}ms", gtfs.read_duration);
@@ -444,7 +444,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }
         
 
-                                       let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes) VALUES ($1, $2, $3, $4, $5);").await.unwrap();
+                                       //let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes) VALUES ($1, $2, $3, $4, $5);").await.unwrap();
                                         
                                         for (shape_id, shape) in &gtfs.shapes {
                                             let color_to_upload =
@@ -514,14 +514,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                          
                                         let time = std::time::Instant::now();
 
-                                        let statement = client.prepare("INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7);").await.unwrap();
+                                       // let statement = client.prepare("INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7);").await.unwrap();
                                         
-                                        for (trip_id, trip) in &gtfs.trips {
-                                            
-                                        }
-                                    
-                                        println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
-
+                                
                                         
                                         /*
                                         
