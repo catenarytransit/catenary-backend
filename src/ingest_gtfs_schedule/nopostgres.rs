@@ -458,61 +458,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                             //bug "Line String must at least have 2 points"
 
-                                            let preshape = shape
-                                            .iter()
-                                            .filter(|point| {
-                                                match feed.id.as_str() {
-                                                    "f-9q5-metro~losangeles~rail" => {
-                                                        //remove B/D railyard
-                                                        match color_to_upload.as_str() {
-                                                            "eb131b" => {
-                                                                point.longitude < -118.2335698
-                                                            }
-                                                            "a05da5" => {
-                                                                point.longitude < -118.2335698
-                                                            }
-                                                            _ => true,
-                                                        }
-                                                    }
-                                                    _ => true,
-                                                }
-                                            });
-
-                                            if preshape.clone().count() < 2 {
-                                                println!("Shape {} has less than 2 points", shape_id);
-                                                continue;
-                                            }
-
-                                            let linestring = ewkb::LineStringT {
-                                                srid: Some(4326),
-                                                points: 
-                                                    preshape.map(|point| ewkb::Point {
-                                                        x: point.longitude,
-                                                        y: point.latitude,
-                                                        srid: Some(4326),
-                                                    })
-                                                    .collect(),
-                                            };
-
-                                            let mut route_ids: Vec<String> = match gtfs
-                                                .trips
-                                                .iter()
-                                                .filter(|(trip_id, trip)| {
-                                                    trip.shape_id.is_some()
-                                                        && trip.shape_id.as_ref().unwrap()
-                                                            == shape_id
-                                                })
-                                                .map(|(trip_id, trip)| trip.route_id.clone())
-                                                .collect::<Vec<String>>()
-                                                .as_slice()
-                                            {
-                                                [] => vec![],
-                                                route_ids => route_ids.to_vec(),
-                                            };
-
-                                             route_ids.dedup();
-
-                                             let route_ids = route_ids;
+                                            
                                             /*
                                               CREATE TABLE IF NOT EXISTS gtfs.shapes (
                                                     onestop_feed_id text NOT NULL,
