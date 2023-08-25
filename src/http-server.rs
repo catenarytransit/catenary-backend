@@ -5,7 +5,7 @@ use actix_web::middleware::DefaultHeaders;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Client;
 use tokio_postgres::{Error as PostgresError, Row};
-use r2d2::Pool;
+use bb8::Pool;
 use qstring::QString;
 use r2d2_postgres::{postgres::NoTls, PostgresConnectionManager};
 
@@ -16,7 +16,7 @@ struct StaticFeed {
     agency_id: String,
     name: String,
     url: String,
-    timezone: String,
+    timezone:String,
     lang: Option<String>,
     phone: Option<String>,
     fare_url: Option<String>,
@@ -33,11 +33,11 @@ async fn index(req: HttpRequest) -> impl Responder {
         .body("Hello world!")
 }
 
-async fn getfeeds(pool: web::Data<Pool<PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
-    let mut client = pool.get().unwrap();
+async fn getfeeds(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
+    let mut client = pool.get().await.unwrap();
     
     let postgresresult = client.query("SELECT onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
-    max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]);
+    max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await;
 
      match postgresresult {
         Ok(postgresresult) => {
@@ -85,9 +85,9 @@ struct RouteOutPostgres {
     long_name: String,
     desc: String,
     route_type: i32,
-    url: String,
-    agency_id: String,
-    gtfs_order: i32,
+    url: Option<String>,
+    agency_id: Option<String>,
+    gtfs_order: Option<i32>,
     color: String,
     text_color: String,
     continuous_pickup: i32,
@@ -96,8 +96,8 @@ struct RouteOutPostgres {
 }
 
 #[actix_web::get("/getroutesperagency")]
-pub async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
-    let mut client = pool.get();
+pub async fn getroutesperagency(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
+    let mut client = pool.get().await;
 
     if client.is_ok() {
     let mut client = client.unwrap();
@@ -105,7 +105,7 @@ pub async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<N
     let qs = QString::from(query_str);
     let req_feed_id = qs.get("feed_id").unwrap(); // "ferret"
 
-        /* 
+        
         let postgresresult = client.query("SELECT onestop_feed_id, route_id,
          short_name, long_name, gtfs_desc, route_type, url, agency_id,
          gtfs_order,
@@ -115,7 +115,7 @@ pub async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<N
          continuous_drop_off,
          shapes_list FROM gtfs.routes WHERE onestop_feed_id = $1;", &[
             &req_feed_id
-         ]);
+         ]).await;
     
          match postgresresult {
             Ok(postgresresult) => {
@@ -144,9 +144,6 @@ pub async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<N
                 HttpResponse::Ok()
                     .insert_header(("Content-Type", "application/json"))
                     .body(json_string)
-                    HttpResponse::Ok()
-                    .insert_header(("Content-Type", "text/plain"))
-                    .body("ok")
             },
             Err(e) => {
                 println!("No results from postgres");
@@ -155,11 +152,7 @@ pub async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<N
                     .insert_header(("Content-Type", "text/plain"))
                     .body("Postgres Error")
             }
-         }*/
-     
-         HttpResponse::Ok()
-         .insert_header(("Content-Type", "text/plain"))
-         .body("ok")
+         }
     } else {
         HttpResponse::InternalServerError()
         .insert_header(("Content-Type", "text/plain"))
@@ -182,11 +175,11 @@ async fn main() -> std::io::Result<()> {
     };
 
    // Connect to the database.
-let manager: PostgresConnectionManager<NoTls> = PostgresConnectionManager::new(
+let manager: bb8_postgres::PostgresConnectionManager<NoTls> = bb8_postgres::PostgresConnectionManager::new(
     postgresstring.parse().unwrap(),
     NoTls,
 );
-let pool: Pool<PostgresConnectionManager<NoTls>> = r2d2::Pool::new(manager).unwrap();
+let pool  = bb8::Pool::builder().build(manager).await.unwrap();
 
 
     // Create a new HTTP server.
