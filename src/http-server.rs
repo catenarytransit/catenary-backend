@@ -95,7 +95,8 @@ struct RouteOutPostgres {
     shapes_list: Vec<String>,
 }
 
-async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
+#[actix_web::get("/getroutesperagency")]
+pub async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
     let mut client = pool.get();
 
     if client.is_ok() {
@@ -103,7 +104,7 @@ async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<NoTls
     let query_str = req.query_string(); // "name=ferret"
     let qs = QString::from(query_str);
     let req_feed_id = qs.get("feed_id").unwrap(); // "ferret"
-        
+        /* 
         let postgresresult = client.query("SELECT onestop_feed_id, route_id,
          short_name, long_name, gtfs_desc, route_type, url, agency_id,
          gtfs_order,
@@ -141,7 +142,10 @@ async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<NoTls
     
                 HttpResponse::Ok()
                     .insert_header(("Content-Type", "application/json"))
-                    .body(json_string)
+                    .body(json_string)*/
+                    HttpResponse::Ok()
+                    .insert_header(("Content-Type", "text/plain"))
+                    .body("ok")
             },
             Err(e) => {
                 println!("No results from postgres");
@@ -156,7 +160,6 @@ async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<NoTls
         .insert_header(("Content-Type", "text/plain"))
         .body("Couldn't connect to pool")
     }
-
 }
 
 #[actix_web::main]
