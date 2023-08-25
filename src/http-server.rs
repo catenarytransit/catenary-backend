@@ -104,6 +104,7 @@ pub async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<N
     let query_str = req.query_string(); // "name=ferret"
     let qs = QString::from(query_str);
     let req_feed_id = qs.get("feed_id").unwrap(); // "ferret"
+
         /* 
         let postgresresult = client.query("SELECT onestop_feed_id, route_id,
          short_name, long_name, gtfs_desc, route_type, url, agency_id,
@@ -199,7 +200,7 @@ let pool: Pool<PostgresConnectionManager<NoTls>> = r2d2::Pool::new(manager).unwr
         )
             .app_data(actix_web::web::Data::new(pool.clone()))
             .route("/", web::get().to(index))
-            .route("/getroutesperagency", web::get().to(getroutesperagency))
+            .service(getroutesperagency)
             .route("/getfeeds", web::get().to(getfeeds))
     })
     .workers(4);
