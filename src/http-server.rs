@@ -172,6 +172,8 @@ let manager: PostgresConnectionManager<NoTls> = PostgresConnectionManager::new(
 );
 let pool: Pool<PostgresConnectionManager<NoTls>> = r2d2::Pool::new(manager).unwrap();
 
+    let data_pool = actix_web::web::Data::new(pool.clone());
+
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
         App::new()
@@ -181,7 +183,7 @@ let pool: Pool<PostgresConnectionManager<NoTls>> = r2d2::Pool::new(manager).unwr
               .add(("Server", "KylerChinCatenary"))
               .add(("Access-Control-Allow-Origin","https://transitmap.kylerchin.com"))
         )
-            .app_data(actix_web::web::Data::new(pool.clone()))
+            .app_data(data_pool.clone())
             .route("/", web::get().to(index))
             .route("/getroutesperagency", web::get().to(getroutesperagency))
             .route("/getfeeds", web::get().to(getfeeds))
