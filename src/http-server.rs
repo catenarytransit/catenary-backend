@@ -6,6 +6,7 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::Client;
 use tokio_postgres::{Error as PostgresError, Row};
 use r2d2::Pool;
+use qstring::QString;
 use r2d2_postgres::{postgres::NoTls, PostgresConnectionManager};
 
 #[derive(serde::Serialize)]
@@ -32,11 +33,13 @@ async fn index(req: HttpRequest) -> impl Responder {
         .body("Hello world!")
 }
 
-async fn getfeeds(req: HttpRequest, client: &Client) -> impl Responder {
+async fn getfeeds(pool: web::Data<Pool<PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
+    let mut client = pool.get().unwrap();
+    
     let postgresresult = client.query("SELECT onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
     max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await;
 
-    match postgresresult {
+     match postgresresult {
         Ok(postgresresult) => {
             let mut result: Vec<StaticFeed> = Vec::new();
             for row in postgresresult {
@@ -63,7 +66,7 @@ async fn getfeeds(req: HttpRequest, client: &Client) -> impl Responder {
             HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/json"))
                 .body(json_string)
-        }
+        },
         Err(e) => {
             println!("No results from postgres");
 
@@ -71,7 +74,7 @@ async fn getfeeds(req: HttpRequest, client: &Client) -> impl Responder {
                 .insert_header(("Content-Type", "text/plain"))
                 .body("Postgres Error")
         }
-    }
+     }
 }
 
 #[derive(serde::Serialize)]
@@ -94,6 +97,10 @@ struct RouteOutPostgres {
 
 async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
     let mut client = pool.get().unwrap();
+
+    let query_str = req.query_string(); // "name=ferret"
+let qs = QString::from(query_str);
+let req_feed_id = qs.get("feed_id").unwrap(); // "ferret"
     
     let postgresresult = client.query("SELECT onestop_feed_id, route_id,
      short_name, long_name, gtfs_desc, route_type, url, agency_id,
@@ -102,7 +109,8 @@ async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<NoTls
      text_color,
      continuous_pickup,
      continuous_drop_off,
-     shapes_list FROM gtfs.routes;", &[
+     shapes_list FROM gtfs.routes WHERE onestop_feed_id = $1;", &[
+        &req_feed_id
      ]);
 
      match postgresresult {
@@ -176,6 +184,7 @@ let pool: Pool<PostgresConnectionManager<NoTls>> = r2d2::Pool::new(manager).unwr
             .app_data(actix_web::web::Data::new(pool.clone()))
             .route("/", web::get().to(index))
             .route("/getroutesperagency", web::get().to(getroutesperagency))
+            .route("/getfeeds", web::get().to(getfeeds))
     })
     .workers(4);
 

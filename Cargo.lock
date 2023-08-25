@@ -657,6 +657,7 @@ dependencies = [
  "postgis",
  "postgres",
  "protobuf",
+ "qstring",
  "r2d2",
  "r2d2_postgres",
  "regress",
@@ -2345,6 +2346,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "qstring"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d464fae65fff2680baf48019211ce37aaec0c78e9264c84a3e484717f965104e"
+dependencies = [
+ "percent-encoding",
 ]
 
 [[package]]

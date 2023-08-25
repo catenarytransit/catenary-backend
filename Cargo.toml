@@ -40,6 +40,7 @@ bb8-postgres = "0.8.1"
 bb8 = "0.8.1"
 threadpool = {version = "1.8.1"}
 tokio-threadpool = "0.1.18"
+qstring = "0.7.2"
 
 [[bin]]
 name = "http_server"
