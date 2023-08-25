@@ -36,7 +36,7 @@ pub fn path_exists(path: &str) -> bool {
 struct Args {
     #[arg(long)]
     postgres: String,
-    #[arg(long, default_value = "10")]
+    #[arg(long)]
     threads: usize,
 }
 
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap()
         .get::<usize>("threads");
 
-    let threadcount = threads.unwrap_or_else(|| 10);
+    let threadcount = threads.unwrap();
 
     let postgresstring = match postgresstring {
         Some(s) => s,
@@ -377,7 +377,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let pool = bb8::Pool::builder()
             .retry_connection(true)
-            .connection_timeout(std::time::Duration::from_secs(99990))
+            .connection_timeout(std::time::Duration::from_secs(600))
+            .idle_timeout(Some(std::time::Duration::from_secs(600)))
             .build(manager)
             .await
             .unwrap();
@@ -396,6 +397,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let pool = pool.clone();
             handles.push(threaded_rt.spawn(async move 
                 {
+                    //it timesout here a lot
                     let mut client = pool.get().await.unwrap();
         
                     //println!("Feed in future {}: {:#?}", key, feed);
@@ -530,18 +532,76 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             }
                                         }
         
+
+                                       let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes) VALUES ($1, $2, $3, $4, $5);").await.unwrap();
+                                        
                                         for (shape_id, shape) in &gtfs.shapes {
+                                            let color_to_upload =
+                                            match shape_to_color_lookup.get(shape_id) {
+                                                Some(color) => format!(
+                                                    "{:02x}{:02x}{:02x}",
+                                                    color.r, color.g, color.b
+                                                ),
+                                                None => String::from("3a3a3a"),
+                                            };
+
+                                            //bug "Line String must at least have 2 points"
+
+                                            let preshape = shape
+                                            .iter()
+                                            .filter(|point| {
+                                                match feed.id.as_str() {
+                                                    "f-9q5-metro~losangeles~rail" => {
+                                                        //remove B/D railyard
+                                                        match color_to_upload.as_str() {
+                                                            "eb131b" => {
+                                                                point.longitude < -118.2335698
+                                                            }
+                                                            "a05da5" => {
+                                                                point.longitude < -118.2335698
+                                                            }
+                                                            _ => true,
+                                                        }
+                                                    }
+                                                    _ => true,
+                                                }
+                                            });
+
+                                            if preshape.clone().count() < 2 {
+                                                println!("Shape {} has less than 2 points", shape_id);
+                                                continue;
+                                            }
+
                                             let linestring = ewkb::LineStringT {
                                                 srid: Some(4326),
-                                                points: shape
-                                                    .iter()
-                                                    .map(|point| ewkb::Point {
+                                                points: 
+                                                    preshape.map(|point| ewkb::Point {
                                                         x: point.longitude,
                                                         y: point.latitude,
                                                         srid: Some(4326),
                                                     })
                                                     .collect(),
                                             };
+
+                                            let mut route_ids: Vec<String> = match gtfs
+                                                .trips
+                                                .iter()
+                                                .filter(|(trip_id, trip)| {
+                                                    trip.shape_id.is_some()
+                                                        && trip.shape_id.as_ref().unwrap()
+                                                            == shape_id
+                                                })
+                                                .map(|(trip_id, trip)| trip.route_id.clone())
+                                                .collect::<Vec<String>>()
+                                                .as_slice()
+                                            {
+                                                [] => vec![],
+                                                route_ids => route_ids.to_vec(),
+                                            };
+
+                                             route_ids.dedup();
+
+                                             let route_ids = route_ids;
                                             /*
                                               CREATE TABLE IF NOT EXISTS gtfs.shapes (
                                                     onestop_feed_id text NOT NULL,
@@ -552,23 +612,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 );
                                             */
         
-                                            let color_to_upload =
-                                                match shape_to_color_lookup.get(shape_id) {
-                                                    Some(color) => format!(
-                                                        "{:02x}{:02x}{:02x}",
-                                                        color.r, color.g, color.b
-                                                    ),
-                                                    None => String::from("3a3a3a"),
-                                                };
+                                            
         
                                                // println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
         
-                                            client.query("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color) VALUES ($1, $2, $3, $4);",
+                                            client.query(&prepared_shapes,
                                          &[
                                             &feed.id,
                                             &shape_id, 
                                          &linestring,
-                                         &color_to_upload
+                                         &color_to_upload,
+                                         &route_ids
                                          ]).await.unwrap();
                                         }
         
@@ -599,30 +653,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             let shape_id_array = shape_id_array;
         
                                                 //println!("uploading route {:?} {}", &feed.id , &route_id);
+
+                                            let route_prepared = client.prepare("INSERT INTO gtfs.routes
+                                            (
+                                                route_id,
+                                                onestop_feed_id,
+                                                short_name,
+                                                long_name,
+                                                gtfs_desc,
+                                                route_type,
+                                                url,
+                                                agency_id,
+                                                gtfs_order,
+                                                color,
+                                                text_color,
+                                                continuous_pickup,
+                                                continuous_drop_off,
+                                                shapes_list
+                                            )
+                                            VALUES (
+                                                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+                                            );
+                                            ").await.unwrap();
         
                                             client
                                             .query(
-                                                "INSERT INTO gtfs.routes
-                                        (
-                                            route_id,
-                                            onestop_feed_id,
-                                            short_name,
-                                            long_name,
-                                            gtfs_desc,
-                                            route_type,
-                                            url,
-                                            agency_id,
-                                            gtfs_order,
-                                            color,
-                                            text_color,
-                                            continuous_pickup,
-                                            continuous_drop_off,
-                                            shapes_list
-                                        )
-                                        VALUES (
-                                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
-                                        );
-                                        ",
+                                                &route_prepared,
                                                 &[
                                                     &route_id,
                                                     &feed.id,
@@ -656,22 +712,85 @@ async fn main() -> Result<(), Box<dyn Error>> {
         
                                         println!("Uploading {} trips", gtfs.trips.len());
 
+                                         
+                                        let time = std::time::Instant::now();
+
+                                        let statement = client.prepare("INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7);").await.unwrap();
+                                        
                                         for (trip_id, trip) in &gtfs.trips {
                                             client
                                                     .query(
-                                                        "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
+                                                        &statement,
                                                         &[
                                                             &feed.id,
                                                                &trip.id,
                                                              &trip.service_id,
-                                         &trip.route_id,
+                                                            &trip.route_id,
                                               &trip.trip_headsign.clone().unwrap_or_else(|| "".to_string()),
                                                       &trip.trip_short_name.clone().unwrap_or_else(|| "".to_string()),
+                                                      &trip.shape_id.clone().unwrap_or_else(|| "".to_string()),
                                                            ],
                                                     ).await.unwrap();
                                         }
                                     
-                                    /* 
+                                        println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
+
+                                        
+                                        /*
+                                        
+                                        
+                                            let mut threaded_trips = runtime::Builder::new_multi_thread()
+                                        .worker_threads(5)
+                                        .enable_time()
+                                        .build()
+                                        .unwrap();
+
+                                        let mut trips_handles = vec![];
+
+                                        for (trip_id, trip) in gtfs.trips.clone().into_iter() {
+                                            let pool = pool.clone();
+        
+                                            let feed_id = feed.id.clone();
+                                            trips_handles.push(threaded_trips.spawn(
+                                               
+            
+                                                async move {
+                                                    
+                                                    println!("Uploading trip {}", &trip.id);
+
+                                                let mut client = pool.get().await.unwrap();
+            
+                                               
+            
+                                                   client
+                                                        .query(
+                                                            "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
+                                                            &[
+                                                                &feed_id,
+                                                                   &trip.id,
+                                                                 &trip.service_id,
+                                             &trip.route_id,
+                                                  &trip.trip_headsign.unwrap_or_else(|| "".to_string()),
+                                                          &trip.trip_short_name.unwrap_or_else(|| "".to_string()),
+                                                               ],
+                                                        ).await.unwrap();
+                                                }
+                                            
+                                            ));
+                                        }
+
+                                        let time = std::time::Instant::now();
+                                        
+                                        futures::future::join_all(trips_handles).await;
+                                        println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
+                                        
+                                         */
+
+                                        /*
+                                        
+                                        
+                                        
+                                    
                                         let trips_insertion_multithread = futures::stream::iter(gtfs.trips.clone().into_iter().map(|(trip_id, trip)| {
                                             
                                             let pool = pool.clone();
@@ -689,19 +808,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
                                                         &[
                                                             &feed_id,
-                                                               &trip.id,
-                                                             &trip.service_id,
-                                         &trip.route_id,
-                                              &trip.trip_headsign.unwrap_or_else(|| "".to_string()),
-                                                      &trip.trip_short_name.unwrap_or_else(|| "".to_string()),
+                                                            &trip.id,
+                                                            &trip.service_id,
+                                                            &trip.route_id,
+                                                            &trip.trip_headsign.unwrap_or_else(|| "".to_string()),
+                                                            &trip.trip_short_name.unwrap_or_else(|| "".to_string()),
                                                            ],
                                                     ).await.unwrap();
                                             }
                                         }))
-                                        .buffer_unordered(10)
+                                        .buffer_unordered(1)
                                         .collect::<Vec<()>>();
 
-                                        trips_insertion_multithread.await;*/
+                                        trips_insertion_multithread.await;
+                                         */
         
                                         //okay finally upload the feed metadata
         
@@ -751,6 +871,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
 
         futures::future::join_all(handles).await;
+
+        println!("Done ingesting all gtfs!");
     }
 
     Ok(())
