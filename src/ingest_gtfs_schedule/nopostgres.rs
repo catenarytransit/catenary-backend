@@ -72,96 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    client
-        .batch_execute(
-            "
-        CREATE EXTENSION IF NOT EXISTS postgis;
-        CREATE EXTENSION IF NOT EXISTS hstore;
-
-        DROP SCHEMA IF EXISTS gtfs CASCADE;
-
-    CREATE SCHEMA IF NOT EXISTS gtfs;
     
-    CREATE TABLE IF NOT EXISTS gtfs.static_feeds (
-        onestop_feed_id text PRIMARY KEY,
-        only_realtime_ref text,
-        operators text[],
-        operators_to_gtfs_ids hstore,
-        realtime_onestop_ids text[],
-        realtime_onestop_ids_to_gtfs_ids hstore,
-        max_lat double precision NOT NULL,
-        max_lon double precision NOT NULL,
-        min_lat double precision NOT NULL,
-        min_lon double precision NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS gtfs.operators (
-        onestop_operator_id text PRIMARY KEY,
-        name text,
-        static_onestop_feeds_to_gtfs_ids hstore,
-        realtime_onestop_feeds_to_gtfs_ids hstore
-    );
-
-    CREATE TABLE IF NOT EXISTS gtfs.realtime_feeds (
-        onestop_feed_id text PRIMARY KEY,
-        name text,
-        operators_to_ids hstore
-    );
-
-    CREATE TABLE IF NOT EXISTS gtfs.routes (
-        route_id text NOT NULL,
-        onestop_feed_id text NOT NULL,
-        short_name text NOT NULL,
-        long_name text NOT NULL,
-        gtfs_desc text,
-        route_type int NOT NULL,
-        url text,
-        agency_id text,
-        gtfs_order int,
-        color text,
-        text_color text,
-        continuous_pickup int,
-        continuous_drop_off int,
-        shapes_list text[],
-        PRIMARY KEY (onestop_feed_id, route_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS gtfs.shapes (
-        onestop_feed_id text NOT NULL,
-        shape_id text NOT NULL,
-        linestring GEOMETRY(LINESTRING,4326) NOT NULL,
-        color text,
-        routes text[],
-        PRIMARY KEY (onestop_feed_id,shape_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS gtfs.trips (
-        trip_id text NOT NULL,
-        onestop_feed_id text NOT NULL,
-        route_id text NOT NULL,
-        service_id text NOT NULL,
-        trip_headsign text,
-        trip_short_name text,
-        direction_id int,
-        block_id text,
-        shape_id text,
-        wheelchair_accessible int,
-        bikes_allowed int,
-        PRIMARY KEY (onestop_feed_id, trip_id)
-    );
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON gtfs.shapes (onestop_feed_id);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON gtfs.routes (onestop_feed_id);
-    
-    ",
-        )
-        .await
-        .unwrap();
-
-    println!("Finished making database");
 
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
         let mut feedhashmap: BTreeMap<String, dmfr::Feed> = BTreeMap::new();
@@ -654,60 +565,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         
                                                 //println!("uploading route {:?} {}", &feed.id , &route_id);
 
-                                            let route_prepared = client.prepare("INSERT INTO gtfs.routes
-                                            (
-                                                route_id,
-                                                onestop_feed_id,
-                                                short_name,
-                                                long_name,
-                                                gtfs_desc,
-                                                route_type,
-                                                url,
-                                                agency_id,
-                                                gtfs_order,
-                                                color,
-                                                text_color,
-                                                continuous_pickup,
-                                                continuous_drop_off,
-                                                shapes_list
-                                            )
-                                            VALUES (
-                                                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
-                                            );
-                                            ").await.unwrap();
+                                            
         
-                                            client
-                                            .query(
-                                                &route_prepared,
-                                                &[
-                                                    &route_id,
-                                                    &feed.id,
-                                                    &route.short_name,
-                                                    &route.long_name,
-                                                    &route.desc.clone().unwrap_or_else(|| "".to_string()),
-                                                    &route_type_number,
-                                                    &route.url,
-                                                    &route.agency_id.clone().unwrap_or_else(|| "".to_string()),
-                                                    &i32::try_from(route.order.unwrap_or_else(|| 0)).ok(),
-                                                    &(route.color.to_string()),
-                                                    &(route.text_color.to_string()),
-                                                    &(match route.continuous_pickup {
-                                                        ContinuousPickupDropOff::Continuous => 0,
-                                                        ContinuousPickupDropOff::NotAvailable => 1,
-                                                        ContinuousPickupDropOff::ArrangeByPhone => 2,
-                                                        ContinuousPickupDropOff::CoordinateWithDriver => 3,
-                                                        ContinuousPickupDropOff::Unknown(i) => i,
-                                                    }),
-                                                    &(match route.continuous_drop_off {
-                                                        ContinuousPickupDropOff::Continuous => 0,
-                                                        ContinuousPickupDropOff::NotAvailable => 1,
-                                                        ContinuousPickupDropOff::ArrangeByPhone => 2,
-                                                        ContinuousPickupDropOff::CoordinateWithDriver => 3,
-                                                        ContinuousPickupDropOff::Unknown(i) => i,
-                                                    }),
-                                                    &shape_id_array,
-                                                ],
-                                            ).await.unwrap();
+                                           
                                         }
         
                                         println!("Uploading {} trips", gtfs.trips.len());
@@ -718,19 +578,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let statement = client.prepare("INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7);").await.unwrap();
                                         
                                         for (trip_id, trip) in &gtfs.trips {
-                                            client
-                                                    .query(
-                                                        &statement,
-                                                        &[
-                                                            &feed.id,
-                                                               &trip.id,
-                                                             &trip.service_id,
-                                                            &trip.route_id,
-                                              &trip.trip_headsign.clone().unwrap_or_else(|| "".to_string()),
-                                                      &trip.trip_short_name.clone().unwrap_or_else(|| "".to_string()),
-                                                      &trip.shape_id.clone().unwrap_or_else(|| "".to_string()),
-                                                           ],
-                                                    ).await.unwrap();
+                                            
                                         }
                                     
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
@@ -844,13 +692,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                  */
         
                                         if gtfs.routes.len() > 0 as usize {
-                                            let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon) VALUES ($1, $2, $3, $4, $5);", &[
-                                            &feed.id,
-                                            &least_lat,
-                                            &least_lon,
-                                            &least_lat,
-                                            &least_lon
-                                        ]).await.unwrap();
+                                            
                                         }
                                     }
                                 }

@@ -54,8 +54,14 @@ name = "import"
 path = "src/ingest_gtfs_schedule/main.rs"
 
 [[bin]]
+name = "importnopostgres"
+path = "src/ingest_gtfs_schedule/nopostgres.rs"
+
+[[bin]]
 name = "flattenuncompressed"
 path = "src/ingest_gtfs_schedule/flatten.rs"
+
+
 
 [features]
 #![feature(async_closure)]
