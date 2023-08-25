@@ -142,7 +142,7 @@ pub async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<N
     
                 HttpResponse::Ok()
                     .insert_header(("Content-Type", "application/json"))
-                    .body(json_string)*/
+                    .body(json_string)
                     HttpResponse::Ok()
                     .insert_header(("Content-Type", "text/plain"))
                     .body("ok")
@@ -154,7 +154,11 @@ pub async fn getroutesperagency(pool: web::Data<Pool<PostgresConnectionManager<N
                     .insert_header(("Content-Type", "text/plain"))
                     .body("Postgres Error")
             }
-         }
+         }*/
+     
+         HttpResponse::Ok()
+         .insert_header(("Content-Type", "text/plain"))
+         .body("ok")
     } else {
         HttpResponse::InternalServerError()
         .insert_header(("Content-Type", "text/plain"))
