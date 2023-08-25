@@ -616,14 +616,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         
                                                // println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
         
-                                            client.query(&prepared_shapes,
-                                         &[
-                                            &feed.id,
-                                            &shape_id, 
-                                         &linestring,
-                                         &color_to_upload,
-                                         &route_ids
-                                         ]).await.unwrap();
+                                            
                                         }
         
                                         for (route_id, route) in &gtfs.routes {
