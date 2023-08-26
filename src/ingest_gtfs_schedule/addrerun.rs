@@ -538,7 +538,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             }
                                         }
 
-                                       let prepared_shapes = client.prepare("INSERT IF NOT EXISTS INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes) VALUES ($1, $2, $3, $4, $5);").await.unwrap();
+                                       let prepared_shapes = client.prepare("INSERT  INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes) VALUES ($1, $2, $3, $4, $5)  on conflict do nothing;").await.unwrap();
                                         
                                         for (shape_id, shape) in &gtfs.shapes {
                                             let color_to_upload =
@@ -659,7 +659,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         
                                                 //println!("uploading route {:?} {}", &feed.id , &route_id);
 
-                                            let route_prepared = client.prepare("INSERT IF NOT EXISTS INTO gtfs.routes
+                                            let route_prepared = client.prepare("INSERT  INTO gtfs.routes
                                             (
                                                 route_id,
                                                 onestop_feed_id,
@@ -678,7 +678,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             )
                                             VALUES (
                                                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
-                                            );
+                                            ) on conflict do nothing;
                                             ").await.unwrap();
         
                                             client
@@ -720,7 +720,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                          
                                         let time = std::time::Instant::now();
 
-                                        let statement = client.prepare("INSERT IF NOT EXISTS INTO gtfs.trips  (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7);").await.unwrap();
+                                        let statement = client.prepare("INSERT INTO gtfs.trips  (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7)  on conflict do nothing;").await.unwrap();
                                         
                                         for (trip_id, trip) in &gtfs.trips {
                                             client
@@ -849,7 +849,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                  */
         
                                         if gtfs.routes.len() > 0 as usize {
-                                            let _ = client.query("INSERT  IF NOT EXISTS INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon) VALUES ($1, $2, $3, $4, $5);", &[
+                                            let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon) VALUES ($1, $2, $3, $4, $5)  on conflict do nothing;", &[
                                             &feed.id,
                                             &least_lat,
                                             &least_lon,
