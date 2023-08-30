@@ -1,0 +1,16 @@
+[Unit]
+Description=transitbackend for kylerchin.com
+
+[Service]
+WorkingDirectory= /opt/catenary-backend
+ExecStart=cargo run --bin http_server -- --postgres "host=HOST user=USER password=PASSWORD"
+
+Restart=always
+RestartSec=1
+
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=autodeploy
+
+[Install]
+WantedBy=multi-user.target

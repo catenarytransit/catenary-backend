@@ -41,6 +41,7 @@ bb8 = "0.8.1"
 threadpool = {version = "1.8.1"}
 tokio-threadpool = "0.1.18"
 qstring = "0.7.2"
+rand = "0.8.5"
 
 [[bin]]
 name = "http_server"
@@ -53,6 +54,10 @@ path = "src/ingest_gtfs_schedule/from-transitland.rs"
 [[bin]]
 name = "import"
 path = "src/ingest_gtfs_schedule/main.rs"
+
+[[bin]]
+path = "src/ingest_gtfs_schedule/addrerun.rs"
+name = "rerunimport"
 
 [[bin]]
 name = "importnopostgres"

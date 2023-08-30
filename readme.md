@@ -4,6 +4,12 @@
 sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip
 ```
 
+### Install Systemd Service
+```bash
+sudo mv transitbackend.service /etc/systemd/system/transitbackend.service
+sudo systemctl enable --now transitbackend.service
+```
+
 ### Running gtfs static ingest
 
 ```bash
