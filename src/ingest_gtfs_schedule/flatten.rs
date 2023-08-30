@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             .parent()
                             .unwrap()
                             .join(file_path.file_name().unwrap());
-                        fs::rename(&file_path, &new_file_path).unwrap();
+                        let _ = fs::rename(&file_path, &new_file_path);
 
                         println!(
                             "{} moved to {}",
