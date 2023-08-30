@@ -34,17 +34,11 @@ pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
 }
 
-#[derive(Parser, Debug)]
-struct Args {
-    #[arg(long)]
-    postgres: String,
-    #[arg(long)]
-    threads: usize,
-}
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let args = Args::parse();
+
 
     let postgresstring = arguments::parse(std::env::args())
         .unwrap()
@@ -62,6 +56,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             panic!("You need a postgres string");
         }
     };
+
+    let onlythisfeed: Option<String> = arguments::parse(std::env::args()).unwrap().get("onlythisfeed");
 
     // Connect to the database.
     let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
@@ -394,6 +390,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut handles = vec![];
 
         let mut bruhz = feedhashmap.clone().into_iter().collect::<Vec<(String, dmfr::Feed)>>();
+
+        if (onlythisfeed.is_some()) {
+            bruhz = bruhz
+                .into_iter()
+                .filter(|(key, feed)| key == onlythisfeed.as_ref().unwrap())
+                .collect::<Vec<(String, dmfr::Feed)>>();
+        }
 
         bruhz.shuffle(&mut thread_rng());
 
