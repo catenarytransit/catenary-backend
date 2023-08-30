@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::copy;
 use std::io::Write;
 
+//yes im intentionally leaking the API key. I don't care, they are free. This is for your convienence.
 fn transform_for_bay_area(x:String) -> String {
  //.replace("https://api.511.org/transit/datafeeds?operator_id=RG", "https://api.511.org/transit/datafeeds?operator_id=RG&api_key=094f6bc5-9d6a-4529-bfb3-6f1bc4d809d9")
 
