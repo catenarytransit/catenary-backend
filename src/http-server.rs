@@ -36,8 +36,7 @@ async fn index(req: HttpRequest) -> impl Responder {
 async fn getfeeds(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
     let mut client = pool.get().await.unwrap();
     
-    let postgresresult = client.query("SELECT onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email, 
-    max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds", &[]).await;
+    let postgresresult = client.query("SELECT onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email,  max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds;", &[]).await;
 
      match postgresresult {
         Ok(postgresresult) => {
