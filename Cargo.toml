@@ -56,10 +56,6 @@ name = "import"
 path = "src/ingest_gtfs_schedule/main.rs"
 
 [[bin]]
-path = "src/ingest_gtfs_schedule/addrerun.rs"
-name = "rerunimport"
-
-[[bin]]
 name = "importnopostgres"
 path = "src/ingest_gtfs_schedule/nopostgres.rs"
 
