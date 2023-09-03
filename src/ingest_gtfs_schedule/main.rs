@@ -287,10 +287,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                         for feed in operator.associated_feeds.iter() {
                                             if feed.feed_onestop_id.is_some() {
-                                                if feed_to_operator_hashmap.contains_key(
+                                                if (&feed_to_operator_hashmap).contains_key(
                                                     feed.feed_onestop_id.as_ref().unwrap().as_str(),
                                                 ) {
-                                                    feed_to_operator_hashmap.insert(
+                                                    &feed_to_operator_hashmap.insert(
                                                         feed.feed_onestop_id.clone().unwrap(),
                                                         feed_to_operator_hashmap
                                                             .get(
@@ -308,7 +308,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                             .collect::<Vec<String>>(),
                                                     );
                                                 } else {
-                                                    feed_to_operator_hashmap.insert(
+                                                    &feed_to_operator_hashmap.insert(
                                                         feed.feed_onestop_id.clone().unwrap(),
                                                         vec![operator.onestop_id.clone()],
                                                     );
@@ -395,6 +395,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         for (key, feed) in feedhashmap.clone().into_iter() {
             let pool = pool.clone();
+
+            let operator_id_list = feed_to_operator_hashmap.get(&key).unwrap().clone();
             handles.push(threaded_rt.spawn(async move 
                 {
                     //it timesout here a lot
@@ -842,14 +844,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 min_lat double precision NOT NULL,
                 min_lon double precision NOT NULL
                  */
-        
+
+
+                                        
+                                               
                                         if gtfs.routes.len() > 0 as usize {
-                                            let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon) VALUES ($1, $2, $3, $4, $5);", &[
+                                            let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon, operators)
+                                            
+                                             VALUES ($1, $2, $3, $4, $5, $6);", &[
                                             &feed.id,
                                             &least_lat,
                                             &least_lon,
                                             &least_lat,
-                                            &least_lon
+                                            &least_lon,
+                                            &operator_id_list
                                         ]).await.unwrap();
                                         }
                                     }
