@@ -32,17 +32,10 @@ pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
 }
 
-#[derive(Parser, Debug)]
-struct Args {
-    #[arg(long)]
-    postgres: String,
-    #[arg(long)]
-    threads: usize,
-}
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let args = Args::parse();
 
     let postgresstring = arguments::parse(std::env::args())
         .unwrap()
@@ -61,6 +54,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
+    let startfresh = arguments::parse(std::env::args())
+        .unwrap()
+        .get::<bool>("startfresh");
+
+    let limittostaticfeed = arguments::parse(std::env::args())
+        .unwrap()
+        .get::<String>("limittostaticfeed");
+
     // Connect to the database.
     let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
 
@@ -73,13 +74,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     client
-        .batch_execute(
-            "
+        .batch_execute("
         CREATE EXTENSION IF NOT EXISTS postgis;
         CREATE EXTENSION IF NOT EXISTS hstore;
+        ").await.unwrap();
 
-        DROP SCHEMA IF EXISTS gtfs CASCADE;
+        if (startfresh.unwrap_or(false)) {
+        client.batch_execute("DROP SCHEMA IF EXISTS gtfs CASCADE;").await.unwrap();
+        }
 
+        client.batch_execute("
     CREATE SCHEMA IF NOT EXISTS gtfs;
     
     CREATE TABLE IF NOT EXISTS gtfs.static_feeds (
@@ -399,6 +403,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let pool = pool.clone();
 
 
+            let mut dothetask = true;
+        
+            if key.contains("~jp") || key.contains("germany~urban~transport") || key.contains("~gov~uk") {
+                dothetask = false;
+            }
+
+            if (limittostaticfeed.is_some()) {
+                if (limittostaticfeed.as_ref().unwrap().as_str() != key.as_str()) {
+                    dothetask = false;
+                }
+            }
+
             let items: Vec<String> = vec![];
             let operator_id_list = feed_to_operator_hashmap.get(&key).unwrap_or_else(|| &items).clone();
             handles.push(threaded_rt.spawn(async move 
@@ -407,12 +423,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let mut client = pool.get().await.unwrap();
         
                     //println!("Feed in future {}: {:#?}", key, feed);
-        
-                    let mut dothetask = true;
-        
-                   if key.contains("~jp") || key.contains("germany~urban~transport") || key.contains("~gov~uk") {
-                       dothetask = false;
-                   }
         
                    if dothetask {
                     match feed.spec {
