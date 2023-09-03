@@ -899,6 +899,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("number of operators: {}", operatorhashmap.len());
 
         for (operator_id, operator) in operatorhashmap {
+            println!("{:?}", operator)
             /*
             
             onestop_operator_id text PRIMARY KEY,
