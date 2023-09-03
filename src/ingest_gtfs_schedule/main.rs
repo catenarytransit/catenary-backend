@@ -898,6 +898,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ]).await.unwrap();
         }
 
+        println!("Done ingesting all operators");
+
         for x in 0..1 {
             println!("Waiting for {} seconds", x);
             std::thread::sleep(std::time::Duration::from_secs(1));
