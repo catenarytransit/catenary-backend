@@ -398,7 +398,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         for (key, feed) in feedhashmap.clone().into_iter() {
             let pool = pool.clone();
 
-            let operator_id_list = feed_to_operator_hashmap.get(&key).unwrap().clone();
+
+            let items: Vec<String> = vec![];
+            let operator_id_list = feed_to_operator_hashmap.get(&key).unwrap_or_else(|| &items).clone();
             handles.push(threaded_rt.spawn(async move 
                 {
                     //it timesout here a lot
