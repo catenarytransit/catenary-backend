@@ -906,7 +906,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         gtfs_static_feeds text[],
              */
             client.query("INSERT INTO gtfs.operators (onestop_operator_id, name, gtfs_static_feeds) VALUES ($1, $2, $3);", &[
-                &operator_id,
+                &operator.onestop_id,
                 &operator.name,
                 &operator_to_feed_hashmap.get(&operator_id).clone().map(|associated_feeds| associated_feeds.iter().map(|associated_feed| associated_feed.feed_onestop_id.clone().unwrap_or_else(
                     || "".to_string()
