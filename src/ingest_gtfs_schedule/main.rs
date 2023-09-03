@@ -98,6 +98,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     CREATE TABLE IF NOT EXISTS gtfs.operators (
         onestop_operator_id text PRIMARY KEY,
         name text,
+        gtfs_static_feeds text[],
+        gtfs_realtime_feeds text[],
         static_onestop_feeds_to_gtfs_ids hstore,
         realtime_onestop_feeds_to_gtfs_ids hstore
     );
@@ -880,7 +882,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         futures::future::join_all(handles).await;
 
-        println!("Done ingesting all gtfs!");
+        println!("Done ingesting all gtfs statics");
+
+        for (operator_id, operator) in operatorhashmap {
+            /*
+            
+            onestop_operator_id text PRIMARY KEY,
+        name text,
+        gtfs_static_feeds text[],
+             */
+            let _ = client.query("INSERT INTO gtfs.operator(onestop_operator_id, name, gtfs_static_feeds) VALUES ($1, $2, $3);", &[
+                &operator_id,
+                &operator.name,
+                &operator_to_feed_hashmap.get(&operator_id).clone().map(|associated_feeds| associated_feeds.iter().map(|associated_feed| associated_feed.feed_onestop_id.clone().unwrap()).collect::<Vec<String>>()).unwrap_or_else(|| vec![])
+            ]).await.unwrap();
+        }
+
+        for x in 0..1 {
+            println!("Waiting for {} seconds", x);
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
     }
 
     Ok(())
