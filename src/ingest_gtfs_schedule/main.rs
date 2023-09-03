@@ -549,7 +549,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }
         
 
-                                       let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes) VALUES ($1, $2, $3, $4, $5);").await.unwrap();
+                                       let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO UPDATE;").await.unwrap();
                                         
                                         for (shape_id, shape) in &gtfs.shapes {
                                             let color_to_upload =
@@ -689,7 +689,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             )
                                             VALUES (
                                                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
-                                            );
+                                            ) ON CONFLICT DO UPDATE;
                                             ").await.unwrap();
         
                                             client
@@ -731,7 +731,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                          
                                         let time = std::time::Instant::now();
 
-                                        let statement = client.prepare("INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7);").await.unwrap();
+                                        let statement = client.prepare("INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO UPDATE;").await.unwrap();
                                         
                                         for (trip_id, trip) in &gtfs.trips {
                                             client
@@ -865,7 +865,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         if gtfs.routes.len() > 0 as usize {
                                             let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon, operators)
                                             
-                                             VALUES ($1, $2, $3, $4, $5, $6);", &[
+                                             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO UPDATE;", &[
                                             &feed.id,
                                             &least_lat,
                                             &least_lon,
@@ -903,7 +903,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         name text,
         gtfs_static_feeds text[],
              */
-            let _ = client.query("INSERT INTO gtfs.operator(onestop_operator_id, name, gtfs_static_feeds) VALUES ($1, $2, $3);", &[
+            let _ = client.query("INSERT INTO gtfs.operator(onestop_operator_id, name, gtfs_static_feeds) VALUES ($1, $2, $3) ON CONFLICT DO UPDATE;", &[
                 &operator_id,
                 &operator.name,
                 &operator_to_feed_hashmap.get(&operator_id).clone().map(|associated_feeds| associated_feeds.iter().map(|associated_feed| associated_feed.feed_onestop_id.clone().unwrap()).collect::<Vec<String>>()).unwrap_or_else(|| vec![])
