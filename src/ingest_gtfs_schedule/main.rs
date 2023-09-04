@@ -542,7 +542,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                 }
             }
 
-            let listofoperatorpairs = feed_to_operator_pairs_hashmap.get(&feed.id).unwrap().clone();
+            let bruhitfailed: Vec<operator_pair_info> = vec![];
+            let listofoperatorpairs = feed_to_operator_pairs_hashmap.get(&feed.id).unwrap_or_else(|| &bruhitfailed).clone();
 
             let mut operator_pairs_hashmap: HashMap<String, Option<String>> = HashMap::new();
 
