@@ -970,7 +970,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             }
 
-            client.query("INSERT INTO gtfs.operators (onestop_operator_id, name, gtfs_static_feeds, gtfs_realtime_feeds, static_onestop_feeds_to_gtfs_ids, realtime_onestop_feeds_to_gtfs_ids) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING;", &[
+            client.query("INSERT INTO gtfs.operators 
+            (onestop_operator_id, 
+                name, 
+                gtfs_static_feeds, 
+                gtfs_realtime_feeds, 
+                static_onestop_feeds_to_gtfs_ids, 
+                realtime_onestop_feeds_to_gtfs_ids)
+                 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;", &[
                 &operator.onestop_id,
                 &operator.name,
                 &simplified_array_static,
