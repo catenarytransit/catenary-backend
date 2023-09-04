@@ -115,7 +115,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         max_lat double precision,
         max_lon double precision,
         min_lat double precision,
-        min_lon double precision,
+        min_lon double precision
     );
 
     CREATE TABLE IF NOT EXISTS gtfs.stops (
