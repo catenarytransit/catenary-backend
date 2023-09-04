@@ -110,7 +110,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     CREATE TABLE IF NOT EXISTS gtfs.realtime_feeds (
         onestop_feed_id text PRIMARY KEY,
         name text,
-        operators_to_ids hstore
+        operators text[],
+        operators_to_gtfs_ids hstore,
+        max_lat double precision,
+        max_lon double precision,
+        min_lat double precision,
+        min_lon double precision,
     );
 
     CREATE TABLE IF NOT EXISTS gtfs.stops (
@@ -205,6 +210,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Finished making database");
 
+    #[derive(Debug, Clone)]
+    struct operator_pair_info {
+        operator_id: String,
+        gtfs_agency_id: Option<String>,
+    }
+
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
         let mut feedhashmap: BTreeMap<String, dmfr::Feed> = BTreeMap::new();
 
@@ -214,6 +225,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             BTreeMap::new();
 
         let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+        let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<operator_pair_info>> = BTreeMap::new();
 
         let feeds_to_discard = vec![
             "f-9q8y-sfmta",
@@ -243,6 +256,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 Ok(dmfrinfo) => {
                                     dmfrinfo.feeds.iter().for_each(|feed| {
                                         for eachoperator in feed.operators.clone().into_iter() {
+
+                                            if (feed_to_operator_pairs_hashmap.contains_key(&feed.id)) {
+                                                let mut existing_operator_pairs = feed_to_operator_pairs_hashmap.get(&feed.id).unwrap().clone();
+
+                                                existing_operator_pairs.push(operator_pair_info {
+                                                    operator_id: eachoperator.onestop_id.clone(),
+                                                    gtfs_agency_id: None,
+                                                });
+
+                                                feed_to_operator_pairs_hashmap.insert(
+                                                    feed.id.clone(), 
+                                                    existing_operator_pairs
+                                                );
+                                            } else {
+                                                feed_to_operator_pairs_hashmap.insert(feed.id.clone(), vec![operator_pair_info {
+                                                    operator_id: eachoperator.onestop_id.clone(),
+                                                    gtfs_agency_id: None,
+                                                }]);
+                                            }
+
                                             if feed_to_operator_hashmap.contains_key(&feed.id) {
                                                 feed_to_operator_hashmap.insert(
                                                     feed.id.clone(),
@@ -353,6 +386,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                         for feed in operator.associated_feeds.iter() {
                                             if feed.feed_onestop_id.is_some() {
+
+                                                if (&feed_to_operator_pairs_hashmap).contains_key(
+                                                    feed.feed_onestop_id.as_ref().unwrap().as_str()
+                                                )
+                                                {
+                                                    let mut existing_operator_pairs = feed_to_operator_pairs_hashmap.get(feed.feed_onestop_id.as_ref().unwrap().as_str()).unwrap().clone();
+
+                                                    existing_operator_pairs.push(operator_pair_info {
+                                                        operator_id: operator.onestop_id.clone(),
+                                                        gtfs_agency_id: feed.gtfs_agency_id.clone(),
+                                                    });
+
+                                                    feed_to_operator_pairs_hashmap.insert(
+                                                        feed.feed_onestop_id.clone().unwrap(),
+                                                        existing_operator_pairs,
+                                                    );
+                                                } else {
+                                                    feed_to_operator_pairs_hashmap.insert(
+                                                        feed.feed_onestop_id.clone().unwrap(),
+                                                        vec![operator_pair_info {
+                                                            operator_id: operator.onestop_id.clone(),
+                                                            gtfs_agency_id: feed.gtfs_agency_id.clone(),
+                                                        }],
+                                                    );
+                                                }
+
                                                 if (&feed_to_operator_hashmap).contains_key(
                                                     feed.feed_onestop_id.as_ref().unwrap().as_str(),
                                                 ) {
@@ -473,6 +532,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 if (limittostaticfeed.as_ref().unwrap().as_str() != key.as_str()) {
                     dothetask = false;
                 }
+            }
+
+            let listofoperatorpairs = feed_to_operator_pairs_hashmap.get(&feed.id).unwrap().clone();
+
+            let mut operator_pairs_hashmap: HashMap<String, Option<String>> = HashMap::new();
+
+            for operator_pair in listofoperatorpairs {
+                operator_pairs_hashmap.insert(operator_pair.operator_id, operator_pair.gtfs_agency_id);
             }
 
             let items: Vec<String> = vec![];
@@ -811,8 +878,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
                                                
+
+                                        
+
                                         if gtfs.routes.len() > 0 as usize {
-                                            let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon, operators)
+                                            let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
                                             
                                              VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT do nothing;", &[
                                             &feed.id,
@@ -820,7 +890,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &least_lon,
                                             &least_lat,
                                             &least_lon,
-                                            &operator_id_list
+                                            &operator_id_list,
+                                            &operator_pairs_hashmap
                                         ]).await.unwrap();
                                         }
                                     }
@@ -828,7 +899,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                         },
                         dmfr::FeedSpec::GtfsRt => {
-                            
+                                            let _ = client.query("INSERT INTO gtfs.realtime_feeds (onestop_feed_id, name, operators, operators_to_gtfs_ids)
+                                             VALUES ($1, $2, $3) ON CONFLICT do nothing;", &[
+                                            &feed.id,
+                                            &feed.name,
+                                            &operator_id_list,
+                                            &operator_pairs_hashmap
+                                             ]).await.unwrap();
                         },
                         _ => {
                             //do nothing
