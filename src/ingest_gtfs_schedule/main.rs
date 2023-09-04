@@ -115,6 +115,43 @@ async fn main() -> Result<(), Box<dyn Error>> {
         operators_to_ids hstore
     );
 
+    CREATE TABLE IF NOT EXISTS gtfs.stops (
+        onestop_operator_id text NOT NULL,
+        id text NOT NULL,
+        name text NOT NULL,
+        code text,
+        desc text,
+        location_type int,
+        parent_station text,
+        zone_id text,
+        url text,
+        long double precision,
+        lat double precision,
+        timezone text,
+        wheelchair_boarding int,
+        level_id text,
+        platform_code text,
+        PRIMARY KEY (onestop_operator_id, id)
+    )
+
+    CREATE TABLE IF NOT EXISTS gtfs.stoptimes (
+        trip_id text NOT NULL,
+        arrival_time text NOT NULL,
+        departure_time text NOT NULL,
+        stop_id text NOT NULL,
+        stop_sequence int NOT NULL,
+        stop_headsign text,
+        pickup_type int,
+        drop_off_type int,
+        shape_dist_traveled double precision,
+        timepoint int,
+        continuous_pickup int,
+        continuous_drop_off int,
+        long double precision,
+        lat double precision,
+        PRIMARY KEY (trip_id, stop_id, stop_sequence)
+    )
+
     CREATE TABLE IF NOT EXISTS gtfs.routes (
         route_id text NOT NULL,
         onestop_feed_id text NOT NULL,
@@ -766,117 +803,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }
                                     
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
-
-                                        
-                                        /*
-                                        
-                                        
-                                            let mut threaded_trips = runtime::Builder::new_multi_thread()
-                                        .worker_threads(5)
-                                        .enable_time()
-                                        .build()
-                                        .unwrap();
-
-                                        let mut trips_handles = vec![];
-
-                                        for (trip_id, trip) in gtfs.trips.clone().into_iter() {
-                                            let pool = pool.clone();
-        
-                                            let feed_id = feed.id.clone();
-                                            trips_handles.push(threaded_trips.spawn(
-                                               
-            
-                                                async move {
-                                                    
-                                                    println!("Uploading trip {}", &trip.id);
-
-                                                let mut client = pool.get().await.unwrap();
-            
-                                               
-            
-                                                   client
-                                                        .query(
-                                                            "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
-                                                            &[
-                                                                &feed_id,
-                                                                   &trip.id,
-                                                                 &trip.service_id,
-                                             &trip.route_id,
-                                                  &trip.trip_headsign.unwrap_or_else(|| "".to_string()),
-                                                          &trip.trip_short_name.unwrap_or_else(|| "".to_string()),
-                                                               ],
-                                                        ).await.unwrap();
-                                                }
-                                            
-                                            ));
-                                        }
-
-                                        let time = std::time::Instant::now();
-                                        
-                                        futures::future::join_all(trips_handles).await;
-                                        println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
-                                        
-                                         */
-
-                                        /*
-                                        
-                                        
-                                        
-                                    
-                                        let trips_insertion_multithread = futures::stream::iter(gtfs.trips.clone().into_iter().map(|(trip_id, trip)| {
-                                            
-                                            let pool = pool.clone();
-        
-                                            let feed_id = feed.id.clone();
-        
-                                            async move {
-        
-                                            let mut client = pool.get().await.unwrap();
-        
-                                           
-        
-                                               client
-                                                    .query(
-                                                        "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
-                                                        &[
-                                                            &feed_id,
-                                                            &trip.id,
-                                                            &trip.service_id,
-                                                            &trip.route_id,
-                                                            &trip.trip_headsign.unwrap_or_else(|| "".to_string()),
-                                                            &trip.trip_short_name.unwrap_or_else(|| "".to_string()),
-                                                           ],
-                                                    ).await.unwrap();
-                                            }
-                                        }))
-                                        .buffer_unordered(1)
-                                        .collect::<Vec<()>>();
-
-                                        trips_insertion_multithread.await;
-                                         */
-        
-                                        //okay finally upload the feed metadata
-        
-                                        /*
-                                        
-                                        onestop_feed_id text PRIMARY KEY,
-                onestop_operator_id text,
-                gtfs_agency_id text,
-                name text ,
-                url text ,
-                timezone text,
-                lang text,
-                phone text,
-                fare_url text,
-                email text,
-                max_lat double precision NOT NULL,
-                max_lon double precision NOT NULL,
-                min_lat double precision NOT NULL,
-                min_lon double precision NOT NULL
-                 */
-
-
-                                        
                                                
                                         if gtfs.routes.len() > 0 as usize {
                                             let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon, operators)
