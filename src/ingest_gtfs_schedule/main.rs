@@ -123,7 +123,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         id text NOT NULL,
         name text NOT NULL,
         code text,
-        desc text,
+        gtfs_desc text,
         location_type int,
         parent_station text,
         zone_id text,
