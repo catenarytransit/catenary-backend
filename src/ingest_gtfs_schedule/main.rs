@@ -83,9 +83,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
 
         client.batch_execute("
-    CREATE SCHEMA IF NOT EXISTS gtfs;
+    CREATE SCHEMA IF NOT EXISTS gtfs;").await.unwrap();
     
-    CREATE TABLE IF NOT EXISTS gtfs.static_feeds (
+    client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.static_feeds (
         onestop_feed_id text PRIMARY KEY,
         only_realtime_ref text,
         operators text[],
@@ -97,16 +97,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         min_lat double precision NOT NULL,
         min_lon double precision NOT NULL
     );
-
-    CREATE TABLE IF NOT EXISTS gtfs.operators (
+").await.unwrap();
+    
+client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         onestop_operator_id text PRIMARY KEY,
         name text,
         gtfs_static_feeds text[],
         gtfs_realtime_feeds text[],
         static_onestop_feeds_to_gtfs_ids hstore,
         realtime_onestop_feeds_to_gtfs_ids hstore
-    );
+    );").await.unwrap();
 
+    client.batch_execute("
     CREATE TABLE IF NOT EXISTS gtfs.realtime_feeds (
         onestop_feed_id text PRIMARY KEY,
         name text,
@@ -116,8 +118,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         max_lon double precision,
         min_lat double precision,
         min_lon double precision
-    );
+    );").await.unwrap();
 
+    client.batch_execute("
     CREATE TABLE IF NOT EXISTS gtfs.stops (
         onestop_operator_id text NOT NULL,
         id text NOT NULL,
@@ -135,8 +138,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         level_id text,
         platform_code text,
         PRIMARY KEY (onestop_operator_id, id)
-    )
+    )").await.unwrap();
 
+    client.batch_execute("
     CREATE TABLE IF NOT EXISTS gtfs.stoptimes (
         trip_id text NOT NULL,
         arrival_time text NOT NULL,
@@ -153,8 +157,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         long double precision,
         lat double precision,
         PRIMARY KEY (trip_id, stop_id, stop_sequence)
-    )
+    )").await.unwrap();
 
+    client.batch_execute("
     CREATE TABLE IF NOT EXISTS gtfs.routes (
         route_id text NOT NULL,
         onestop_feed_id text NOT NULL,
@@ -171,8 +176,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         continuous_drop_off int,
         shapes_list text[],
         PRIMARY KEY (onestop_feed_id, route_id)
-    );
+    );").await.unwrap();
 
+    client.batch_execute("
     CREATE TABLE IF NOT EXISTS gtfs.shapes (
         onestop_feed_id text NOT NULL,
         shape_id text NOT NULL,
@@ -180,8 +186,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         color text,
         routes text[],
         PRIMARY KEY (onestop_feed_id,shape_id)
-    );
+    );").await.unwrap();
 
+    client.batch_execute("
     CREATE TABLE IF NOT EXISTS gtfs.trips (
         trip_id text NOT NULL,
         onestop_feed_id text NOT NULL,
@@ -195,8 +202,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         wheelchair_accessible int,
         bikes_allowed int,
         PRIMARY KEY (onestop_feed_id, trip_id)
-    );
+    );").await.unwrap();
 
+    client.batch_execute("
     CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
 
     CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON gtfs.shapes (onestop_feed_id);
