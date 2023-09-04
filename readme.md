@@ -4,12 +4,6 @@
 sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip
 ```
 
-### Install Systemd Service
-```bash
-sudo mv transitbackend.service /etc/systemd/system/transitbackend.service
-sudo systemctl enable --now transitbackend.service
-```
-
 ## Loading in Data
 Loading in data into the Postgres database is a multistep process. Ensure your postgres database is working and your password is set correctly.
 
@@ -39,6 +33,12 @@ cargo run --bin import -- --postgres "host=localhost user=postgres password=corr
 You're all done! Data is fully ready for serving to users!
 
 ## Running the Application
+
+### Install Systemd Service
+```bash
+sudo mv transitbackend.service /etc/systemd/system/transitbackend.service
+sudo systemctl enable --now transitbackend.service
+```
 
 Example endpoints
 
