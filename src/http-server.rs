@@ -169,6 +169,13 @@ pub async fn gettrip(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionM
     }
 }
 
+#[actix_web::get("/getinitdata")]
+pub async fn getinitdata(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
+    HttpResponse::Ok()
+                    .insert_header(("Content-Type", "application/json"))
+                    .body("{}")
+}
+
 #[actix_web::get("/getroutesperagency")]
 pub async fn getroutesperagency(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
     let mut client = pool.get().await;
@@ -271,6 +278,7 @@ let pool  = bb8::Pool::builder().build(manager).await.unwrap();
             .route("/", web::get().to(index))
             .service(getroutesperagency)
             .service(gettrip)
+            .service(getinitdata)
             .route("/getfeeds", web::get().to(getfeeds))
     })
     .workers(4);

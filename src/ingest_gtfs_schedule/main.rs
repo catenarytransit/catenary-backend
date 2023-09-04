@@ -909,7 +909,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                         },
                         dmfr::FeedSpec::GtfsRt => {
                                             let _ = client.query("INSERT INTO gtfs.realtime_feeds (onestop_feed_id, name, operators, operators_to_gtfs_ids)
-                                             VALUES ($1, $2, $3) ON CONFLICT do nothing;", &[
+                                             VALUES ($1, $2, $3, $4) ON CONFLICT do nothing;", &[
                                             &feed.id,
                                             &feed.name,
                                             &operator_id_list,
