@@ -1,4 +1,5 @@
 use futures::StreamExt;
+use protobuf::well_known_types::empty;
 use serde_json::Error as SerdeError;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -921,10 +922,48 @@ async fn main() -> Result<(), Box<dyn Error>> {
         name text,
         gtfs_static_feeds text[],
              */
-            client.query("INSERT INTO gtfs.operators (onestop_operator_id, name, gtfs_static_feeds) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;", &[
+
+             let empty_vec: Vec<dmfr::OperatorAssociatedFeedsItem> = vec![];
+            let listoffeeds = operator_to_feed_hashmap.get(&operator_id).unwrap_or_else(|| &empty_vec).clone();
+
+            let mut gtfs_static_feeds: HashMap<String, Option<String>> = HashMap::new();
+            let mut gtfs_realtime_feeds: HashMap<String, Option<String>> = HashMap::new();
+
+            let mut simplified_array_static:Vec<String> = vec![];
+            let mut simplified_array_realtime:Vec<String> = vec![];
+
+            for x in listoffeeds {
+                //get type
+
+                if (x.feed_onestop_id.is_some()) {
+                if feedhashmap.contains_key(&x.feed_onestop_id.clone().unwrap()) {
+                    let feed = feedhashmap.get(&x.feed_onestop_id.clone().unwrap()).unwrap();
+
+                    match feed.spec {
+                        dmfr::FeedSpec::Gtfs => {
+                            gtfs_static_feeds.insert(x.feed_onestop_id.clone().unwrap(), x.gtfs_agency_id);
+                            simplified_array_static.push(x.feed_onestop_id.clone().unwrap());
+                        },
+                        dmfr::FeedSpec::GtfsRt => {
+                            gtfs_realtime_feeds.insert(x.feed_onestop_id.clone().unwrap(), x.gtfs_agency_id);
+                            simplified_array_realtime.push(x.feed_onestop_id.clone().unwrap());
+                        },
+                        _ => {
+                            //do nothing
+                        }
+                    }
+                }
+                }
+
+            }
+
+            client.query("INSERT INTO gtfs.operators (onestop_operator_id, name, gtfs_static_feeds, gtfs_realtime_feeds, static_onestop_feeds_to_gtfs_ids, realtime_onestop_feeds_to_gtfs_ids) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING;", &[
                 &operator.onestop_id,
                 &operator.name,
-
+                &simplified_array_static,
+                &simplified_array_realtime,
+                &gtfs_static_feeds,
+                &gtfs_realtime_feeds
             ]).await.unwrap();
         }
 
