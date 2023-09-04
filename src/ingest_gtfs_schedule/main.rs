@@ -33,8 +33,6 @@ pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
 }
 
-
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
 
@@ -216,6 +214,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             BTreeMap::new();
 
         let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+        let feeds_to_discard = vec![
+            "f-9q8y-sfmta",
+        "f-9qc-westcat~ca~us",
+        "f-9q9-actransit",
+        "f-9q9-vta",
+        "f-9q8yy-missionbaytma~ca~us",
+        "f-9qbb-marintransit"
+        ];
 
         for entry in entries {
             if let Ok(entry) = entry {
@@ -867,8 +874,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                     match feed.spec {
                         dmfr::FeedSpec::Gtfs => {
-                            gtfs_static_feeds.insert(x.feed_onestop_id.clone().unwrap(), x.gtfs_agency_id);
+                            if (!feeds_to_discard.contains(&x.feed_onestop_id.clone().unwrap().as_str())) {
+                                gtfs_static_feeds.insert(x.feed_onestop_id.clone().unwrap(), x.gtfs_agency_id);
                             simplified_array_static.push(x.feed_onestop_id.clone().unwrap());
+                            }
+                            
                         },
                         dmfr::FeedSpec::GtfsRt => {
                             gtfs_realtime_feeds.insert(x.feed_onestop_id.clone().unwrap(), x.gtfs_agency_id);
