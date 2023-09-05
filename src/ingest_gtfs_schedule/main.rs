@@ -151,8 +151,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
     client.batch_execute("
     CREATE TABLE IF NOT EXISTS gtfs.stoptimes (
         trip_id text NOT NULL,
-        arrival_time int,
-        departure_time int,
+        arrival_time bigint,
+        departure_time bigint,
         stop_id text NOT NULL,
         stop_sequence int NOT NULL,
         stop_headsign text,
