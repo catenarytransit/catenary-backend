@@ -137,14 +137,15 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         wheelchair_boarding int,
         level_id text,
         platform_code text,
+        routes text[],
         PRIMARY KEY (onestop_operator_id, id)
     )").await.unwrap();
 
     client.batch_execute("
     CREATE TABLE IF NOT EXISTS gtfs.stoptimes (
         trip_id text NOT NULL,
-        arrival_time text NOT NULL,
-        departure_time text NOT NULL,
+        arrival_time int,
+        departure_time int,
         stop_id text NOT NULL,
         stop_sequence int NOT NULL,
         stop_headsign text,
@@ -156,6 +157,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         continuous_drop_off int,
         long double precision,
         lat double precision,
+        route_id text,
         PRIMARY KEY (trip_id, stop_id, stop_sequence)
     )").await.unwrap();
 
@@ -510,8 +512,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
         let pool = bb8::Pool::builder()
             .retry_connection(true)
-            .connection_timeout(std::time::Duration::from_secs(99999))
-            .idle_timeout(Some(std::time::Duration::from_secs(99999)))
+            .connection_timeout(std::time::Duration::from_secs(3600))
+            .idle_timeout(Some(std::time::Duration::from_secs(3600)))
             .build(manager)
             .await
             .unwrap();
@@ -868,7 +870,9 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                         let time = std::time::Instant::now();
 
                                         let statement = client.prepare("INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;").await.unwrap();
-                                        
+
+                                        let stoptimestatement = client.prepare("INSERT INTO gtfs.stoptimes (trip_id, stop_id, stop_sequence, arrival_time, departure_time, stop_headsign) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;").await.unwrap();
+
                                         for (trip_id, trip) in &gtfs.trips {
                                             client
                                                     .query(
@@ -883,12 +887,24 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                       &trip.shape_id.clone().unwrap_or_else(|| "".to_string()),
                                                            ],
                                                     ).await.unwrap();
+
+                                            for stoptime in &trip.stop_times {
+                                                client
+                                                    .query(
+                                                        &stoptimestatement,
+                                                        &[
+                                                            &trip.id,
+                                                            &stoptime.stop.id,
+                                                            &(stoptime.stop_sequence as u32),
+                                                            &stoptime.arrival_time,
+                                                            &stoptime.departure_time,
+                                                            &stoptime.stop_headsign,
+                                                        ],
+                                                    ).await.unwrap();
+                                            }
                                         }
                                     
-                                        println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
-                                               
-
-                                        
+                                        println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());                    
 
                                         if gtfs.routes.len() > 0 as usize {
                                             let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
