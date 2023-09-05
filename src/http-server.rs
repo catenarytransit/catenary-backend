@@ -142,7 +142,7 @@ pub async fn getinitdata(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnect
     // (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
     let statics = client.query("SELECT
     onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids
-     FROM gtfs_static.static_feeds;", &[])
+     FROM gtfs.static_feeds;", &[])
      .await;
 
     let statics_result: Vec<StaticFeed> = statics.unwrap().iter().map(|row| {
@@ -162,7 +162,7 @@ pub async fn getinitdata(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnect
     gtfs_static_feeds, 
     gtfs_realtime_feeds, 
     static_onestop_feeds_to_gtfs_ids, 
-    realtime_onestop_feeds_to_gtfs_ids FROM gtfs_static.operators;", &[])
+    realtime_onestop_feeds_to_gtfs_ids FROM gtfs.operators;", &[])
     .await;
 
     let operators_result: Vec<OperatorPostgres> = operators.unwrap().iter().map(|row| {
