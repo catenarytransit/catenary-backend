@@ -899,7 +899,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                         &[
                                                             &trip.id,
                                                             &stoptime.stop.id,
-                                                            &(stoptime.stop_sequence as u32),
+                                                            &(stoptime.stop_sequence as i32),
                                                             &stoptime.arrival_time,
                                                             &stoptime.departure_time,
                                                             &stoptime.stop_headsign
