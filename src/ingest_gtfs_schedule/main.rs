@@ -33,6 +33,13 @@ pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
 }
 
+pub fn toi64(input: &Option<u32>) -> Option<i64> {
+    match input {
+        Some(i) => Some(*i as i64),
+        None => None,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
 
@@ -902,8 +909,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                             &trip.id,
                                                             &stoptime.stop.id,
                                                             &(stoptime.stop_sequence as i32),
-                                                            &stoptime.arrival_time.unwrap(),
-                                                            &stoptime.departure_time.unwrap(),
+                                                            &toi64(&stoptime.arrival_time),
+                                                            &toi64(&stoptime.departure_time),
                                                             &stoptime.stop_headsign
                                                         ],
                                                     ).await.unwrap();
