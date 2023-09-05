@@ -1,6 +1,7 @@
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use serde_json::{json, to_string_pretty};
 use tokio_postgres::types::private::BytesMut;
+use serde_json::to_string;
 use actix_web::middleware::DefaultHeaders;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Client;
@@ -8,72 +9,33 @@ use tokio_postgres::{Error as PostgresError, Row};
 use bb8::Pool;
 use qstring::QString;
 use r2d2_postgres::{postgres::NoTls, PostgresConnectionManager};
+use std::collections::HashMap;
 
 #[derive(serde::Serialize)]
 struct StaticFeed {
-    feed_id: String,
-    operator_id: String,
-    agency_id: String,
-    name: String,
-    url: String,
-    timezone:String,
-    lang: Option<String>,
-    phone: Option<String>,
-    fare_url: Option<String>,
-    email: Option<String>,
+    onestop_feed_id: String,
     max_lat: f64,
-    min_lat: f64,
     max_lon: f64,
+    min_lat: f64,
     min_lon: f64,
+    operators: Vec<String>,
+    operators_hashmap: HashMap<String, Option<String>>
+}
+
+#[derive(serde::Serialize)]
+struct OperatorPostgres {
+    onestop_operator_id: String,
+    name: String,
+    gtfs_static_feeds: Vec<String>,
+    gtfs_realtime_feeds: Vec<String>,
+    static_onestop_feeds_to_gtfs_ids: HashMap<String, Option<String>>,
+    realtime_onestop_feeds_to_gtfs_ids: HashMap<String, Option<String>>
 }
 
 async fn index(req: HttpRequest) -> impl Responder {
     HttpResponse::Ok()
         .insert_header(("Content-Type", "text/plain"))
         .body("Hello world!")
-}
-
-async fn getfeeds(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
-    let mut client = pool.get().await.unwrap();
-    
-    let postgresresult = client.query("SELECT onestop_feed_id, onestop_operator_id, gtfs_agency_id, name, url, timezone, lang, phone, fare_url, email,  max_lat, min_lat, max_lon, min_lon FROM gtfs_static.static_feeds;", &[]).await;
-
-     match postgresresult {
-        Ok(postgresresult) => {
-            let mut result: Vec<StaticFeed> = Vec::new();
-            for row in postgresresult {
-                result.push(StaticFeed {
-                    feed_id: row.get(0),
-                    operator_id: row.get(1),
-                    agency_id: row.get(2),
-                    name: row.get(3),
-                    url: row.get(4),
-                    timezone: row.get(5),
-                    lang: row.get(6),
-                    phone: row.get(7),
-                    fare_url: row.get(8),
-                    email: row.get(9),
-                    max_lat: row.get(10),
-                    min_lat: row.get(11),
-                    max_lon: row.get(12),
-                    min_lon: row.get(13),
-                });
-            }
-
-            let json_string = to_string_pretty(&json!(result)).unwrap();
-
-            HttpResponse::Ok()
-                .insert_header(("Content-Type", "application/json"))
-                .body(json_string)
-        },
-        Err(e) => {
-            println!("No results from postgres");
-
-            HttpResponse::InternalServerError()
-                .insert_header(("Content-Type", "text/plain"))
-                .body("Postgres Error")
-        }
-     }
 }
 
 #[derive(serde::Serialize)]
@@ -169,13 +131,64 @@ pub async fn gettrip(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionM
     }
 }
 
+//this endpoint is used to load the initial static feeds, realtime feeds, and operators
 #[actix_web::get("/getinitdata")]
 pub async fn getinitdata(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
-    HttpResponse::Ok()
+    let mut client = pool.get().await;
+
+    if client.is_ok() {
+    let mut client = client.unwrap();
+
+    // (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
+    let statics = client.query("SELECT
+    onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids
+     FROM gtfs_static.static_feeds;", &[])
+     .await;
+
+    let statics_result: Vec<StaticFeed> = statics.unwrap().iter().map(|row| {
+        StaticFeed {
+            onestop_feed_id: row.get(0),
+            max_lat: row.get(1),
+            max_lon: row.get(2),
+            min_lat: row.get(3),
+            min_lon: row.get(4),
+            operators: row.get(5),
+            operators_hashmap: row.get(6)
+        }
+    }).collect();
+
+    let operators = client.query("SELECT onestop_operator_id, 
+    name, 
+    gtfs_static_feeds, 
+    gtfs_realtime_feeds, 
+    static_onestop_feeds_to_gtfs_ids, 
+    realtime_onestop_feeds_to_gtfs_ids FROM gtfs_static.operators;", &[])
+    .await;
+
+    let operators_result: Vec<OperatorPostgres> = operators.unwrap().iter().map(|row| {
+        OperatorPostgres {
+            onestop_operator_id: row.get(0),
+            name: row.get(1),
+            gtfs_static_feeds: row.get(2),
+            gtfs_realtime_feeds: row.get(3),
+            static_onestop_feeds_to_gtfs_ids: row.get(4),
+            realtime_onestop_feeds_to_gtfs_ids: row.get(5)
+        }
+    }).collect();
+    
+    return HttpResponse::Ok()
+    .insert_header(("Content-Type", "application/json"))
+    .body(format!("{{s:{}, o:{}}}", to_string(&statics_result).unwrap(),
+to_string(&operators_result).unwrap()
+));
+    }
+
+    HttpResponse::InternalServerError()
                     .insert_header(("Content-Type", "application/json"))
                     .body("{}")
 }
 
+//given a static feed id, return all routes and the basic metadata with it
 #[actix_web::get("/getroutesperagency")]
 pub async fn getroutesperagency(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>, req: HttpRequest) -> impl Responder {
     let mut client = pool.get().await;
@@ -220,7 +233,7 @@ pub async fn getroutesperagency(pool: web::Data<bb8::Pool<bb8_postgres::Postgres
                     });
                 }
     
-                let json_string = to_string_pretty(&json!(result)).unwrap();
+                let json_string = to_string(&json!(result)).unwrap();
     
                 HttpResponse::Ok()
                     .insert_header(("Content-Type", "application/json"))
