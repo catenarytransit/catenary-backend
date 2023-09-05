@@ -122,8 +122,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
     client.batch_execute("
     CREATE TABLE IF NOT EXISTS gtfs.stops (
-        onestop_operator_id text NOT NULL,
-        id text NOT NULL,
+        onestop_feed_id text NOT NULL,
+        gtfs_id text NOT NULL,
         name text NOT NULL,
         code text,
         gtfs_desc text,
@@ -138,7 +138,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         level_id text,
         platform_code text,
         routes text[],
-        PRIMARY KEY (onestop_operator_id, id)
+        PRIMARY KEY (onestop_feed_id , gtfs_id)
     )").await.unwrap();
 
     client.batch_execute("
@@ -904,10 +904,25 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             }
                                         }
                                     
-                                        println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());                    
+                                        println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
+
+                                        let stopstatement = client.prepare("INSERT INTO gtfs.stops
+                                         (onestop_feed_id, gtfs_id, name, code, gtfs_desc, long, lat)
+                                               VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING;").await.unwrap();
+                                        for (stop_id, stop) in &gtfs.stops {
+                                            client.query(&stopstatement, &[
+                                                &feed.id,
+                                                &stop.id,
+                                                &stop.name,
+                                                &stop.code,
+                                                &stop.description,
+                                                &stop.longitude,
+                                                &stop.latitude
+                                            ]).await.unwrap();
+                                        }                  
 
                                         if gtfs.routes.len() > 0 as usize {
-                                            let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id,max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
+                                            let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
                                             
                                              VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT do nothing;", &[
                                             &feed.id,
