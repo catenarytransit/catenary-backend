@@ -894,18 +894,20 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
                                             for stoptime in &trip.stop_times {
                                                 
-                                                    client
+                                                    if stoptime.arrival_time.is_some() && stoptime.departure_time.is_some() {
+                                                        client
                                                     .query(
                                                         &stoptimestatement,
                                                         &[
                                                             &trip.id,
                                                             &stoptime.stop.id,
                                                             &(stoptime.stop_sequence as i32),
-                                                            &stoptime.arrival_time,
-                                                            &stoptime.departure_time,
+                                                            &stoptime.arrival_time.unwrap(),
+                                                            &stoptime.departure_time.unwrap(),
                                                             &stoptime.stop_headsign
                                                         ],
                                                     ).await.unwrap();
+                                                    }
                                                
                                                 
                                             }
@@ -946,7 +948,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                             }
                         },
                         dmfr::FeedSpec::GtfsRt => {
-                                            let _ = client.query("INSERT INTO gtfs.realtime_feeds (onestop_feed_id, name, operators, operators_to_gtfs_ids)
+                                             client.query("INSERT INTO gtfs.realtime_feeds (onestop_feed_id, name, operators, operators_to_gtfs_ids)
                                              VALUES ($1, $2, $3, $4) ON CONFLICT do nothing;", &[
                                             &feed.id,
                                             &feed.name,
