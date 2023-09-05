@@ -940,7 +940,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                         if gtfs.routes.len() > 0 as usize {
                                             let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
                                             
-                                             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT do nothing;", &[
+                                             VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;", &[
                                             &feed.id,
                                             &least_lat,
                                             &least_lon,
