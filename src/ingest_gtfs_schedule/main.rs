@@ -871,7 +871,11 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
                                         let statement = client.prepare("INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;").await.unwrap();
 
-                                        let stoptimestatement = client.prepare("INSERT INTO gtfs.stoptimes (trip_id, stop_id, stop_sequence, arrival_time, departure_time, stop_headsign) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;").await.unwrap();
+                                        let stoptimestatement = client.prepare(
+                                            "INSERT INTO gtfs.stoptimes 
+                                            (trip_id, stop_id, stop_sequence, 
+                                                arrival_time, departure_time, stop_headsign) 
+                                                VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;").await.unwrap();
 
                                         for (trip_id, trip) in &gtfs.trips {
                                             client
@@ -898,7 +902,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                             &(stoptime.stop_sequence as u32),
                                                             &stoptime.arrival_time,
                                                             &stoptime.departure_time,
-                                                            &stoptime.stop_headsign,
+                                                            &stoptime.stop_headsign
                                                         ],
                                                     ).await.unwrap();
                                             }
