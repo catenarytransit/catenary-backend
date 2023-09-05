@@ -893,7 +893,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     ).await.unwrap();
 
                                             for stoptime in &trip.stop_times {
-                                                client
+                                                
+                                                    client
                                                     .query(
                                                         &stoptimestatement,
                                                         &[
@@ -905,6 +906,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                             &stoptime.stop_headsign
                                                         ],
                                                     ).await.unwrap();
+                                               
+                                                
                                             }
                                         }
                                     
