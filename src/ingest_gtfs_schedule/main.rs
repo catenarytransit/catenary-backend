@@ -145,16 +145,17 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         level_id text,
         platform_code text,
         routes text[],
-        PRIMARY KEY (onestop_feed_id , gtfs_id)
+        PRIMARY KEY (onestop_feed_id, gtfs_id)
     )").await.unwrap();
 
     client.batch_execute("
     CREATE TABLE IF NOT EXISTS gtfs.stoptimes (
+        onestop_feed_id text NOT NULL,
         trip_id text NOT NULL,
+        stop_sequence int NOT NULL,
         arrival_time bigint,
         departure_time bigint,
         stop_id text NOT NULL,
-        stop_sequence int NOT NULL,
         stop_headsign text,
         pickup_type int,
         drop_off_type int,
@@ -165,7 +166,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         long double precision,
         lat double precision,
         route_id text,
-        PRIMARY KEY (trip_id, stop_id, stop_sequence)
+        PRIMARY KEY (onestop_feed_id, trip_id, stop_sequence)
     )").await.unwrap();
 
     client.batch_execute("
@@ -880,9 +881,9 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
                                         let stoptimestatement = client.prepare(
                                             "INSERT INTO gtfs.stoptimes 
-                                            (trip_id, stop_id, stop_sequence, 
+                                            (onestop_feed_id, trip_id, stop_id, stop_sequence, 
                                                 arrival_time, departure_time, stop_headsign) 
-                                                VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;").await.unwrap();
+                                                VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING;").await.unwrap();
 
                                         for (trip_id, trip) in &gtfs.trips {
                                             client
@@ -906,6 +907,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     .query(
                                                         &stoptimestatement,
                                                         &[
+                                                            &feed.id,
                                                             &trip.id,
                                                             &stoptime.stop.id,
                                                             &(stoptime.stop_sequence as i32),
