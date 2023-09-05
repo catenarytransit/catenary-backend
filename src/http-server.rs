@@ -292,7 +292,6 @@ let pool  = bb8::Pool::builder().build(manager).await.unwrap();
             .service(getroutesperagency)
             .service(gettrip)
             .service(getinitdata)
-            .route("/getfeeds", web::get().to(getfeeds))
     })
     .workers(4);
 
