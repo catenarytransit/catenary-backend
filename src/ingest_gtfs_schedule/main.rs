@@ -739,9 +739,9 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
                                          let mut route_type_number = 3;
 
-                                         let route = gtfs.routes.get(&route_ids[0]);
-
                                             if route_ids.len() > 0 {
+
+                                                let route = gtfs.routes.get(&route_ids[0]);
                                                 
                                                 if route.is_some() {
                                                     route_type_number = route_type_to_int(
@@ -758,6 +758,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     
                                                     if (route_ids.len() > 0) {
                                                         
+                                                        let route = gtfs.routes.get(&route_ids[0]);
+
                                                         if route.is_some() {
                                                             match route.unwrap().short_name.as_str() {
                                                                 "720" => {
