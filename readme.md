@@ -4,11 +4,6 @@
 sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip
 ```
 
-## Use nightly rust
-```bash
-rustup default nightly
-```
-
 ## Loading in Data
 Loading in data into the Postgres database is a multistep process. Ensure your postgres database is working and your password is set correctly.
 
