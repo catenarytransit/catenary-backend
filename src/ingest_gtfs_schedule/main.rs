@@ -40,6 +40,23 @@ pub fn toi64(input: &Option<u32>) -> Option<i64> {
     }
 }
 
+pub fn route_type_to_int(input: &gtfs_structures::RouteType) -> i32 {
+    match input {
+        RouteType::Tramway => 0,
+        RouteType::Subway => 1,
+        RouteType::Rail => 2,
+        RouteType::Bus => 3,
+        RouteType::Ferry => 4,
+        RouteType::CableCar => 5,
+        RouteType::Gondola => 6,
+        RouteType::Funicular => 7,
+        RouteType::Coach => 200,
+        RouteType::Air => 1100,
+        RouteType::Taxi => 1500,
+        RouteType::Other(i) => *i,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
 
@@ -195,6 +212,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         linestring GEOMETRY(LINESTRING,4326) NOT NULL,
         color text,
         routes text[],
+        route_type int NOT NULL,
         PRIMARY KEY (onestop_feed_id,shape_id)
     );").await.unwrap();
 
@@ -695,16 +713,92 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                         }
         
 
-                                       let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes) VALUES ($1, $2, $3, $4, $5) ON CONFLICT do nothing;").await.unwrap();
+                                       let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes, route_type) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT do nothing;").await.unwrap();
                                         
                                         for (shape_id, shape) in &gtfs.shapes {
+
+                                            let mut route_ids: Vec<String> = match gtfs
+                                            .trips
+                                            .iter()
+                                            .filter(|(trip_id, trip)| {
+                                                trip.shape_id.is_some()
+                                                    && trip.shape_id.as_ref().unwrap()
+                                                        == shape_id
+                                            })
+                                            .map(|(trip_id, trip)| trip.route_id.clone())
+                                            .collect::<Vec<String>>()
+                                            .as_slice()
+                                        {
+                                            [] => vec![],
+                                            route_ids => route_ids.to_vec(),
+                                        };
+
+                                         route_ids.dedup();
+
+                                         let route_ids = route_ids;
+
+                                         let mut route_type_number = 3;
+
+                                         let route = gtfs.routes.get(&route_ids[0]);
+
+                                            if route_ids.len() > 0 {
+                                                
+                                                if route.is_some() {
+                                                    route_type_number = route_type_to_int(
+                                                        &route.unwrap().route_type
+                                                    );
+                                                }
+                                            }
+
                                             let color_to_upload =
-                                            match shape_to_color_lookup.get(shape_id) {
-                                                Some(color) => format!(
-                                                    "{:02x}{:02x}{:02x}",
-                                                    color.r, color.g, color.b
-                                                ),
-                                                None => String::from("3a3a3a"),
+                                            match feed.id.as_str() {
+                                                "f-9q5-metro~losangeles" => {
+
+                                                    let mut nameoflinelametro = "e16710";
+                                                    
+                                                    if (route_ids.len() > 0) {
+                                                        
+                                                        if route.is_some() {
+                                                            match route.unwrap().short_name.as_str() {
+                                                                "720" => {
+                                                                    nameoflinelametro = "d11242";
+                                                                },
+                                                                "754" => {
+                                                                    nameoflinelametro = "d11242";
+                                                                },
+                                                                "761" => {
+                                                                    nameoflinelametro = "d11242";
+                                                                },
+                                                                "901" => {
+                                                                    nameoflinelametro = "fc4c02";
+                                                                },
+                                                                "950" => {
+                                                                    nameoflinelametro = "adb8bf";
+                                                                },
+                                                                "910" => {
+                                                                    nameoflinelametro = "adb8bf";
+                                                                },
+                                                                _ => {
+    
+                                                                }
+                                                               
+                                                            }
+                                                        }
+
+                                                           
+                                                    }
+
+                                                    String::from(nameoflinelametro)
+                                                },
+                                                _ => {
+                                                    match shape_to_color_lookup.get(shape_id) {
+                                                        Some(color) => format!(
+                                                            "{:02x}{:02x}{:02x}",
+                                                            color.r, color.g, color.b
+                                                        ),
+                                                        None => String::from("3a3a3a"),
+                                                    }
+                                                }
                                             };
 
                                             //bug "Line String must at least have 2 points"
@@ -744,26 +838,6 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     })
                                                     .collect(),
                                             };
-
-                                            let mut route_ids: Vec<String> = match gtfs
-                                                .trips
-                                                .iter()
-                                                .filter(|(trip_id, trip)| {
-                                                    trip.shape_id.is_some()
-                                                        && trip.shape_id.as_ref().unwrap()
-                                                            == shape_id
-                                                })
-                                                .map(|(trip_id, trip)| trip.route_id.clone())
-                                                .collect::<Vec<String>>()
-                                                .as_slice()
-                                            {
-                                                [] => vec![],
-                                                route_ids => route_ids.to_vec(),
-                                            };
-
-                                             route_ids.dedup();
-
-                                             let route_ids = route_ids;
                                             /*
                                               CREATE TABLE IF NOT EXISTS gtfs.shapes (
                                                     onestop_feed_id text NOT NULL,
@@ -784,25 +858,14 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             &shape_id, 
                                          &linestring,
                                          &color_to_upload,
-                                         &route_ids
+                                         &route_ids,
+                                         //add route type here
+                                        &route_type_number
                                          ]).await.unwrap();
                                         }
         
                                         for (route_id, route) in &gtfs.routes {
-                                            let route_type_number = match &route.route_type {
-                                                RouteType::Tramway => 0,
-                                                RouteType::Subway => 1,
-                                                RouteType::Rail => 2,
-                                                RouteType::Bus => 3,
-                                                RouteType::Ferry => 4,
-                                                RouteType::CableCar => 5,
-                                                RouteType::Gondola => 6,
-                                                RouteType::Funicular => 7,
-                                                RouteType::Coach => 200,
-                                                RouteType::Air => 1100,
-                                                RouteType::Taxi => 1500,
-                                                RouteType::Other(i) => *i,
-                                            };
+                                            let route_type_number = route_type_to_int(&route.route_type);
         
                                             let mut shape_id_array: Vec<String> =
                                                 match shapes_per_route.get(route_id) {
