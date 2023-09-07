@@ -559,10 +559,6 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
 
             let mut dothetask = true;
-        
-            if key.contains("~jp") || key.contains("germany~urban~transport") || key.contains("~gov~uk") {
-                dothetask = false;
-            }
 
             if (limittostaticfeed.is_some()) {
                 if (limittostaticfeed.as_ref().unwrap().as_str() != key.as_str()) {
