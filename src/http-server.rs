@@ -1,3 +1,4 @@
+#![feature(future_join)]
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use serde_json::{json, to_string_pretty};
 use tokio_postgres::types::private::BytesMut;
@@ -10,6 +11,7 @@ use bb8::Pool;
 use qstring::QString;
 use r2d2_postgres::{postgres::NoTls, PostgresConnectionManager};
 use std::collections::HashMap;
+use std::future::join;
 
 #[derive(serde::Serialize)]
 struct StaticFeed {
@@ -20,6 +22,13 @@ struct StaticFeed {
     min_lon: f64,
     operators: Vec<String>,
     operators_hashmap: HashMap<String, Option<String>>
+}
+
+#[derive(serde::Serialize)]
+struct RealtimeFeedPostgres {
+    onestop_feed_id: String,
+    operators: Vec<String>,
+    operators_to_gtfs_ids: HashMap<String, Option<String>>
 }
 
 #[derive(serde::Serialize)]
@@ -142,10 +151,34 @@ pub async fn getinitdata(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnect
     // (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
     let statics = client.query("SELECT
     onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids
-     FROM gtfs.static_feeds;", &[])
-     .await;
+     FROM gtfs.static_feeds;", &[]);
 
-    let statics_result: Vec<StaticFeed> = statics.unwrap().iter().map(|row| {
+  
+
+    let operators = client.query("SELECT onestop_operator_id, 
+    name, 
+    gtfs_static_feeds, 
+    gtfs_realtime_feeds, 
+    static_onestop_feeds_to_gtfs_ids, 
+    realtime_onestop_feeds_to_gtfs_ids FROM gtfs.operators;", &[]);
+
+    let realtime = 
+    client.query("SELECT onestop_feed_id, operators, operators_to_gtfs_ids FROM gtfs.realtime_feeds;", &[]);
+
+    let runqueries = join!(statics, operators, realtime).await;
+
+    let operators_result: Vec<OperatorPostgres> = runqueries.1.unwrap().iter().map(|row| {
+        OperatorPostgres {
+            onestop_operator_id: row.get(0),
+            name: row.get(1),
+            gtfs_static_feeds: row.get(2),
+            gtfs_realtime_feeds: row.get(3),
+            static_onestop_feeds_to_gtfs_ids: row.get(4),
+            realtime_onestop_feeds_to_gtfs_ids: row.get(5)
+        }
+    }).collect();
+
+    let statics_result: Vec<StaticFeed> = runqueries.0.unwrap().iter().map(|row| {
         StaticFeed {
             onestop_feed_id: row.get(0),
             max_lat: row.get(1),
@@ -157,29 +190,19 @@ pub async fn getinitdata(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnect
         }
     }).collect();
 
-    let operators = client.query("SELECT onestop_operator_id, 
-    name, 
-    gtfs_static_feeds, 
-    gtfs_realtime_feeds, 
-    static_onestop_feeds_to_gtfs_ids, 
-    realtime_onestop_feeds_to_gtfs_ids FROM gtfs.operators;", &[])
-    .await;
-
-    let operators_result: Vec<OperatorPostgres> = operators.unwrap().iter().map(|row| {
-        OperatorPostgres {
-            onestop_operator_id: row.get(0),
-            name: row.get(1),
-            gtfs_static_feeds: row.get(2),
-            gtfs_realtime_feeds: row.get(3),
-            static_onestop_feeds_to_gtfs_ids: row.get(4),
-            realtime_onestop_feeds_to_gtfs_ids: row.get(5)
+    let realtime_result: Vec<RealtimeFeedPostgres> = runqueries.2.unwrap().iter().map(|row| {
+        RealtimeFeedPostgres {
+            onestop_feed_id: row.get(0),
+            operators: row.get(1),
+            operators_to_gtfs_ids: row.get(2)
         }
     }).collect();
     
     return HttpResponse::Ok()
     .insert_header(("Content-Type", "application/json"))
-    .body(format!("{{s:{}, o:{}}}", to_string(&statics_result).unwrap(),
-to_string(&operators_result).unwrap()
+    .body(format!("{{s:{},o:{},r:{}}}", to_string(&statics_result).unwrap(),
+to_string(&operators_result).unwrap(),
+to_string(&realtime_result).unwrap()
 ));
     }
 
