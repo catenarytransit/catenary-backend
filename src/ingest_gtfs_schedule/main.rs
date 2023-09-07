@@ -813,6 +813,9 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                             }
                                                             "a05da5" => {
                                                                 point.longitude < -118.2335698
+                                                            },
+                                                            "e470ab" => {
+                                                                point.latitude > 33.961543
                                                             }
                                                             _ => true,
                                                         }
