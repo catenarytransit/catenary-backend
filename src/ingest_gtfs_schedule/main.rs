@@ -822,7 +822,22 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     }
                                                     _ => true,
                                                 }
-                                            });
+                                            })
+                                            .filter(|point| {
+                                                match route_ids.len() {
+                                                    1 => {
+                                                        //remove B/D railyard
+                                                        match route_ids[0].as_str() {
+                                                            "807" => {
+                                                                point.latitude > 33.961543
+                                                            }
+                                                            _ => true,
+                                                        }
+                                                    }
+                                                    _ => true,
+                                                }
+                                            })
+                                        ;
 
                                             if preshape.clone().count() < 2 {
                                                 println!("Shape {} has less than 2 points", shape_id);
