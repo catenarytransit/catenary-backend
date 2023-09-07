@@ -757,7 +757,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     let mut nameoflinelametro = "e16710";
                                                     
                                                     if (route_ids.len() > 0) {
-                                                        
+
                                                         let route = gtfs.routes.get(&route_ids[0]);
 
                                                         if route.is_some() {
@@ -1017,6 +1017,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             &operator_pairs_hashmap
                                         ]).await.unwrap();
                                         }
+                                    } else {
+                                        println!("{} is not a valid gtfs feed", &key)
                                     }
                                 }
                             }
@@ -1048,7 +1050,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         println!("number of operators: {}", operatorhashmap.len());
 
         for (operator_id, operator) in operatorhashmap {
-            println!("{:?}", operator);
+            //println!("{:?}", operator);
             /*
             
             onestop_operator_id text PRIMARY KEY,
