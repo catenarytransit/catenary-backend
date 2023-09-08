@@ -645,42 +645,50 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         
                                             if (*stop).deref().longitude.is_some() {
                                                 let stop_lon = (*stop).deref().longitude.unwrap();
-        
-                                                if least_lon.is_some() {
-                                                    if stop_lon < least_lon.unwrap() {
+
+                                                if stop_lon != 0.0 {
+                                                    if least_lon.is_some() {
+                                                        if stop_lon < least_lon.unwrap() {
+                                                            least_lon = Some(stop_lon);
+                                                        }
+                                                    } else {
                                                         least_lon = Some(stop_lon);
                                                     }
-                                                } else {
-                                                    least_lon = Some(stop_lon);
-                                                }
-        
-                                                if most_lon.is_some() {
-                                                    if stop_lon > most_lon.unwrap() {
+            
+                                                    if most_lon.is_some() {
+                                                        if stop_lon > most_lon.unwrap() {
+                                                            most_lon = Some(stop_lon);
+                                                        }
+                                                    } else {
                                                         most_lon = Some(stop_lon);
                                                     }
-                                                } else {
-                                                    most_lon = Some(stop_lon);
                                                 }
+        
+                                               
                                             }
         
                                             if (*stop).deref().latitude.is_some() {
                                                 let stop_lat = (*stop).deref().latitude.unwrap();
-        
-                                                if least_lat.is_some() {
-                                                    if stop_lat < least_lat.unwrap() {
+
+                                                if stop_lat != 0.0 {
+                                                    if least_lat.is_some() {
+                                                        if stop_lat < least_lat.unwrap() {
+                                                            least_lat = Some(stop_lat);
+                                                        }
+                                                    } else {
                                                         least_lat = Some(stop_lat);
                                                     }
-                                                } else {
-                                                    least_lat = Some(stop_lat);
-                                                }
-        
-                                                if most_lat.is_some() {
-                                                    if stop_lat > most_lat.unwrap() {
+            
+                                                    if most_lat.is_some() {
+                                                        if stop_lat > most_lat.unwrap() {
+                                                            most_lat = Some(stop_lat);
+                                                        }
+                                                    } else {
                                                         most_lat = Some(stop_lat);
                                                     }
-                                                } else {
-                                                    most_lat = Some(stop_lat);
                                                 }
+        
+                                               
                                             }
                                         }
         
