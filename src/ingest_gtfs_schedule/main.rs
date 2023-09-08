@@ -1023,8 +1023,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             
                                              VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;", &[
                                             &feed.id,
-                                            &least_lat,
-                                            &least_lon,
+                                            &most_lat,
+                                            &most_lon,
                                             &least_lat,
                                             &least_lon,
                                             &operator_id_list,
