@@ -200,7 +200,7 @@ pub async fn getinitdata(pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnect
     
     return HttpResponse::Ok()
     .insert_header(("Content-Type", "application/json"))
-    .body(format!("{{s:{},o:{},r:{}}}", to_string(&statics_result).unwrap(),
+    .body(format!("{{\"s\":{},\"o\":{},\"r\":{}}}", to_string(&statics_result).unwrap(),
 to_string(&operators_result).unwrap(),
 to_string(&realtime_result).unwrap()
 ));
