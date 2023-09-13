@@ -561,10 +561,6 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
 
             let mut dothetask = true;
-        
-            if key.contains("~jp") || key.contains("germany~urban~transport") || key.contains("~gov~uk") {
-                dothetask = false;
-            }
 
             if (limittostaticfeed.is_some()) {
                 if (limittostaticfeed.as_ref().unwrap().as_str() != key.as_str()) {
@@ -651,42 +647,50 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         
                                             if (*stop).deref().longitude.is_some() {
                                                 let stop_lon = (*stop).deref().longitude.unwrap();
-        
-                                                if least_lon.is_some() {
-                                                    if stop_lon < least_lon.unwrap() {
+
+                                                if stop_lon != 0.0 {
+                                                    if least_lon.is_some() {
+                                                        if stop_lon < least_lon.unwrap() {
+                                                            least_lon = Some(stop_lon);
+                                                        }
+                                                    } else {
                                                         least_lon = Some(stop_lon);
                                                     }
-                                                } else {
-                                                    least_lon = Some(stop_lon);
-                                                }
-        
-                                                if most_lon.is_some() {
-                                                    if stop_lon > most_lon.unwrap() {
+            
+                                                    if most_lon.is_some() {
+                                                        if stop_lon > most_lon.unwrap() {
+                                                            most_lon = Some(stop_lon);
+                                                        }
+                                                    } else {
                                                         most_lon = Some(stop_lon);
                                                     }
-                                                } else {
-                                                    most_lon = Some(stop_lon);
                                                 }
+        
+                                               
                                             }
         
                                             if (*stop).deref().latitude.is_some() {
                                                 let stop_lat = (*stop).deref().latitude.unwrap();
-        
-                                                if least_lat.is_some() {
-                                                    if stop_lat < least_lat.unwrap() {
+
+                                                if stop_lat != 0.0 {
+                                                    if least_lat.is_some() {
+                                                        if stop_lat < least_lat.unwrap() {
+                                                            least_lat = Some(stop_lat);
+                                                        }
+                                                    } else {
                                                         least_lat = Some(stop_lat);
                                                     }
-                                                } else {
-                                                    least_lat = Some(stop_lat);
-                                                }
-        
-                                                if most_lat.is_some() {
-                                                    if stop_lat > most_lat.unwrap() {
+            
+                                                    if most_lat.is_some() {
+                                                        if stop_lat > most_lat.unwrap() {
+                                                            most_lat = Some(stop_lat);
+                                                        }
+                                                    } else {
                                                         most_lat = Some(stop_lat);
                                                     }
-                                                } else {
-                                                    most_lat = Some(stop_lat);
                                                 }
+        
+                                               
                                             }
                                         }
         
@@ -759,7 +763,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     let mut nameoflinelametro = "e16710";
                                                     
                                                     if (route_ids.len() > 0) {
-                                                        
+
                                                         let route = gtfs.routes.get(&route_ids[0]);
 
                                                         if route.is_some() {
@@ -819,13 +823,31 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                             }
                                                             "a05da5" => {
                                                                 point.longitude < -118.2335698
+                                                            },
+                                                            "e470ab" => {
+                                                                point.latitude > 33.961543
                                                             }
                                                             _ => true,
                                                         }
                                                     }
                                                     _ => true,
                                                 }
-                                            });
+                                            })
+                                            .filter(|point| {
+                                                match route_ids.len() {
+                                                    1 => {
+                                                        //remove B/D railyard
+                                                        match route_ids[0].as_str() {
+                                                            "807" => {
+                                                                point.latitude > 33.961543
+                                                            }
+                                                            _ => true,
+                                                        }
+                                                    }
+                                                    _ => true,
+                                                }
+                                            })
+                                        ;
 
                                             if preshape.clone().count() < 2 {
                                                 println!("Shape {} has less than 2 points", shape_id);
@@ -1029,14 +1051,16 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             
                                              VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;", &[
                                             &feed.id,
-                                            &least_lat,
-                                            &least_lon,
+                                            &most_lat,
+                                            &most_lon,
                                             &least_lat,
                                             &least_lon,
                                             &operator_id_list,
                                             &operator_pairs_hashmap
                                         ]).await.unwrap();
                                         }
+                                    } else {
+                                        println!("{} is not a valid gtfs feed", &key)
                                     }
                                 }
                             }
@@ -1068,7 +1092,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         println!("number of operators: {}", operatorhashmap.len());
 
         for (operator_id, operator) in operatorhashmap {
-            println!("{:?}", operator);
+            //println!("{:?}", operator);
             /*
             
             onestop_operator_id text PRIMARY KEY,

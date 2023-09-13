@@ -36,7 +36,8 @@ You're all done! Data is fully ready for serving to users!
 
 ### Install Systemd Service
 ```bash
-sudo mv transitbackend.service /etc/systemd/system/transitbackend.service
+sudo cp transitbackend.service /etc/systemd/system/transitbackend.service
+sudo systemctl daemon-reload
 sudo systemctl enable --now transitbackend.service
 ```
 
