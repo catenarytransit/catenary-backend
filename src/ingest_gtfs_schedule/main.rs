@@ -976,7 +976,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             "INSERT INTO gtfs.stoptimes 
                                             (onestop_feed_id, trip_id, stop_id, stop_sequence, 
                                                 arrival_time, departure_time, stop_headsign, point) 
-                                                VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING;").await.unwrap();
+                                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").await.unwrap();
 
                                         for (trip_id, trip) in &gtfs.trips {
                                             client
