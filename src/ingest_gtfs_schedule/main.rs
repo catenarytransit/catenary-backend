@@ -239,7 +239,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
     CREATE INDEX IF NOT EXISTS gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
 
-    CREATE INDEX IF NOT EXISTS gtfs_static_stoptimes_geom_idx ON gtfs_stoptimes USING GIST (point);
+    CREATE INDEX IF NOT EXISTS gtfs_static_stoptimes_geom_idx ON gtfs.stoptimes USING GIST (point);
 
     CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON gtfs.shapes (onestop_feed_id);
 
