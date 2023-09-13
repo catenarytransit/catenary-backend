@@ -1027,7 +1027,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
 
                                         let stopstatement = client.prepare("INSERT INTO gtfs.stops
-                                         (onestop_feed_id, gtfs_id, name, code, gtfs_desc, long, lat)
+                                         (onestop_feed_id, gtfs_id, name, code, gtfs_desc, long, lat, point)
                                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").await.unwrap();
                                         for (stop_id, stop) in &gtfs.stops {
 
