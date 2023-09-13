@@ -1001,7 +1001,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                         y: stoptime.stop.latitude.unwrap(),
                                                         srid: Some(4326),
                                                     };
-                                                }
+                                            
                                                 
                                                     if stoptime.arrival_time.is_some() && stoptime.departure_time.is_some() {
                                                         client
@@ -1014,10 +1014,11 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                             &(stoptime.stop_sequence as i32),
                                                             &toi64(&stoptime.arrival_time),
                                                             &toi64(&stoptime.departure_time),
-                                                            &stoptime.stop_headsign
+                                                            &stoptime.stop_headsign,
+                                                            &point
                                                         ],
                                                     ).await.unwrap();
-                                                    }
+                                                    }    }
                                                
                                                 
                                             }
