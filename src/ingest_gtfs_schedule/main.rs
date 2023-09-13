@@ -157,6 +157,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         url text,
         long double precision,
         lat double precision,
+        point GEOMETRY(POINT,4326) NOT NULL,
         timezone text,
         wheelchair_boarding int,
         level_id text,
@@ -182,6 +183,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         continuous_drop_off int,
         long double precision,
         lat double precision,
+        point GEOMETRY(POINT,4326) NOT NULL,
         route_id text,
         PRIMARY KEY (onestop_feed_id, trip_id, stop_sequence)
     )").await.unwrap();
@@ -947,7 +949,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                         let stoptimestatement = client.prepare(
                                             "INSERT INTO gtfs.stoptimes 
                                             (onestop_feed_id, trip_id, stop_id, stop_sequence, 
-                                                arrival_time, departure_time, stop_headsign) 
+                                                arrival_time, departure_time, stop_headsign, point) 
                                                 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING;").await.unwrap();
 
                                         for (trip_id, trip) in &gtfs.trips {
@@ -966,6 +968,14 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     ).await.unwrap();
 
                                             for stoptime in &trip.stop_times {
+
+                                                if (stoptime.stop.latitude.is_some() && stoptime.stop.longitude.is_some()) {
+                                                    let point = ewkb::Point {
+                                                        x: stoptime.stop.longitude.unwrap(),
+                                                        y: stoptime.stop.latitude.unwrap(),
+                                                        srid: Some(4326),
+                                                    };
+                                                }
                                                 
                                                     if stoptime.arrival_time.is_some() && stoptime.departure_time.is_some() {
                                                         client
@@ -991,8 +1001,16 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
                                         let stopstatement = client.prepare("INSERT INTO gtfs.stops
                                          (onestop_feed_id, gtfs_id, name, code, gtfs_desc, long, lat)
-                                               VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING;").await.unwrap();
+                                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").await.unwrap();
                                         for (stop_id, stop) in &gtfs.stops {
+
+                                           if (stop.latitude.is_some() && stop.longitude.is_some()) {
+                                            let point = ewkb::Point {
+                                                x: stop.longitude.unwrap(),
+                                                y: stop.latitude.unwrap(),
+                                                srid: Some(4326),
+                                            };
+
                                             client.query(&stopstatement, &[
                                                 &feed.id,
                                                 &stop.id,
@@ -1000,8 +1018,10 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                 &stop.code,
                                                 &stop.description,
                                                 &stop.longitude,
-                                                &stop.latitude
+                                                &stop.latitude,
+                                                &point
                                             ]).await.unwrap();
+                                           }
                                         }                  
 
                                         if gtfs.routes.len() > 0 as usize {
