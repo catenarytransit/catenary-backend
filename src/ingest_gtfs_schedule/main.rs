@@ -215,6 +215,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         color text,
         routes text[],
         route_type int NOT NULL,
+        route_label text,
+        text_color text,
         PRIMARY KEY (onestop_feed_id,shape_id)
     );").await.unwrap();
 
@@ -699,6 +701,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                         }
         
                                         let mut shape_to_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
+                                        let mut  shape_to_text_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
         
                                         for (trip_id, trip) in &gtfs.trips {
                                             if trip.shape_id.is_some() {
@@ -717,13 +720,18 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                         trip.shape_id.as_ref().unwrap().clone(),
                                                             color,
                                                         );
+
+                                                        shape_to_text_color_lookup.insert(
+                                                            trip.shape_id.as_ref().unwrap().clone(),
+                                                            route.text_color.clone(),
+                                                        );
                                                     }
                                                 }
                                             }
                                         }
         
 
-                                       let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes, route_type) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT do nothing;").await.unwrap();
+                                       let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, text_color, routes, route_type,route_label) VALUES ($1, $2, $3, $4, $5, $6,$7,$8) ON CONFLICT do nothing;").await.unwrap();
                                         
                                         for (shape_id, shape) in &gtfs.shapes {
 
@@ -878,9 +886,26 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                 );
                                             */
         
-                                            
+                                            let text_color = match shape_to_text_color_lookup.get(shape_id) {
+                                                Some(color) => format!(
+                                                    "{:02x}{:02x}{:02x}",
+                                                    color.r, color.g, color.b
+                                                ),
+                                                None => String::from("3a3a3a"),
+                                            };
         
                                                // println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
+
+                                               let route_label:String = route_ids.iter().map(|route_id| {
+                                                let route = gtfs.routes.get(route_id);
+                                                if route.is_some() {
+                                                    return route.unwrap().short_name.clone()
+                                                    .replace("-16168","")
+                                                    .replace("clockwise", "CW").replace("Clockwise", "CW").replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW");
+                                                } else {
+                                                    return route_id.to_string();
+                                                }
+                                               }).collect::<Vec<String>>().join(",");
         
                                             client.query(&prepared_shapes,
                                          &[
@@ -888,9 +913,11 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             &shape_id, 
                                          &linestring,
                                          &color_to_upload,
+                                         &text_color,
                                          &route_ids,
                                          //add route type here
-                                        &route_type_number
+                                        &route_type_number,
+                                        &route_label
                                          ]).await.unwrap();
                                         }
         
