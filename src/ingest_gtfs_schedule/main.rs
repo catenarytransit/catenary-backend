@@ -899,9 +899,20 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                let route_label:String = route_ids.iter().map(|route_id| {
                                                 let route = gtfs.routes.get(route_id);
                                                 if route.is_some() {
-                                                    return route.unwrap().short_name.clone()
-                                                    .replace("-16168","")
-                                                    .replace("clockwise", "CW").replace("Clockwise", "CW").replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW");
+                                                    if (route.unwrap().short_name.as_str() == "") {
+                                                      if (route.unwrap().long_name.as_str() == "") {
+                                                        return route_id.to_string();
+                                                      } else {
+                                                        return route.unwrap().long_name.clone()
+                                                        .replace("-16168","")
+                                                        .replace("clockwise", "CW").replace("Clockwise", "CW").replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW");
+                                                      }
+                                                    } else {
+                                                        return route.unwrap().short_name.clone()
+                                                        .replace("-16168","")
+                                                        .replace("clockwise", "CW").replace("Clockwise", "CW").replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW");
+                                                    }
+                                                    
                                                 } else {
                                                     return route_id.to_string();
                                                 }
