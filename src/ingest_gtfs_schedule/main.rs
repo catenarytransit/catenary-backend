@@ -753,6 +753,26 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
                                          route_ids.dedup();
 
+                                         if (feed.id == "f-9qh-metrolinktrains") {
+
+                                            let cleanedline = shape_id.clone().replace("in","").replace("out","");
+                                           
+                                                let value = match cleanedline.as_str() {
+                                                    "91" => "91 Line",
+                                                    "IEOC" => "Inland Emp.-Orange Co. Line",
+                                                    "AV" => "Antelope Valley Line",
+                                                    "OC" => "Orange County Line",
+                                                    "RIVER" => "Riverside Line",
+                                                    "SB" => "San Bernardino Line",
+                                                    "VT" => "Ventura County Line",
+                                                    _ => "",
+                                                };
+
+                                                if (value != "") {
+                                                    route_ids.push(value.to_string());
+                                                }
+                                         }
+
                                          let route_ids = route_ids;
 
                                          let mut route_type_number = 3;
