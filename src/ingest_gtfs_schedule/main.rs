@@ -833,6 +833,20 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
                                                     String::from(nameoflinelametro)
                                                 },
+                                                "f-9qh-metrolinktrains" => {
+                                                    if (route_ids.len() > 0) {
+                                                        let route = gtfs.routes.get(&route_ids[0]);
+
+                                                        let color = route.unwrap().color;
+
+                                                        format!(
+                                                            "{:02x}{:02x}{:02x}",
+                                                            color.r, color.g, color.b
+                                                        )
+                                                    } else {
+                                                        String::from("3a3a3a")
+                                                    }
+                                                },
                                                 _ => {
                                                     match shape_to_color_lookup.get(shape_id) {
                                                         Some(color) => format!(
@@ -909,12 +923,30 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                 );
                                             */
         
-                                            let text_color = match shape_to_text_color_lookup.get(shape_id) {
-                                                Some(color) => format!(
-                                                    "{:02x}{:02x}{:02x}",
-                                                    color.r, color.g, color.b
-                                                ),
-                                                None => String::from("3a3a3a"),
+                                            let text_color = match feed.id.as_str() {
+                                                "f-9qh-metrolinktrains" => {
+                                                    if (route_ids.len() > 0) {
+                                                        let route = gtfs.routes.get(&route_ids[0]);
+
+                                                        let text_color = route.unwrap().text_color;
+
+                                                        format!(
+                                                            "{:02x}{:02x}{:02x}",
+                                                            text_color.r, text_color.g, text_color.b
+                                                        )
+                                                    } else {
+                                                        String::from("ffffff")
+                                                    }
+                                                },
+                                                _ => {
+                                                    match shape_to_text_color_lookup.get(shape_id) {
+                                                        Some(color) => format!(
+                                                            "{:02x}{:02x}{:02x}",
+                                                            color.r, color.g, color.b
+                                                        ),
+                                                        None => String::from("000000"),
+                                                    }
+                                                }
                                             };
         
                                                // println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
