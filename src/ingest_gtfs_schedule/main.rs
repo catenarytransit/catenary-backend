@@ -751,12 +751,12 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             route_ids => route_ids.to_vec(),
                                         };
 
-                                         route_ids.dedup();
-
-                                         if (feed.id == "f-9qh-metrolinktrains") {
+                                         if feed.id == "f-9qh-metrolinktrains" {
 
                                             let cleanedline = shape_id.clone().replace("in","").replace("out","");
                                            
+                                            println!("cleanedline: {}", &cleanedline);
+
                                                 let value = match cleanedline.as_str() {
                                                     "91" => "91 Line",
                                                     "IEOC" => "Inland Emp.-Orange Co. Line",
@@ -768,10 +768,13 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     _ => "",
                                                 };
 
+                                                println!("real metrolink line {}", &value);
+
                                                 if (value != "") {
                                                     route_ids.push(value.to_string());
                                                 }
                                          }
+                                         route_ids.dedup();
 
                                          let route_ids = route_ids;
 
