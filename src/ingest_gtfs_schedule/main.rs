@@ -847,6 +847,9 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                         String::from("3a3a3a")
                                                     }
                                                 },
+                                                "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => {
+                                                    String::from("1772ac")
+                                                },
                                                 _ => {
                                                     match shape_to_color_lookup.get(shape_id) {
                                                         Some(color) => format!(
@@ -937,6 +940,9 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     } else {
                                                         String::from("ffffff")
                                                     }
+                                                },
+                                                "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => {
+                                                    String::from("ffffff")
                                                 },
                                                 _ => {
                                                     match shape_to_text_color_lookup.get(shape_id) {
