@@ -966,12 +966,12 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                       } else {
                                                         return route.unwrap().long_name.clone()
                                                         .replace("-16168","")
-                                                        .replace("clockwise", "CW").replace("Clockwise", "CW").replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW");
+                                                        .replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW").replace("clockwise", "CW").replace("Clockwise", "CW");
                                                       }
                                                     } else {
                                                         return route.unwrap().short_name.clone()
                                                         .replace("-16168","")
-                                                        .replace("clockwise", "CW").replace("Clockwise", "CW").replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW");
+                                                        .replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW").replace("clockwise", "CW").replace("Clockwise", "CW");
                                                     }
                                                     
                                                 } else {
