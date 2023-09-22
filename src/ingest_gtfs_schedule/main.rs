@@ -57,6 +57,14 @@ pub fn route_type_to_int(input: &gtfs_structures::RouteType) -> i32 {
     }
 }
 
+pub fn is_uppercase(string: &str) -> bool {
+    string.chars().all(char::is_uppercase)
+}
+
+fn only_latin_chars(s: &str) -> bool {
+    s.chars().all(|c| c.is_ascii_alphabetic())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
 
@@ -1130,6 +1138,16 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                 y: stop.latitude.unwrap(),
                                                 srid: Some(4326),
                                             };
+
+                                            let mut name = stop.name.clone();
+
+                                            //it's not an acronym, and can be safely title cased
+                                            if (name.len() >= 7) {
+                                                //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
+                                                if (only_latin_chars(name.as_str()) && is_uppercase(name.as_str())) {
+                                                    name = name.to_lowercase();
+                                                }
+                                            }
 
                                             client.query(&stopstatement, &[
                                                 &feed.id,
