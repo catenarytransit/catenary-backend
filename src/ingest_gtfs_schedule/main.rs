@@ -62,9 +62,17 @@ pub fn is_uppercase(string: &str) -> bool {
     string.chars().all(char::is_uppercase)
 }
 
-fn only_latin_chars(s: &str) -> bool {
-    s.chars().all(|c| c.is_ascii_alphabetic())
+pub fn titlecase_process(string: &mut String) -> () {
+
+                                            //it's not an acronym, and can be safely title cased
+                                            if (string.len() >= 7) {
+                                                //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
+                                                if (string.as_str().chars().all(|s| s.is_ascii_punctuation() || s.is_ascii()) == true) {
+                                                    *string = titlecase(string.as_str());
+                                                }
+                                            }
 }
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -1039,6 +1047,10 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             ) ON CONFLICT do nothing;
                                             ").await.unwrap();
         
+                                            let mut long_name = route.long_name.clone();
+
+                                            titlecase_process(&mut long_name);
+
                                             client
                                             .query(
                                                 &route_prepared,
@@ -1046,7 +1058,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     &route_id,
                                                     &feed.id,
                                                     &route.short_name,
-                                                    &route.long_name,
+                                                    &long_name,
                                                     &route.desc.clone().unwrap_or_else(|| "".to_string()),
                                                     &route_type_number,
                                                     &route.url,
@@ -1087,6 +1099,11 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").await.unwrap();
 
                                         for (trip_id, trip) in &gtfs.trips {
+
+                                            let mut trip_headsign = trip.trip_headsign.clone().unwrap_or_else(|| "".to_string());
+
+                                            titlecase_process(&mut trip_headsign);
+
                                             client
                                                     .query(
                                                         &statement,
@@ -1095,7 +1112,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                                &trip.id,
                                                              &trip.service_id,
                                                             &trip.route_id,
-                                              &trip.trip_headsign.clone().unwrap_or_else(|| "".to_string()),
+                                              &trip_headsign,
                                                       &trip.trip_short_name.clone().unwrap_or_else(|| "".to_string()),
                                                       &trip.shape_id.clone().unwrap_or_else(|| "".to_string()),
                                                            ],
@@ -1110,6 +1127,10 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                         srid: Some(4326),
                                                     };
                                             
+
+                                                    let mut stop_headsign = stoptime.stop_headsign.clone().unwrap_or_else(|| "".to_string());
+
+                                                    titlecase_process(&mut trip_headsign);
                                                 
                                                     if stoptime.arrival_time.is_some() && stoptime.departure_time.is_some() {
                                                         client
@@ -1122,7 +1143,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                             &(stoptime.stop_sequence as i32),
                                                             &toi64(&stoptime.arrival_time),
                                                             &toi64(&stoptime.departure_time),
-                                                            &stoptime.stop_headsign,
+                                                            &stop_headsign,
                                                             &point
                                                         ],
                                                     ).await.unwrap();
@@ -1148,13 +1169,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
                                             let mut name = stop.name.clone();
 
-                                            //it's not an acronym, and can be safely title cased
-                                            if (name.len() >= 7) {
-                                                //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
-                                                if (name.as_str().chars().all(|s| s.is_ascii_punctuation() || s.is_ascii()) == true) {
-                                                    name = titlecase(name.as_str());
-                                                }
-                                            }
+                                            titlecase_process(&mut name);
 
                                             client.query(&stopstatement, &[
                                                 &feed.id,
