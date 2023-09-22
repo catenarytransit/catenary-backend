@@ -855,6 +855,9 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                         String::from("3a3a3a")
                                                     }
                                                 },
+                                                "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => {
+                                                    String::from("1772ac")
+                                                },
                                                 _ => {
                                                     match shape_to_color_lookup.get(shape_id) {
                                                         Some(color) => format!(
@@ -946,6 +949,9 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                         String::from("ffffff")
                                                     }
                                                 },
+                                                "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => {
+                                                    String::from("ffffff")
+                                                },
                                                 _ => {
                                                     match shape_to_text_color_lookup.get(shape_id) {
                                                         Some(color) => format!(
@@ -968,12 +974,12 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                       } else {
                                                         return route.unwrap().long_name.clone()
                                                         .replace("-16168","")
-                                                        .replace("clockwise", "CW").replace("Clockwise", "CW").replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW");
+                                                        .replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW").replace("clockwise", "CW").replace("Clockwise", "CW");
                                                       }
                                                     } else {
                                                         return route.unwrap().short_name.clone()
                                                         .replace("-16168","")
-                                                        .replace("clockwise", "CW").replace("Clockwise", "CW").replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW");
+                                                        .replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW").replace("clockwise", "CW").replace("Clockwise", "CW");
                                                     }
                                                     
                                                 } else {
