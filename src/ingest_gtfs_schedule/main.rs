@@ -2,6 +2,7 @@ use futures::StreamExt;
 use protobuf::well_known_types::empty;
 use serde_json::Error as SerdeError;
 use std::collections::BTreeMap;
+use titlecase::titlecase;
 use std::collections::HashMap;
 use std::fs;
 mod dmfr;
@@ -1150,8 +1151,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             //it's not an acronym, and can be safely title cased
                                             if (name.len() >= 7) {
                                                 //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
-                                                if (only_latin_chars(name.as_str()) && is_uppercase(name.as_str())) {
-                                                    name = name.to_lowercase();
+                                                if (name.as_str().chars().all(|s| s.is_ascii_punctuation() || s.is_ascii()) == true) {
+                                                    name = titlecase(name.as_str());
                                                 }
                                             }
 
