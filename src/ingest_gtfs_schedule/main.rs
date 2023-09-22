@@ -1158,7 +1158,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             client.query(&stopstatement, &[
                                                 &feed.id,
                                                 &stop.id,
-                                                &stop.name,
+                                                &name,
                                                 &stop.code,
                                                 &stop.description,
                                                 &stop.longitude,
