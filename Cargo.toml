@@ -42,6 +42,7 @@ threadpool = {version = "1.8.1"}
 tokio-threadpool = "0.1.18"
 qstring = "0.7.2"
 rand = "0.8.5"
+titlecase = "2.2.1"
 
 [[bin]]
 name = "http_server"
