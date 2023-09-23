@@ -278,7 +278,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         "f-9q9-actransit",
         "f-9q9-vta",
         "f-9q8yy-missionbaytma~ca~us",
-        "f-9qbb-marintransit"
+        "f-9qbb-marintransit",
+        "f-9q8-samtrans"
         ];
 
         for entry in entries {
@@ -572,6 +573,10 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                 if (limittostaticfeed.as_ref().unwrap().as_str() != key.as_str()) {
                     dothetask = false;
                 }
+            }
+
+            if (feeds_to_discard.contains(&key.as_str())) {
+                dothetask = false;
             }
 
             let bruhitfailed: Vec<operator_pair_info> = vec![];
