@@ -16,7 +16,7 @@ Transitland acts as an initial source of knowledge for Catenary-Backend, and ass
 ### Download GTFS static data
 This downloads the world's GTFS Static Data. This step may take a while, so go play some Minecraft / touch grass and come back when it's all finished!
 ```bash
-cargo run --bin transitlanddownload
+cargo run --release --bin transitlanddownload
 ```
 
 ### Unzip and format the zip files
@@ -27,7 +27,7 @@ cargo run --bin transitlanddownload
 ### Import data into the postgres database
 
 ```bash
-cargo run --bin import -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple" --threads 25 --startfresh false
+cargo run --release --bin import -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple" --threads 25 --startfresh false
 ```
 
 You're all done! Data is fully ready for serving to users!
