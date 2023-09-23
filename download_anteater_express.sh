@@ -4,5 +4,3 @@ cd ../..
 if [ ! -d gtfs_uncompressed/f-anteaterexpress/ ]; then
   mkdir gtfs_uncompressed/f-anteaterexpress/
 fi
-cd gtfs_uncompressed/f-anteaterexpress/
-zip -r ../anteater_gtfs.zip *
