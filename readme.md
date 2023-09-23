@@ -13,6 +13,13 @@ Transitland acts as an initial source of knowledge for Catenary-Backend, and ass
 ./clone-transitland.sh
 ```
 
+If you already have it, remember to git pull / merge changes
+
+#### Insert Anteater Express feed
+```bash
+./download_anteater_express.sh
+```
+
 ### Download GTFS static data
 This downloads the world's GTFS Static Data. This step may take a while, so go play some Minecraft / touch grass and come back when it's all finished!
 ```bash
