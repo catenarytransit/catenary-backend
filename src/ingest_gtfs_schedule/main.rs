@@ -2,9 +2,9 @@ use futures::StreamExt;
 use protobuf::well_known_types::empty;
 use serde_json::Error as SerdeError;
 use std::collections::BTreeMap;
-use titlecase::titlecase;
 use std::collections::HashMap;
 use std::fs;
+use titlecase::titlecase;
 mod dmfr;
 use bb8_postgres::PostgresConnectionManager;
 use clap::Parser;
@@ -63,20 +63,22 @@ pub fn is_uppercase(string: &str) -> bool {
 }
 
 pub fn titlecase_process(string: &mut String) -> () {
-
-                                            //it's not an acronym, and can be safely title cased
-                                            if (string.len() >= 7) {
-                                                //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
-                                                if (string.as_str().chars().all(|s| s.is_ascii_punctuation() || s.is_ascii()) == true) {
-                                                    *string = titlecase(string.as_str());
-                                                }
-                                            }
+    //it's not an acronym, and can be safely title cased
+    if (string.len() >= 7) {
+        //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
+        if (string
+            .as_str()
+            .chars()
+            .all(|s| s.is_ascii_punctuation() || s.is_ascii())
+            == true)
+        {
+            *string = titlecase(string.as_str());
+        }
+    }
 }
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-
     let postgresstring = arguments::parse(std::env::args())
         .unwrap()
         .get::<String>("postgres");
@@ -102,6 +104,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap()
         .get::<String>("limittostaticfeed");
 
+    let is_prod = arguments::parse(std::env::args())
+        .unwrap()
+        .get::<bool>("isprod");
+
+    let schemaname = match is_prod {
+        Some(s) => {
+            if s {
+                "gtfs"
+            } else {
+                "gtfs_stage"
+            }
+        }
+        None => "gtfs_stage",
+    };
+
     // Connect to the database.
     let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
 
@@ -114,43 +131,75 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     client
-        .batch_execute("
+        .batch_execute(
+            "
         CREATE EXTENSION IF NOT EXISTS postgis;
         CREATE EXTENSION IF NOT EXISTS hstore;
-        ").await.unwrap();
+        ",
+        )
+        .await
+        .unwrap();
 
-        if (startfresh.unwrap_or(false)) {
-        client.batch_execute("DROP SCHEMA IF EXISTS gtfs CASCADE;").await.unwrap();
-        }
+    if startfresh.unwrap_or(false) && is_prod.unwrap_or(false) {
+        client
+            .batch_execute(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schemaname).as_str())
+            .await
+            .unwrap();
+    }
 
-        client.batch_execute("
-    CREATE SCHEMA IF NOT EXISTS gtfs;").await.unwrap();
-    
-    client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.static_feeds (
-        onestop_feed_id text PRIMARY KEY,
-        only_realtime_ref text,
-        operators text[],
-        operators_to_gtfs_ids hstore,
-        realtime_onestop_ids text[],
-        realtime_onestop_ids_to_gtfs_ids hstore,
-        max_lat double precision NOT NULL,
-        max_lon double precision NOT NULL,
-        min_lat double precision NOT NULL,
-        min_lon double precision NOT NULL
-    );
-").await.unwrap();
-    
-client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
+    client
+        .batch_execute(
+            "
+    CREATE SCHEMA IF NOT EXISTS gtfs;",
+        )
+        .await
+        .unwrap();
+
+    client
+        .batch_execute(
+            format!(
+                "CREATE TABLE IF NOT EXISTS {}.static_feeds (
+            onestop_feed_id text PRIMARY KEY,
+            only_realtime_ref text,
+            operators text[],
+            operators_to_gtfs_ids hstore,
+            realtime_onestop_ids text[],
+            realtime_onestop_ids_to_gtfs_ids hstore,
+            max_lat double precision NOT NULL,
+            max_lon double precision NOT NULL,
+            min_lat double precision NOT NULL,
+            min_lon double precision NOT NULL
+        );",
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
+
+    client
+        .batch_execute(
+            format!(
+                "CREATE TABLE IF NOT EXISTS {}.operators (
         onestop_operator_id text PRIMARY KEY,
         name text,
         gtfs_static_feeds text[],
         gtfs_realtime_feeds text[],
         static_onestop_feeds_to_gtfs_ids hstore,
         realtime_onestop_feeds_to_gtfs_ids hstore
-    );").await.unwrap();
+    );",
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute("
-    CREATE TABLE IF NOT EXISTS gtfs.realtime_feeds (
+    client
+        .batch_execute(
+            format!(
+                "
+    CREATE TABLE IF NOT EXISTS {}.realtime_feeds (
         onestop_feed_id text PRIMARY KEY,
         name text,
         operators text[],
@@ -159,10 +208,19 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         max_lon double precision,
         min_lat double precision,
         min_lon double precision
-    );").await.unwrap();
+    );",
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute("
-    CREATE TABLE IF NOT EXISTS gtfs.stops (
+    client
+        .batch_execute(
+            format!(
+                "
+    CREATE TABLE IF NOT EXISTS {}.stops (
         onestop_feed_id text NOT NULL,
         gtfs_id text NOT NULL,
         name text NOT NULL,
@@ -181,10 +239,19 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         platform_code text,
         routes text[],
         PRIMARY KEY (onestop_feed_id, gtfs_id)
-    )").await.unwrap();
+    )",
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute("
-    CREATE TABLE IF NOT EXISTS gtfs.stoptimes (
+    client
+        .batch_execute(
+            format!(
+                "
+    CREATE TABLE IF NOT EXISTS {}.stoptimes (
         onestop_feed_id text NOT NULL,
         trip_id text NOT NULL,
         stop_sequence int NOT NULL,
@@ -203,10 +270,19 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         point GEOMETRY(POINT,4326) NOT NULL,
         route_id text,
         PRIMARY KEY (onestop_feed_id, trip_id, stop_sequence)
-    )").await.unwrap();
+    )",
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute("
-    CREATE TABLE IF NOT EXISTS gtfs.routes (
+    client
+        .batch_execute(
+            format!(
+                "
+    CREATE TABLE IF NOT EXISTS {}.routes (
         route_id text NOT NULL,
         onestop_feed_id text NOT NULL,
         short_name text NOT NULL,
@@ -222,10 +298,19 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         continuous_drop_off int,
         shapes_list text[],
         PRIMARY KEY (onestop_feed_id, route_id)
-    );").await.unwrap();
+    );",
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute("
-    CREATE TABLE IF NOT EXISTS gtfs.shapes (
+    client
+        .batch_execute(
+            format!(
+                "
+    CREATE TABLE IF NOT EXISTS {}.shapes (
         onestop_feed_id text NOT NULL,
         shape_id text NOT NULL,
         linestring GEOMETRY(LINESTRING,4326) NOT NULL,
@@ -235,10 +320,19 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         route_label text,
         text_color text,
         PRIMARY KEY (onestop_feed_id,shape_id)
-    );").await.unwrap();
+    );",
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute("
-    CREATE TABLE IF NOT EXISTS gtfs.trips (
+    client
+        .batch_execute(
+            format!(
+                "
+    CREATE TABLE IF NOT EXISTS {}.trips (
         trip_id text NOT NULL,
         onestop_feed_id text NOT NULL,
         route_id text NOT NULL,
@@ -251,20 +345,26 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         wheelchair_accessible int,
         bikes_allowed int,
         PRIMARY KEY (onestop_feed_id, trip_id)
-    );").await.unwrap();
+    );",
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute("
-    CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
+    client.batch_execute(format!("
+    CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON {schemaname}.shapes USING GIST (linestring);
 
-    CREATE INDEX IF NOT EXISTS gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
+    CREATE INDEX IF NOT EXISTS gtfs_static_stops_geom_idx ON {schemaname}.stops USING GIST (point);
 
-    CREATE INDEX IF NOT EXISTS gtfs_static_stoptimes_geom_idx ON gtfs.stoptimes USING GIST (point);
+    CREATE INDEX IF NOT EXISTS gtfs_static_stoptimes_geom_idx ON {schemaname}.stoptimes USING GIST (point);
 
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON gtfs.shapes (onestop_feed_id);
+    CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON {schemaname}.shapes (onestop_feed_id);
 
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON gtfs.routes (onestop_feed_id);
+    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);
     
-    ",
+    ").as_str(),
         )
         .await
         .unwrap();
@@ -287,16 +387,17 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
         let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
-        let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<operator_pair_info>> = BTreeMap::new();
+        let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<operator_pair_info>> =
+            BTreeMap::new();
 
         let feeds_to_discard = vec![
             "f-9q8y-sfmta",
-        "f-9qc-westcat~ca~us",
-        "f-9q9-actransit",
-        "f-9q9-vta",
-        "f-9q8yy-missionbaytma~ca~us",
-        "f-9qbb-marintransit",
-        "f-9q8-samtrans"
+            "f-9qc-westcat~ca~us",
+            "f-9q9-actransit",
+            "f-9q9-vta",
+            "f-9q8yy-missionbaytma~ca~us",
+            "f-9qbb-marintransit",
+            "f-9q8-samtrans",
         ];
 
         for entry in entries {
@@ -318,9 +419,14 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                 Ok(dmfrinfo) => {
                                     dmfrinfo.feeds.iter().for_each(|feed| {
                                         for eachoperator in feed.operators.clone().into_iter() {
-
-                                            if (feed_to_operator_pairs_hashmap.contains_key(&feed.id)) {
-                                                let mut existing_operator_pairs = feed_to_operator_pairs_hashmap.get(&feed.id).unwrap().clone();
+                                            if (feed_to_operator_pairs_hashmap
+                                                .contains_key(&feed.id))
+                                            {
+                                                let mut existing_operator_pairs =
+                                                    feed_to_operator_pairs_hashmap
+                                                        .get(&feed.id)
+                                                        .unwrap()
+                                                        .clone();
 
                                                 existing_operator_pairs.push(operator_pair_info {
                                                     operator_id: eachoperator.onestop_id.clone(),
@@ -328,14 +434,19 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                 });
 
                                                 feed_to_operator_pairs_hashmap.insert(
-                                                    feed.id.clone(), 
-                                                    existing_operator_pairs
+                                                    feed.id.clone(),
+                                                    existing_operator_pairs,
                                                 );
                                             } else {
-                                                feed_to_operator_pairs_hashmap.insert(feed.id.clone(), vec![operator_pair_info {
-                                                    operator_id: eachoperator.onestop_id.clone(),
-                                                    gtfs_agency_id: None,
-                                                }]);
+                                                feed_to_operator_pairs_hashmap.insert(
+                                                    feed.id.clone(),
+                                                    vec![operator_pair_info {
+                                                        operator_id: eachoperator
+                                                            .onestop_id
+                                                            .clone(),
+                                                        gtfs_agency_id: None,
+                                                    }],
+                                                );
                                             }
 
                                             if feed_to_operator_hashmap.contains_key(&feed.id) {
@@ -358,20 +469,18 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                 );
                                             }
 
-                                            if operator_to_feed_hashmap.contains_key(&eachoperator.onestop_id) {
-
+                                            if operator_to_feed_hashmap
+                                                .contains_key(&eachoperator.onestop_id)
+                                            {
                                             } else {
                                                 operator_to_feed_hashmap.insert(
                                                     eachoperator.onestop_id.clone(),
-                                                    vec![
-                                                        dmfr::OperatorAssociatedFeedsItem {
-                                                            feed_onestop_id: Some(feed.id.clone()),
-                                                            gtfs_agency_id: None,
-                                                        }
-                                                    ],
+                                                    vec![dmfr::OperatorAssociatedFeedsItem {
+                                                        feed_onestop_id: Some(feed.id.clone()),
+                                                        gtfs_agency_id: None,
+                                                    }],
                                                 );
                                             }
-
                                         }
 
                                         //println!("Feed {}: {:#?}", feed.id.clone(), feed);
@@ -448,17 +557,30 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
 
                                         for feed in operator.associated_feeds.iter() {
                                             if feed.feed_onestop_id.is_some() {
-
                                                 if (&feed_to_operator_pairs_hashmap).contains_key(
-                                                    feed.feed_onestop_id.as_ref().unwrap().as_str()
-                                                )
-                                                {
-                                                    let mut existing_operator_pairs = feed_to_operator_pairs_hashmap.get(feed.feed_onestop_id.as_ref().unwrap().as_str()).unwrap().clone();
+                                                    feed.feed_onestop_id.as_ref().unwrap().as_str(),
+                                                ) {
+                                                    let mut existing_operator_pairs =
+                                                        feed_to_operator_pairs_hashmap
+                                                            .get(
+                                                                feed.feed_onestop_id
+                                                                    .as_ref()
+                                                                    .unwrap()
+                                                                    .as_str(),
+                                                            )
+                                                            .unwrap()
+                                                            .clone();
 
-                                                    existing_operator_pairs.push(operator_pair_info {
-                                                        operator_id: operator.onestop_id.clone(),
-                                                        gtfs_agency_id: feed.gtfs_agency_id.clone(),
-                                                    });
+                                                    existing_operator_pairs.push(
+                                                        operator_pair_info {
+                                                            operator_id: operator
+                                                                .onestop_id
+                                                                .clone(),
+                                                            gtfs_agency_id: feed
+                                                                .gtfs_agency_id
+                                                                .clone(),
+                                                        },
+                                                    );
 
                                                     feed_to_operator_pairs_hashmap.insert(
                                                         feed.feed_onestop_id.clone().unwrap(),
@@ -468,8 +590,12 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                                     feed_to_operator_pairs_hashmap.insert(
                                                         feed.feed_onestop_id.clone().unwrap(),
                                                         vec![operator_pair_info {
-                                                            operator_id: operator.onestop_id.clone(),
-                                                            gtfs_agency_id: feed.gtfs_agency_id.clone(),
+                                                            operator_id: operator
+                                                                .onestop_id
+                                                                .clone(),
+                                                            gtfs_agency_id: feed
+                                                                .gtfs_agency_id
+                                                                .clone(),
                                                         }],
                                                     );
                                                 }
@@ -583,7 +709,6 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         for (key, feed) in feedhashmap.clone().into_iter() {
             let pool = pool.clone();
 
-
             let mut dothetask = true;
 
             if (limittostaticfeed.is_some()) {
@@ -597,16 +722,23 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
             }
 
             let bruhitfailed: Vec<operator_pair_info> = vec![];
-            let listofoperatorpairs = feed_to_operator_pairs_hashmap.get(&feed.id).unwrap_or_else(|| &bruhitfailed).clone();
+            let listofoperatorpairs = feed_to_operator_pairs_hashmap
+                .get(&feed.id)
+                .unwrap_or_else(|| &bruhitfailed)
+                .clone();
 
             let mut operator_pairs_hashmap: HashMap<String, Option<String>> = HashMap::new();
 
             for operator_pair in listofoperatorpairs {
-                operator_pairs_hashmap.insert(operator_pair.operator_id, operator_pair.gtfs_agency_id);
+                operator_pairs_hashmap
+                    .insert(operator_pair.operator_id, operator_pair.gtfs_agency_id);
             }
 
             let items: Vec<String> = vec![];
-            let operator_id_list = feed_to_operator_hashmap.get(&key).unwrap_or_else(|| &items).clone();
+            let operator_id_list = feed_to_operator_hashmap
+                .get(&key)
+                .unwrap_or_else(|| &items)
+                .clone();
             handles.push(threaded_rt.spawn(async move 
                 {
                     //it timesout here a lot
@@ -753,7 +885,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                         }
         
 
-                                       let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, text_color, routes, route_type,route_label) VALUES ($1, $2, $3, $4, $5, $6,$7,$8) ON CONFLICT do nothing;").await.unwrap();
+                                       let prepared_shapes = client.prepare(format!("INSERT INTO {schemaname}.shapes (onestop_feed_id, shape_id, linestring, color, text_color, routes, route_type,route_label) VALUES ($1, $2, $3, $4, $5, $6,$7,$8) ON CONFLICT do nothing;").as_str()).await.unwrap();
                                         
                                         for (shape_id, shape) in &gtfs.shapes {
 
@@ -1030,7 +1162,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         
                                                 //println!("uploading route {:?} {}", &feed.id , &route_id);
 
-                                            let route_prepared = client.prepare("INSERT INTO gtfs.routes
+                                            let route_prepared = client.prepare(format!("INSERT INTO {schemaname}.routes
                                             (
                                                 route_id,
                                                 onestop_feed_id,
@@ -1050,7 +1182,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                             VALUES (
                                                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
                                             ) ON CONFLICT do nothing;
-                                            ").await.unwrap();
+                                            ").as_str()).await.unwrap();
         
                                             let mut long_name = route.long_name.clone();
 
@@ -1095,7 +1227,7 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                          
                                         let time = std::time::Instant::now();
 
-                                        let statement = client.prepare("INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;").await.unwrap();
+                                        let statement = client.prepare(format!("INSERT INTO {schemaname}.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;").as_str()).await.unwrap();
 
                                         let stoptimestatement = client.prepare(
                                             "INSERT INTO gtfs.stoptimes 
@@ -1160,9 +1292,11 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                     
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
 
-                                        let stopstatement = client.prepare("INSERT INTO gtfs.stops
+                                        let stopstatement = client.prepare(format!(
+                                            "INSERT INTO {schemaname}.stops
                                          (onestop_feed_id, gtfs_id, name, code, gtfs_desc, long, lat, point)
-                                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").await.unwrap();
+                                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;"
+                                        ).as_str()).await.unwrap();
                                         for (stop_id, stop) in &gtfs.stops {
 
                                            if (stop.latitude.is_some() && stop.longitude.is_some()) {
@@ -1190,9 +1324,10 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                                         }                  
 
                                         if gtfs.routes.len() > 0 as usize {
-                                            let _ = client.query("INSERT INTO gtfs.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
+                                            let _ = client.query(
+                                                format!("INSERT INTO {schemaname}.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
                                             
-                                             VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;", &[
+                                                VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;").as_str(), &[
                                             &feed.id,
                                             &most_lat,
                                             &most_lon,
@@ -1209,8 +1344,8 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
                             }
                         },
                         dmfr::FeedSpec::GtfsRt => {
-                                             client.query("INSERT INTO gtfs.realtime_feeds (onestop_feed_id, name, operators, operators_to_gtfs_ids)
-                                             VALUES ($1, $2, $3, $4) ON CONFLICT do nothing;", &[
+                                             client.query(format!("INSERT INTO {schemaname}.realtime_feeds (onestop_feed_id, name, operators, operators_to_gtfs_ids)
+                                             VALUES ($1, $2, $3, $4) ON CONFLICT do nothing;").as_str(), &[
                                             &feed.id,
                                             &feed.name,
                                             &operator_id_list,
@@ -1237,64 +1372,80 @@ client.batch_execute("CREATE TABLE IF NOT EXISTS gtfs.operators (
         for (operator_id, operator) in operatorhashmap {
             //println!("{:?}", operator);
             /*
-            
-            onestop_operator_id text PRIMARY KEY,
-        name text,
-        gtfs_static_feeds text[],
-             */
 
-             let empty_vec: Vec<dmfr::OperatorAssociatedFeedsItem> = vec![];
-            let listoffeeds = operator_to_feed_hashmap.get(&operator_id).unwrap_or_else(|| &empty_vec).clone();
+                onestop_operator_id text PRIMARY KEY,
+            name text,
+            gtfs_static_feeds text[],
+                 */
+
+            let empty_vec: Vec<dmfr::OperatorAssociatedFeedsItem> = vec![];
+            let listoffeeds = operator_to_feed_hashmap
+                .get(&operator_id)
+                .unwrap_or_else(|| &empty_vec)
+                .clone();
 
             let mut gtfs_static_feeds: HashMap<String, Option<String>> = HashMap::new();
             let mut gtfs_realtime_feeds: HashMap<String, Option<String>> = HashMap::new();
 
-            let mut simplified_array_static:Vec<String> = vec![];
-            let mut simplified_array_realtime:Vec<String> = vec![];
+            let mut simplified_array_static: Vec<String> = vec![];
+            let mut simplified_array_realtime: Vec<String> = vec![];
 
             for x in listoffeeds {
                 //get type
 
                 if (x.feed_onestop_id.is_some()) {
-                if feedhashmap.contains_key(&x.feed_onestop_id.clone().unwrap()) {
-                    let feed = feedhashmap.get(&x.feed_onestop_id.clone().unwrap()).unwrap();
+                    if feedhashmap.contains_key(&x.feed_onestop_id.clone().unwrap()) {
+                        let feed = feedhashmap
+                            .get(&x.feed_onestop_id.clone().unwrap())
+                            .unwrap();
 
-                    match feed.spec {
-                        dmfr::FeedSpec::Gtfs => {
-                            if (!feeds_to_discard.contains(&x.feed_onestop_id.clone().unwrap().as_str())) {
-                                gtfs_static_feeds.insert(x.feed_onestop_id.clone().unwrap(), x.gtfs_agency_id);
-                            simplified_array_static.push(x.feed_onestop_id.clone().unwrap());
+                        match feed.spec {
+                            dmfr::FeedSpec::Gtfs => {
+                                if (!feeds_to_discard
+                                    .contains(&x.feed_onestop_id.clone().unwrap().as_str()))
+                                {
+                                    gtfs_static_feeds.insert(
+                                        x.feed_onestop_id.clone().unwrap(),
+                                        x.gtfs_agency_id,
+                                    );
+                                    simplified_array_static
+                                        .push(x.feed_onestop_id.clone().unwrap());
+                                }
                             }
-                            
-                        },
-                        dmfr::FeedSpec::GtfsRt => {
-                            gtfs_realtime_feeds.insert(x.feed_onestop_id.clone().unwrap(), x.gtfs_agency_id);
-                            simplified_array_realtime.push(x.feed_onestop_id.clone().unwrap());
-                        },
-                        _ => {
-                            //do nothing
+                            dmfr::FeedSpec::GtfsRt => {
+                                gtfs_realtime_feeds
+                                    .insert(x.feed_onestop_id.clone().unwrap(), x.gtfs_agency_id);
+                                simplified_array_realtime.push(x.feed_onestop_id.clone().unwrap());
+                            }
+                            _ => {
+                                //do nothing
+                            }
                         }
                     }
                 }
-                }
-
             }
 
-            client.query("INSERT INTO gtfs.operators 
-            (onestop_operator_id, 
-                name, 
-                gtfs_static_feeds, 
-                gtfs_realtime_feeds, 
-                static_onestop_feeds_to_gtfs_ids, 
-                realtime_onestop_feeds_to_gtfs_ids)
-                 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;", &[
-                &operator.onestop_id,
-                &operator.name,
-                &simplified_array_static,
-                &simplified_array_realtime,
-                &gtfs_static_feeds,
-                &gtfs_realtime_feeds
-            ]).await.unwrap();
+            client
+                .query(
+                    format!("INSERT INTO {schemaname}.operators 
+                    (onestop_operator_id, 
+                        name, 
+                        gtfs_static_feeds, 
+                        gtfs_realtime_feeds, 
+                        static_onestop_feeds_to_gtfs_ids, 
+                        realtime_onestop_feeds_to_gtfs_ids)
+                         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;").as_str(),
+                    &[
+                        &operator.onestop_id,
+                        &operator.name,
+                        &simplified_array_static,
+                        &simplified_array_realtime,
+                        &gtfs_static_feeds,
+                        &gtfs_realtime_feeds,
+                    ],
+                )
+                .await
+                .unwrap();
         }
 
         println!("Done ingesting all operators");

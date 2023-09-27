@@ -72,8 +72,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    
-
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
         let mut feedhashmap: BTreeMap<String, dmfr::Feed> = BTreeMap::new();
 
@@ -306,117 +304,113 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         for (key, feed) in feedhashmap.clone().into_iter() {
             let pool = pool.clone();
-            handles.push(threaded_rt.spawn(async move 
+            handles.push(threaded_rt.spawn(async move {
+                //it timesout here a lot
+                let mut client = pool.get().await.unwrap();
+
+                //println!("Feed in future {}: {:#?}", key, feed);
+
+                let mut dothetask = true;
+
+                if key.contains("~jp")
+                    || key.contains("germany~urban~transport")
+                    || key.contains("~gov~uk")
                 {
-                    //it timesout here a lot
-                    let mut client = pool.get().await.unwrap();
-        
-                    //println!("Feed in future {}: {:#?}", key, feed);
-        
-                    let mut dothetask = true;
-        
-                   if key.contains("~jp") || key.contains("germany~urban~transport") || key.contains("~gov~uk") {
-                       dothetask = false;
-                   }
-        
-                   if dothetask {
+                    dothetask = false;
+                }
+
+                if dothetask {
                     match feed.spec {
                         dmfr::FeedSpec::Gtfs => {
                             //println!("{:?}", feed.urls);
-        
+
                             if feed.urls.static_current.is_some() {
                                 //check if folder exists in the directory
-        
+
                                 //process and upload routes, stops, headways, and shapes etc into postgres
-        
+
                                 //calculate the bounds of the feed,
-        
+
                                 //upload the feed id metadata
-        
+
                                 let file_path = format!("gtfs_uncompressed/{}/", key);
-        
-        
+
                                 if path_exists(&file_path) {
-        
                                     //feed exists
-        
+
                                     println!("Starting read for {}", &key);
-        
-                                    
-                                let folder_size = get_size(&file_path).unwrap();
-                                println!("size: {} kB", folder_size / 1000); 
-        
+
+                                    let folder_size = get_size(&file_path).unwrap();
+                                    println!("size: {} kB", folder_size / 1000);
+
                                     let gtfs = gtfs_structures::GtfsReader::default()
                                         .read_from_path(&file_path);
-        
+
                                     if false {
                                         let gtfs = gtfs.unwrap();
-        
+
                                         println!("read_duration: {:?}ms", gtfs.read_duration);
-        
+
                                         println!(
                                             "there are {} stops in the gtfs",
                                             gtfs.stops.len()
                                         );
-        
+
                                         println!(
                                             "there are {} routes in the gtfs",
                                             gtfs.routes.len()
                                         );
-        
+
                                         let mut least_lat: Option<f64> = None;
                                         let mut least_lon: Option<f64> = None;
-        
+
                                         let mut most_lat: Option<f64> = None;
                                         let mut most_lon: Option<f64> = None;
-        
+
                                         let timestarting = std::time::Instant::now();
-        
+
                                         let mut shapes_per_route: HashMap<String, Vec<String>> =
                                             HashMap::new();
-        
-                                   
-        
-                                        let mut shape_to_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
-        
+
+                                        let mut shape_to_color_lookup: BTreeMap<String, RGB<u8>> =
+                                            BTreeMap::new();
+
                                         for (trip_id, trip) in &gtfs.trips {
                                             if trip.shape_id.is_some() {
-                                                if !shape_to_color_lookup
-                                                    .contains_key(&trip.shape_id.as_ref().unwrap().clone())
-                                                {
+                                                if !shape_to_color_lookup.contains_key(
+                                                    &trip.shape_id.as_ref().unwrap().clone(),
+                                                ) {
                                                     if gtfs.routes.contains_key(&trip.route_id) {
                                                         let route = gtfs
                                                             .routes
                                                             .get(&trip.route_id)
                                                             .unwrap();
-        
+
                                                         let color = route.color.clone();
-        
+
                                                         shape_to_color_lookup.insert(
-                                                        trip.shape_id.as_ref().unwrap().clone(),
+                                                            trip.shape_id.as_ref().unwrap().clone(),
                                                             color,
                                                         );
                                                     }
                                                 }
                                             }
                                         }
-        
 
-                                       //let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes) VALUES ($1, $2, $3, $4, $5);").await.unwrap();
-                                        
+                                        //let prepared_shapes = client.prepare("INSERT INTO gtfs.shapes (onestop_feed_id, shape_id, linestring, color, routes) VALUES ($1, $2, $3, $4, $5);").await.unwrap();
+
                                         for (shape_id, shape) in &gtfs.shapes {
                                             let color_to_upload =
-                                            match shape_to_color_lookup.get(shape_id) {
-                                                Some(color) => format!(
-                                                    "{:02x}{:02x}{:02x}",
-                                                    color.r, color.g, color.b
-                                                ),
-                                                None => String::from("3a3a3a"),
-                                            };
+                                                match shape_to_color_lookup.get(shape_id) {
+                                                    Some(color) => format!(
+                                                        "{:02x}{:02x}{:02x}",
+                                                        color.r, color.g, color.b
+                                                    ),
+                                                    None => String::from("3a3a3a"),
+                                                };
 
                                             //bug "Line String must at least have 2 points"
 
-                                            
                                             /*
                                               CREATE TABLE IF NOT EXISTS gtfs.shapes (
                                                     onestop_feed_id text NOT NULL,
@@ -426,14 +420,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     PRIMARY KEY (onestop_feed_id,shape_id)
                                                 );
                                             */
-        
-                                            
-        
-                                               // println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
-        
-                                            
+
+                                            // println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
                                         }
-        
+
                                         for (route_id, route) in &gtfs.routes {
                                             let route_type_number = match &route.route_type {
                                                 RouteType::Tramway => 0,
@@ -449,36 +439,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 RouteType::Taxi => 1500,
                                                 RouteType::Other(i) => *i,
                                             };
-        
+
                                             let mut shape_id_array: Vec<String> =
                                                 match shapes_per_route.get(route_id) {
                                                     Some(shape_list) => shape_list.clone(),
                                                     None => vec![],
                                                 };
-        
-                                            shape_id_array.dedup();
-        
-                                            let shape_id_array = shape_id_array;
-        
-                                                //println!("uploading route {:?} {}", &feed.id , &route_id);
 
-                                            
-        
-                                           
+                                            shape_id_array.dedup();
+
+                                            let shape_id_array = shape_id_array;
+
+                                            //println!("uploading route {:?} {}", &feed.id , &route_id);
                                         }
-        
+
                                         println!("Uploading {} trips", gtfs.trips.len());
 
-                                         
                                         let time = std::time::Instant::now();
 
-                                       // let statement = client.prepare("INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7);").await.unwrap();
-                                        
-                                
-                                        
+                                        // let statement = client.prepare("INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7);").await.unwrap();
+
                                         /*
-                                        
-                                        
+
+
                                             let mut threaded_trips = runtime::Builder::new_multi_thread()
                                         .worker_threads(5)
                                         .enable_time()
@@ -489,19 +472,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                         for (trip_id, trip) in gtfs.trips.clone().into_iter() {
                                             let pool = pool.clone();
-        
+
                                             let feed_id = feed.id.clone();
                                             trips_handles.push(threaded_trips.spawn(
-                                               
-            
+
+
                                                 async move {
-                                                    
+
                                                     println!("Uploading trip {}", &trip.id);
 
                                                 let mut client = pool.get().await.unwrap();
-            
-                                               
-            
+
+
+
                                                    client
                                                         .query(
                                                             "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
@@ -515,34 +498,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                                ],
                                                         ).await.unwrap();
                                                 }
-                                            
+
                                             ));
                                         }
 
                                         let time = std::time::Instant::now();
-                                        
+
                                         futures::future::join_all(trips_handles).await;
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
-                                        
+
                                          */
 
                                         /*
-                                        
-                                        
-                                        
-                                    
+
+
+
+
                                         let trips_insertion_multithread = futures::stream::iter(gtfs.trips.clone().into_iter().map(|(trip_id, trip)| {
-                                            
+
                                             let pool = pool.clone();
-        
+
                                             let feed_id = feed.id.clone();
-        
+
                                             async move {
-        
+
                                             let mut client = pool.get().await.unwrap();
-        
-                                           
-        
+
+
+
                                                client
                                                     .query(
                                                         "INSERT INTO gtfs.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name) VALUES ($1, $2, $3, $4, $5, $6);",
@@ -562,46 +545,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                         trips_insertion_multithread.await;
                                          */
-        
+
                                         //okay finally upload the feed metadata
-        
+
                                         /*
-                                        
-                                        onestop_feed_id text PRIMARY KEY,
-                onestop_operator_id text,
-                gtfs_agency_id text,
-                name text ,
-                url text ,
-                timezone text,
-                lang text,
-                phone text,
-                fare_url text,
-                email text,
-                max_lat double precision NOT NULL,
-                max_lon double precision NOT NULL,
-                min_lat double precision NOT NULL,
-                min_lon double precision NOT NULL
-                 */
-        
-                                        if gtfs.routes.len() > 0 as usize {
-                                            
-                                        }
+
+                                                                onestop_feed_id text PRIMARY KEY,
+                                        onestop_operator_id text,
+                                        gtfs_agency_id text,
+                                        name text ,
+                                        url text ,
+                                        timezone text,
+                                        lang text,
+                                        phone text,
+                                        fare_url text,
+                                        email text,
+                                        max_lat double precision NOT NULL,
+                                        max_lon double precision NOT NULL,
+                                        min_lat double precision NOT NULL,
+                                        min_lon double precision NOT NULL
+                                         */
+
+                                        if gtfs.routes.len() > 0 as usize {}
                                     }
                                 }
                             }
-                        },
-                        dmfr::FeedSpec::GtfsRt => {
-                            
-                        },
+                        }
+                        dmfr::FeedSpec::GtfsRt => {}
                         _ => {
                             //do nothing
                             println!("skipping {}, does not match dmfr feed spec", &key);
                         }
                     }
-                
                 }
-            
-        }));
+            }));
         }
 
         futures::future::join_all(handles).await;
