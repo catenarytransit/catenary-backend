@@ -149,8 +149,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     client
         .batch_execute(
-            "
-    CREATE SCHEMA IF NOT EXISTS gtfs;",
+            format!("
+            CREATE SCHEMA IF NOT EXISTS {schemaname};").as_str(),
         )
         .await
         .unwrap();
