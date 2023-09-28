@@ -34,7 +34,7 @@ cargo run --release --bin transitlanddownload
 ### Import data into the postgres database
 
 ```bash
-cargo run --release --bin import -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple" --threads 25 --startfresh true
+cargo run --release --bin import -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple" --threads 25 --startfresh true --isprod false
 ```
 
 This command writes to `gtfs_stage`. 
@@ -45,7 +45,7 @@ For safety reasons, you are unable to wipe the `gtfs` schema, which is the produ
 You can also write to production, especially loading in a single agency, like this.
 
 ```bash
-cargo run --release --bin import -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple" --threads 25 --startfresh false --limittostaticfeed f-9q9-caltrain
+cargo run --release --bin import -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple" --threads 25 --startfresh false --limittostaticfeed f-9q9-caltrain --isprod true
 ```
 
 ### Moving staging to be the new production database.
