@@ -30,6 +30,8 @@ use tokio_threadpool::ThreadPool;
 extern crate fs_extra;
 use fs_extra::dir::get_size;
 
+mod colour_correction;
+
 pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
 }
@@ -1138,8 +1140,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &feed.id,
                                             &shape_id, 
                                          &linestring,
-                                         &color_to_upload,
-                                         &text_color,
+                                         &colour_correction::fix_background_colour(color_to_upload.as_str()),
+                                         &colour_correction::fix_foreground_colour(color_to_upload.as_str(),text_color.as_str()),
                                          &route_ids,
                                          //add route type here
                                         &route_type_number,
@@ -1201,8 +1203,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     &route.url,
                                                     &route.agency_id.clone().unwrap_or_else(|| "".to_string()),
                                                     &i32::try_from(route.order.unwrap_or_else(|| 0)).ok(),
-                                                    &(route.color.to_string()),
-                                                    &(route.text_color.to_string()),
+                                                    &(colour_correction::fix_background_colour_rgb(route.color).to_string()),
+                                                    &(colour_correction::fix_foreground_colour_rgb(route.color, route.text_color).to_string()),
                                                     &(match route.continuous_pickup {
                                                         ContinuousPickupDropOff::Continuous => 0,
                                                         ContinuousPickupDropOff::NotAvailable => 1,
@@ -1257,7 +1259,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                             for stoptime in &trip.stop_times {
 
-                                                if (stoptime.stop.latitude.is_some() && stoptime.stop.longitude.is_some()) {
+                                                if stoptime.stop.latitude.is_some() && stoptime.stop.longitude.is_some() {
                                                     let point = ewkb::Point {
                                                         x: stoptime.stop.longitude.unwrap(),
                                                         y: stoptime.stop.latitude.unwrap(),
@@ -1299,7 +1301,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         ).as_str()).await.unwrap();
                                         for (stop_id, stop) in &gtfs.stops {
 
-                                           if (stop.latitude.is_some() && stop.longitude.is_some()) {
+                                           if stop.latitude.is_some() && stop.longitude.is_some() {
                                             let point = ewkb::Point {
                                                 x: stop.longitude.unwrap(),
                                                 y: stop.latitude.unwrap(),
@@ -1393,7 +1395,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             for x in listoffeeds {
                 //get type
 
-                if (x.feed_onestop_id.is_some()) {
+                if x.feed_onestop_id.is_some() {
                     if feedhashmap.contains_key(&x.feed_onestop_id.clone().unwrap()) {
                         let feed = feedhashmap
                             .get(&x.feed_onestop_id.clone().unwrap())
@@ -1427,14 +1429,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             client
                 .query(
-                    format!("INSERT INTO {schemaname}.operators 
+                    format!(
+                        "INSERT INTO {schemaname}.operators 
                     (onestop_operator_id, 
                         name, 
                         gtfs_static_feeds, 
                         gtfs_realtime_feeds, 
                         static_onestop_feeds_to_gtfs_ids, 
                         realtime_onestop_feeds_to_gtfs_ids)
-                         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;").as_str(),
+                         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;"
+                    )
+                    .as_str(),
                     &[
                         &operator.onestop_id,
                         &operator.name,
