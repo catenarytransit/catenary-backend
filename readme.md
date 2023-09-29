@@ -14,6 +14,7 @@ Transitland acts as an initial source of knowledge for Catenary-Backend, and ass
 ```
 
 If you already have it, remember to git pull / merge changes
+To do this, cd into the folder `transitland-atlas` and run `git pull`
 
 #### Insert Anteater Express feed
 ```bash
