@@ -34,7 +34,7 @@ async fn main() {
          DROP TABLE IF EXISTS gtfs;
          ALTER TABLE gtfs_stage RENAME TO gtfs;
          COMMIT;",
-    );
+    ).await.unwrap();
 
     println!("Done!");
 }
