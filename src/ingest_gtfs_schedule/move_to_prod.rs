@@ -31,8 +31,8 @@ async fn main() {
     client.batch_execute(
         "
         BEGIN;
-         DROP TABLE IF EXISTS gtfs;
-         ALTER TABLE gtfs_stage RENAME TO gtfs;
+         DROP SCHEMA IF EXISTS gtfs;
+         ALTER SCHEMA gtfs_stage RENAME TO gtfs;
          COMMIT;",
     ).await.unwrap();
 
