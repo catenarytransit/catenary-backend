@@ -25,6 +25,10 @@ fn transform_for_bay_area(x: String) -> String {
 
 #[tokio::main]
 async fn main() {
+    let threads = arguments::parse(std::env::args())
+        .unwrap()
+        .get::<usize>("threads").unwrap_or_else(|| 32);
+
     let _ = fs::create_dir("gtfs_static_zips");
     let _ = fs::create_dir("gtfs_uncompressed");
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
@@ -256,7 +260,7 @@ async fn main() {
                     }
                 }
             }))
-            .buffer_unordered(20)
+            .buffer_unordered(threads)
             .collect::<Vec<()>>();
 
         static_fetches.await;
