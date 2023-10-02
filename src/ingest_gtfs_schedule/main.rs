@@ -370,6 +370,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
+        println!("making index");
+
     client.batch_execute(format!("
     CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON {schemaname}.shapes USING GIST (linestring);
 
