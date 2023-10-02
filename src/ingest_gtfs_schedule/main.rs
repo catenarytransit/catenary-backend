@@ -727,7 +727,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             if feeds_to_discard.contains(&key.as_str()) || (limittostaticfeed.is_some() && limittostaticfeed.as_ref().unwrap().as_str() != key.as_str()) {
                     dothetask = false;
-                    println!("feed cancelled {}", key);
             }
 
             let bruhitfailed: Vec<operator_pair_info> = vec![];
