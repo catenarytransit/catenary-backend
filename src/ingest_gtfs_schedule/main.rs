@@ -1476,6 +1476,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("Waiting for {} seconds", x);
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
+    } else {
+        println!("Could not read that directory!");
     }
 
     Ok(())
