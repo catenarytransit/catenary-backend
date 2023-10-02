@@ -738,14 +738,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             let mut dothetask = true;
 
-            if (limittostaticfeed.is_some()) {
-                if (limittostaticfeed.as_ref().unwrap().as_str() != key.as_str()) {
+            if feeds_to_discard.contains(&key.as_str()) || (limittostaticfeed.is_some() && limittostaticfeed.as_ref().unwrap().as_str() != key.as_str()) {
                     dothetask = false;
-                }
-            }
-
-            if (feeds_to_discard.contains(&key.as_str())) {
-                dothetask = false;
             }
 
             let bruhitfailed: Vec<operator_pair_info> = vec![];
