@@ -718,7 +718,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let mut handles = vec![];
 
-        print!("run db upload now");
+        println!("run db upload now");
 
         for (key, feed) in feedhashmap.clone().into_iter() {
             let pool = pool.clone();
