@@ -576,12 +576,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         operatorhashmap
                                             .insert(operator.onestop_id.clone(), operator.clone());
 
-                                        println!(
-                                            "Operator {}: {:?}",
-                                            operator.onestop_id.clone(),
-                                            operator.associated_feeds
-                                        );
-
                                         for feed in operator.associated_feeds.iter() {
                                             if feed.feed_onestop_id.is_some() {
                                                 if (&feed_to_operator_pairs_hashmap).contains_key(
