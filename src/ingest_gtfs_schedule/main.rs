@@ -1232,10 +1232,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let statement = client.prepare(format!("INSERT INTO {schemaname}.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;").as_str()).await.unwrap();
 
                                         let stoptimestatement = client.prepare(
-                                            "INSERT INTO gtfs.stoptimes 
+                                            format!("INSERT INTO {schemaname}.stoptimes 
                                             (onestop_feed_id, trip_id, stop_id, stop_sequence, 
                                                 arrival_time, departure_time, stop_headsign, point) 
-                                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").await.unwrap();
+                                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").as_str()).await.unwrap();
 
                                         for (trip_id, trip) in &gtfs.trips {
 
