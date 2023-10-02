@@ -382,16 +382,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON {schemaname}.shapes (onestop_feed_id);
 
     CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);
-
-    ALTER TABLE {schemaname}.shapes SET UNLOGGED;
-
-    ALTER TABLE {schemaname}.stops SET UNLOGGED;
-
-    ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;
-
-    ALTER TABLE {schemaname}.routes SET UNLOGGED;
-
-    ALTER TABLE {schemaname}.trips SET UNLOGGED;
     
     ").as_str(),
         )
