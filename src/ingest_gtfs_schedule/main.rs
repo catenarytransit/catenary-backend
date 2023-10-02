@@ -720,7 +720,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         println!("run db upload now");
 
-        println!("limittostaticfeed {:?}", limittostaticfeed);
+        println!("limittostaticfeed {:?}", &limittostaticfeed);
 
         for (key, feed) in feedhashmap.clone().into_iter() {
             let pool = pool.clone();
@@ -731,8 +731,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 dothetask = false;
             }
 
-            if (limit_to_static_feed.is_some()) {
-                if (limit_to_static_feed.unwrap() != key) {
+            if limittostaticfeed.is_some() {
+                if limittostaticfeed.as_ref().unwrap().as_str() != key.as_str() {
                     dothetask = false;
                 }
             }
