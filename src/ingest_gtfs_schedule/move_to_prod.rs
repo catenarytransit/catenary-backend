@@ -28,13 +28,16 @@ async fn main() {
 
     println!("Connected to database\nSwapping...");
 
-    client.batch_execute(
-        "
+    client
+        .batch_execute(
+            "
         BEGIN;
          DROP SCHEMA IF EXISTS gtfs CASCADE;
          ALTER SCHEMA gtfs_stage RENAME TO gtfs;
          COMMIT;",
-    ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
     println!("Done!");
 }

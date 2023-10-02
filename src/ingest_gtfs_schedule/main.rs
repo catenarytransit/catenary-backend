@@ -1,10 +1,10 @@
 use futures::StreamExt;
-use protobuf::well_known_types::empty;
 use serde_json::Error as SerdeError;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use titlecase::titlecase;
+use futures::stream::iter;
 mod dmfr;
 use bb8_postgres::PostgresConnectionManager;
 use clap::Parser;
@@ -23,6 +23,7 @@ use std::ops::Deref;
 use tokio_postgres::Client;
 use tokio_postgres::{Error as PostgresError, NoTls};
 extern crate tokio_threadpool;
+use rayon::prelude::*;
 use std::sync::mpsc::channel;
 use tokio::runtime;
 use tokio_threadpool::ThreadPool;
@@ -41,6 +42,17 @@ pub fn toi64(input: &Option<u32>) -> Option<i64> {
         Some(i) => Some(*i as i64),
         None => None,
     }
+}
+
+struct StopTimePostgres {
+    feed_id: String,
+    trip_id: String,
+    stop_id: String,
+    stop_sequence: i32,
+    arrival_time: Option<i64>,
+    departure_time: Option<i64>,
+    stop_headsign: Option<String>,
+    point: ewkb::Point
 }
 
 pub fn route_type_to_int(input: &gtfs_structures::RouteType) -> i32 {
@@ -151,8 +163,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     client
         .batch_execute(
-            format!("
-            CREATE SCHEMA IF NOT EXISTS {schemaname};").as_str(),
+            format!(
+                "
+            CREATE SCHEMA IF NOT EXISTS {schemaname};"
+            )
+            .as_str(),
         )
         .await
         .unwrap();
@@ -365,6 +380,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON {schemaname}.shapes (onestop_feed_id);
 
     CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);
+
+    ALTER TABLE {schemaname}.shapes SET UNLOGGED;
+
+    ALTER TABLE {schemaname}.stops SET UNLOGGED;
+
+    ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;
+
+    ALTER TABLE {schemaname}.routes SET UNLOGGED;
+
+    ALTER TABLE {schemaname}.trips SET UNLOGGED;
     
     ").as_str(),
         )
@@ -1236,7 +1261,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             (onestop_feed_id, trip_id, stop_id, stop_sequence, 
                                                 arrival_time, departure_time, stop_headsign, point) 
                                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").as_str()).await.unwrap();
-
+                                        
+                                        //let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
                                         for (trip_id, trip) in &gtfs.trips {
 
                                             let mut trip_headsign = trip.trip_headsign.clone().unwrap_or_else(|| "".to_string());
@@ -1244,18 +1270,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             titlecase_process(&mut trip_headsign);
 
                                             client
-                                                    .query(
-                                                        &statement,
-                                                        &[
-                                                            &feed.id,
-                                                               &trip.id,
-                                                             &trip.service_id,
-                                                            &trip.route_id,
-                                              &trip_headsign,
-                                                      &trip.trip_short_name.clone().unwrap_or_else(|| "".to_string()),
-                                                      &trip.shape_id.clone().unwrap_or_else(|| "".to_string()),
-                                                           ],
-                                                    ).await.unwrap();
+                                                .query(
+                                                    &statement,
+                                                    &[
+                                                        &feed.id,
+                                                           &trip.id,
+                                                         &trip.service_id,
+                                                        &trip.route_id,
+                                          &trip_headsign,
+                                                  &trip.trip_short_name.clone().unwrap_or_else(|| "".to_string()),
+                                                  &trip.shape_id.clone().unwrap_or_else(|| "".to_string()),
+                                                       ],
+                                                ).await.unwrap();
 
                                             for stoptime in &trip.stop_times {
 
