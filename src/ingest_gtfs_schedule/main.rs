@@ -1,28 +1,37 @@
-use bb8::PooledConnection;
-use gtfs_structures::Route;
+use futures::StreamExt;
 use serde_json::Error as SerdeError;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use titlecase::titlecase;
+use futures::stream::iter;
 mod dmfr;
-use geo_postgis::ToPostgis;
 use bb8_postgres::PostgresConnectionManager;
+use clap::Parser;
 use futures;
 use gtfs_structures::ContinuousPickupDropOff;
+use gtfs_structures::Error as GtfsError;
+use gtfs_structures::PickupDropOffType;
 use gtfs_structures::RouteType;
-use postgis::ewkb;
+use postgis::{ewkb, LineString};
 use rgb::RGB;
 use std::error::Error;
+use std::fs::File;
+use std::io::copy;
+use std::io::Write;
 use std::ops::Deref;
-use tokio_postgres::NoTls;
+use tokio_postgres::Client;
+use tokio_postgres::{Error as PostgresError, NoTls};
 extern crate tokio_threadpool;
+use rayon::prelude::*;
+use std::sync::mpsc::channel;
 use tokio::runtime;
+use tokio_threadpool::ThreadPool;
+
 extern crate fs_extra;
 use fs_extra::dir::get_size;
 
 mod colour_correction;
-mod convex_hull;
 
 pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
@@ -35,7 +44,7 @@ pub fn toi64(input: &Option<u32>) -> Option<i64> {
     }
 }
 
-/*struct StopTimePostgres {
+struct StopTimePostgres {
     feed_id: String,
     trip_id: String,
     stop_id: String,
@@ -44,7 +53,7 @@ pub fn toi64(input: &Option<u32>) -> Option<i64> {
     departure_time: Option<i64>,
     stop_headsign: Option<String>,
     point: ewkb::Point
-}*/
+}
 
 pub fn route_type_to_int(input: &gtfs_structures::RouteType) -> i32 {
     match input {
@@ -69,9 +78,13 @@ pub fn is_uppercase(string: &str) -> bool {
 
 pub fn titlecase_process(string: &mut String) -> () {
     //it's not an acronym, and can be safely title cased
-    if string.len() >= 7 {
+    if (string.len() >= 7) {
         //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
-        if string.as_str().chars().all(|s| s.is_ascii_punctuation() || s.is_ascii()) == true
+        if (string
+            .as_str()
+            .chars()
+            .all(|s| s.is_ascii_punctuation() || s.is_ascii())
+            == true)
         {
             *string = titlecase(string.as_str());
         }
@@ -141,7 +154,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
-    if startfresh.unwrap_or(false) {
+    if startfresh.unwrap_or(false) && is_prod.unwrap_or(false) {
         client
             .batch_execute(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schemaname).as_str())
             .await
@@ -172,8 +185,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             max_lat double precision NOT NULL,
             max_lon double precision NOT NULL,
             min_lat double precision NOT NULL,
-            min_lon double precision NOT NULL,
-            hull GEOMETRY(POLYGON,4326) NOT NULL
+            min_lon double precision NOT NULL
         );",
                 schemaname
             )
@@ -360,7 +372,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         println!("making index");
 
-        
+        /* 
     client.batch_execute(format!("
     CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON {schemaname}.shapes USING GIST (linestring);
 
@@ -370,26 +382,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON {schemaname}.shapes (onestop_feed_id);
 
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);
-    
-    CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);").as_str(),
+    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);").as_str(),
         )
         .await
-        .unwrap();
-
-        println!("make static hulls...");
-
-        client.batch_execute(format!("
-        
-        CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);").as_str(),
-            )
-            .await
-            .unwrap();
+        .unwrap();*/
 
     println!("Finished making database");
 
     #[derive(Debug, Clone)]
-    struct OperatorPairInfo {
+    struct operator_pair_info {
         operator_id: String,
         gtfs_agency_id: Option<String>,
     }
@@ -404,7 +405,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
-        let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<OperatorPairInfo>> =
+        let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<operator_pair_info>> =
             BTreeMap::new();
 
         let feeds_to_discard = vec![
@@ -436,14 +437,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 Ok(dmfrinfo) => {
                                     dmfrinfo.feeds.iter().for_each(|feed| {
                                         for eachoperator in feed.operators.clone().into_iter() {
-                                            if feed_to_operator_pairs_hashmap.contains_key(&feed.id) {
+                                            if (feed_to_operator_pairs_hashmap
+                                                .contains_key(&feed.id))
+                                            {
                                                 let mut existing_operator_pairs =
                                                     feed_to_operator_pairs_hashmap
                                                         .get(&feed.id)
                                                         .unwrap()
                                                         .clone();
 
-                                                existing_operator_pairs.push(OperatorPairInfo {
+                                                existing_operator_pairs.push(operator_pair_info {
                                                     operator_id: eachoperator.onestop_id.clone(),
                                                     gtfs_agency_id: None,
                                                 });
@@ -455,7 +458,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             } else {
                                                 feed_to_operator_pairs_hashmap.insert(
                                                     feed.id.clone(),
-                                                    vec![OperatorPairInfo {
+                                                    vec![operator_pair_info {
                                                         operator_id: eachoperator
                                                             .onestop_id
                                                             .clone(),
@@ -581,7 +584,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                             .clone();
 
                                                     existing_operator_pairs.push(
-                                                        OperatorPairInfo {
+                                                        operator_pair_info {
                                                             operator_id: operator
                                                                 .onestop_id
                                                                 .clone(),
@@ -598,7 +601,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 } else {
                                                     feed_to_operator_pairs_hashmap.insert(
                                                         feed.feed_onestop_id.clone().unwrap(),
-                                                        vec![OperatorPairInfo {
+                                                        vec![operator_pair_info {
                                                             operator_id: operator
                                                                 .onestop_id
                                                                 .clone(),
@@ -612,7 +615,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 if (&feed_to_operator_hashmap).contains_key(
                                                     feed.feed_onestop_id.as_ref().unwrap().as_str(),
                                                 ) {
-                                                    /*&feed_to_operator_hashmap.insert(
+                                                    &feed_to_operator_hashmap.insert(
                                                         feed.feed_onestop_id.clone().unwrap(),
                                                         feed_to_operator_hashmap
                                                             .get(
@@ -628,12 +631,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                                 .onestop_id
                                                                 .clone()])
                                                             .collect::<Vec<String>>(),
-                                                    );*/
+                                                    );
                                                 } else {
-                                                    /*&feed_to_operator_hashmap.insert(
+                                                    &feed_to_operator_hashmap.insert(
                                                         feed.feed_onestop_id.clone().unwrap(),
                                                         vec![operator.onestop_id.clone()],
-                                                    );*/
+                                                    );
                                                 }
                                             }
                                         }
@@ -686,10 +689,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }
                                     });
                                 }
-                                Err(_) => {}
+                                Err(e) => {}
                             }
                         }
-                        Err(_) => {}
+                        Err(e) => {}
                     }
                 }
             }
@@ -734,7 +737,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
 
-            let bruhitfailed: Vec<OperatorPairInfo> = vec![];
+            let bruhitfailed: Vec<operator_pair_info> = vec![];
             let listofoperatorpairs = feed_to_operator_pairs_hashmap
                 .get(&feed.id)
                 .unwrap_or_else(|| &bruhitfailed)
@@ -755,7 +758,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             handles.push(threaded_rt.spawn(async move 
                 {
                     //it timesout here a lot
-                    let client = pool.get().await.unwrap();
+                    let mut client = pool.get().await.unwrap();
         
                     //println!("Feed in future {}: {:#?}", key, feed);
         
@@ -810,7 +813,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let mut most_lat: Option<f64> = None;
                                         let mut most_lon: Option<f64> = None;
         
-                                        //let timestarting = std::time::Instant::now();
+                                        let timestarting = std::time::Instant::now();
+        
+                                        let mut shapes_per_route: HashMap<String, Vec<String>> =
+                                            HashMap::new();
         
                                         for (stop_id, stop) in &gtfs.stops {
                                             //check if least_lat has a value
@@ -934,7 +940,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                                 println!("real metrolink line {}", &value);
 
-                                                if value != "" {
+                                                if (value != "") {
                                                     route_ids.push(value.to_string());
                                                 }
                                          }
@@ -961,7 +967,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                                     let mut nameoflinelametro = "e16710";
                                                     
-                                                    if route_ids.len() > 0 {
+                                                    if (route_ids.len() > 0) {
 
                                                         let route = gtfs.routes.get(&route_ids[0]);
 
@@ -998,7 +1004,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     String::from(nameoflinelametro)
                                                 },
                                                 "f-9qh-metrolinktrains" => {
-                                                    if route_ids.len() > 0 {
+                                                    if (route_ids.len() > 0) {
                                                         let route = gtfs.routes.get(&route_ids[0]);
 
                                                         let color = route.unwrap().color;
@@ -1092,7 +1098,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         
                                             let text_color = match feed.id.as_str() {
                                                 "f-9qh-metrolinktrains" => {
-                                                    if route_ids.len() > 0 {
+                                                    if (route_ids.len() > 0) {
                                                         let route = gtfs.routes.get(&route_ids[0]);
 
                                                         let text_color = route.unwrap().text_color;
@@ -1124,8 +1130,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                let route_label:String = route_ids.iter().map(|route_id| {
                                                 let route = gtfs.routes.get(route_id);
                                                 if route.is_some() {
-                                                    if route.unwrap().short_name.as_str() == "" {
-                                                      if route.unwrap().long_name.as_str() == "" {
+                                                    if (route.unwrap().short_name.as_str() == "") {
+                                                      if (route.unwrap().long_name.as_str() == "") {
                                                         return route_id.to_string();
                                                       } else {
                                                         return route.unwrap().long_name.clone()
@@ -1156,20 +1162,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         &route_label
                                          ]).await.unwrap();
                                         }
-                                        let routes: HashMap<(String, String), (&Route, &PooledConnection<PostgresConnectionManager<NoTls>>)> = gtfs.routes.iter()
-                                            .map(|(key, route)| ((key.clone(), feed.id.clone()), (route, &client))).collect();
-                                        let routes_clone = routes.clone();
-                                        let route_workers = routes_clone.into_iter().map( |((route_id, feed_id), (route, client))| async move {
+        
+                                        for (route_id, route) in &gtfs.routes {
                                             let route_type_number = route_type_to_int(&route.route_type);
-                                            let shapes_per_route: HashMap<String, Vec<String>> = HashMap::new();
+        
                                             let mut shape_id_array: Vec<String> =
-                                                match shapes_per_route.get(&route_id) {
+                                                match shapes_per_route.get(route_id) {
                                                     Some(shape_list) => shape_list.clone(),
                                                     None => vec![],
                                                 };
+        
                                             shape_id_array.dedup();
+        
                                             let shape_id_array = shape_id_array;
-                                            //println!("uploading route {:?} {}", &feed.id , &route_id);
+        
+                                                //println!("uploading route {:?} {}", &feed.id , &route_id);
+
                                             let route_prepared = client.prepare(format!("INSERT INTO {schemaname}.routes
                                             (
                                                 route_id,
@@ -1191,14 +1199,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
                                             ) ON CONFLICT do nothing;
                                             ").as_str()).await.unwrap();
+        
                                             let mut long_name = route.long_name.clone();
+
                                             titlecase_process(&mut long_name);
+
                                             client
                                             .query(
                                                 &route_prepared,
                                                 &[
                                                     &route_id,
-                                                    &feed_id,
+                                                    &feed.id,
                                                     &route.short_name,
                                                     &long_name,
                                                     &route.desc.clone().unwrap_or_else(|| "".to_string()),
@@ -1225,11 +1236,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     &shape_id_array,
                                                 ],
                                             ).await.unwrap();
-                                        });
-                                        for worker in route_workers {
-                                            let _ = worker.await;
                                         }
+        
                                         println!("Uploading {} trips", gtfs.trips.len());
+
                                          
                                         let time = std::time::Instant::now();
 
@@ -1272,7 +1282,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     };
                                             
 
-                                                    let stop_headsign = stoptime.stop_headsign.clone().unwrap_or_else(|| "".to_string());
+                                                    let mut stop_headsign = stoptime.stop_headsign.clone().unwrap_or_else(|| "".to_string());
 
                                                     titlecase_process(&mut trip_headsign);
                                                 
@@ -1328,69 +1338,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 &point
                                             ]).await.unwrap();
                                            }
-                                        }              
-                                        let start_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
-
-                                        //convex hull calcs
-                                        let mut shape_points = gtfs.shapes.iter().map(|(a,b)| b)
-                                        .flat_map(|s| s.iter())
-                                        .map(|s| s.clone())
-                                        .map(|s| (s.longitude, s.latitude))
-                                        .collect::<Vec<(f64, f64)>>();
-
-                                        shape_points.dedup();
-
-                                        let shape_points = shape_points;
-
-                                        let hull = convex_hull::convex_hull(&shape_points);
-
-                                        let stop_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
-                                        
-                                        println!("Convex Hull Algo for {} took {}μs", feed.id, (stop_hull_time - start_hull_time) / 1000);
-
-                                        //convert hull to polygon postgres
-
-                                       /*
-                                        
-                                        let mut polygon = ewkb::EwkbPolygon::new();
-
-
-                                        let hull_postgres_line = 
-                                           ewkb::LineStringT {
-                                                srid: Some(4326),
-                                                points: hull.iter().map(|s| ewkb::Point {
-                                                    x: s.0,
-                                                    y: s.1,
-                                                    srid: Some(4326),
-                                                }).collect::<Vec<ewkb::Point>>()
-                                            };
-                                             */
-
-
-                                            let hull_postgres_line = geo_types::LineString::from(hull.iter().map(|s| geo_types::Coordinate {
-                                                x: s.0,
-                                                y: s.1,
-                                            }).collect::<Vec<geo_types::Coordinate>>());
-
-                                            let hull_postgres = geo_types::Polygon::new(
-                                                hull_postgres_line,
-                                                vec![]
-                                            )
-                                            .to_postgis_wgs84();
+                                        }                  
 
                                         if gtfs.routes.len() > 0 as usize {
                                             let _ = client.query(
-                                                format!("INSERT INTO {schemaname}.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids, hull)
+                                                format!("INSERT INTO {schemaname}.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
                                             
-                                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT do nothing;").as_str(), &[
+                                                VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;").as_str(), &[
                                             &feed.id,
                                             &most_lat,
                                             &most_lon,
                                             &least_lat,
                                             &least_lon,
                                             &operator_id_list,
-                                            &operator_pairs_hashmap,
-                                            &hull_postgres
+                                            &operator_pairs_hashmap
                                         ]).await.unwrap();
                                         }
                                     } else {
@@ -1457,7 +1418,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                         match feed.spec {
                             dmfr::FeedSpec::Gtfs => {
-                                if !feeds_to_discard.contains(&x.feed_onestop_id.clone().unwrap().as_str())
+                                if (!feeds_to_discard
+                                    .contains(&x.feed_onestop_id.clone().unwrap().as_str()))
                                 {
                                     gtfs_static_feeds.insert(
                                         x.feed_onestop_id.clone().unwrap(),
