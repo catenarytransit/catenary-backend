@@ -1381,7 +1381,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             let _ = client.query(
                                                 format!("INSERT INTO {schemaname}.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids, hull)
                                             
-                                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT do update set hull = $8;").as_str(), &[
+                                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (onestop_feed_id) do update set hull = $8;").as_str(), &[
                                             &feed.id,
                                             &most_lat,
                                             &most_lon,
