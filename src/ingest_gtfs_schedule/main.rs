@@ -375,7 +375,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         println!("making index");
 
-        /* 
+        
     client.batch_execute(format!("
     CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON {schemaname}.shapes USING GIST (linestring);
 
@@ -388,7 +388,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);").as_str(),
         )
         .await
-        .unwrap();*/
+        .unwrap();
 
     println!("Finished making database");
 
