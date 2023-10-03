@@ -109,6 +109,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap()
         .get::<bool>("isprod");
 
+    let skiptrips = arguments::parse(std::env::args())
+        .unwrap()
+        .get::<bool>("skiptrips").unwrap_or_else(|| false);
+
     let schemaname = match is_prod {
         Some(s) => {
             if s {
@@ -1242,60 +1246,64 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").as_str()).await.unwrap();
                                         
                                         //let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
-                                        for (trip_id, trip) in &gtfs.trips {
+                                        if (skiptrips == false) {
+                                            for (trip_id, trip) in &gtfs.trips {
 
-                                            let mut trip_headsign = trip.trip_headsign.clone().unwrap_or_else(|| "".to_string());
-
-                                            titlecase_process(&mut trip_headsign);
-
-                                            client
-                                                .query(
-                                                    &statement,
-                                                    &[
-                                                        &feed.id,
-                                                           &trip.id,
-                                                         &trip.service_id,
-                                                        &trip.route_id,
-                                          &trip_headsign,
-                                                  &trip.trip_short_name.clone().unwrap_or_else(|| "".to_string()),
-                                                  &trip.shape_id.clone().unwrap_or_else(|| "".to_string()),
-                                                       ],
-                                                ).await.unwrap();
-
-                                            for stoptime in &trip.stop_times {
-
-                                                if stoptime.stop.latitude.is_some() && stoptime.stop.longitude.is_some() {
-                                                    let point = ewkb::Point {
-                                                        x: stoptime.stop.longitude.unwrap(),
-                                                        y: stoptime.stop.latitude.unwrap(),
-                                                        srid: Some(4326),
-                                                    };
-                                            
-
-                                                    let stop_headsign = stoptime.stop_headsign.clone().unwrap_or_else(|| "".to_string());
-
-                                                    titlecase_process(&mut trip_headsign);
-                                                
-                                                    if stoptime.arrival_time.is_some() && stoptime.departure_time.is_some() {
-                                                        client
+                                                let mut trip_headsign = trip.trip_headsign.clone().unwrap_or_else(|| "".to_string());
+    
+                                                titlecase_process(&mut trip_headsign);
+    
+                                                client
                                                     .query(
-                                                        &stoptimestatement,
+                                                        &statement,
                                                         &[
                                                             &feed.id,
-                                                            &trip.id,
-                                                            &stoptime.stop.id,
-                                                            &(stoptime.stop_sequence as i32),
-                                                            &toi64(&stoptime.arrival_time),
-                                                            &toi64(&stoptime.departure_time),
-                                                            &stop_headsign,
-                                                            &point
-                                                        ],
+                                                               &trip.id,
+                                                             &trip.service_id,
+                                                            &trip.route_id,
+                                              &trip_headsign,
+                                                      &trip.trip_short_name.clone().unwrap_or_else(|| "".to_string()),
+                                                      &trip.shape_id.clone().unwrap_or_else(|| "".to_string()),
+                                                           ],
                                                     ).await.unwrap();
-                                                    }    }
-                                               
+    
+                                                for stoptime in &trip.stop_times {
+    
+                                                    if stoptime.stop.latitude.is_some() && stoptime.stop.longitude.is_some() {
+                                                        let point = ewkb::Point {
+                                                            x: stoptime.stop.longitude.unwrap(),
+                                                            y: stoptime.stop.latitude.unwrap(),
+                                                            srid: Some(4326),
+                                                        };
                                                 
+    
+                                                        let stop_headsign = stoptime.stop_headsign.clone().unwrap_or_else(|| "".to_string());
+    
+                                                        titlecase_process(&mut trip_headsign);
+                                                    
+                                                        if stoptime.arrival_time.is_some() && stoptime.departure_time.is_some() {
+                                                            client
+                                                        .query(
+                                                            &stoptimestatement,
+                                                            &[
+                                                                &feed.id,
+                                                                &trip.id,
+                                                                &stoptime.stop.id,
+                                                                &(stoptime.stop_sequence as i32),
+                                                                &toi64(&stoptime.arrival_time),
+                                                                &toi64(&stoptime.departure_time),
+                                                                &stop_headsign,
+                                                                &point
+                                                            ],
+                                                        ).await.unwrap();
+                                                        }    }
+                                                   
+                                                    
+                                                }
                                             }
                                         }
+                                        
+                                        
                                     
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
 
