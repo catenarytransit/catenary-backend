@@ -47,6 +47,9 @@ qstring = "0.7.2"
 rand = "0.8.5"
 titlecase = "2.2.1"
 rayon = "1.8.0"
+chrono = "0.4.31"
+geo-types = "0.7.11"
+geo-postgis = "0.2.2"
 
 [[bin]]
 name = "http_server"
