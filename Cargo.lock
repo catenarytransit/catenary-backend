@@ -167,7 +167,7 @@ dependencies = [
  "serde_urlencoded",
  "smallvec",
  "socket2 0.4.9",
- "time 0.3.29",
+ "time",
  "url",
 ]
 
@@ -267,6 +267,12 @@ name = "allocator-api2"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56fc6cf8dc8c4158eed8649f9b8b0ea1518eb62b544fe9490d66fa0b349eafe9"
+
+[[package]]
+name = "android-tzdata"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e999941b234f3131b00bc13c22d06e8c5ff726d1b6318ac7eb276997bbb4fef0"
 
 [[package]]
 name = "android_system_properties"
@@ -645,6 +651,7 @@ dependencies = [
  "arguments",
  "bb8",
  "bb8-postgres",
+ "chrono",
  "clap",
  "color-eyre",
  "crossbeam-utils 0.8.16",
@@ -652,6 +659,8 @@ dependencies = [
  "fasthash",
  "fs_extra",
  "futures 0.3.28",
+ "geo-postgis",
+ "geo-types",
  "gtfs-rt",
  "gtfs-structures",
  "itertools 0.11.0",
@@ -673,7 +682,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "threadpool",
- "time 0.3.29",
+ "time",
  "titlecase",
  "tokio",
  "tokio-postgres",
@@ -704,17 +713,16 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chrono"
-version = "0.4.24"
+version = "0.4.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e3c5919066adf22df73762e50cffcde3a758f2a848b113b586d1f86728b673b"
+checksum = "7f2c685bad3eb3d45a01354cedb7d5faa66194d1d58ba6e267a8de788f79db38"
 dependencies = [
+ "android-tzdata",
  "iana-time-zone",
  "js-sys",
- "num-integer",
  "num-traits",
- "time 0.1.45",
  "wasm-bindgen",
- "winapi",
+ "windows-targets 0.48.0",
 ]
 
 [[package]]
@@ -827,7 +835,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e859cd57d0710d9e06c381b550c06e76992472a8c6d527aecd2fc673dcc231fb"
 dependencies = [
  "percent-encoding",
- "time 0.3.29",
+ "time",
  "version_check",
 ]
 
@@ -1373,10 +1381,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "geo-types"
-version = "0.7.10"
+name = "geo-postgis"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1019f6d372c5b53143f08deee4168d05c22920fe5e0f51f0dfb0e8ffb67ec11e"
+checksum = "90fdc8b3bd7e9f4c91b8e69b508cd8a5520b83bad3e4a94b8e08a2b184a152b8"
+dependencies = [
+ "geo-types",
+ "postgis",
+]
+
+[[package]]
+name = "geo-types"
+version = "0.7.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9705398c5c7b26132e74513f4ee7c1d7dafd786004991b375c172be2be0eecaa"
 dependencies = [
  "approx",
  "num-traits",
@@ -1391,7 +1409,7 @@ checksum = "c85e1d9ab2eadba7e5040d4e09cbd6d072b76a557ad64e797c2cb9d4da21d7e4"
 dependencies = [
  "cfg-if 1.0.0",
  "libc",
- "wasi 0.11.0+wasi-snapshot-preview1",
+ "wasi",
 ]
 
 [[package]]
@@ -1920,7 +1938,7 @@ checksum = "5b9d9a46eff5b4ff64b45a9e316a6d1e0bc719ef429cbec4dc630684212bfdf9"
 dependencies = [
  "libc",
  "log",
- "wasi 0.11.0+wasi-snapshot-preview1",
+ "wasi",
  "windows-sys 0.45.0",
 ]
 
@@ -1974,16 +1992,6 @@ checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
 dependencies = [
  "memchr",
  "minimal-lexical",
-]
-
-[[package]]
-name = "num-integer"
-version = "0.1.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "225d3389fb3509a24c93f5c29eb6bde2586b98d9f016636dff58d7c6f7569cd9"
-dependencies = [
- "autocfg",
- "num-traits",
 ]
 
 [[package]]
@@ -2710,7 +2718,7 @@ dependencies = [
  "serde_json",
  "sha1_smol",
  "threadpool",
- "time 0.3.29",
+ "time",
  "tiny_http",
  "url",
 ]
@@ -3233,17 +3241,6 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.1.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b797afad3f312d1c66a56d11d0316f916356d11bd158fbc6ca6389ff6bf805a"
-dependencies = [
- "libc",
- "wasi 0.10.0+wasi-snapshot-preview1",
- "winapi",
-]
-
-[[package]]
-name = "time"
 version = "0.3.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "426f806f4089c493dcac0d24c29c01e2c38baf8e30f1b716ee37e83d200b18fe"
@@ -3642,12 +3639,6 @@ dependencies = [
 
 [[package]]
 name = "wasi"
-version = "0.10.0+wasi-snapshot-preview1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a143597ca7c7793eff794def352d41792a93c481eb1042423ff7ff72ba2c31f"
-
-[[package]]
-name = "wasi"
 version = "0.11.0+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
@@ -3989,7 +3980,7 @@ dependencies = [
  "hmac",
  "pbkdf2",
  "sha1",
- "time 0.3.29",
+ "time",
  "zstd 0.11.2+zstd.1.5.2",
 ]
 

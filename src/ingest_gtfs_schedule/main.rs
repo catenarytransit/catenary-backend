@@ -6,6 +6,7 @@ use std::fs;
 use titlecase::titlecase;
 use futures::stream::iter;
 mod dmfr;
+use geo_postgis::ToPostgis;
 use bb8_postgres::PostgresConnectionManager;
 use clap::Parser;
 use futures;
@@ -32,6 +33,7 @@ extern crate fs_extra;
 use fs_extra::dir::get_size;
 
 mod colour_correction;
+mod convex_hull;
 
 pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
@@ -185,7 +187,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             max_lat double precision NOT NULL,
             max_lon double precision NOT NULL,
             min_lat double precision NOT NULL,
-            min_lon double precision NOT NULL
+            min_lon double precision NOT NULL,
+            hull GEOMETRY(POLYGON,4326) NOT NULL,
         );",
                 schemaname
             )
@@ -1351,18 +1354,68 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                            }
                                         }                  
 
+                                        let start_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
+
+                                        //convex hull calcs
+                                        let mut shape_points = gtfs.shapes.iter().map(|(a,b)| b)
+                                        .flat_map(|s| s.iter())
+                                        .map(|s| s.clone())
+                                        .map(|s| (s.longitude, s.latitude))
+                                        .collect::<Vec<(f64, f64)>>();
+
+                                        shape_points.dedup();
+
+                                        let shape_points = shape_points;
+
+                                        let hull = convex_hull::convex_hull(&shape_points);
+
+                                        let stop_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
+                                        
+                                        println!("Convex Hull Algo for {} took {}ns", feed.id, stop_hull_time - start_hull_time);
+
+                                        //convert hull to polygon postgres
+
+                                       /*
+                                        
+                                        let mut polygon = ewkb::EwkbPolygon::new();
+
+
+                                        let hull_postgres_line = 
+                                           ewkb::LineStringT {
+                                                srid: Some(4326),
+                                                points: hull.iter().map(|s| ewkb::Point {
+                                                    x: s.0,
+                                                    y: s.1,
+                                                    srid: Some(4326),
+                                                }).collect::<Vec<ewkb::Point>>()
+                                            };
+                                             */
+
+
+                                            let hull_postgres_line = geo_types::LineString::from(hull.iter().map(|s| geo_types::Coordinate {
+                                                x: s.0,
+                                                y: s.1,
+                                            }).collect::<Vec<geo_types::Coordinate>>());
+
+                                            let hull_postgres = geo_types::Polygon::new(
+                                                hull_postgres_line,
+                                                vec![]
+                                            )
+                                            .to_postgis_wgs84();
+
                                         if gtfs.routes.len() > 0 as usize {
                                             let _ = client.query(
-                                                format!("INSERT INTO {schemaname}.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
+                                                format!("INSERT INTO {schemaname}.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids, hull)
                                             
-                                                VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;").as_str(), &[
+                                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT do nothing;").as_str(), &[
                                             &feed.id,
                                             &most_lat,
                                             &most_lon,
                                             &least_lat,
                                             &least_lon,
                                             &operator_id_list,
-                                            &operator_pairs_hashmap
+                                            &operator_pairs_hashmap,
+                                            &hull_postgres
                                         ]).await.unwrap();
                                         }
                                     } else {
