@@ -156,7 +156,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
-    if startfresh.unwrap_or(false) && is_prod.unwrap_or(false) {
+    if startfresh.unwrap_or(false) {
         client
             .batch_execute(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schemaname).as_str())
             .await
