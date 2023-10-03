@@ -387,7 +387,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);
     
-    CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds (hull) USING GIST (polygon);").as_str(),
+    CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);").as_str(),
         )
         .await
         .unwrap();
