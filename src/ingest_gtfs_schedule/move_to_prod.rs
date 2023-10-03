@@ -1,4 +1,4 @@
-use tokio_postgres::{Error as PostgresError, NoTls};
+use tokio_postgres::NoTls;
 
 #[tokio::main]
 async fn main() {

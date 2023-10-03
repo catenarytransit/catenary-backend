@@ -373,6 +373,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
+        println!("making index");
+
+        /* 
     client.batch_execute(format!("
     CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON {schemaname}.shapes USING GIST (linestring);
 
@@ -382,22 +385,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON {schemaname}.shapes (onestop_feed_id);
 
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);
-
-    ALTER TABLE {schemaname}.shapes SET UNLOGGED;
-
-    ALTER TABLE {schemaname}.stops SET UNLOGGED;
-
-    ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;
-
-    ALTER TABLE {schemaname}.routes SET UNLOGGED;
-
-    ALTER TABLE {schemaname}.trips SET UNLOGGED;
-    
-    ").as_str(),
+    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);").as_str(),
         )
         .await
-        .unwrap();
+        .unwrap();*/
 
     println!("Finished making database");
 
@@ -579,12 +570,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         operatorhashmap
                                             .insert(operator.onestop_id.clone(), operator.clone());
 
-                                        println!(
-                                            "Operator {}: {:?}",
-                                            operator.onestop_id.clone(),
-                                            operator.associated_feeds
-                                        );
-
                                         for feed in operator.associated_feeds.iter() {
                                             if feed.feed_onestop_id.is_some() {
                                                 if (&feed_to_operator_pairs_hashmap).contains_key(
@@ -736,19 +721,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let mut handles = vec![];
 
+        println!("run db upload now");
+
+        println!("limittostaticfeed {:?}", &limittostaticfeed);
+
         for (key, feed) in feedhashmap.clone().into_iter() {
             let pool = pool.clone();
 
             let mut dothetask = true;
 
-            if (limittostaticfeed.is_some()) {
-                if (limittostaticfeed.as_ref().unwrap().as_str() != key.as_str()) {
-                    dothetask = false;
-                }
+            if feeds_to_discard.contains(&key.as_str()) {
+                dothetask = false;
             }
 
-            if (feeds_to_discard.contains(&key.as_str())) {
-                dothetask = false;
+            if limittostaticfeed.is_some() {
+                if limittostaticfeed.as_ref().unwrap().as_str() != key.as_str() {
+                    dothetask = false;
+                }
             }
 
             let bruhitfailed: Vec<operator_pair_info> = vec![];
@@ -1538,6 +1527,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("Waiting for {} seconds", x);
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
+    } else {
+        println!("Could not read that directory!");
     }
 
     Ok(())
