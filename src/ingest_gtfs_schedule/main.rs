@@ -392,6 +392,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
+        println!("make static hulls...");
+
+        client.batch_execute(format!("
+        
+        CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);").as_str(),
+            )
+            .await
+            .unwrap();
+
     println!("Finished making database");
 
     #[derive(Debug, Clone)]
