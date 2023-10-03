@@ -1371,7 +1371,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                         let stop_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
                                         
-                                        println!("Convex Hull Algo for {} took {}ns", feed.id, stop_hull_time - start_hull_time);
+                                        println!("Convex Hull Algo for {} took {}μs", feed.id, (stop_hull_time - start_hull_time) / 1000);
 
                                         //convert hull to polygon postgres
 
