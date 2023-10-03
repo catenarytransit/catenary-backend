@@ -50,6 +50,7 @@ rayon = "1.8.0"
 chrono = "0.4.31"
 geo-types = "0.7.11"
 geo-postgis = "0.2.2"
+geo = "0.26.0"
 
 [[bin]]
 name = "http_server"

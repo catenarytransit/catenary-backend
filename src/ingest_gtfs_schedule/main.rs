@@ -1364,18 +1364,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     srid: Some(4326),
                                                 }).collect::<Vec<ewkb::Point>>()
                                             };
-                                             */
+                                            */
 
-
-                                            let hull_postgres_line = geo_types::LineString::from(hull.iter().map(|s| geo_types::Coordinate {
-                                                x: s.0,
-                                                y: s.1,
-                                            }).collect::<Vec<geo_types::Coordinate>>());
-
-                                            let hull_postgres = geo_types::Polygon::new(
-                                                hull_postgres_line,
-                                                vec![]
-                                            )
+                                            let hull_postgres = hull
                                             .to_postgis_wgs84();
 
                                         if gtfs.routes.len() > 0 as usize {
