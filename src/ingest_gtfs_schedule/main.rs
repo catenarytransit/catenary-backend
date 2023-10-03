@@ -188,7 +188,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             max_lon double precision NOT NULL,
             min_lat double precision NOT NULL,
             min_lon double precision NOT NULL,
-            hull GEOMETRY(POLYGON,4326) NOT NULLs
+            hull GEOMETRY(POLYGON,4326) NOT NULL
         );",
                 schemaname
             )
