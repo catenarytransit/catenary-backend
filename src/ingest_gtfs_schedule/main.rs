@@ -1,33 +1,22 @@
-use futures::StreamExt;
+use bb8::PooledConnection;
+use gtfs_structures::Route;
 use serde_json::Error as SerdeError;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use titlecase::titlecase;
-use futures::stream::iter;
 mod dmfr;
 use bb8_postgres::PostgresConnectionManager;
-use clap::Parser;
 use futures;
 use gtfs_structures::ContinuousPickupDropOff;
-use gtfs_structures::Error as GtfsError;
-use gtfs_structures::PickupDropOffType;
 use gtfs_structures::RouteType;
-use postgis::{ewkb, LineString};
+use postgis::ewkb;
 use rgb::RGB;
 use std::error::Error;
-use std::fs::File;
-use std::io::copy;
-use std::io::Write;
 use std::ops::Deref;
-use tokio_postgres::Client;
-use tokio_postgres::{Error as PostgresError, NoTls};
+use tokio_postgres::NoTls;
 extern crate tokio_threadpool;
-use rayon::prelude::*;
-use std::sync::mpsc::channel;
 use tokio::runtime;
-use tokio_threadpool::ThreadPool;
-
 extern crate fs_extra;
 use fs_extra::dir::get_size;
 
@@ -44,7 +33,7 @@ pub fn toi64(input: &Option<u32>) -> Option<i64> {
     }
 }
 
-struct StopTimePostgres {
+/*struct StopTimePostgres {
     feed_id: String,
     trip_id: String,
     stop_id: String,
@@ -53,7 +42,7 @@ struct StopTimePostgres {
     departure_time: Option<i64>,
     stop_headsign: Option<String>,
     point: ewkb::Point
-}
+}*/
 
 pub fn route_type_to_int(input: &gtfs_structures::RouteType) -> i32 {
     match input {
@@ -78,13 +67,9 @@ pub fn is_uppercase(string: &str) -> bool {
 
 pub fn titlecase_process(string: &mut String) -> () {
     //it's not an acronym, and can be safely title cased
-    if (string.len() >= 7) {
+    if string.len() >= 7 {
         //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
-        if (string
-            .as_str()
-            .chars()
-            .all(|s| s.is_ascii_punctuation() || s.is_ascii())
-            == true)
+        if string.as_str().chars().all(|s| s.is_ascii_punctuation() || s.is_ascii()) == true
         {
             *string = titlecase(string.as_str());
         }
@@ -399,7 +384,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Finished making database");
 
     #[derive(Debug, Clone)]
-    struct operator_pair_info {
+    struct OperatorPairInfo {
         operator_id: String,
         gtfs_agency_id: Option<String>,
     }
@@ -414,7 +399,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
-        let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<operator_pair_info>> =
+        let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<OperatorPairInfo>> =
             BTreeMap::new();
 
         let feeds_to_discard = vec![
@@ -446,16 +431,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 Ok(dmfrinfo) => {
                                     dmfrinfo.feeds.iter().for_each(|feed| {
                                         for eachoperator in feed.operators.clone().into_iter() {
-                                            if (feed_to_operator_pairs_hashmap
-                                                .contains_key(&feed.id))
-                                            {
+                                            if feed_to_operator_pairs_hashmap.contains_key(&feed.id) {
                                                 let mut existing_operator_pairs =
                                                     feed_to_operator_pairs_hashmap
                                                         .get(&feed.id)
                                                         .unwrap()
                                                         .clone();
 
-                                                existing_operator_pairs.push(operator_pair_info {
+                                                existing_operator_pairs.push(OperatorPairInfo {
                                                     operator_id: eachoperator.onestop_id.clone(),
                                                     gtfs_agency_id: None,
                                                 });
@@ -467,7 +450,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             } else {
                                                 feed_to_operator_pairs_hashmap.insert(
                                                     feed.id.clone(),
-                                                    vec![operator_pair_info {
+                                                    vec![OperatorPairInfo {
                                                         operator_id: eachoperator
                                                             .onestop_id
                                                             .clone(),
@@ -599,7 +582,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                             .clone();
 
                                                     existing_operator_pairs.push(
-                                                        operator_pair_info {
+                                                        OperatorPairInfo {
                                                             operator_id: operator
                                                                 .onestop_id
                                                                 .clone(),
@@ -616,7 +599,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 } else {
                                                     feed_to_operator_pairs_hashmap.insert(
                                                         feed.feed_onestop_id.clone().unwrap(),
-                                                        vec![operator_pair_info {
+                                                        vec![OperatorPairInfo {
                                                             operator_id: operator
                                                                 .onestop_id
                                                                 .clone(),
@@ -630,7 +613,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 if (&feed_to_operator_hashmap).contains_key(
                                                     feed.feed_onestop_id.as_ref().unwrap().as_str(),
                                                 ) {
-                                                    &feed_to_operator_hashmap.insert(
+                                                    /*&feed_to_operator_hashmap.insert(
                                                         feed.feed_onestop_id.clone().unwrap(),
                                                         feed_to_operator_hashmap
                                                             .get(
@@ -646,12 +629,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                                 .onestop_id
                                                                 .clone()])
                                                             .collect::<Vec<String>>(),
-                                                    );
+                                                    );*/
                                                 } else {
-                                                    &feed_to_operator_hashmap.insert(
+                                                    /*&feed_to_operator_hashmap.insert(
                                                         feed.feed_onestop_id.clone().unwrap(),
                                                         vec![operator.onestop_id.clone()],
-                                                    );
+                                                    );*/
                                                 }
                                             }
                                         }
@@ -704,10 +687,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }
                                     });
                                 }
-                                Err(e) => {}
+                                Err(_) => {}
                             }
                         }
-                        Err(e) => {}
+                        Err(_) => {}
                     }
                 }
             }
@@ -742,7 +725,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     dothetask = false;
             }
 
-            let bruhitfailed: Vec<operator_pair_info> = vec![];
+            let bruhitfailed: Vec<OperatorPairInfo> = vec![];
             let listofoperatorpairs = feed_to_operator_pairs_hashmap
                 .get(&feed.id)
                 .unwrap_or_else(|| &bruhitfailed)
@@ -763,7 +746,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             handles.push(threaded_rt.spawn(async move 
                 {
                     //it timesout here a lot
-                    let mut client = pool.get().await.unwrap();
+                    let client = pool.get().await.unwrap();
         
                     //println!("Feed in future {}: {:#?}", key, feed);
         
@@ -818,10 +801,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let mut most_lat: Option<f64> = None;
                                         let mut most_lon: Option<f64> = None;
         
-                                        let timestarting = std::time::Instant::now();
-        
-                                        let mut shapes_per_route: HashMap<String, Vec<String>> =
-                                            HashMap::new();
+                                        //let timestarting = std::time::Instant::now();
         
                                         for (stop_id, stop) in &gtfs.stops {
                                             //check if least_lat has a value
@@ -945,7 +925,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                                 println!("real metrolink line {}", &value);
 
-                                                if (value != "") {
+                                                if value != "" {
                                                     route_ids.push(value.to_string());
                                                 }
                                          }
@@ -972,7 +952,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                                     let mut nameoflinelametro = "e16710";
                                                     
-                                                    if (route_ids.len() > 0) {
+                                                    if route_ids.len() > 0 {
 
                                                         let route = gtfs.routes.get(&route_ids[0]);
 
@@ -1009,7 +989,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     String::from(nameoflinelametro)
                                                 },
                                                 "f-9qh-metrolinktrains" => {
-                                                    if (route_ids.len() > 0) {
+                                                    if route_ids.len() > 0 {
                                                         let route = gtfs.routes.get(&route_ids[0]);
 
                                                         let color = route.unwrap().color;
@@ -1103,7 +1083,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         
                                             let text_color = match feed.id.as_str() {
                                                 "f-9qh-metrolinktrains" => {
-                                                    if (route_ids.len() > 0) {
+                                                    if route_ids.len() > 0 {
                                                         let route = gtfs.routes.get(&route_ids[0]);
 
                                                         let text_color = route.unwrap().text_color;
@@ -1135,8 +1115,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                let route_label:String = route_ids.iter().map(|route_id| {
                                                 let route = gtfs.routes.get(route_id);
                                                 if route.is_some() {
-                                                    if (route.unwrap().short_name.as_str() == "") {
-                                                      if (route.unwrap().long_name.as_str() == "") {
+                                                    if route.unwrap().short_name.as_str() == "" {
+                                                      if route.unwrap().long_name.as_str() == "" {
                                                         return route_id.to_string();
                                                       } else {
                                                         return route.unwrap().long_name.clone()
@@ -1167,22 +1147,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         &route_label
                                          ]).await.unwrap();
                                         }
-        
-                                        for (route_id, route) in &gtfs.routes {
+                                        let routes: HashMap<(String, String), (&Route, &PooledConnection<PostgresConnectionManager<NoTls>>)> = gtfs.routes.iter()
+                                            .map(|(key, route)| ((key.clone(), feed.id.clone()), (route, &client))).collect();
+                                        let routes_clone = routes.clone();
+                                        let route_workers = routes_clone.into_iter().map( |((route_id, feed_id), (route, client))| async move {
                                             let route_type_number = route_type_to_int(&route.route_type);
-        
+                                            let shapes_per_route: HashMap<String, Vec<String>> = HashMap::new();
                                             let mut shape_id_array: Vec<String> =
-                                                match shapes_per_route.get(route_id) {
+                                                match shapes_per_route.get(&route_id) {
                                                     Some(shape_list) => shape_list.clone(),
                                                     None => vec![],
                                                 };
-        
                                             shape_id_array.dedup();
-        
                                             let shape_id_array = shape_id_array;
-        
-                                                //println!("uploading route {:?} {}", &feed.id , &route_id);
-
+                                            //println!("uploading route {:?} {}", &feed.id , &route_id);
                                             let route_prepared = client.prepare(format!("INSERT INTO {schemaname}.routes
                                             (
                                                 route_id,
@@ -1204,17 +1182,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
                                             ) ON CONFLICT do nothing;
                                             ").as_str()).await.unwrap();
-        
                                             let mut long_name = route.long_name.clone();
-
                                             titlecase_process(&mut long_name);
-
                                             client
                                             .query(
                                                 &route_prepared,
                                                 &[
                                                     &route_id,
-                                                    &feed.id,
+                                                    &feed_id,
                                                     &route.short_name,
                                                     &long_name,
                                                     &route.desc.clone().unwrap_or_else(|| "".to_string()),
@@ -1241,10 +1216,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     &shape_id_array,
                                                 ],
                                             ).await.unwrap();
+                                        });
+                                        for worker in route_workers {
+                                            let _ = worker.await;
                                         }
-        
                                         println!("Uploading {} trips", gtfs.trips.len());
-
                                          
                                         let time = std::time::Instant::now();
 
@@ -1287,7 +1263,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     };
                                             
 
-                                                    let mut stop_headsign = stoptime.stop_headsign.clone().unwrap_or_else(|| "".to_string());
+                                                    let stop_headsign = stoptime.stop_headsign.clone().unwrap_or_else(|| "".to_string());
 
                                                     titlecase_process(&mut trip_headsign);
                                                 
@@ -1345,7 +1321,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                            }
                                         }                  
 
-                                        if gtfs.routes.len() > 0 as usize {
+                                        if routes.len() > 0 as usize {
                                             let _ = client.query(
                                                 format!("INSERT INTO {schemaname}.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
                                             
@@ -1423,8 +1399,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                         match feed.spec {
                             dmfr::FeedSpec::Gtfs => {
-                                if (!feeds_to_discard
-                                    .contains(&x.feed_onestop_id.clone().unwrap().as_str()))
+                                if !feeds_to_discard.contains(&x.feed_onestop_id.clone().unwrap().as_str())
                                 {
                                     gtfs_static_feeds.insert(
                                         x.feed_onestop_id.clone().unwrap(),
