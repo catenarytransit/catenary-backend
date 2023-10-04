@@ -1,6 +1,6 @@
 use rgb::RGB;
 
-pub const WHITE_RGB:RGB<u8> = RGB::new(255,255,255);
+pub const WHITE_RGB: RGB<u8> = RGB::new(255, 255, 255);
 
 pub fn fix_background_colour(input: &str) -> &str {
     if input == "ffffff" || input == "000000" {
@@ -18,11 +18,11 @@ pub fn fix_background_colour_rgb(background: RGB<u8>) -> RGB<u8> {
     }
 }
 
-pub fn fix_background_colour_rgb_feed(feed_id:&String,background: RGB<u8>) -> RGB<u8> {
+pub fn fix_background_colour_rgb_feed(feed_id: &String, background: RGB<u8>) -> RGB<u8> {
     match feed_id.as_str() {
         "f-9q5b-longbeachtransit" => {
             if (background == WHITE_RGB) {
-                return RGB::new(128,31,58);
+                return RGB::new(128, 31, 58);
             } else {
                 return fix_background_colour_rgb(background);
             }
@@ -33,8 +33,8 @@ pub fn fix_background_colour_rgb_feed(feed_id:&String,background: RGB<u8>) -> RG
             } else {
                 return fix_background_colour_rgb(background);
             }
-        },
-        _ => fix_background_colour_rgb(background)
+        }
+        _ => fix_background_colour_rgb(background),
     }
 }
 
@@ -54,9 +54,13 @@ pub fn fix_foreground_colour_rgb(background: RGB<u8>, foreground: RGB<u8>) -> RG
     }
 }
 
-pub fn fix_foreground_colour_rgb_feed(feed_id: &String, background: RGB<u8>, foreground: RGB<u8>) -> RGB<u8> {
+pub fn fix_foreground_colour_rgb_feed(
+    feed_id: &String,
+    background: RGB<u8>,
+    foreground: RGB<u8>,
+) -> RGB<u8> {
     match feed_id.as_str() {
         "f-9q5b-longbeachtransit" => WHITE_RGB,
-        _ => fix_foreground_colour_rgb(background, foreground)
+        _ => fix_foreground_colour_rgb(background, foreground),
     }
 }
