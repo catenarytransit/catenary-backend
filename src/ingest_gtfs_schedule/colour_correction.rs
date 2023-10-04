@@ -22,7 +22,7 @@ pub fn fix_background_colour_rgb_feed(feed_id:&String,background: RGB<u8>) -> RG
     match feed_id.as_str() {
         "f-9q5b-longbeachtransit" => {
             if (background == WHITE_RGB) {
-                return RGB::new(225, 103, 16);
+                return RGB::new(128,31,58);
             } else {
                 return fix_background_colour_rgb(background);
             }
