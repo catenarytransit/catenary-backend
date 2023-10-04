@@ -1034,6 +1034,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                             if (color.r == 255 && color.g == 255 && color.b == 255) {
                                                                 String::from("801f3a")
                                                             } else {
+                                                                println!("long beach shape not white? {:?}", color);
                                                                 format!("{:02x}{:02x}{:02x}",
                                                             color.r, color.g, color.b
                                                             )
