@@ -909,7 +909,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }
         
 
-                                       let prepared_shapes = client.prepare(format!("INSERT INTO {schemaname}.shapes (onestop_feed_id, shape_id, linestring, color, text_color, routes, route_type,route_label) VALUES ($1, $2, $3, $4, $5, $6,$7,$8) ON CONFLICT do nothing;").as_str()).await.unwrap();
+                                       let prepared_shapes = client.prepare(format!("INSERT INTO {schemaname}.shapes
+                                        (onestop_feed_id, shape_id, linestring, color, text_color, routes, route_type,route_label) 
+                                        VALUES ($1, $2, $3, $4, $5, $6,$7,$8) ON CONFLICT (onestop_feed_id, shape_id) DO UPDATE set
+                                        linestring = $3,
+                                        color = $4,
+                                        text_color = $5,
+                                        routes = $6,
+                                        route_type = $7,
+                                        route_label = $8
+                                        ;").as_str()).await.unwrap();
                                         
                                         for (shape_id, shape) in &gtfs.shapes {
 
