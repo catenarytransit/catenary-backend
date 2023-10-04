@@ -1212,8 +1212,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     &route.url,
                                                     &route.agency_id.clone().unwrap_or_else(|| "".to_string()),
                                                     &i32::try_from(route.order.unwrap_or_else(|| 0)).ok(),
-                                                    &(colour_correction::fix_background_colour_rgb(route.color).to_string()),
-                                                    &(colour_correction::fix_foreground_colour_rgb(route.color, route.text_color).to_string()),
+                                                    &(colour_correction::fix_background_colour_rgb_feed(&feed_id,route.color).to_string()),
+                                                    &(colour_correction::fix_foreground_colour_rgb_feed(&feed_id, route.color, route.text_color).to_string()),
                                                     &(match route.continuous_pickup {
                                                         ContinuousPickupDropOff::Continuous => 0,
                                                         ContinuousPickupDropOff::NotAvailable => 1,
