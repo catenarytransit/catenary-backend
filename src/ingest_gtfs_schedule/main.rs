@@ -1244,7 +1244,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             (onestop_feed_id, trip_id, stop_id, stop_sequence, 
                                                 arrival_time, departure_time, stop_headsign, point) 
                                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").as_str()).await.unwrap();
-                                                
+
                                         if (skiptrips == false) {
                                             for (trip_id, trip) in &gtfs.trips {
 
@@ -1386,7 +1386,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &most_lon,
                                             &least_lat,
                                             &least_lon,
-                                            &operator_id_list,
+                                            &operator_pairs_hashmap.iter().map(|(a,b)| a).collect::<Vec<&String>>(),
                                             &operator_pairs_hashmap,
                                             &hull_postgres
                                         ]).await.unwrap();
