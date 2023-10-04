@@ -1402,7 +1402,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                              VALUES ($1, $2, $3, $4) ON CONFLICT do nothing;").as_str(), &[
                                             &feed.id,
                                             &feed.name,
-                                            &operator_id_list,
+                                            &operator_pairs_hashmap.iter().map(|(a,b)| a).collect::<Vec<&String>>(),
                                             &operator_pairs_hashmap
                                              ]).await.unwrap();
                         },
