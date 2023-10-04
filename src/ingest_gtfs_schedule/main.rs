@@ -1193,7 +1193,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             )
                                             VALUES (
                                                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
-                                            ) ON CONFLICT do nothing;
+                                            ) ON CONFLICT (onestop_feed_id, route_id) do update set 
+                                            color = $10,
+                                            text_color = $11;
                                             ").as_str()).await.unwrap();
                                             let mut long_name = route.long_name.clone();
                                             titlecase_process(&mut long_name);
