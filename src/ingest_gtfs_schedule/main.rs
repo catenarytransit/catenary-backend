@@ -1244,8 +1244,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             (onestop_feed_id, trip_id, stop_id, stop_sequence, 
                                                 arrival_time, departure_time, stop_headsign, point) 
                                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").as_str()).await.unwrap();
-                                        
-                                        //let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+                                                
                                         if (skiptrips == false) {
                                             for (trip_id, trip) in &gtfs.trips {
 
