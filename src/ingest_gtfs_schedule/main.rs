@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use std::fs;
 use titlecase::titlecase;
 mod dmfr;
-use geo_postgis::ToPostgis;
 use bb8_postgres::PostgresConnectionManager;
 use futures;
+use geo_postgis::ToPostgis;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::RouteType;
 use postgis::ewkb;
@@ -73,7 +73,11 @@ pub fn titlecase_process(string: &mut String) -> () {
     //it's not an acronym, and can be safely title cased
     if string.len() >= 7 {
         //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
-        if string.as_str().chars().all(|s| s.is_ascii_punctuation() || s.is_ascii()) == true
+        if string
+            .as_str()
+            .chars()
+            .all(|s| s.is_ascii_punctuation() || s.is_ascii())
+            == true
         {
             *string = titlecase(string.as_str());
         }
@@ -113,7 +117,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let skiptrips = arguments::parse(std::env::args())
         .unwrap()
-        .get::<bool>("skiptrips").unwrap_or_else(|| false);
+        .get::<bool>("skiptrips")
+        .unwrap_or_else(|| false);
 
     let schemaname = match is_prod {
         Some(s) => {
@@ -364,9 +369,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
-        println!("making index");
+    println!("making index");
 
-        
     client.batch_execute(format!("
     CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON {schemaname}.shapes USING GIST (linestring);
 
@@ -383,14 +387,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
-        println!("make static hulls...");
+    println!("make static hulls...");
 
-        client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         
-        CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);").as_str(),
+        CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);"
             )
-            .await
-            .unwrap();
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
     println!("Finished making database");
 
@@ -442,7 +451,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 Ok(dmfrinfo) => {
                                     dmfrinfo.feeds.iter().for_each(|feed| {
                                         for eachoperator in feed.operators.clone().into_iter() {
-                                            if feed_to_operator_pairs_hashmap.contains_key(&feed.id) {
+                                            if feed_to_operator_pairs_hashmap.contains_key(&feed.id)
+                                            {
                                                 let mut existing_operator_pairs =
                                                     feed_to_operator_pairs_hashmap
                                                         .get(&feed.id)
@@ -901,7 +911,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }
         
 
-                                       let prepared_shapes = client.prepare(format!("INSERT INTO {schemaname}.shapes (onestop_feed_id, shape_id, linestring, color, text_color, routes, route_type,route_label) VALUES ($1, $2, $3, $4, $5, $6,$7,$8) ON CONFLICT do nothing;").as_str()).await.unwrap();
+                                       let prepared_shapes = client.prepare(format!("INSERT INTO {schemaname}.shapes
+                                        (onestop_feed_id, shape_id, linestring, color, text_color, routes, route_type,route_label) 
+                                        VALUES ($1, $2, $3, $4, $5, $6,$7,$8) ON CONFLICT (onestop_feed_id, shape_id) DO UPDATE set
+                                        linestring = $3,
+                                        color = $4,
+                                        text_color = $5,
+                                        routes = $6,
+                                        route_type = $7,
+                                        route_label = $8
+                                        ;").as_str()).await.unwrap();
                                         
                                         for (shape_id, shape) in &gtfs.shapes {
 
@@ -992,7 +1011,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                                     nameoflinelametro = "adb8bf";
                                                                 },
                                                                 _ => {
-    
+                                                                    nameoflinelametro = "e16710";
                                                                 }
                                                                
                                                             }
@@ -1020,6 +1039,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => {
                                                     String::from("1772ac")
                                                 },
+                                                "f-9q5b-longbeachtransit" => {
+                                                    match shape_to_color_lookup.get(shape_id) {
+                                                        Some(color) => {
+                                                            if (color.r == 255 && color.g == 255 && color.b == 255) {
+                                                                String::from("801f3a")
+                                                            } else {
+                                                                println!("long beach shape not white? {:?}", color);
+                                                                format!("{:02x}{:02x}{:02x}",
+                                                            color.r, color.g, color.b
+                                                            )
+                                                            }
+                                                        },
+                                                        None => String::from("801f3a")
+                                                    }
+                                                }
                                                 _ => {
                                                     match shape_to_color_lookup.get(shape_id) {
                                                         Some(color) => format!(
@@ -1195,7 +1229,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             )
                                             VALUES (
                                                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
-                                            ) ON CONFLICT do nothing;
+                                            ) ON CONFLICT (onestop_feed_id, route_id) do update set 
+                                            color = $10,
+                                            text_color = $11;
                                             ").as_str()).await.unwrap();
                                             let mut long_name = route.long_name.clone();
                                             titlecase_process(&mut long_name);
@@ -1212,8 +1248,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     &route.url,
                                                     &route.agency_id.clone().unwrap_or_else(|| "".to_string()),
                                                     &i32::try_from(route.order.unwrap_or_else(|| 0)).ok(),
-                                                    &(colour_correction::fix_background_colour_rgb(route.color).to_string()),
-                                                    &(colour_correction::fix_foreground_colour_rgb(route.color, route.text_color).to_string()),
+                                                    &(colour_correction::fix_background_colour_rgb_feed(&feed_id,route.color).to_string()),
+                                                    &(colour_correction::fix_foreground_colour_rgb_feed(&feed_id, route.color, route.text_color).to_string()),
                                                     &(match route.continuous_pickup {
                                                         ContinuousPickupDropOff::Continuous => 0,
                                                         ContinuousPickupDropOff::NotAvailable => 1,
@@ -1460,7 +1496,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                         match feed.spec {
                             dmfr::FeedSpec::Gtfs => {
-                                if !feeds_to_discard.contains(&x.feed_onestop_id.clone().unwrap().as_str())
+                                if !feeds_to_discard
+                                    .contains(&x.feed_onestop_id.clone().unwrap().as_str())
                                 {
                                     gtfs_static_feeds.insert(
                                         x.feed_onestop_id.clone().unwrap(),
