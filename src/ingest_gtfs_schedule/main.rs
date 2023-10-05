@@ -1341,6 +1341,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     
                                                 }
                                             });
+                                            for worker in trips_workers {
+                                                let _ = worker.await;
+                                            }
                                         }
                                         
                                         
