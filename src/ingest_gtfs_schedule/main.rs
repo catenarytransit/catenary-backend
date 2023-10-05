@@ -1269,7 +1269,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             ).await.unwrap();
                                         });
                                         for worker in route_workers {
-                                            let _ = worker.await;
+                                            let _ = tokio::join!(worker);
                                         }
                                         println!("Uploading {} trips", gtfs.trips.len());
                                          
@@ -1342,7 +1342,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 }
                                             });
                                             for worker in trips_workers {
-                                                let _ = worker.await;
+                                                let _ = tokio::join!(worker);
                                             }
                                         }
                                         
