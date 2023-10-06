@@ -1389,10 +1389,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         .map(|s| (s.longitude, s.latitude))
                                         .collect::<Vec<(f64, f64)>>();
 
-                                        shape_points.sort_by(|a, b| match a.0.partial_cmp(&b.0) {
+                                        /*shape_points.sort_by(|a, b| match a.0.partial_cmp(&b.0) {
                                             Some(ord) => ord,
                                             None => a.1.partial_cmp(&b.1).unwrap(),
-                                        });
+                                        });*/
+
                                         shape_points.dedup();
 
                                         let shape_points = shape_points;
