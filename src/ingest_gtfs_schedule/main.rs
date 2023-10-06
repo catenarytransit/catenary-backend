@@ -6,6 +6,7 @@ use tokio_postgres::Statement;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
+use itertools::Itertools;
 use titlecase::titlecase;
 mod dmfr;
 use bb8_postgres::PostgresConnectionManager;
@@ -963,9 +964,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     route_ids.push(value.to_string());
                                                 }
                                          }
-                                         route_ids.dedup();
+                                         
 
-                                         let route_ids = route_ids;
+                                         let route_ids:Vec<String> = route_ids.into_iter().unique().collect();
 
                                          let mut route_type_number = 3;
 
@@ -1207,8 +1208,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     Some(shape_list) => shape_list.clone(),
                                                     None => vec![],
                                                 };
-                                            shape_id_array.dedup();
-                                            let shape_id_array = shape_id_array;
+                                            let shape_id_array:Vec<String> = shape_id_array.into_iter().unique().collect();
                                             //println!("uploading route {:?} {}", &feed.id , &route_id);
                                             let route_prepared = client.prepare(format!("INSERT INTO {schemaname}.routes
                                             (
