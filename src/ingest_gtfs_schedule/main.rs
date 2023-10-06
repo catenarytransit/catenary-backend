@@ -1389,6 +1389,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         .map(|s| (s.longitude, s.latitude))
                                         .collect::<Vec<(f64, f64)>>();
 
+                                        //shape_points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
                                         shape_points.dedup();
 
                                         let shape_points = shape_points;
@@ -1398,7 +1399,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let stop_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
                                         
                                         println!("Convex Hull Algo for {} took {}μs", feed.id, (stop_hull_time - start_hull_time) / 1000);
-
+                                        println!("{} points", shape_points.len());
                                         //convert hull to polygon postgres
 
                                        /*
