@@ -991,7 +991,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         let route = gtfs.routes.get(&route_ids[0]);
 
                                                         if route.is_some() {
-                                                            match route.unwrap().short_name.as_str().split("-").collect::<Vec<&str>>()[0] {
+                                                            match route.unwrap().short_name.as_str() {
                                                                 "720" => {
                                                                     nameoflinelametro = "d11242";
                                                                 },
