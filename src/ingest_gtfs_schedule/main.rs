@@ -11,6 +11,7 @@ use titlecase::titlecase;
 mod dmfr;
 use bb8_postgres::PostgresConnectionManager;
 use futures;
+use rayon::prelude::*;
 use geo_postgis::ToPostgis;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::RouteType;
@@ -541,7 +542,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 let existing_feed_ids = operator_to_feed_hashmap
                                                     .get(&operator.onestop_id)
                                                     .unwrap()
-                                                    .iter()
+                                                    .par_iter()
                                                     .map(|associated_feed| {
                                                         associated_feed
                                                             .feed_onestop_id
@@ -1389,7 +1390,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         .map(|s| (s.longitude, s.latitude))
                                         .collect::<Vec<(f64, f64)>>();
 
-                                        shape_points.sort_unstable_by(|a, b| match a.0.partial_cmp(&b.0) {
+                                        shape_points.par_sort_unstable_by(|a, b| match a.0.partial_cmp(&b.0) {
                                             Some(ord) => ord,
                                             None => a.1.partial_cmp(&b.1).unwrap(),
                                         });
@@ -1435,7 +1436,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &most_lon,
                                             &least_lat,
                                             &least_lon,
-                                            &operator_pairs_hashmap.iter().map(|(a,b)| a).collect::<Vec<&String>>(),
+                                            &operator_pairs_hashmap.par_iter().map(|(a,b)| a).collect::<Vec<&String>>(),
                                             &operator_pairs_hashmap,
                                             &hull_postgres
                                         ]).await.unwrap();
