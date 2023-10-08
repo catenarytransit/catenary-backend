@@ -1307,9 +1307,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     stoptime.stop_headsign.is_some()
                                                 });
 
-                                                let stop_headsigns_for_trip = trip.stop_times.iter().map(|stoptime| {
+                                                let mut stop_headsigns_for_trip = trip.stop_times.iter().map(|stoptime| {
                                                     stoptime.stop_headsign.clone()
-                                                }).collect::<Vec<Option<String>>>();
+                                                }).collect::<Vec<Option<String>>>().into_iter().unique().collect::<Vec<Option<String>>>();
+
+                                                //dedup
+                                                stop_headsigns_for_trip.dedup();
+
+                                                let stop_headsigns_for_trip = stop_headsigns_for_trip;
     
                                                 client
                                                     .query(
