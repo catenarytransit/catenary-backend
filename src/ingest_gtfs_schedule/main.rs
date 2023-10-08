@@ -71,8 +71,9 @@ pub fn is_uppercase(string: &str) -> bool {
     string.chars().all(char::is_uppercase)
 }
 
-pub fn titlecase_process(string: &mut String) -> () {
-    //it's not an acronym, and can be safely title cased
+pub fn titlecase_process_new_nooption(input: String) -> String {
+    let mut string = input;
+
     if string.len() >= 7 {
         //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
         if string
@@ -81,8 +82,17 @@ pub fn titlecase_process(string: &mut String) -> () {
             .all(|s| s.is_ascii_punctuation() || s.is_ascii())
             == true
         {
-            *string = titlecase(string.as_str());
+            string = titlecase(string.as_str());
         }
+    }
+
+    string
+}
+
+pub fn titlecase_process_new(input: Option<String>) -> Option<String> {
+    match input {
+        Some(s) => Some(titlecase_process_new_nooption(s)),
+        None => None,
     }
 }
 
@@ -356,6 +366,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         route_id text NOT NULL,
         service_id text NOT NULL,
         trip_headsign text,
+        has_stop_headsign boolean,
         trip_short_name text,
         direction_id int,
         block_id text,
@@ -1234,8 +1245,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             color = $10,
                                             text_color = $11;
                                             ").as_str()).await.unwrap();
-                                            let mut long_name = route.long_name.clone();
-                                            titlecase_process(&mut long_name);
+                                            let long_name = titlecase_process_new_nooption(route.long_name.clone());
                                             client
                                             .query(
                                                 &route_prepared,
@@ -1282,7 +1292,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             .map(|(key, trip)| ((key.clone(), feed.id.clone()), (trip, &client))).collect();
                                             let trips_clone = trips.clone();
                                             let trips_workers = trips_clone.into_iter().map( |((trip_id, feed_id), (trip, client))| async move {
-                                                let statement = client.prepare(format!("INSERT INTO {schemaname}.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;").as_str()).await.unwrap();
+                                                let statement = client.prepare(format!("INSERT INTO {schemaname}.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id, has_stop_headsign) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT do nothing;").as_str()).await.unwrap();
 
                                                 let stoptimestatement = client.prepare(
                                                     format!("INSERT INTO {schemaname}.stoptimes 
@@ -1290,9 +1300,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         arrival_time, departure_time, stop_headsign, point) 
                                                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").as_str()).await.unwrap();
                                                 
-                                                let mut trip_headsign = trip.trip_headsign.clone().unwrap_or_else(|| "".to_string());
-    
-                                                titlecase_process(&mut trip_headsign);
+                                                let trip_headsign = titlecase_process_new(trip.trip_headsign.clone());
+
+                                                //calculate if any stop time has a stop headsign
+                                                let has_stop_headsign = trip.stop_times.iter().any(|stoptime| {
+                                                    stoptime.stop_headsign.is_some()
+                                                });
     
                                                 client
                                                     .query(
@@ -1303,8 +1316,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                              &trip.service_id,
                                                             &trip.route_id,
                                               &trip_headsign,
-                                                      &trip.trip_short_name.clone().unwrap_or_else(|| "".to_string()),
-                                                      &trip.shape_id.clone().unwrap_or_else(|| "".to_string()),
+                                                      &trip.trip_short_name.clone(),
+                                                      &trip.shape_id.clone(),
+                                                        &has_stop_headsign
                                                            ],
                                                     ).await.unwrap();
     
@@ -1318,9 +1332,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         };
                                                 
     
-                                                        let stop_headsign = stoptime.stop_headsign.clone().unwrap_or_else(|| "".to_string());
-    
-                                                        titlecase_process(&mut trip_headsign);
+                                                        let stop_headsign:Option<String> = titlecase_process_new(stoptime.stop_headsign.clone());
                                                     
                                                         if stoptime.arrival_time.is_some() && stoptime.departure_time.is_some() {
                                                             client
@@ -1365,9 +1377,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 srid: Some(4326),
                                             };
 
-                                            let mut name = stop.name.clone();
-
-                                            titlecase_process(&mut name);
+                                            let name = titlecase_process_new_nooption(stop.name.clone());
 
                                             client.query(&stopstatement, &[
                                                 &feed.id,
