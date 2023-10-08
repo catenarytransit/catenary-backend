@@ -1286,7 +1286,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                          
                                         let time = std::time::Instant::now();
 
-
                                         if skiptrips == false {
                                             let trips: HashMap<(String, String), (&Trip, &PooledConnection<PostgresConnectionManager<NoTls>>)> = gtfs.trips.iter()
                                             .map(|(key, trip)| ((key.clone(), feed.id.clone()), (trip, &client))).collect();
