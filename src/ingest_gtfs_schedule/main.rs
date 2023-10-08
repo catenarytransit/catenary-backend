@@ -1292,7 +1292,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             .map(|(key, trip)| ((key.clone(), feed.id.clone()), (trip, &client))).collect();
                                             let trips_clone = trips.clone();
                                             let trips_workers = trips_clone.into_iter().map( |((trip_id, feed_id), (trip, client))| async move {
-                                                let statement = client.prepare(format!("INSERT INTO {schemaname}.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id, has_stop_headsign, stop_headsigns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT do nothing;").as_str()).await.unwrap();
+                                                let statement = client.prepare(format!("INSERT INTO {schemaname}.trips 
+                                                (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id, has_stop_headsign, stop_headsigns)
+                                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (onestop_feed_id, trip_id) do update set
+                                                 service_id = $3,
+                                                 route_id = $4,
+                                                    trip_headsign = $5,
+                                                    trip_short_name = $6,
+                                                    shape_id = $7,
+                                                    has_stop_headsign = $8,
+                                                    stop_headsigns = $9
+                                                 ;").as_str()).await.unwrap();
 
                                                 let stoptimestatement = client.prepare(
                                                     format!("INSERT INTO {schemaname}.stoptimes 
