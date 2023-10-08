@@ -367,6 +367,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         service_id text NOT NULL,
         trip_headsign text,
         has_stop_headsign boolean,
+        stop_headsigns text[],
         trip_short_name text,
         direction_id int,
         block_id text,
@@ -1291,7 +1292,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             .map(|(key, trip)| ((key.clone(), feed.id.clone()), (trip, &client))).collect();
                                             let trips_clone = trips.clone();
                                             let trips_workers = trips_clone.into_iter().map( |((trip_id, feed_id), (trip, client))| async move {
-                                                let statement = client.prepare(format!("INSERT INTO {schemaname}.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id, has_stop_headsign) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT do nothing;").as_str()).await.unwrap();
+                                                let statement = client.prepare(format!("INSERT INTO {schemaname}.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id, has_stop_headsign, stop_headsigns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT do nothing;").as_str()).await.unwrap();
 
                                                 let stoptimestatement = client.prepare(
                                                     format!("INSERT INTO {schemaname}.stoptimes 
@@ -1305,6 +1306,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 let has_stop_headsign = trip.stop_times.iter().any(|stoptime| {
                                                     stoptime.stop_headsign.is_some()
                                                 });
+
+                                                let stop_headsigns_for_trip = trip.stop_times.iter().map(|stoptime| {
+                                                    stoptime.stop_headsign.clone()
+                                                }).collect::<Vec<Option<String>>>();
     
                                                 client
                                                     .query(
@@ -1317,7 +1322,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                               &trip_headsign,
                                                       &trip.trip_short_name.clone(),
                                                       &trip.shape_id.clone(),
-                                                        &has_stop_headsign
+                                                        &has_stop_headsign,
+                                                        &stop_headsigns_for_trip
                                                            ],
                                                     ).await.unwrap();
     
