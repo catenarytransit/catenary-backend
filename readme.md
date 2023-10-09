@@ -10,12 +10,8 @@ Loading in data into the Postgres database is a multistep process. Ensure your p
 ### Download the Transitland repo
 Transitland acts as an initial source of knowledge for Catenary-Backend, and associates static feeds and realtime feeds together.
 ```bash
-./clone-transitland.sh
+git submodule update
 ```
-
-If you already have it, remember to git pull / merge changes
-To do this, cd into the folder `transitland-atlas` and run `git pull`
-
 #### Insert Anteater Express feed
 ```bash
 ./download_anteater_express.sh
