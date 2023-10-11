@@ -11,7 +11,7 @@ Loading in data into the Postgres database is a multistep process. Ensure your p
 Transitland acts as an initial source of knowledge for Catenary-Backend, and associates static feeds and realtime feeds together.
 Download and Update it via:
 ```bash
-git submodule update
+git submodule init && git submodule update
 ```
 
 If you already have it, remember to git pull / merge changes
