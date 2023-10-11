@@ -1,0 +1,114 @@
+postgres:
+  connection_string: postgresql://postgres:password@localhost:5432/postgres
+  auto_publish: true
+  tables:
+    shapes:
+      schema: gtfs
+      table: shapes
+      srid: 4326
+      geometry_column: linestring
+      bounds:
+      - -158.22903
+      - -35.8747155
+      - 145.252557
+      - 64.89969635009766
+      extent: 4096
+      buffer: 64
+      clip_geom: true
+      geometry_type: LINESTRING
+      properties:
+        color: text
+        onestop_feed_id: text
+        route_label: text
+        route_type: int4
+        routes: text
+        shape_id: text
+        text_color: text
+    static_feeds:
+      schema: gtfs
+      table: static_feeds
+      srid: 4326
+      geometry_column: hull
+      bounds:
+      - -158.22903
+      - -35.8747155
+      - 145.252557
+      - 64.89969635009766
+      extent: 4096
+      buffer: 64
+      clip_geom: true
+      geometry_type: POLYGON
+      properties:
+        max_lat: float8
+        max_lon: float8
+        min_lat: float8
+        min_lon: float8
+        onestop_feed_id: text
+        only_realtime_ref: text
+        operators: text
+        operators_to_gtfs_ids: hstore
+        realtime_onestop_ids: text
+        realtime_onestop_ids_to_gtfs_ids: hstore
+    stops:
+      schema: gtfs
+      table: stops
+      srid: 4326
+      geometry_column: point
+      bounds:
+      - -158.228463
+      - -35.8738929
+      - 145.287201336112
+      - 64.8996653247773
+      extent: 4096
+      buffer: 64
+      clip_geom: true
+      geometry_type: POINT
+      properties:
+        code: text
+        gtfs_desc: text
+        gtfs_id: text
+        lat: float8
+        level_id: text
+        location_type: int4
+        long: float8
+        name: text
+        onestop_feed_id: text
+        parent_station: text
+        platform_code: text
+        routes: text
+        timezone: text
+        url: text
+        wheelchair_boarding: int4
+        zone_id: text
+    stoptimes:
+      schema: gtfs
+      table: stoptimes
+      srid: 4326
+      geometry_column: point
+      bounds:
+      - -158.228463
+      - -35.5790842
+      - 145.287201336112
+      - 64.89947422493645
+      extent: 4096
+      buffer: 64
+      clip_geom: true
+      geometry_type: POINT
+      properties:
+        arrival_time: int8
+        continuous_drop_off: int4
+        continuous_pickup: int4
+        departure_time: int8
+        drop_off_type: int4
+        lat: float8
+        long: float8
+        onestop_feed_id: text
+        pickup_type: int4
+        route_id: text
+        shape_dist_traveled: float8
+        stop_headsign: text
+        stop_id: text
+        stop_sequence: int4
+        timepoint: int4
+        trip_id: text
+  functions: {}
