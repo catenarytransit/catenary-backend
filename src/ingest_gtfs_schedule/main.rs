@@ -415,6 +415,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
+    println!("making martin functions");
+
+    if (is_prod.unwrap_or(false)) {
+    client.batch_execute("
+    CREATE OR REPLACE
+    FUNCTION busonly(z integer, x integer, y integer)
+    RETURNS bytea AS $$
+DECLARE
+  mvt bytea;
+BEGIN
+  SELECT INTO mvt ST_AsMVT(tile, 'busonly', 4096, geom) FROM (
+    SELECT
+      ST_AsMVTGeom(
+          ST_Transform(ST_CurveToLine(linestring), 3857),
+          ST_TileEnvelope(z, x, y),
+          4096, 64, true) AS geom
+    FROM gtfs.shapes
+    WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND route_type = 3
+  ) as tile WHERE geom IS NOT NULL;
+
+  RETURN mvt;
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+").await;}
+
     println!("Finished making database");
 
     #[derive(Debug, Clone)]
