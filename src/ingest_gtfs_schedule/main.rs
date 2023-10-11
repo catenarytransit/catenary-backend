@@ -433,13 +433,37 @@ BEGIN
           4096, 64, true) AS geom,
           route_type
     FROM gtfs.shapes
-    WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND route_type = 3
+    WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (route_type = 3 OR route_type = 11)
   ) as tile WHERE geom IS NOT NULL;
 
   RETURN mvt;
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
-").await.unwrap();}
+").await.unwrap();
+
+client.batch_execute("
+    CREATE OR REPLACE
+    FUNCTION notbus(z integer, x integer, y integer)
+    RETURNS bytea AS $$
+DECLARE
+  mvt bytea;
+BEGIN
+  SELECT INTO mvt ST_AsMVT(tile, 'notbus', 4096, geom) FROM (
+    SELECT
+      ST_AsMVTGeom(
+          linestring,
+          ST_TileEnvelope(z, x, y),
+          4096, 64, true) AS geom,
+          route_type
+    FROM gtfs.shapes
+    WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND route_type != 3 AND route_type != 11
+  ) as tile WHERE geom IS NOT NULL;
+
+  RETURN mvt;
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+").await.unwrap();
+}
 
     println!("Finished making database");
 
