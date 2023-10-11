@@ -428,9 +428,10 @@ BEGIN
   SELECT INTO mvt ST_AsMVT(tile, 'busonly', 4096, geom) FROM (
     SELECT
       ST_AsMVTGeom(
-          ST_Transform(ST_CurveToLine(linestring), 3857),
+          linestring,
           ST_TileEnvelope(z, x, y),
-          4096, 64, true) AS geom
+          4096, 64, true) AS geom,
+          route_type
     FROM gtfs.shapes
     WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND route_type = 3
   ) as tile WHERE geom IS NOT NULL;
@@ -438,7 +439,7 @@ BEGIN
   RETURN mvt;
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
-").await;}
+").await.unwrap();}
 
     println!("Finished making database");
 
