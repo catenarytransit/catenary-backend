@@ -5,4 +5,4 @@ fi
 rm -rf ./gtfs_static_zips/f-anteaterexpress.zip
 curl https://raw.githubusercontent.com/CatenaryMaps/zotgtfs/main/f-anteaterexpress.zip > ./gtfs_static_zips/f-anteaterexpress.zip
 rm -rf ./gtfs_uncompressed/f-anteaterexpress/*
-unzip ../../gtfs_static_zips/f-anteaterexpress.zip
+unzip -d ./gtfs_uncompressed/ ./gtfs_static_zips/f-anteaterexpress.zip
