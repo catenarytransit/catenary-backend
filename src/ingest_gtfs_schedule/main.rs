@@ -1,13 +1,17 @@
 use bb8::PooledConnection;
 use gtfs_structures::Route;
+use gtfs_structures::Trip;
 use serde_json::Error as SerdeError;
+use tokio_postgres::Statement;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
+use itertools::Itertools;
 use titlecase::titlecase;
 mod dmfr;
 use bb8_postgres::PostgresConnectionManager;
 use futures;
+use rayon::prelude::*;
 use geo_postgis::ToPostgis;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::RouteType;
@@ -67,8 +71,9 @@ pub fn is_uppercase(string: &str) -> bool {
     string.chars().all(char::is_uppercase)
 }
 
-pub fn titlecase_process(string: &mut String) -> () {
-    //it's not an acronym, and can be safely title cased
+pub fn titlecase_process_new_nooption(input: String) -> String {
+    let mut string = input;
+
     if string.len() >= 7 {
         //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
         if string
@@ -77,8 +82,17 @@ pub fn titlecase_process(string: &mut String) -> () {
             .all(|s| s.is_ascii_punctuation() || s.is_ascii())
             == true
         {
-            *string = titlecase(string.as_str());
+            string = titlecase(string.as_str());
         }
+    }
+
+    string
+}
+
+pub fn titlecase_process_new(input: Option<String>) -> Option<String> {
+    match input {
+        Some(s) => Some(titlecase_process_new_nooption(s)),
+        None => None,
     }
 }
 
@@ -353,6 +367,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         route_id text NOT NULL,
         service_id text NOT NULL,
         trip_headsign text,
+        has_stop_headsign boolean,
+        stop_headsigns text[],
         trip_short_name text,
         direction_id int,
         block_id text,
@@ -380,6 +396,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON {schemaname}.shapes (onestop_feed_id);
 
     CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);
+
+    CREATE INDEX IF NOT EXISTS gtfs_static_route_type ON {schemaname}.routes (route_type);
     
     CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);").as_str(),
         )
@@ -399,6 +417,56 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
+
+    println!("making martin functions");
+
+    if (is_prod.unwrap_or(false)) {
+    client.batch_execute("
+    CREATE OR REPLACE
+    FUNCTION busonly(z integer, x integer, y integer)
+    RETURNS bytea AS $$
+DECLARE
+  mvt bytea;
+BEGIN
+  SELECT INTO mvt ST_AsMVT(tile, 'busonly', 4096, geom) FROM (
+    SELECT
+      ST_AsMVTGeom(
+          linestring,
+          ST_TileEnvelope(z, x, y),
+          4096, 64, true) AS geom,
+          onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
+    FROM gtfs.shapes
+    WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (route_type = 3 OR route_type = 11)
+  ) as tile WHERE geom IS NOT NULL;
+
+  RETURN mvt;
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+").await.unwrap();
+
+client.batch_execute("
+    CREATE OR REPLACE
+    FUNCTION notbus(z integer, x integer, y integer)
+    RETURNS bytea AS $$
+DECLARE
+  mvt bytea;
+BEGIN
+  SELECT INTO mvt ST_AsMVT(tile, 'notbus', 4096, geom) FROM (
+    SELECT
+      ST_AsMVTGeom(
+          linestring,
+          ST_TileEnvelope(z, x, y),
+          4096, 64, true) AS geom,
+          onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
+    FROM gtfs.shapes
+    WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND route_type != 3 AND route_type != 11
+  ) as tile WHERE geom IS NOT NULL;
+
+  RETURN mvt;
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+").await.unwrap();
+}
 
     println!("Finished making database");
 
@@ -539,7 +607,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 let existing_feed_ids = operator_to_feed_hashmap
                                                     .get(&operator.onestop_id)
                                                     .unwrap()
-                                                    .iter()
+                                                    .par_iter()
                                                     .map(|associated_feed| {
                                                         associated_feed
                                                             .feed_onestop_id
@@ -962,9 +1030,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     route_ids.push(value.to_string());
                                                 }
                                          }
-                                         route_ids.dedup();
+                                         
 
-                                         let route_ids = route_ids;
+                                         let route_ids:Vec<String> = route_ids.into_iter().unique().collect();
 
                                          let mut route_type_number = 3;
 
@@ -1206,8 +1274,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     Some(shape_list) => shape_list.clone(),
                                                     None => vec![],
                                                 };
-                                            shape_id_array.dedup();
-                                            let shape_id_array = shape_id_array;
+                                            let shape_id_array:Vec<String> = shape_id_array.into_iter().unique().collect();
                                             //println!("uploading route {:?} {}", &feed.id , &route_id);
                                             let route_prepared = client.prepare(format!("INSERT INTO {schemaname}.routes
                                             (
@@ -1232,8 +1299,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             color = $10,
                                             text_color = $11;
                                             ").as_str()).await.unwrap();
-                                            let mut long_name = route.long_name.clone();
-                                            titlecase_process(&mut long_name);
+                                            let long_name = titlecase_process_new_nooption(route.long_name.clone());
                                             client
                                             .query(
                                                 &route_prepared,
@@ -1268,38 +1334,64 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             ).await.unwrap();
                                         });
                                         for worker in route_workers {
-                                            let _ = worker.await;
+                                            let _ = tokio::join!(worker);
                                         }
                                         println!("Uploading {} trips", gtfs.trips.len());
                                          
                                         let time = std::time::Instant::now();
 
-                                        let statement = client.prepare(format!("INSERT INTO {schemaname}.trips (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT do nothing;").as_str()).await.unwrap();
+                                        if skiptrips == false {
+                                            let trips: HashMap<(String, String), (&Trip, &PooledConnection<PostgresConnectionManager<NoTls>>)> = gtfs.trips.iter()
+                                            .map(|(key, trip)| ((key.clone(), feed.id.clone()), (trip, &client))).collect();
+                                            let trips_clone = trips.clone();
+                                            let trips_workers = trips_clone.into_iter().map( |((trip_id, feed_id), (trip, client))| async move {
+                                                let statement = client.prepare(format!("INSERT INTO {schemaname}.trips 
+                                                (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id, has_stop_headsign, stop_headsigns)
+                                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (onestop_feed_id, trip_id) do update set
+                                                 service_id = $3,
+                                                 route_id = $4,
+                                                    trip_headsign = $5,
+                                                    trip_short_name = $6,
+                                                    shape_id = $7,
+                                                    has_stop_headsign = $8,
+                                                    stop_headsigns = $9
+                                                 ;").as_str()).await.unwrap();
 
-                                        let stoptimestatement = client.prepare(
-                                            format!("INSERT INTO {schemaname}.stoptimes 
-                                            (onestop_feed_id, trip_id, stop_id, stop_sequence, 
-                                                arrival_time, departure_time, stop_headsign, point) 
-                                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").as_str()).await.unwrap();
+                                                let stoptimestatement = client.prepare(
+                                                    format!("INSERT INTO {schemaname}.stoptimes 
+                                                    (onestop_feed_id, trip_id, stop_id, stop_sequence, 
+                                                        arrival_time, departure_time, stop_headsign, point) 
+                                                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").as_str()).await.unwrap();
+                                                
+                                                let trip_headsign = titlecase_process_new(trip.trip_headsign.clone());
 
-                                        if (skiptrips == false) {
-                                            for (trip_id, trip) in &gtfs.trips {
+                                                //calculate if any stop time has a stop headsign
+                                                let has_stop_headsign = trip.stop_times.iter().any(|stoptime| {
+                                                    stoptime.stop_headsign.is_some()
+                                                });
 
-                                                let mut trip_headsign = trip.trip_headsign.clone().unwrap_or_else(|| "".to_string());
-    
-                                                titlecase_process(&mut trip_headsign);
+                                                let mut stop_headsigns_for_trip = trip.stop_times.iter().map(|stoptime| {
+                                                    stoptime.stop_headsign.clone()
+                                                }).collect::<Vec<Option<String>>>().into_iter().unique().collect::<Vec<Option<String>>>();
+
+                                                //dedup
+                                                stop_headsigns_for_trip.dedup();
+
+                                                let stop_headsigns_for_trip = stop_headsigns_for_trip;
     
                                                 client
                                                     .query(
                                                         &statement,
                                                         &[
-                                                            &feed.id,
+                                                            &feed_id,
                                                                &trip.id,
                                                              &trip.service_id,
                                                             &trip.route_id,
                                               &trip_headsign,
-                                                      &trip.trip_short_name.clone().unwrap_or_else(|| "".to_string()),
-                                                      &trip.shape_id.clone().unwrap_or_else(|| "".to_string()),
+                                                      &trip.trip_short_name.clone(),
+                                                      &trip.shape_id.clone(),
+                                                        &has_stop_headsign,
+                                                        &stop_headsigns_for_trip
                                                            ],
                                                     ).await.unwrap();
     
@@ -1313,16 +1405,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         };
                                                 
     
-                                                        let stop_headsign = stoptime.stop_headsign.clone().unwrap_or_else(|| "".to_string());
-    
-                                                        titlecase_process(&mut trip_headsign);
+                                                        let stop_headsign:Option<String> = titlecase_process_new(stoptime.stop_headsign.clone());
                                                     
                                                         if stoptime.arrival_time.is_some() && stoptime.departure_time.is_some() {
                                                             client
                                                         .query(
                                                             &stoptimestatement,
                                                             &[
-                                                                &feed.id,
+                                                                &feed_id,
                                                                 &trip.id,
                                                                 &stoptime.stop.id,
                                                                 &(stoptime.stop_sequence as i32),
@@ -1336,6 +1426,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                    
                                                     
                                                 }
+                                            });
+                                            for worker in trips_workers {
+                                                let _ = tokio::join!(worker);
                                             }
                                         }
                                         
@@ -1357,9 +1450,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 srid: Some(4326),
                                             };
 
-                                            let mut name = stop.name.clone();
-
-                                            titlecase_process(&mut name);
+                                            let name = titlecase_process_new_nooption(stop.name.clone());
 
                                             client.query(&stopstatement, &[
                                                 &feed.id,
@@ -1372,7 +1463,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 &point
                                             ]).await.unwrap();
                                            }
-                                        }              
+                                        }
                                         let start_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
 
                                         //convex hull calcs
@@ -1381,6 +1472,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         .map(|s| s.clone())
                                         .map(|s| (s.longitude, s.latitude))
                                         .collect::<Vec<(f64, f64)>>();
+
+                                        shape_points.par_sort_unstable_by(|a, b| match a.0.partial_cmp(&b.0) {
+                                            Some(ord) => ord,
+                                            None => a.1.partial_cmp(&b.1).unwrap(),
+                                        });
 
                                         shape_points.dedup();
 
@@ -1391,7 +1487,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let stop_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
                                         
                                         println!("Convex Hull Algo for {} took {}μs", feed.id, (stop_hull_time - start_hull_time) / 1000);
-
+                                        println!("{} points", shape_points.len());
                                         //convert hull to polygon postgres
 
                                        /*
@@ -1423,7 +1519,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &most_lon,
                                             &least_lat,
                                             &least_lon,
-                                            &operator_pairs_hashmap.iter().map(|(a,b)| a).collect::<Vec<&String>>(),
+                                            &operator_pairs_hashmap.par_iter().map(|(a,b)| a).collect::<Vec<&String>>(),
                                             &operator_pairs_hashmap,
                                             &hull_postgres
                                         ]).await.unwrap();

@@ -1,7 +1,7 @@
 ## Install Dependencies
 
 ```bash
-sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip
+sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip wget
 ```
 
 ## Loading in Data
@@ -9,17 +9,13 @@ Loading in data into the Postgres database is a multistep process. Ensure your p
 
 ### Download the Transitland repo
 Transitland acts as an initial source of knowledge for Catenary-Backend, and associates static feeds and realtime feeds together.
+Download and Update it via:
 ```bash
-./clone-transitland.sh
+git submodule init && git submodule update
 ```
 
 If you already have it, remember to git pull / merge changes
 To do this, cd into the folder `transitland-atlas` and run `git pull`
-
-#### Insert Anteater Express feed
-```bash
-./download_anteater_express.sh
-```
 
 ### Download GTFS static data
 This downloads the world's GTFS Static Data. This step may take a while, so go play some Minecraft / touch grass and come back when it's all finished!
