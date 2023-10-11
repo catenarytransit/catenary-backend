@@ -1,7 +1,7 @@
 ## Install Dependencies
 
 ```bash
-sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip
+sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip wget
 ```
 
 ## Loading in Data
