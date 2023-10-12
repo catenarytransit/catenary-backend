@@ -446,7 +446,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
 client.batch_execute(format!("
 CREATE OR REPLACE
-FUNCTION {}.notbus(z integer, x integer, y integer)
+FUNCTION {schemaname}.notbus(z integer, x integer, y integer)
 RETURNS bytea AS $$
 DECLARE
 mvt bytea;
@@ -458,14 +458,14 @@ SELECT
       ST_TileEnvelope(z, x, y),
       4096, 64, true) AS geom,
       onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
-FROM {}.shapes
+FROM {schemaname}.shapes
 WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND route_type != 3 AND route_type != 11
 ) as tile WHERE geom IS NOT NULL;
 
 RETURN mvt;
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
-", schemaname).as_str()).await.unwrap();
+").as_str()).await.unwrap();
 
     println!("Finished making database");
 
