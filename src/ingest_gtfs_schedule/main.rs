@@ -435,7 +435,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 DECLARE
   mvt bytea;
 BEGIN
-  SELECT INTO mvt ST_AsMVT(tile, 'busonly', 4096, geom) FROM (
+  SELECT INTO mvt ST_AsMVT(tile, 'busonly', 4096, 'geom') FROM (
     SELECT
       ST_AsMVTGeom(
           ST_Transform(linestring, 3857),
@@ -458,7 +458,7 @@ RETURNS bytea AS $$
 DECLARE
 mvt bytea;
 BEGIN
-SELECT INTO mvt ST_AsMVT(tile, 'notbus', 4096, geom) FROM (
+SELECT INTO mvt ST_AsMVT(tile, 'notbus', 4096, 'geom') FROM (
 SELECT
   ST_AsMVTGeom(
       ST_Transform(linestring, 3857),
