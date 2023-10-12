@@ -1478,9 +1478,9 @@ checksum = "b6c80984affa11d98d1b88b66ac8853f143217b399d3c74116778ff8fdb4ed2e"
 
 [[package]]
 name = "gtfs-rt"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd86317230dbbc5dd3a7b63eaa521172e33e189131ebc53329f0661a96ccd4d6"
+checksum = "7b2eb9b34ce86f4f0f6d920356a7e1c766b95d4db07adea993487859a622d42c"
 dependencies = [
  "prost",
  "prost-build",
