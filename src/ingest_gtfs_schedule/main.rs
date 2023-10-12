@@ -435,7 +435,7 @@ BEGIN
           ST_TileEnvelope(z, x, y),
           4096, 64, true) AS geom,
           onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
-    FROM gtfs.shapes
+    FROM {schemaname}.shapes
     WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (route_type = 3 OR route_type = 11)
   ) as tile WHERE geom IS NOT NULL;
 
@@ -458,7 +458,7 @@ SELECT
       ST_TileEnvelope(z, x, y),
       4096, 64, true) AS geom,
       onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
-FROM gtfs.shapes
+FROM {}.shapes
 WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND route_type != 3 AND route_type != 11
 ) as tile WHERE geom IS NOT NULL;
 
