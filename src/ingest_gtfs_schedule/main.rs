@@ -427,10 +427,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("making martin functions");
 
-    if (is_prod.unwrap_or(false)) {
-    client.batch_execute("
+    
+    client.batch_execute(format!("
     CREATE OR REPLACE
-    FUNCTION busonly(z integer, x integer, y integer)
+    FUNCTION {schemaname}.busonly(z integer, x integer, y integer)
     RETURNS bytea AS $$
 DECLARE
   mvt bytea;
@@ -438,42 +438,41 @@ BEGIN
   SELECT INTO mvt ST_AsMVT(tile, 'busonly', 4096, geom) FROM (
     SELECT
       ST_AsMVTGeom(
-          linestring,
+          ST_Transform(linestring, 3857),
           ST_TileEnvelope(z, x, y),
           4096, 64, true) AS geom,
           onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
-    FROM gtfs.shapes
+    FROM {schemaname}.shapes
     WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (route_type = 3 OR route_type = 11)
   ) as tile WHERE geom IS NOT NULL;
 
   RETURN mvt;
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
-").await.unwrap();
+").as_str()).await.unwrap();
 
-client.batch_execute("
-    CREATE OR REPLACE
-    FUNCTION notbus(z integer, x integer, y integer)
-    RETURNS bytea AS $$
+client.batch_execute(format!("
+CREATE OR REPLACE
+FUNCTION {schemaname}.notbus(z integer, x integer, y integer)
+RETURNS bytea AS $$
 DECLARE
-  mvt bytea;
+mvt bytea;
 BEGIN
-  SELECT INTO mvt ST_AsMVT(tile, 'notbus', 4096, geom) FROM (
-    SELECT
-      ST_AsMVTGeom(
-          linestring,
-          ST_TileEnvelope(z, x, y),
-          4096, 64, true) AS geom,
-          onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
-    FROM gtfs.shapes
-    WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND route_type != 3 AND route_type != 11
-  ) as tile WHERE geom IS NOT NULL;
+SELECT INTO mvt ST_AsMVT(tile, 'notbus', 4096, geom) FROM (
+SELECT
+  ST_AsMVTGeom(
+      ST_Transform(linestring, 3857),
+      ST_TileEnvelope(z, x, y),
+      4096, 64, true) AS geom,
+      onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
+FROM {schemaname}.shapes
+WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND route_type != 3 AND route_type != 11
+) as tile WHERE geom IS NOT NULL;
 
-  RETURN mvt;
+RETURN mvt;
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
-").await.unwrap();
-}
+").as_str()).await.unwrap();
 
     println!("Finished making database");
 
