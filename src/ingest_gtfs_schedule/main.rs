@@ -183,7 +183,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap();
 
         client.batch_execute(
-            format!("CREATE TABLE {schemaname}.gtfs_errors (
+            format!("CREATE TABLE IF NOT EXISTS {schemaname}.gtfs_errors (
                 onestop_feed_id text PRIMARY KEY,
                 error text
             )").as_str()
