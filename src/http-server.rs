@@ -54,14 +54,14 @@ struct RouteOutPostgres {
     short_name: String,
     long_name: String,
     desc: String,
-    route_type: i32,
+    route_type: i16,
     url: Option<String>,
     agency_id: Option<String>,
     gtfs_order: Option<i32>,
     color: String,
     text_color: String,
-    continuous_pickup: i32,
-    continuous_drop_off: i32,
+    continuous_pickup: i16,
+    continuous_drop_off: i16,
     shapes_list: Vec<String>,
 }
 
