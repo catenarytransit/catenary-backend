@@ -182,6 +182,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
+        client.batch_execute(
+            format!("CREATE TABLE {schemaname}.gtfs_errors (
+                onestop_feed_id text PRIMARY KEY,
+                error text
+            )").as_str()
+        ).await.unwrap();
+
     client
         .batch_execute(
             format!(
@@ -872,8 +879,9 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                     let gtfs = gtfs_structures::GtfsReader::default()
                                         .read_from_path(&file_path);
         
-                                    if gtfs.is_ok() {
-                                        let gtfs = gtfs.unwrap();
+                                    match gtfs 
+                                    {
+                                    Ok(gtfs) => {
         
                                         println!("read_duration: {:?}ms", gtfs.read_duration);
         
@@ -1524,9 +1532,22 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                             &hull_postgres
                                         ]).await.unwrap();
                                         }
-                                    } else {
-                                        println!("{} is not a valid gtfs feed", &key)
+                                    },
+                                    Err(gtfs_err) => {
+                                        println!("{} is not a valid gtfs feed", &key);
+
+
+                                        println!("{:?}", gtfs_err);
+                                        //we should save this in some database
+
+                                        let errormsg = format!("{:#?}", gtfs_err);
+
+                                        client.query(format!("INSERT INTO {schemaname}.gtfs_errors (onestop_feed_id, error) VALUES ($1, $2) ON CONFLICT (onestop_feed_id) UPDATE SET error = $2;").as_str(), &[
+                                            &feed.id,
+                                            &errormsg
+                                        ]).await.unwrap();
                                     }
+                                }
                                 }
                             }
                         },
