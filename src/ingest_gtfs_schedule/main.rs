@@ -63,7 +63,7 @@ pub fn route_type_to_int(input: &gtfs_structures::RouteType) -> i32 {
         RouteType::Coach => 200,
         RouteType::Air => 1100,
         RouteType::Taxi => 1500,
-        RouteType::Other(i) => *i,
+        RouteType::Other(i) => (*i).into(),
     }
 }
 
