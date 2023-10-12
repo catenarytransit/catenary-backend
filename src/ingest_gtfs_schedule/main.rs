@@ -50,7 +50,7 @@ pub fn toi64(input: &Option<u32>) -> Option<i64> {
     point: ewkb::Point
 }*/
 
-pub fn route_type_to_int(input: &gtfs_structures::RouteType) -> i32 {
+pub fn route_type_to_int(input: &gtfs_structures::RouteType) -> i16 {
     match input {
         RouteType::Tramway => 0,
         RouteType::Subway => 1,
@@ -63,7 +63,7 @@ pub fn route_type_to_int(input: &gtfs_structures::RouteType) -> i32 {
         RouteType::Coach => 200,
         RouteType::Air => 1100,
         RouteType::Taxi => 1500,
-        RouteType::Other(i) => (*i).into(),
+        RouteType::Other(i) => (*i),
     }
 }
 
@@ -324,7 +324,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         short_name text NOT NULL,
         long_name text NOT NULL,
         gtfs_desc text,
-        route_type int NOT NULL,
+        route_type smallint NOT NULL,
         url text,
         agency_id text,
         gtfs_order int,
@@ -352,7 +352,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         linestring GEOMETRY(LINESTRING,4326) NOT NULL,
         color text,
         routes text[],
-        route_type int NOT NULL,
+        route_type smallint NOT NULL,
         route_label text,
         text_color text,
         PRIMARY KEY (onestop_feed_id,shape_id)
