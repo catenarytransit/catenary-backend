@@ -330,8 +330,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         gtfs_order int,
         color text,
         text_color text,
-        continuous_pickup int,
-        continuous_drop_off int,
+        continuous_pickup smallint,
+        continuous_drop_off smallint,
         shapes_list text[],
         PRIMARY KEY (onestop_feed_id, route_id)
     );",
