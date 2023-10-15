@@ -1,7 +1,7 @@
 ## Install Dependencies
 
 ```bash
-sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip
+sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip wget
 ```
 
 ## Loading in Data
@@ -11,7 +11,7 @@ Loading in data into the Postgres database is a multistep process. Ensure your p
 Transitland acts as an initial source of knowledge for Catenary-Backend, and associates static feeds and realtime feeds together.
 Download and Update it via:
 ```bash
-git submodule update
+git submodule init && git submodule update
 ```
 
 If you already have it, remember to git pull / merge changes
@@ -50,7 +50,7 @@ cargo run --release --bin import -- --postgres "host=localhost user=postgres pas
 Moving the `gtfs_stage` set of tables to `gtfs` is really simple
 
 ```bash
-cargo --bin move_to_prod --postgres "host=localhost user=postgres password=correcthorsebatterystaple"
+cargo run --bin move_to_prod -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple"
 ```
 
 You're all done! Data is fully ready for serving to users!

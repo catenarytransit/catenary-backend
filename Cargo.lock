@@ -1478,9 +1478,9 @@ checksum = "b6c80984affa11d98d1b88b66ac8853f143217b399d3c74116778ff8fdb4ed2e"
 
 [[package]]
 name = "gtfs-rt"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd86317230dbbc5dd3a7b63eaa521172e33e189131ebc53329f0661a96ccd4d6"
+checksum = "7b2eb9b34ce86f4f0f6d920356a7e1c766b95d4db07adea993487859a622d42c"
 dependencies = [
  "prost",
  "prost-build",
@@ -1490,9 +1490,9 @@ dependencies = [
 
 [[package]]
 name = "gtfs-structures"
-version = "0.34.0"
+version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5230a38084e57f3aa65ecd6d78f5e76c105389f11a3df518d33249d488bf94"
+checksum = "874f29ec17c0e7026652df0c441c589b3299c5e0ebee8e7855176d30bb41b400"
 dependencies = [
  "bytes",
  "chrono",
