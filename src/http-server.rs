@@ -53,7 +53,7 @@ struct RouteOutPostgres {
     route_id: String,
     short_name: String,
     long_name: String,
-    desc: String,
+    desc: Option<String>,
     route_type: i16,
     url: Option<String>,
     agency_id: Option<String>,

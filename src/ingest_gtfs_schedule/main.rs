@@ -17,6 +17,7 @@ use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::RouteType;
 use postgis::ewkb;
 use rgb::RGB;
+use std::rc::Rc;
 use std::error::Error;
 use std::ops::Deref;
 use tokio_postgres::NoTls;
@@ -71,8 +72,8 @@ pub fn is_uppercase(string: &str) -> bool {
     string.chars().all(char::is_uppercase)
 }
 
-pub fn titlecase_process_new_nooption(input: String) -> String {
-    let mut string = input;
+pub fn titlecase_process_new_nooption(input: &String) -> String {
+    let mut string = input.clone();
 
     if string.len() >= 7 {
         //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
@@ -89,7 +90,7 @@ pub fn titlecase_process_new_nooption(input: String) -> String {
     string
 }
 
-pub fn titlecase_process_new(input: Option<String>) -> Option<String> {
+pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
     match input {
         Some(s) => Some(titlecase_process_new_nooption(s)),
         None => None,
@@ -969,7 +970,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                                             .get(&trip.route_id)
                                                             .unwrap();
         
-                                                        let color = route.color.clone();
+                                                        let color = route.color;
         
                                                         shape_to_color_lookup.insert(
                                                         trip.shape_id.as_ref().unwrap().clone(),
@@ -978,7 +979,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
                                                         shape_to_text_color_lookup.insert(
                                                             trip.shape_id.as_ref().unwrap().clone(),
-                                                            route.text_color.clone(),
+                                                            route.text_color,
                                                         );
                                                     }
                                                 }
@@ -1307,7 +1308,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                             color = $10,
                                             text_color = $11;
                                             ").as_str()).await.unwrap();
-                                            let long_name = titlecase_process_new_nooption(route.long_name.clone());
+                                            let long_name = titlecase_process_new_nooption(&route.long_name);
                                             client
                                             .query(
                                                 &route_prepared,
@@ -1316,10 +1317,10 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                                     &feed_id,
                                                     &route.short_name,
                                                     &long_name,
-                                                    &route.desc.clone().unwrap_or_else(|| "".to_string()),
+                                                    &route.desc,
                                                     &route_type_number,
                                                     &route.url,
-                                                    &route.agency_id.clone().unwrap_or_else(|| "".to_string()),
+                                                    &route.agency_id,
                                                     &i32::try_from(route.order.unwrap_or_else(|| 0)).ok(),
                                                     &(colour_correction::fix_background_colour_rgb_feed_route(&feed_id,route.color, &route).to_string()),
                                                     &(colour_correction::fix_foreground_colour_rgb_feed(&feed_id, route.color, route.text_color).to_string()),
@@ -1371,7 +1372,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                                         arrival_time, departure_time, stop_headsign, point) 
                                                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;").as_str()).await.unwrap();
                                                 
-                                                let trip_headsign = titlecase_process_new(trip.trip_headsign.clone());
+                                                let trip_headsign = titlecase_process_new(trip.trip_headsign.as_ref());
 
                                                 //calculate if any stop time has a stop headsign
                                                 let has_stop_headsign = trip.stop_times.iter().any(|stoptime| {
@@ -1396,8 +1397,8 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                                              &trip.service_id,
                                                             &trip.route_id,
                                               &trip_headsign,
-                                                      &trip.trip_short_name.clone(),
-                                                      &trip.shape_id.clone(),
+                                                      &trip.trip_short_name,
+                                                      &trip.shape_id,
                                                         &has_stop_headsign,
                                                         &stop_headsigns_for_trip
                                                            ],
@@ -1413,7 +1414,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                                         };
                                                 
     
-                                                        let stop_headsign:Option<String> = titlecase_process_new(stoptime.stop_headsign.clone());
+                                                        let stop_headsign:Option<String> = titlecase_process_new(stoptime.stop_headsign.as_ref());
                                                     
                                                         if stoptime.arrival_time.is_some() && stoptime.departure_time.is_some() {
                                                             client
@@ -1458,7 +1459,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                                 srid: Some(4326),
                                             };
 
-                                            let name = titlecase_process_new_nooption(stop.name.clone());
+                                            let name = titlecase_process_new_nooption(&stop.name);
 
                                             client.query(&stopstatement, &[
                                                 &feed.id,
@@ -1477,7 +1478,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                         //convex hull calcs
                                         let mut shape_points = gtfs.shapes.iter().map(|(a,b)| b)
                                         .flat_map(|s| s.iter())
-                                        .map(|s| s.clone())
+                                        .map(|s| s)
                                         .map(|s| (s.longitude, s.latitude))
                                         .collect::<Vec<(f64, f64)>>();
 
