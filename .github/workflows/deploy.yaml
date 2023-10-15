@@ -27,7 +27,6 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -t rsa ${{ secrets.REMOTE_SERVER }} >> ~/.ssh/known_hosts
         shell: bash
 
       - name: Shutdown and view logs of cloudflared
