@@ -1380,8 +1380,8 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                                 });
 
                                                 let mut stop_headsigns_for_trip = trip.stop_times.iter().map(|stoptime| {
-                                                    stoptime.stop_headsign.clone()
-                                                }).collect::<Vec<Option<String>>>().into_iter().unique().collect::<Vec<Option<String>>>();
+                                                    stoptime.stop_headsign.as_ref()
+                                                }).collect::<Vec<Option<&String>>>().into_iter().unique().collect::<Vec<Option<&String>>>();
 
                                                 //dedup
                                                 stop_headsigns_for_trip.dedup();
