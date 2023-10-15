@@ -29,6 +29,8 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
         shell: bash
 
-      - name: Shutdown and view logs of cloudflared
-        if: always()
-        uses: AnimMouse/setup-cloudflared/shutdown@v1
+      - name: SSH
+        run: |
+          ssh lolpro11@sshtransit02.kylerchin.com
+          touch workflow
+        shell: bash
