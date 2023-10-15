@@ -841,8 +841,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
             let items: Vec<String> = vec![];
             let operator_id_list = feed_to_operator_hashmap
                 .get(&key)
-                .unwrap_or_else(|| &items)
-                .clone();
+                .unwrap_or_else(|| &items);
             handles.push(threaded_rt.spawn(async move 
                 {
                     //it timesout here a lot
@@ -1603,15 +1602,15 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                 //get type
 
                 if x.feed_onestop_id.is_some() {
-                    if feedhashmap.contains_key(&x.feed_onestop_id.clone().unwrap()) {
+                    if feedhashmap.contains_key((&x.feed_onestop_id).as_ref().unwrap()) {
                         let feed = feedhashmap
-                            .get(&x.feed_onestop_id.clone().unwrap())
+                            .get((&x.feed_onestop_id).as_ref().unwrap())
                             .unwrap();
 
                         match feed.spec {
                             dmfr::FeedSpec::Gtfs => {
                                 if !feeds_to_discard
-                                    .contains(&x.feed_onestop_id.clone().unwrap().as_str())
+                                    .contains(&(&x.feed_onestop_id).as_ref().unwrap().as_str())
                                 {
                                     gtfs_static_feeds.insert(
                                         x.feed_onestop_id.clone().unwrap(),
