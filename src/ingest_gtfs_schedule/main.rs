@@ -1543,7 +1543,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
                                         let errormsg = format!("{:#?}", gtfs_err);
 
-                                        client.query(format!("INSERT INTO {schemaname}.gtfs_errors (onestop_feed_id, error) VALUES ($1, $2) ON CONFLICT (onestop_feed_id) UPDATE SET error = $2;").as_str(), &[
+                                        client.query(format!("INSERT INTO {schemaname}.gtfs_errors (onestop_feed_id, error) VALUES ($1, $2) ON CONFLICT (onestop_feed_id) DO UPDATE SET error = $2;").as_str(), &[
                                             &feed.id,
                                             &errormsg
                                         ]).await.unwrap();
