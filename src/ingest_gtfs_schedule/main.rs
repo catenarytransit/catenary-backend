@@ -1478,7 +1478,6 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                         //convex hull calcs
                                         let mut shape_points = gtfs.shapes.iter().map(|(a,b)| b)
                                         .flat_map(|s| s.iter())
-                                        .map(|s| s)
                                         .map(|s| (s.longitude, s.latitude))
                                         .collect::<Vec<(f64, f64)>>();
 
