@@ -31,6 +31,5 @@ jobs:
 
       - name: SSH
         run: |
-          ssh lolpro11@sshtransit02.kylerchin.com
-          touch workflow
+           ssh sshtransit02.kylerchin.com "cd ~/catenary-backend; git pull"
         shell: bash
