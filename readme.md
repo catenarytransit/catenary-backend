@@ -50,7 +50,7 @@ cargo run --release --bin import -- --postgres "host=localhost user=postgres pas
 Moving the `gtfs_stage` set of tables to `gtfs` is really simple
 
 ```bash
-cargo --bin move_to_prod -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple"
+cargo run --bin move_to_prod -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple"
 ```
 
 You're all done! Data is fully ready for serving to users!
