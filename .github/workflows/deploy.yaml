@@ -16,8 +16,19 @@ jobs:
           cloudflare_tunnel_configuration: ${{ secrets.CLOUDFLARE_TUNNEL_CONFIGURATION }}
           cloudflare_tunnel_id: ${{ secrets.CLOUDFLARE_TUNNEL_ID }}
 
-      - name: Start Python HTTP server
-        run: timeout 5m python -m http.server 8080 || true
+      - name: Setup ssh cloudflared config
+        run: |
+          mkdir -p ~/.ssh
+          printf "Host sshtransit02.kylerchin.com\nProxyCommand /usr/bin/cloudflared access ssh --hostname %%h" > ~/.ssh/config
+        shell: bash
+        
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t rsa ${{ secrets.REMOTE_SERVER }} >> ~/.ssh/known_hosts
+        shell: bash
 
       - name: Shutdown and view logs of cloudflared
         if: always()
