@@ -1,5 +1,5 @@
 [Unit]
-Description=transitbackend for kylerchin.com
+Description=transitbackend for Catenary
 
 [Service]
 WorkingDirectory= /opt/catenary-backend
