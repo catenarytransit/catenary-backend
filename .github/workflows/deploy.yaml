@@ -1,14 +1,24 @@
-steps:
-  - name: Setup cloudflared
-    uses: AnimMouse/setup-cloudflared@v1
-    with:
-      cloudflare_tunnel_credential: ${{ secrets.CLOUDFLARE_TUNNEL_CREDENTIAL }}
-      cloudflare_tunnel_configuration: ${{ secrets.CLOUDFLARE_TUNNEL_CONFIGURATION }}
-      cloudflare_tunnel_id: ${{ secrets.CLOUDFLARE_TUNNEL_ID }}
-      
-    - name: Start Python HTTP server
-      run: timeout 5m python -m http.server 8080 || true
-      
-    - name: Shutdown and view logs of cloudflared
-      if: always()
-      uses: AnimMouse/setup-cloudflared/shutdown@v1
+name: Deploy on Successful Build
+
+on:
+  push:
+    branches:
+      - main  # Change this to your main branch name
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup cloudflared
+        uses: AnimMouse/setup-cloudflared@v1
+        with:
+          cloudflare_tunnel_credential: ${{ secrets.CLOUDFLARE_TUNNEL_CREDENTIAL }}
+          cloudflare_tunnel_configuration: ${{ secrets.CLOUDFLARE_TUNNEL_CONFIGURATION }}
+          cloudflare_tunnel_id: ${{ secrets.CLOUDFLARE_TUNNEL_ID }}
+          
+        - name: Start Python HTTP server
+          run: timeout 5m python -m http.server 8080 || true
+          
+        - name: Shutdown and view logs of cloudflared
+          if: always()
+          uses: AnimMouse/setup-cloudflared/shutdown@v1
