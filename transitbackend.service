@@ -3,7 +3,7 @@ Description=transitbackend for kylerchin.com
 
 [Service]
 WorkingDirectory= /opt/catenary-backend
-User=catenary_backend
+User=kyler
 ExecStart=cargo run --release --bin http_server -- --postgres "host=HOST user=USER password=PASSWORD"
 
 Restart=always
