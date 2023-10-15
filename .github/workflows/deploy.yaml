@@ -19,7 +19,7 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           printf "Host sshtransit02.kylerchin.com\nProxyCommand /usr/bin/cloudflared access ssh --hostname %%h" > ~/.ssh/config
-          echo ${{ secrets.REMOTE_SERVER }} > ~/.ssh/known_hosts
+          echo "${{ secrets.REMOTE_SERVER }}" > ~/.ssh/known_hosts
         shell: bash
         
       - name: Setup SSH Key
