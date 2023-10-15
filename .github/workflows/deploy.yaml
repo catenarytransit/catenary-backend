@@ -32,5 +32,5 @@ jobs:
 
       - name: SSH
         run: |
-           ssh lolpro11@sshtransit02.kylerchin.com "cd ~/catenary-backend; git pull; sudo -S <<< ${{ secrets.SUDO_PASSWD }} systemctl restart transitbackend.service"
+           ssh lolpro11@sshtransit02.kylerchin.com "cd ~/catenary-backend; git pull; sudo systemctl restart transitbackend.service"
         shell: bash
