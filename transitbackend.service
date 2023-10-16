@@ -4,7 +4,7 @@ Description=transitbackend for Catenary
 [Service]
 WorkingDirectory= /opt/catenary-backend
 User=kyler
-ExecStart=cargo run --release --bin http_server -- --postgres "host=HOST user=USER password=PASSWORD"
+ExecStart=cargo run --release --bin http_server -- --postgres "host=localhost user=postgres password=PASSWORD"
 
 Restart=always
 RestartSec=1
