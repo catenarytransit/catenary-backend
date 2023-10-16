@@ -256,7 +256,7 @@ pub async fn getroutesperagency(
                 .insert_header(("Content-Type", "text/plain"))
                 .body("No feed_id specified")
             },
-            Ok(req_feed_id) => {
+            Some(req_feed_id) => {
                 
         let postgresresult = client
         .query(
