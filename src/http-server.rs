@@ -248,56 +248,66 @@ pub async fn getroutesperagency(
         let mut client = client.unwrap();
         let query_str = req.query_string(); // "name=ferret"
         let qs = QString::from(query_str);
-        let req_feed_id = qs.get("feed_id").unwrap(); // "ferret"
+        let req_feed_id = qs.get("feed_id"); // "ferret"
 
-        let postgresresult = client
-            .query(
-                "SELECT onestop_feed_id, route_id,
-         short_name, long_name, gtfs_desc, route_type, url, agency_id,
-         gtfs_order,
-         color,
-         text_color,
-         continuous_pickup,
-         continuous_drop_off,
-         shapes_list FROM gtfs.routes WHERE onestop_feed_id = $1;",
-                &[&req_feed_id],
-            )
-            .await;
-
-        match postgresresult {
-            Ok(postgresresult) => {
-                let mut result: Vec<RouteOutPostgres> = Vec::new();
-                for row in postgresresult {
-                    result.push(RouteOutPostgres {
-                        onestop_feed_id: row.get(0),
-                        route_id: row.get(1),
-                        short_name: row.get(2),
-                        long_name: row.get(3),
-                        desc: row.get(4),
-                        route_type: row.get(5),
-                        url: row.get(6),
-                        agency_id: row.get(7),
-                        gtfs_order: row.get(8),
-                        color: row.get(9),
-                        text_color: row.get(10),
-                        continuous_pickup: row.get(11),
-                        continuous_drop_off: row.get(12),
-                        shapes_list: row.get(13),
-                    });
-                }
-
-                let json_string = to_string(&json!(result)).unwrap();
-
-                HttpResponse::Ok()
-                    .insert_header(("Content-Type", "application/json"))
-                    .body(json_string)
-            }
-            Err(e) => {
-                println!("No results from postgres");
-
+        match req_feed_id {
+            None => {
                 HttpResponse::InternalServerError()
-                    .insert_header(("Content-Type", "text/plain"))
-                    .body("Postgres Error")
+                .insert_header(("Content-Type", "text/plain"))
+                .body("No feed_id specified")
+            },
+            Ok(req_feed_id) => {
+                
+        let postgresresult = client
+        .query(
+            "SELECT onestop_feed_id, route_id,
+     short_name, long_name, gtfs_desc, route_type, url, agency_id,
+     gtfs_order,
+     color,
+     text_color,
+     continuous_pickup,
+     continuous_drop_off,
+     shapes_list FROM gtfs.routes WHERE onestop_feed_id = $1;",
+            &[&req_feed_id],
+        )
+        .await;
+
+    match postgresresult {
+        Ok(postgresresult) => {
+            let mut result: Vec<RouteOutPostgres> = Vec::new();
+            for row in postgresresult {
+                result.push(RouteOutPostgres {
+                    onestop_feed_id: row.get(0),
+                    route_id: row.get(1),
+                    short_name: row.get(2),
+                    long_name: row.get(3),
+                    desc: row.get(4),
+                    route_type: row.get(5),
+                    url: row.get(6),
+                    agency_id: row.get(7),
+                    gtfs_order: row.get(8),
+                    color: row.get(9),
+                    text_color: row.get(10),
+                    continuous_pickup: row.get(11),
+                    continuous_drop_off: row.get(12),
+                    shapes_list: row.get(13),
+                });
+            }
+
+            let json_string = to_string(&json!(result)).unwrap();
+
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/json"))
+                .body(json_string)
+        }
+        Err(e) => {
+            println!("No results from postgres");
+
+            HttpResponse::InternalServerError()
+                .insert_header(("Content-Type", "text/plain"))
+                .body("Postgres Error")
+        }
+    }
             }
         }
     } else {
