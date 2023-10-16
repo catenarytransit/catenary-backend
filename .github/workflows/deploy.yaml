@@ -19,7 +19,7 @@ jobs:
       - name: Setup ssh cloudflared config
         run: |
           mkdir -p ~/.ssh
-          printf "Host sshtransit03.kylerchin.com\nProxyCommand /usr/bin/cloudflared access ssh --hostname %%h" > ~/.ssh/config
+          printf "Host sshtransit03.catenarymaps.org\nProxyCommand /usr/bin/cloudflared access ssh --hostname %%h" > ~/.ssh/config
           echo "${{ secrets.REMOTE_SERVER }}" > ~/.ssh/known_hosts
         shell: bash
         
@@ -32,5 +32,5 @@ jobs:
 
       - name: SSH
         run: |
-          ssh runner@sshtransit03.kylerchin.com " echo "${{ secrets.SUDO_PASSWD }}" | sudo -S -u lolpro11 bash -c "cd /opt/catenary-backend; git pull"; echo "${{ secrets.SUDO_PASSWD }}" | sudo -S systemctl restart transitbackend.service"
+          ssh runner@sshtransit03.catenarymaps.org " echo "${{ secrets.SUDO_PASSWD }}" | sudo -S -u lolpro11 bash -c "cd /opt/catenary-backend; git pull"; echo "${{ secrets.SUDO_PASSWD }}" | sudo -S systemctl restart transitbackend.service"
         shell: bash
