@@ -32,5 +32,5 @@ jobs:
 
       - name: SSH
         run: |
-          ssh runner@sshtransit03.catenarymaps.org " echo "${{ secrets.SUDO_PASSWD }}" | sudo -S -u lolpro11 bash -c "cd /opt/catenary-backend; git pull"; echo "${{ secrets.SUDO_PASSWD }}" | sudo -S systemctl restart transitbackend.service"
+          ssh runner@sshtransit03.catenarymaps.org "echo '${{ secrets.SUDO_PASSWD }}' | sudo -S -u lolpro11 bash -c 'cd /opt/catenary-backend; git pull'; echo '${{ secrets.SUDO_PASSWD }}' | sudo -S systemctl restart transitbackend.service"
         shell: bash
