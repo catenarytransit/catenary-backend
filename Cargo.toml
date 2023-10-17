@@ -26,7 +26,7 @@ tokio-postgres = { version = "0.7.8", features = [
     "array-impls",
     "with-geo-types-0_7",
 ] }
-rust_decimal = "1.30.0"
+rust_decimal = "1.32.0"
 sqlx = { version = "0.6.3", features = ["postgres", "runtime-tokio-rustls"] }
 serde_json = "1.0.100"
 actix-web = "4.3.1"
