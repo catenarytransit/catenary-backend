@@ -348,9 +348,9 @@ dependencies = [
 
 [[package]]
 name = "arguments"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d8b6590432235ca848cccae06397e642a4e984b37c546dc1b0dcb056b9dcd23"
+checksum = "e63898dbe1952e16886475dedaeaebf28704434fb8fcf05436a0dbe01fc1118d"
 dependencies = [
  "options",
 ]
