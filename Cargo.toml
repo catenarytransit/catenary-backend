@@ -15,7 +15,7 @@ reqwest = "0.11"
 protobuf = "3.3"
 csv = "1.2"
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.29", features = ["full"] }
+tokio = { version = "1.33", features = ["full"] }
 futures = "0.3"
 gtfs-structures = "0.35.0"
 tungstenite = "0.20.1"
