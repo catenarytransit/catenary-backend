@@ -12,7 +12,7 @@ time = "0.3.30"
 rouille = "3.0"
 gtfs-rt = "0.4"
 reqwest = "0.11"
-protobuf = "3.2"
+protobuf = "3.3"
 csv = "1.2"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.29", features = ["full"] }
