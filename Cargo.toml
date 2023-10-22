@@ -8,33 +8,33 @@ edition = "2021"
 [dependencies]
 crossbeam-utils = "0.8.16"
 memoffset = "0.9.0"
-time = "0.3.29"
+time = "0.3.30"
 rouille = "3.0"
 gtfs-rt = "0.4"
 reqwest = "0.11"
-protobuf = "3.2"
-csv = "1.2"
+protobuf = "3.3"
+csv = "1.3"
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.28", features = ["full"] }
+tokio = { version = "1.33", features = ["full"] }
 futures = "0.3"
 gtfs-structures = "0.35.0"
 tungstenite = "0.20.1"
-postgres = "0.19.5"
+postgres = "0.19.7"
 postgis = "0.9.0"
-arguments = "0.7.1"
-tokio-postgres = { version = "0.7.8", features = [
+arguments = "0.7.2"
+tokio-postgres = { version = "0.7.10", features = [
     "array-impls",
     "with-geo-types-0_7",
 ] }
-rust_decimal = "1.30.0"
-sqlx = { version = "0.6.3", features = ["postgres", "runtime-tokio-rustls"] }
-serde_json = "1.0.100"
-actix-web = "4.3.1"
-regress = "0.6.0"
+rust_decimal = "1.32.0"
+sqlx = { version = "0.7.2", features = ["postgres", "runtime-tokio-rustls"] }
+serde_json = "1.0.107"
+actix-web = "4.4.0"
+regress = "0.7.1"
 color-eyre = {version = "0.6.2", features = ["url", "issue-url"]}
 fasthash = "0.4.0"
 rgb = "0.8.36"
-clap = {version = "4.3.21", features = ["derive"]}
+clap = {version = "4.4.6", features = ["derive"]}
 itertools = "0.11.0"
 fs_extra = "1.3.0"
 r2d2 = "0.8.10"
