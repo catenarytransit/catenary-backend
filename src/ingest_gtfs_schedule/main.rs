@@ -1440,8 +1440,6 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                                 let _ = tokio::join!(worker);
                                             }
                                         }
-                                        
-                                        
                                     
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
 
