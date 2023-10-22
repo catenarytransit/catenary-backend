@@ -1,5 +1,2 @@
-[submodule "catenary-backend"]
-	path = catenary-backend
-	url = https://github.com/CatenaryMaps/catenary-backend
 [submodule "transitland-atlas"]
 	url = https://github.com/CatenaryMaps/transitland-atlas.git
