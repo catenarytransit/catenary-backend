@@ -1684,7 +1684,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
             client.query(format!("UPDATE {schemaname}.realtime_feeds SET operators = 
             (select array_agg(distinct e) from unnest(operators || '{{{1}}}') e),
-             operators_to_gtfs_ids = operators_to_gtfs_ids || '{1}=>null' :: hstore WHERE onestop_feed_id = {0}", 
+             operators_to_gtfs_ids = operators_to_gtfs_ids || '{1}=>null' :: hstore WHERE onestop_feed_id = '{0}'", 
             &realtime_override.realtimeid,
             &realtime_override.operatorid,
         )
