@@ -1680,9 +1680,9 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
             &realtime_override.operatorid
         ]).await.unwrap();
 
-            client.query(format!("UPDATE {schemaname}.realtime_feeds SET operators = operators || '{{{1}}}', operators_to_gtfs_ids = operators_to_gtfs_ids || '{1}=>null' :: hstore WHERE  onestop_feed_id = {0}", 
-            &realtime_override.operatorid,
+            client.query(format!("UPDATE {schemaname}.realtime_feeds SET operators = operators || '{{{1}}}', operators_to_gtfs_ids = operators_to_gtfs_ids || '{1}=>null' :: hstore WHERE onestop_feed_id = {0}", 
             &realtime_override.realtimeid,
+            &realtime_override.operatorid,
         )
             .as_str(),&[
             ]).await.unwrap();
