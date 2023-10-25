@@ -51,7 +51,7 @@ pub fn fix_background_colour_rgb_feed_route(feed_id: &String, background: RGB<u8
             if (background == WHITE_RGB) {
                 return RGB::new(225, 103, 16);
             } else {
-                let metroid = &route.clone().id.split("-").collect::<Vec<&str>>()[0];
+                let metroid = &route.id.split("-").collect::<Vec<&str>>()[0];
 
                 if metroid.len() == 3 && metroid.chars().nth(0).unwrap() == '7' {
                     return RGB::new(209, 18, 66);

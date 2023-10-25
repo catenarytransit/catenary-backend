@@ -3,7 +3,8 @@ use gtfs_structures::Route;
 use gtfs_structures::Trip;
 use serde_json::Error as SerdeError;
 use tokio_postgres::Statement;
-use std::collections::{HashMap,BTreeMap};
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fs;
 use itertools::Itertools;
 use titlecase::titlecase;
@@ -12,7 +13,8 @@ use bb8_postgres::PostgresConnectionManager;
 use futures;
 use rayon::prelude::*;
 use geo_postgis::ToPostgis;
-use gtfs_structures::{ContinuousPickupDropOff,RouteType};
+use gtfs_structures::ContinuousPickupDropOff;
+use gtfs_structures::RouteType;
 use postgis::ewkb;
 use rgb::RGB;
 use std::rc::Rc;
@@ -26,6 +28,11 @@ use fs_extra::dir::get_size;
 
 mod colour_correction;
 mod convex_hull;
+
+struct RealtimeOverride {
+    realtimeid: String,
+    operatorid: String
+}
 
 pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
@@ -1656,6 +1663,30 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
         }
 
         println!("Done ingesting all operators");
+
+        println!("adding extra lines");          
+
+        let realtime_override_file = std::fs::File::open("add-realtime-feeds.csv").unwrap();
+        let mut realtime_override_reader = csv::Reader::from_reader(std::io::BufReader::new(realtime_override_file));
+
+        let realtime_overrides = realtime_override_reader.records().filter(|x| x.is_ok())
+        .map(|x| RealtimeOverride {
+            realtimeid: x.as_ref().unwrap().clone()[0].to_string(),
+            operatorid: x.as_ref().unwrap().clone()[1].to_string(),
+        }).collect::<Vec<RealtimeOverride>>();
+
+        for realtime_override in realtime_overrides {
+            client.query(format!("UPDATE {schemaname}.operators SET gtfs_static_feeds = array_agg(gtfs_static_feeds || '{{$1}}'), static_onestop_feeds_to_gtfs_ids = static_onestop_feeds_to_gtfs_ids || '$1=>null' :: hstore WHERE onestop_operator_id = $2").as_str(), &[
+            &realtime_override.realtimeid,
+            &realtime_override.operatorid
+        ]).await.unwrap();
+
+            client.query(format!("UPDATE {schemaname}.realtime_feeds SET operators = array_agg(operators || '{{$2}}'), operators_to_gtfs_ids = operators_to_gtfs_ids || '$2=>null' :: hstore WHERE  onestop_feed_id = $1")
+            .as_str(),&[
+            &realtime_override.realtimeid,
+            &realtime_override.operatorid
+            ]).await.unwrap();
+        }
 
         for x in 0..1 {
             println!("Waiting for {} seconds", x);
