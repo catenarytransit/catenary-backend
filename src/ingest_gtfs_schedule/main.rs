@@ -1676,7 +1676,7 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
         }).collect::<Vec<RealtimeOverride>>();
 
         for realtime_override in realtime_overrides {
-            client.query(format!("UPDATE {schemaname}.operators SET gtfs_static_feeds = gtfs_static_feeds || '{0}', static_onestop_feeds_to_gtfs_ids = static_onestop_feeds_to_gtfs_ids || '{0}=>null' :: hstore WHERE onestop_operator_id = $1" &realtime_override.realtimeid).as_str(), &[
+            client.query(format!("UPDATE {schemaname}.operators SET gtfs_static_feeds = gtfs_static_feeds || '{0}', static_onestop_feeds_to_gtfs_ids = static_onestop_feeds_to_gtfs_ids || '{0}=>null' :: hstore WHERE onestop_operator_id = $1", &realtime_override.realtimeid).as_str(), &[
             &realtime_override.operatorid
         ]).await.unwrap();
 
