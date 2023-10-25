@@ -105,11 +105,11 @@ pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let postgresstring = arguments::parse(std::env::args())
-        .unwrap()
+        .expect("Add a postgres string via --postgres <string>")
         .get::<String>("postgres");
 
     let threads = arguments::parse(std::env::args())
-        .unwrap()
+        .expect("Add a thread count via --threads <positive int>")
         .get::<usize>("threads");
 
     let threadcount = threads.unwrap();
@@ -117,7 +117,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let postgresstring = match postgresstring {
         Some(s) => s,
         None => {
-            panic!("You need a postgres string");
+            panic!("Add a postgres string via --postgres <string>");
         }
     };
 
