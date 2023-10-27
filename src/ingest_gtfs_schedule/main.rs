@@ -203,7 +203,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         format!("CREATE TABLE IF NOT EXISTS {schemaname}.feeds_updated (
             onestop_feed_id text PRIMARY KEY,
             created_trips boolean,
-            updated_trips_time_ms bigint,
+            updated_trips_time_ms bigint
         );").as_str()
     ).await.unwrap();
 
