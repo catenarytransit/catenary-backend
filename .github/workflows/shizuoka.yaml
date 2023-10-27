@@ -19,7 +19,7 @@ jobs:
       - name: Setup ssh cloudflared config
         run: |
           mkdir -p ~/.ssh
-          printf "Host catenary_backend@shizuoka.kylerchin.com\nProxyCommand /usr/bin/cloudflared access ssh --hostname %%h" > ~/.ssh/config
+          printf "Host catenary_backend@shizuoka.catenarymaps.org\nProxyCommand /usr/bin/cloudflared access ssh --hostname %%h" > ~/.ssh/config
           echo "${{ secrets.SHIZUOKA_PUBLIC  }}" > ~/.ssh/known_hosts
         shell: bash
         
