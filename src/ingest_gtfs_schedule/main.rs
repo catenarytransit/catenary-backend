@@ -838,11 +838,13 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
             if feeds_to_discard.contains(&key.as_str()) {
                 dothetask = false;
+                println!("Cancel SF bay override");
             }
 
             if limittostaticfeed.is_some() {
                 if limittostaticfeed.as_ref().unwrap().as_str() != key.as_str() {
                     dothetask = false;
+                    println!("Cancelled because limit to static feed");
                 }
             }
 
@@ -854,6 +856,8 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                 if already_done.len() == 1 {
                 
                 dothetask = false;
+
+                println!("Already done {}", &feed.id);
                 }
             }
 
