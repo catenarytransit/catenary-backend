@@ -32,5 +32,5 @@ jobs:
 
       - name: SSH
         run: |
-          ssh catenary_backend@shizuoka.kylerchin.com "cd catenary-backend | cargo build --release | systemctl --user restart transitbackend.service"
+          ssh catenary_backend@shizuoka.catenarymaps.org "cd catenary-backend | cargo build --release | systemctl --user restart transitbackend.service"
         shell: bash
