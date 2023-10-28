@@ -1,4 +1,4 @@
-name: Deploy on Successful Build
+name: Deploy on Successful Build Skizuoka
 
 on:
   workflow_run:
