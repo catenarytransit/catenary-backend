@@ -342,7 +342,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(
                 DefaultHeaders::new()
                     .add(("Access-Control-Allow-Origin", "*"))
-                    .add(("Server", "KylerChinCatenary"))
+                    .add(("Server", "Catenary"))
                     .add((
                         "Access-Control-Allow-Origin",
                         "https://transitmap.kylerchin.com",
