@@ -50,7 +50,7 @@ async fn index(req: HttpRequest) -> impl Responder {
 async fn robots(req: HttpRequest) -> impl Responder {
     HttpResponse::Ok()
         .insert_header(("Content-Type", "text/plain"))
-        .body("User-agent: GPTBot\nDisallow: /")
+        .body("User-agent: GPTBot\nDisallow: /\nUser-agent: Google-Extended\nDisallow: /")
 }
 
 #[derive(serde::Serialize)]
