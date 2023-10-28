@@ -10,12 +10,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-          - name: Exit if the branch is not master
-      run: |
-        if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
-          echo "Branch is not master, exiting."
-          exit 0
-        fi
+      - name: Exit if the branch is not master
+        run: |
+            if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
+            echo "Branch is not master, exiting."
+            exit 0
+          fi
 
       - name: Setup Cloudflared
         run: |
