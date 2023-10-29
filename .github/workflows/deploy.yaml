@@ -1,4 +1,4 @@
-name: Deploy on Successful Build Proxmox
+name: Deploy on Successful Build
 
 on:
   workflow_run:
@@ -9,15 +9,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Exit if the branch is not master
-        run: |
-          if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
-            echo "Branch is not master, exiting."
-            exit 0
-          fi
-
       - name: Setup Cloudflared
         run: |
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
