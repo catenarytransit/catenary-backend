@@ -20,14 +20,16 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           printf "Host shizuoka.kylerchin.com\nProxyCommand /usr/bin/cloudflared access ssh --hostname %%h" > ~/.ssh/config
-          echo "${{ secrets.SHIZUOKA_PUBLIC  }}" > ~/.ssh/known_hosts
+          ssh-keyscan -H shizuoka.kylerchin.com
         shell: bash
         
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.SHIZUOKA_PRIVATE }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.SHIZUOKA_PUBLIC }}" > ~/.ssh/id_ed25519.pub
+          chmod 644 ~/.ssh/id_ed25519.pub
         shell: bash
 
       - name: SSH
