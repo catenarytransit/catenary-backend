@@ -1,4 +1,4 @@
-name: Deploy on Successful Build Proxmox
+name: Shizuoka Continuous Deployment
 
 on:
   workflow_run:
