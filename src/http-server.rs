@@ -47,6 +47,12 @@ async fn index(req: HttpRequest) -> impl Responder {
         .body("Hello world!")
 }
 
+async fn robots(req: HttpRequest) -> impl Responder {
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "text/plain"))
+        .body("User-agent: GPTBot\nDisallow: /\nUser-agent: Google-Extended\nDisallow: /")
+}
+
 #[derive(serde::Serialize)]
 struct RouteOutPostgres {
     onestop_feed_id: String,
@@ -342,7 +348,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(
                 DefaultHeaders::new()
                     .add(("Access-Control-Allow-Origin", "*"))
-                    .add(("Server", "KylerChinCatenary"))
+                    .add(("Server", "Catenary"))
                     .add((
                         "Access-Control-Allow-Origin",
                         "https://transitmap.kylerchin.com",
@@ -351,6 +357,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(actix_web::web::Data::new(pool.clone()))
             .route("/", web::get().to(index))
             .service(getroutesperagency)
+            .route("robots.txt", web::get().to(robots))
             .service(gettrip)
             .service(getinitdata)
     })
