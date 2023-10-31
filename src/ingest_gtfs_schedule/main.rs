@@ -29,6 +29,8 @@ use fs_extra::dir::get_size;
 mod colour_correction;
 mod convex_hull;
 
+mod shape_functions;
+
 struct RealtimeOverride {
     realtimeid: String,
     operatorid: String
@@ -138,6 +140,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .get::<bool>("skiptrips")
         .unwrap_or_else(|| false);
 
+    let soft_insert = arguments::parse(std::env::args())
+        .unwrap()
+        .get::<bool>("softinsert");
+
     let schemaname = match is_prod {
         Some(s) => {
             if s {
@@ -194,6 +200,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 error text
             )").as_str()
         ).await.unwrap();
+
+    client.batch_execute(
+        format!("CREATE TABLE IF NOT EXISTS {schemaname}.feeds_updated (
+            onestop_feed_id text PRIMARY KEY,
+            created_trips boolean,
+            updated_trips_time_ms bigint
+        );").as_str()
+    ).await.unwrap();
 
     client
         .batch_execute(
@@ -435,51 +449,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     
   if is_prod.unwrap_or(false) {
-    client.batch_execute(format!("
-    CREATE OR REPLACE
-    FUNCTION gtfs.busonly(z integer, x integer, y integer)
-    RETURNS bytea AS $$
-DECLARE
-  mvt bytea;
-BEGIN
-  SELECT INTO mvt ST_AsMVT(tile, 'busonly', 4096, 'geom') FROM (
-    SELECT
-      ST_AsMVTGeom(
-          ST_Transform(linestring, 3857),
-          ST_TileEnvelope(z, x, y),
-          4096, 64, true) AS geom,
-          onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
-    FROM gtfs.shapes
-    WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (route_type = 3 OR route_type = 11)
-  ) as tile WHERE geom IS NOT NULL;
-
-  RETURN mvt;
-END
-$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
-").as_str()).await.unwrap();
-
-client.batch_execute(format!("
-CREATE OR REPLACE
-FUNCTION gtfs.notbus(z integer, x integer, y integer)
-RETURNS bytea AS $$
-DECLARE
-mvt bytea;
-BEGIN
-SELECT INTO mvt ST_AsMVT(tile, 'notbus', 4096, 'geom') FROM (
-SELECT
-  ST_AsMVTGeom(
-      ST_Transform(linestring, 3857),
-      ST_TileEnvelope(z, x, y),
-      4096, 64, true) AS geom,
-      onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
-FROM gtfs.shapes
-WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND route_type != 3 AND route_type != 11
-) as tile WHERE geom IS NOT NULL;
-
-RETURN mvt;
-END
-$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
-").as_str()).await.unwrap();
+    shape_functions::render_vector_tile_functions(client).await;
   }
 
     println!("Finished making database");
@@ -816,18 +786,36 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
         println!("limittostaticfeed {:?}", &limittostaticfeed);
 
+        let client = pool.get().await.unwrap();
+
         for (key, feed) in feedhashmap.clone().into_iter() {
+
             let pool = pool.clone();
 
             let mut dothetask = true;
 
             if feeds_to_discard.contains(&key.as_str()) {
                 dothetask = false;
+                println!("Cancel SF bay override");
             }
 
             if limittostaticfeed.is_some() {
                 if limittostaticfeed.as_ref().unwrap().as_str() != key.as_str() {
                     dothetask = false;
+                    //println!("Cancelled because limit to static feed");
+                }
+            }
+
+            if soft_insert == Some(true) {
+                let already_done = client.query(format!("SELECT onestop_feed_id, created_trips, updated_trips_time_ms FROM {schemaname}.feeds_updated WHERE onestop_feed_id = $1;").as_str(),
+                 &[&feed.id])
+                 .await.unwrap();
+
+                if already_done.len() == 1 {
+                
+                dothetask = false;
+
+               // println!("Already done {}", &feed.id);
                 }
             }
 
@@ -1444,10 +1432,13 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                             for worker in trips_workers {
                                                 let _ = tokio::join!(worker);
                                             }
-                                        }
-                                    
+
+                                                          
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
 
+
+                                        }
+                      
                                         let stopstatement = client.prepare(format!(
                                             "INSERT INTO {schemaname}.stops
                                          (onestop_feed_id, gtfs_id, name, code, gtfs_desc, long, lat, point)
@@ -1534,6 +1525,31 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
                                             &operator_pairs_hashmap,
                                             &hull_postgres
                                         ]).await.unwrap();
+
+                                        if skiptrips == false {
+                                            
+                                            //get current unix timestamp
+                                            let since_the_epoch = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .expect("Time went backwards");
+
+                                            let in_ms = since_the_epoch.as_millis();
+
+            /*
+            onestop_feed_id text PRIMARY KEY,
+                        created_trips boolean,
+                        updated_trips_time_ms bigint, */
+
+                                            client.execute(
+                                                format!(
+                                                    "INSERT INTO {schemaname}.feeds_updated (onestop_feed_id, created_trips, updated_trips_time_ms) VALUES ($1, $2, $3) ON CONFLICT (onestop_feed_id) DO UPDATE SET created_trips = $2, updated_trips_time_ms = $3;"
+                                                ).as_str()
+                                                , &[
+                                                &feed.id,
+                                                &true,
+                                                &(in_ms as i64)
+                                            ]).await.unwrap();
+                                        }
                                         }
                                     },
                                     Err(gtfs_err) => {

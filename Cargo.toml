@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ahash = "0.8.5"
+ahash = "0.8.6"
 crossbeam-utils = "0.8.16"
 memoffset = "0.9.0"
 time = "0.3.30"
@@ -18,7 +18,7 @@ csv = "1.3"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.33", features = ["full"] }
 futures = "0.3"
-gtfs-structures = "0.35.0"
+gtfs-structures = "0.36.1"
 tungstenite = "0.20.1"
 postgres = "0.19.7"
 postgis = "0.9.0"
@@ -35,7 +35,7 @@ regress = "0.7.1"
 color-eyre = {version = "0.6.2", features = ["url", "issue-url"]}
 fasthash = "0.4.0"
 rgb = "0.8.36"
-clap = {version = "4.4.6", features = ["derive"]}
+clap = {version = "4.4.7", features = ["derive"]}
 itertools = "0.11.0"
 fs_extra = "1.3.0"
 r2d2 = "0.8.10"
@@ -79,7 +79,9 @@ path = "src/ingest_gtfs_schedule/nopostgres.rs"
 name = "flattenuncompressed"
 path = "src/ingest_gtfs_schedule/flatten.rs"
 
-
+[[bin]]
+name = "newunzip"
+path = "src/ingest_gtfs_schedule/new-unzip.rs"
 
 [features]
 #![feature(async_closure)]

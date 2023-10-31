@@ -1,4 +1,4 @@
-name: Deploy on Successful Build
+name: Deploy on Successful Build Proxmox
 
 on:
   workflow_run:
@@ -9,7 +9,15 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    
     steps:
+      - name: Exit if the branch is not master
+        run: |
+          if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
+            echo "Branch is not master, exiting."
+            exit 0
+          fi
+
       - name: Setup Cloudflared
         run: |
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
@@ -32,5 +40,5 @@ jobs:
 
       - name: SSH
         run: |
-          ssh runner@sshtransit03.catenarymaps.org "echo '${{ secrets.SUDO_PASSWD }}' | sudo -S bash -c 'chown -R lolpro11 /opt/catenary-backend; rm /opt/catenary-backend/Cargo.lock'; echo '${{ secrets.SUDO_PASSWD }}' | sudo -S -u lolpro11 bash -c 'cd /opt/catenary-backend; git pull'; echo '${{ secrets.SUDO_PASSWD }}' | sudo -S systemctl restart transitbackend.service"
+          ssh runner@sshtransit03.catenarymaps.org "echo '${{ secrets.SUDO_PASSWD }}' | sudo -S bash -c 'chown -R lolpro11 /opt/catenary-backend; rm /opt/catenary-backend/Cargo.lock'; echo '${{ secrets.SUDO_PASSWD }}' | sudo -S -u lolpro11 bash -c 'cd /opt/catenary-backend; git pull'; echo '${{ secrets.SUDO_PASSWD }}'; cargo build --release | sudo -S systemctl restart transitbackend.service"
         shell: bash

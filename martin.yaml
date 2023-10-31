@@ -49,31 +49,6 @@ postgres:
         routes: text
         shape_id: text
         text_color: text
-    static_feeds:
-      schema: gtfs
-      table: static_feeds
-      srid: 4326
-      geometry_column: hull
-      bounds:
-      - -158.22903
-      - -35.8747155
-      - 145.252557
-      - 64.89969635009766
-      extent: 4096
-      buffer: 64
-      clip_geom: true
-      geometry_type: POLYGON
-      properties:
-        max_lat: float8
-        max_lon: float8
-        min_lat: float8
-        min_lon: float8
-        onestop_feed_id: text
-        only_realtime_ref: text
-        operators: text
-        operators_to_gtfs_ids: hstore
-        realtime_onestop_ids: text
-        realtime_onestop_ids_to_gtfs_ids: hstore
     stops:
       schema: gtfs
       table: stops
