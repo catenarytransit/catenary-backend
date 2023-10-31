@@ -4,6 +4,7 @@ use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Res
 use bb8::Pool;
 use qstring::QString;
 use r2d2_postgres::{postgres::NoTls, PostgresConnectionManager};
+use actix_web::dev::Service;
 use serde_json::to_string;
 use serde_json::{json, to_string_pretty};
 use std::collections::HashMap;
@@ -347,6 +348,9 @@ async fn main() -> std::io::Result<()> {
                         "Access-Control-Allow-Origin",
                         "https://transitmap.kylerchin.com",
                     )),
+            )
+            .wrap(
+                actix_block_ai_crawling::BlockAi
             )
             .app_data(actix_web::web::Data::new(pool.clone()))
             .route("/", web::get().to(index))
