@@ -60,6 +60,7 @@ tokio-serde = "0.8.0"
 tracing-subscriber = "0.3.17"
 futures-util = "0.3.29"
 actix_block_ai_crawling = "0.2.1"
+kactus = {git = "https://github.com/catenarymaps/kactus-gtfs-rt"}
 
 [[bin]]
 name = "http_server"
