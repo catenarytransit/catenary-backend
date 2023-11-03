@@ -52,8 +52,15 @@ chrono = "0.4.31"
 geo-types = "0.7.11"
 geo-postgis = "0.2.2"
 geo = "0.26.0"
+tarpc = {version = "0.33.0", features = ["full"]}
+anyhow = "1.0.75"
+tracing = "0.1.40"
+service = "0.0.0"
+tokio-serde = "0.8.0"
+tracing-subscriber = "0.3.17"
 futures-util = "0.3.29"
 actix_block_ai_crawling = "0.2.1"
+kactus = {git = "https://github.com/catenarymaps/kactus-gtfs-rt"}
 
 [[bin]]
 name = "http_server"
@@ -82,6 +89,14 @@ path = "src/ingest_gtfs_schedule/flatten.rs"
 [[bin]]
 name = "newunzip"
 path = "src/ingest_gtfs_schedule/new-unzip.rs"
+
+[[bin]]
+name = "aspen"
+path = "src/aspen/main.rs"
+
+[lib]
+name = "aspenlib"
+path = "src/aspen/lib.rs"
 
 [features]
 #![feature(async_closure)]
