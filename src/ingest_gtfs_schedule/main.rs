@@ -481,6 +481,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "f-9q8yy-missionbaytma~ca~us",
             "f-9qbb-marintransit",
             "f-9q8-samtrans",
+            "f-9q9-bart",
+            "f-9q9-caltrain",
+            "f-9qc3-riovistadeltabreeze"
         ];
 
         for entry in entries {

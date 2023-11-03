@@ -17,6 +17,8 @@ pub async fn new_rt_kactus(realtime_feed_id: String, data: Vec<u8>) -> bool {
 
     if MAKE_VEHICLES_FEED_LIST.contains(&realtime_feed_id.as_str()) {
         //make a vehicles feed
+        
+        //get gtfs data from postgres?
     }
 
     true
