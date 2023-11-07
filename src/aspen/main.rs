@@ -1,10 +1,10 @@
+use aspenlib::AspenRpc;
 use clap::Parser;
 use futures::{future, prelude::*};
 use rand::{
     distributions::{Distribution, Uniform},
     thread_rng,
 };
-use aspenlib::{AspenRpc};
 use std::{
     net::{IpAddr, Ipv6Addr, SocketAddr},
     time::Duration,
@@ -39,8 +39,13 @@ impl AspenRpc for AspenServer {
         format!("Hello, {name}! You are connected from {}", self.0)
     }
 
-    async fn new_rt_kactus(self, _: context::Context, realtime_feed_id: String,
-        vehicles: Option<Vec<u8>>, trips: Option<Vec<u8>>, alerts: Option<Vec<u8>>
+    async fn new_rt_kactus(
+        self,
+        _: context::Context,
+        realtime_feed_id: String,
+        vehicles: Option<Vec<u8>>,
+        trips: Option<Vec<u8>>,
+        alerts: Option<Vec<u8>>,
     ) -> bool {
         import_kactus::new_rt_kactus(realtime_feed_id, vehicles, trips, alerts).await
     }

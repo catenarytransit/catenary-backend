@@ -1,10 +1,10 @@
 #![feature(future_join)]
+use actix_web::dev::Service;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use bb8::Pool;
 use qstring::QString;
 use r2d2_postgres::{postgres::NoTls, PostgresConnectionManager};
-use actix_web::dev::Service;
 use serde_json::to_string;
 use serde_json::{json, to_string_pretty};
 use std::collections::HashMap;
@@ -258,16 +258,13 @@ pub async fn getroutesperagency(
         let req_feed_id = qs.get("feed_id"); // "ferret"
 
         match req_feed_id {
-            None => {
-                HttpResponse::InternalServerError()
+            None => HttpResponse::InternalServerError()
                 .insert_header(("Content-Type", "text/plain"))
-                .body("No feed_id specified")
-            },
+                .body("No feed_id specified"),
             Some(req_feed_id) => {
-                
-        let postgresresult = client
-        .query(
-            "SELECT onestop_feed_id, route_id,
+                let postgresresult = client
+                    .query(
+                        "SELECT onestop_feed_id, route_id,
      short_name, long_name, gtfs_desc, route_type, url, agency_id,
      gtfs_order,
      color,
@@ -275,46 +272,46 @@ pub async fn getroutesperagency(
      continuous_pickup,
      continuous_drop_off,
      shapes_list FROM gtfs.routes WHERE onestop_feed_id = $1;",
-            &[&req_feed_id],
-        )
-        .await;
+                        &[&req_feed_id],
+                    )
+                    .await;
 
-    match postgresresult {
-        Ok(postgresresult) => {
-            let mut result: Vec<RouteOutPostgres> = Vec::new();
-            for row in postgresresult {
-                result.push(RouteOutPostgres {
-                    onestop_feed_id: row.get(0),
-                    route_id: row.get(1),
-                    short_name: row.get(2),
-                    long_name: row.get(3),
-                    desc: row.get(4),
-                    route_type: row.get(5),
-                    url: row.get(6),
-                    agency_id: row.get(7),
-                    gtfs_order: row.get(8),
-                    color: row.get(9),
-                    text_color: row.get(10),
-                    continuous_pickup: row.get(11),
-                    continuous_drop_off: row.get(12),
-                    shapes_list: row.get(13),
-                });
-            }
+                match postgresresult {
+                    Ok(postgresresult) => {
+                        let mut result: Vec<RouteOutPostgres> = Vec::new();
+                        for row in postgresresult {
+                            result.push(RouteOutPostgres {
+                                onestop_feed_id: row.get(0),
+                                route_id: row.get(1),
+                                short_name: row.get(2),
+                                long_name: row.get(3),
+                                desc: row.get(4),
+                                route_type: row.get(5),
+                                url: row.get(6),
+                                agency_id: row.get(7),
+                                gtfs_order: row.get(8),
+                                color: row.get(9),
+                                text_color: row.get(10),
+                                continuous_pickup: row.get(11),
+                                continuous_drop_off: row.get(12),
+                                shapes_list: row.get(13),
+                            });
+                        }
 
-            let json_string = to_string(&json!(result)).unwrap();
+                        let json_string = to_string(&json!(result)).unwrap();
 
-            HttpResponse::Ok()
-                .insert_header(("Content-Type", "application/json"))
-                .body(json_string)
-        }
-        Err(e) => {
-            println!("No results from postgres");
+                        HttpResponse::Ok()
+                            .insert_header(("Content-Type", "application/json"))
+                            .body(json_string)
+                    }
+                    Err(e) => {
+                        println!("No results from postgres");
 
-            HttpResponse::InternalServerError()
-                .insert_header(("Content-Type", "text/plain"))
-                .body("Postgres Error")
-        }
-    }
+                        HttpResponse::InternalServerError()
+                            .insert_header(("Content-Type", "text/plain"))
+                            .body("Postgres Error")
+                    }
+                }
             }
         }
     } else {
@@ -355,9 +352,7 @@ async fn main() -> std::io::Result<()> {
                         "https://transitmap.kylerchin.com",
                     )),
             )
-            .wrap(
-                actix_block_ai_crawling::BlockAi
-            )
+            .wrap(actix_block_ai_crawling::BlockAi)
             .app_data(actix_web::web::Data::new(pool.clone()))
             .route("/", web::get().to(index))
             .service(getroutesperagency)

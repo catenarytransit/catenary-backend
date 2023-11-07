@@ -1,25 +1,25 @@
 use bb8::PooledConnection;
 use gtfs_structures::Route;
 use gtfs_structures::Trip;
+use itertools::Itertools;
 use serde_json::Error as SerdeError;
-use tokio_postgres::Statement;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
-use itertools::Itertools;
 use titlecase::titlecase;
+use tokio_postgres::Statement;
 mod dmfr;
 use bb8_postgres::PostgresConnectionManager;
 use futures;
-use rayon::prelude::*;
 use geo_postgis::ToPostgis;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::RouteType;
 use postgis::ewkb;
+use rayon::prelude::*;
 use rgb::RGB;
-use std::rc::Rc;
 use std::error::Error;
 use std::ops::Deref;
+use std::rc::Rc;
 use tokio_postgres::NoTls;
 extern crate tokio_threadpool;
 use tokio::runtime;
@@ -33,7 +33,7 @@ mod shape_functions;
 
 struct RealtimeOverride {
     realtimeid: String,
-    operatorid: String
+    operatorid: String,
 }
 
 pub fn path_exists(path: &str) -> bool {
@@ -194,20 +194,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
-        client.batch_execute(
-            format!("CREATE TABLE IF NOT EXISTS {schemaname}.gtfs_errors (
+    client
+        .batch_execute(
+            format!(
+                "CREATE TABLE IF NOT EXISTS {schemaname}.gtfs_errors (
                 onestop_feed_id text PRIMARY KEY,
                 error text
-            )").as_str()
-        ).await.unwrap();
+            )"
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute(
-        format!("CREATE TABLE IF NOT EXISTS {schemaname}.feeds_updated (
+    client
+        .batch_execute(
+            format!(
+                "CREATE TABLE IF NOT EXISTS {schemaname}.feeds_updated (
             onestop_feed_id text PRIMARY KEY,
             created_trips boolean,
             updated_trips_time_ms bigint
-        );").as_str()
-    ).await.unwrap();
+        );"
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
     client
         .batch_execute(
@@ -447,10 +459,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("making martin functions");
 
-    
-  if is_prod.unwrap_or(false) {
-    shape_functions::render_vector_tile_functions(client).await;
-  }
+    if is_prod.unwrap_or(false) {
+        shape_functions::render_vector_tile_functions(client).await;
+    }
 
     println!("Finished making database");
 
@@ -483,7 +494,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "f-9q8-samtrans",
             "f-9q9-bart",
             "f-9q9-caltrain",
-            "f-9qc3-riovistadeltabreeze"
+            "f-9qc3-riovistadeltabreeze",
         ];
 
         for entry in entries {
@@ -792,7 +803,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let client = pool.get().await.unwrap();
 
         for (key, feed) in feedhashmap.clone().into_iter() {
-
             let pool = pool.clone();
 
             let mut dothetask = true;
@@ -815,10 +825,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                  .await.unwrap();
 
                 if already_done.len() == 1 {
-                
-                dothetask = false;
+                    dothetask = false;
 
-               // println!("Already done {}", &feed.id);
+                    // println!("Already done {}", &feed.id);
                 }
             }
 
@@ -836,9 +845,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
 
             let items: Vec<String> = vec![];
-            let operator_id_list = feed_to_operator_hashmap
-                .get(&key)
-                .unwrap_or_else(|| &items);
+            let operator_id_list = feed_to_operator_hashmap.get(&key).unwrap_or_else(|| &items);
             handles.push(threaded_rt.spawn(async move 
                 {
                     //it timesout here a lot
@@ -1683,16 +1690,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         println!("Done ingesting all operators");
 
-        println!("adding extra lines");          
+        println!("adding extra lines");
 
         let realtime_override_file = std::fs::File::open("add-realtime-feeds.csv").unwrap();
-        let mut realtime_override_reader = csv::Reader::from_reader(std::io::BufReader::new(realtime_override_file));
+        let mut realtime_override_reader =
+            csv::Reader::from_reader(std::io::BufReader::new(realtime_override_file));
 
-        let realtime_overrides = realtime_override_reader.records().filter(|x| x.is_ok())
-        .map(|x| RealtimeOverride {
-            realtimeid: x.as_ref().unwrap().clone()[0].to_string(),
-            operatorid: x.as_ref().unwrap().clone()[1].to_string(),
-        }).collect::<Vec<RealtimeOverride>>();
+        let realtime_overrides = realtime_override_reader
+            .records()
+            .filter(|x| x.is_ok())
+            .map(|x| RealtimeOverride {
+                realtimeid: x.as_ref().unwrap().clone()[0].to_string(),
+                operatorid: x.as_ref().unwrap().clone()[1].to_string(),
+            })
+            .collect::<Vec<RealtimeOverride>>();
 
         for realtime_override in realtime_overrides {
             client.query(format!("UPDATE {schemaname}.operators SET gtfs_realtime_feeds = 

@@ -38,7 +38,11 @@ pub fn fix_background_colour_rgb_feed(feed_id: &String, background: RGB<u8>) -> 
     }
 }
 
-pub fn fix_background_colour_rgb_feed_route(feed_id: &String, background: RGB<u8>, route: &gtfs_structures::Route) -> RGB<u8> {
+pub fn fix_background_colour_rgb_feed_route(
+    feed_id: &String,
+    background: RGB<u8>,
+    route: &gtfs_structures::Route,
+) -> RGB<u8> {
     match feed_id.as_str() {
         "f-9q5b-longbeachtransit" => {
             if (background == WHITE_RGB) {
@@ -56,8 +60,7 @@ pub fn fix_background_colour_rgb_feed_route(feed_id: &String, background: RGB<u8
                 if metroid.len() == 3 && metroid.chars().nth(0).unwrap() == '7' {
                     return RGB::new(209, 18, 66);
                 } else {
-                    
-                return fix_background_colour_rgb(background);
+                    return fix_background_colour_rgb(background);
                 }
             }
         }

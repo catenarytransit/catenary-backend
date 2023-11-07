@@ -1,5 +1,5 @@
-pub async fn render_vector_tile_functions(client:tokio_postgres::Client) {
-        client.batch_execute(format!("
+pub async fn render_vector_tile_functions(client: tokio_postgres::Client) {
+    client.batch_execute(format!("
         CREATE OR REPLACE
         FUNCTION gtfs.busonly(z integer, x integer, y integer)
         RETURNS bytea AS $$
@@ -68,7 +68,10 @@ pub async fn render_vector_tile_functions(client:tokio_postgres::Client) {
     $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
     ").as_str()).await.unwrap();
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
     CREATE OR REPLACE
     FUNCTION gtfs.intercityrail(z integer, x integer, y integer)
     RETURNS bytea AS $$
@@ -89,7 +92,12 @@ pub async fn render_vector_tile_functions(client:tokio_postgres::Client) {
     RETURN mvt;
     END
     $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
-    ").as_str()).await.unwrap();
+    "
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
     client.batch_execute(format!("
     CREATE OR REPLACE
