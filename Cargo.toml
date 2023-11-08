@@ -18,7 +18,7 @@ csv = "1.3"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.33", features = ["full"] }
 futures = "0.3"
-gtfs-structures = "0.36.1"
+gtfs-structures = "0.37.0"
 tungstenite = "0.20.1"
 postgres = "0.19.7"
 postgis = "0.9.0"
