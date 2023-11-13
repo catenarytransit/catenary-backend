@@ -61,6 +61,8 @@ tracing-subscriber = "0.3.17"
 futures-util = "0.3.29"
 actix_block_ai_crawling = "0.2.1"
 kactus = {git = "https://github.com/catenarymaps/kactus-gtfs-rt"}
+actix = "0.13.1"
+actix-web-actors = "4.2.0"
 
 [[bin]]
 name = "http_server"
@@ -97,6 +99,10 @@ path = "src/aspen/main.rs"
 [lib]
 name = "aspenlib"
 path = "src/aspen/lib.rs"
+
+[[bin]]
+name = "spruce"
+path = "src/spruce/main.rs"
 
 [features]
 #![feature(async_closure)]
