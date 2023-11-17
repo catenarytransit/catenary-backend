@@ -1,4 +1,4 @@
-pub async fn render_vector_tile_functions(client: tokio_postgres::Client) {
+pub async fn render_vector_tile_functions(client: &tokio_postgres::Client) {
     client.batch_execute(format!("
         CREATE OR REPLACE
         FUNCTION gtfs.busonly(z integer, x integer, y integer)

@@ -460,7 +460,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("making martin functions");
 
     if is_prod.unwrap_or(false) {
-        shape_functions::render_vector_tile_functions(client).await;
+        shape_functions::render_vector_tile_functions(&client).await;
     }
 
     client.batch_execute(format!("ALTER TABLE {schemaname}.routes SET UNLOGGED; ALTER TABLE {schemaname}.trips SET UNLOGGED; ALTER TABLE {schemaname}.shapes SET UNLOGGED; ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;").as_str());

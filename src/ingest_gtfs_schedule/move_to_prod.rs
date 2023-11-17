@@ -30,7 +30,7 @@ async fn main() {
 
     println!("Connected to database\nSwapping...");
 
-    shape_functions::render_vector_tile_functions(client).await;
+    shape_functions::render_vector_tile_functions(&client).await;
 
     println!("Done!");
 }
