@@ -319,7 +319,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-    CREATE TABLE IF NOT EXISTS {}.stoptimes (
+    CREATE UNLOGGED TABLE IF NOT EXISTS {}.stoptimes (
         onestop_feed_id text NOT NULL,
         trip_id text NOT NULL,
         stop_sequence int NOT NULL,
@@ -350,7 +350,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-    CREATE TABLE IF NOT EXISTS {}.routes (
+    CREATE UNLOGGED TABLE IF NOT EXISTS {}.routes (
         route_id text NOT NULL,
         onestop_feed_id text NOT NULL,
         short_name text NOT NULL,
@@ -378,7 +378,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-    CREATE TABLE IF NOT EXISTS {}.shapes (
+    CREATE UNLOGGED TABLE IF NOT EXISTS {}.shapes (
         onestop_feed_id text NOT NULL,
         shape_id text NOT NULL,
         linestring GEOMETRY(LINESTRING,4326) NOT NULL,
@@ -400,7 +400,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-    CREATE TABLE IF NOT EXISTS {}.trips (
+    CREATE UNLOGGED TABLE IF NOT EXISTS {}.trips (
         trip_id text NOT NULL,
         onestop_feed_id text NOT NULL,
         route_id text NOT NULL,
@@ -463,6 +463,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         shape_functions::render_vector_tile_functions(client).await;
     }
 
+    client.batch_execute(format!("ALTER TABLE {schemaname}.routes SET UNLOGGED; ALTER TABLE {schemaname}.trips SET UNLOGGED; ALTER TABLE {schemaname}.shapes SET UNLOGGED; ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;").as_str());
+    
     println!("Finished making database");
 
     #[derive(Debug, Clone)]
@@ -1439,10 +1441,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     
                                                 }
                                             });
+
                                             for worker in trips_workers {
                                                 let _ = tokio::join!(worker);
                                             }
-
                                                           
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
 
