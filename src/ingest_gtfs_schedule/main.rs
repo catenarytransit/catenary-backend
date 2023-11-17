@@ -30,6 +30,7 @@ mod colour_correction;
 mod convex_hull;
 
 mod shape_functions;
+mod make_prod_index;
 
 struct RealtimeOverride {
     realtimeid: String,
@@ -423,48 +424,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
-    println!("making index");
-
-    client.batch_execute(format!("
-    CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON {schemaname}.shapes USING GIST (linestring);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_stops_geom_idx ON {schemaname}.stops USING GIST (point);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_stoptimes_geom_idx ON {schemaname}.stoptimes USING GIST (point);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON {schemaname}.shapes (onestop_feed_id);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_route_type ON {schemaname}.routes (route_type);
-    
-    CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);").as_str(),
-        )
-        .await
-        .unwrap();
-
-    println!("make static hulls...");
-
-    client
-        .batch_execute(
-            format!(
-                "
+    if is_prod.unwrap_or(false) {
         
-        CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);"
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-
     println!("making martin functions");
+        make_prod_index::make_prod_index(&client, &schemaname.to_string()).await;
+    }
 
     if is_prod.unwrap_or(false) {
-        shape_functions::render_vector_tile_functions(&client).await;
+        shape_functions::render_vector_tile_functions(&client, &schemaname.to_string()).await;
     }
 
     client.batch_execute(format!("ALTER TABLE {schemaname}.routes SET UNLOGGED; ALTER TABLE {schemaname}.trips SET UNLOGGED; ALTER TABLE {schemaname}.shapes SET UNLOGGED; ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;").as_str());
-    
+
     println!("Finished making database");
 
     #[derive(Debug, Clone)]

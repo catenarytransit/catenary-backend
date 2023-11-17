@@ -1,7 +1,7 @@
-pub async fn render_vector_tile_functions(client: &tokio_postgres::Client) {
+pub async fn render_vector_tile_functions(client: &tokio_postgres::Client, schemaname: &String) {
     client.batch_execute(format!("
         CREATE OR REPLACE
-        FUNCTION gtfs.busonly(z integer, x integer, y integer)
+        FUNCTION {schemaname}.busonly(z integer, x integer, y integer)
         RETURNS bytea AS $$
     DECLARE
     mvt bytea;
@@ -24,7 +24,7 @@ pub async fn render_vector_tile_functions(client: &tokio_postgres::Client) {
 
     client.batch_execute(format!("
     CREATE OR REPLACE
-    FUNCTION gtfs.notbus(z integer, x integer, y integer)
+    FUNCTION {schemaname}.notbus(z integer, x integer, y integer)
     RETURNS bytea AS $$
     DECLARE
     mvt bytea;
@@ -47,7 +47,7 @@ pub async fn render_vector_tile_functions(client: &tokio_postgres::Client) {
 
     client.batch_execute(format!("
     CREATE OR REPLACE
-    FUNCTION gtfs.localrail(z integer, x integer, y integer)
+    FUNCTION {schemaname}.localrail(z integer, x integer, y integer)
     RETURNS bytea AS $$
     DECLARE
     mvt bytea;
@@ -73,7 +73,7 @@ pub async fn render_vector_tile_functions(client: &tokio_postgres::Client) {
             format!(
                 "
     CREATE OR REPLACE
-    FUNCTION gtfs.intercityrail(z integer, x integer, y integer)
+    FUNCTION {schemaname}.intercityrail(z integer, x integer, y integer)
     RETURNS bytea AS $$
     DECLARE
     mvt bytea;
@@ -101,7 +101,7 @@ pub async fn render_vector_tile_functions(client: &tokio_postgres::Client) {
 
     client.batch_execute(format!("
     CREATE OR REPLACE
-    FUNCTION gtfs.intercityrail(z integer, x integer, y integer)
+    FUNCTION {schemaname}.other(z integer, x integer, y integer)
     RETURNS bytea AS $$
     DECLARE
     mvt bytea;
