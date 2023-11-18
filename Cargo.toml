@@ -63,6 +63,7 @@ actix_block_ai_crawling = "0.2.8"
 kactus = {git = "https://github.com/catenarymaps/kactus-gtfs-rt"}
 actix = "0.13.1"
 actix-web-actors = "4.2.0"
+amtk = "0.1.0"
 
 [[bin]]
 name = "http_server"
