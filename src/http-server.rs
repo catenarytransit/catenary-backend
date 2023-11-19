@@ -393,6 +393,14 @@ async fn main() -> std::io::Result<()> {
                         "Access-Control-Allow-Origin",
                         "https://transitmap.kylerchin.com",
                     )),
+                    .add((
+                        "Access-Control-Allow-Origin",
+                        "https://maps.catenarymaps.org",
+                    )),
+                    .add((
+                        "Access-Control-Allow-Origin",
+                        "https://catenarymaps.org",
+                    )),
             )
             .wrap(actix_block_ai_crawling::BlockAi)
             .app_data(actix_web::web::Data::new(pool.clone()))
