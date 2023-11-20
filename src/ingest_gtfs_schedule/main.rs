@@ -1233,7 +1233,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 } else {
                                                     return route_id.to_string();
                                                 }
-                                               }).collect::<Vec<String>>().join(",");
+                                               }).collect::<Vec<String>>().join(",").as_str().replace("Orange County","OC").replace("Inland Empire", "IE").to_string();
         
                                             client.query(&prepared_shapes,
                                          &[

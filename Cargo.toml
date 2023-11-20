@@ -64,6 +64,7 @@ kactus = {git = "https://github.com/catenarymaps/kactus-gtfs-rt"}
 actix = "0.13.1"
 actix-web-actors = "4.2.0"
 amtk = "0.1.0"
+geojson = "0.24.1"
 
 [[bin]]
 name = "http_server"
