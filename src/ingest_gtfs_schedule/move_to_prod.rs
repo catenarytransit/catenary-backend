@@ -1,7 +1,7 @@
 use tokio_postgres::NoTls;
 
-mod shape_functions;
 mod make_prod_index;
+mod shape_functions;
 
 #[tokio::main]
 async fn main() {
@@ -35,14 +35,18 @@ async fn main() {
 
     make_prod_index::make_prod_index(&client, &String::from("gtfs_stage")).await;
 
-    
     println!("Building martin functions");
 
-    shape_functions::render_vector_tile_functions(&client,&String::from("gtfs_stage")).await;
+    shape_functions::render_vector_tile_functions(&client, &String::from("gtfs_stage")).await;
 
     println!("Swapping tables");
 
-    client.batch_execute("BEGIN; DROP SCHEMA gtfs CASCADE; ALTER SCHEMA gtfs_stage RENAME TO gtfs; COMMIT;").await.unwrap();
+    client
+        .batch_execute(
+            "BEGIN; DROP SCHEMA gtfs CASCADE; ALTER SCHEMA gtfs_stage RENAME TO gtfs; COMMIT;",
+        )
+        .await
+        .unwrap();
 
     println!("Done!");
 }

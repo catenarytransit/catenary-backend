@@ -29,8 +29,8 @@ use fs_extra::dir::get_size;
 mod colour_correction;
 mod convex_hull;
 
-mod shape_functions;
 mod make_prod_index;
+mod shape_functions;
 
 struct RealtimeOverride {
     realtimeid: String,
@@ -425,8 +425,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap();
 
     if is_prod.unwrap_or(false) {
-        
-    println!("making martin functions");
+        println!("making martin functions");
         make_prod_index::make_prod_index(&client, &schemaname.to_string()).await;
     }
 
@@ -434,7 +433,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         shape_functions::render_vector_tile_functions(&client, &schemaname.to_string()).await;
     }
 
-    client.batch_execute(format!("ALTER TABLE {schemaname}.routes SET UNLOGGED; ALTER TABLE {schemaname}.trips SET UNLOGGED; ALTER TABLE {schemaname}.shapes SET UNLOGGED; ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;").as_str());
+    let _ = client.batch_execute(format!("ALTER TABLE {schemaname}.routes SET UNLOGGED; ALTER TABLE {schemaname}.trips SET UNLOGGED; ALTER TABLE {schemaname}.shapes SET UNLOGGED; ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;").as_str()).await.unwrap();
 
     println!("Finished making database");
 

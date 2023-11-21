@@ -63,21 +63,19 @@ pub fn fix_background_colour_rgb_feed_route(
                     return fix_background_colour_rgb(background);
                 }
             }
-        },
-        "f-9mu-mts" => {
-            match route.id.as_str() {
-                "280" => RGB::new(7, 103, 56),
-                "290" => RGB::new(235, 194, 22),
-                "237" => RGB::new(96, 41, 133),
-                "201" => RGB::new(232, 93, 152),
-                "202" => RGB::new(232, 93, 152),
-                "204" => RGB::new(232, 93, 152),
-                "235" => RGB::new(238, 45, 36),
-                "215" => RGB::new(59, 192, 225),
-                "225" => RGB::new(41, 52, 144),
-                "227" => RGB::new(123, 194, 77),
-                _ => fix_background_colour_rgb(background)
-            }
+        }
+        "f-9mu-mts" => match route.id.as_str() {
+            "280" => RGB::new(7, 103, 56),
+            "290" => RGB::new(235, 194, 22),
+            "237" => RGB::new(96, 41, 133),
+            "201" => RGB::new(232, 93, 152),
+            "202" => RGB::new(232, 93, 152),
+            "204" => RGB::new(232, 93, 152),
+            "235" => RGB::new(238, 45, 36),
+            "215" => RGB::new(59, 192, 225),
+            "225" => RGB::new(41, 52, 144),
+            "227" => RGB::new(123, 194, 77),
+            _ => fix_background_colour_rgb(background),
         },
         _ => fix_background_colour_rgb(background),
     }

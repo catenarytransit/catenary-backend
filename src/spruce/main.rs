@@ -1,13 +1,12 @@
-use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix::{fut, ActorContext, ActorFuture, ContextFutureSpawner, WrapFuture};
 use actix::{Actor, Addr, Running, StreamHandler};
 use actix::{AsyncContext, Handler};
+use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
 use actix_web_actors::ws::Message::Text;
 use std::time::Instant;
 /// Define HTTP actor
-pub struct SpruceWs {
-}
+pub struct SpruceWs {}
 
 impl Actor for SpruceWs {
     type Context = ws::WebsocketContext<Self>;
@@ -23,8 +22,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SpruceWs {
             Ok(ws::Message::Ping(msg)) => {
                 ctx.pong(&msg);
             }
-            Ok(ws::Message::Pong(_)) => {
-            }
+            Ok(ws::Message::Pong(_)) => {}
             Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
             Ok(ws::Message::Close(reason)) => {
                 ctx.close(reason);
