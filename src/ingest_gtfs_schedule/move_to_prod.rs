@@ -33,12 +33,12 @@ async fn main() {
 
     println!("Building indexes");
 
-    make_prod_index::make_prod_index(&client, &String::from("gtfs_stage")).await.unwrap();
+    make_prod_index::make_prod_index(&client, &String::from("gtfs_stage")).await;
 
     
     println!("Building martin functions");
 
-    shape_functions::render_vector_tile_functions(&client,&String::from("gtfs_stage")).await.unwrap();
+    shape_functions::render_vector_tile_functions(&client,&String::from("gtfs_stage")).await;
 
     println!("Swapping tables");
 
