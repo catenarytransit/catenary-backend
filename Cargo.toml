@@ -69,6 +69,7 @@ actix = "0.13.1"
 actix-web-actors = "4.2.0"
 amtk = "0.1.0"
 geojson = "0.24.1"
+travelling_salesman = "1.1.22"
 
 [[bin]]
 name = "http_server"

@@ -31,7 +31,7 @@ mod convex_hull;
 
 mod make_prod_index;
 mod shape_functions;
-
+mod fix_broken_lines;
 struct RealtimeOverride {
     realtimeid: String,
     operatorid: String,
@@ -1161,7 +1161,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 continue;
                                             }
 
-                                            let linestring = ewkb::LineStringT {
+                                            let linestring = fix_broken_lines::fix_broken_lines(ewkb::LineStringT {
                                                 srid: Some(4326),
                                                 points: 
                                                     preshape.map(|point| ewkb::Point {
@@ -1170,7 +1170,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         srid: Some(4326),
                                                     })
                                                     .collect(),
-                                            };
+                                            });
                                             /*
                                               CREATE TABLE IF NOT EXISTS gtfs.shapes (
                                                     onestop_feed_id text NOT NULL,
