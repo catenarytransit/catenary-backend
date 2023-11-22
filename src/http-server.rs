@@ -9,8 +9,8 @@ use serde_json::to_string;
 use serde_json::{json, to_string_pretty};
 use std::collections::HashMap;
 use std::future::join;
-use std::time::{Duration, SystemTime};
 use std::time::UNIX_EPOCH;
+use std::time::{Duration, SystemTime};
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Client;
@@ -92,40 +92,37 @@ struct TripPostgres {
 #[actix_web::get("/microtime")]
 pub async fn microtime(req: HttpRequest) -> impl Responder {
     HttpResponse::Ok()
-    .insert_header(("Content-Type", "text/plain"))
-    .body(format!("{}", SystemTime::now()
-    .duration_since(SystemTime::UNIX_EPOCH)
-    .unwrap()
-    .as_micros()))
+        .insert_header(("Content-Type", "text/plain"))
+        .body(format!(
+            "{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_micros()
+        ))
 }
 
 #[actix_web::get("/amtrakproxy")]
 pub async fn amtrakproxy(req: HttpRequest) -> impl Responder {
-    let raw_data = reqwest::get("https://maps.amtrak.com/services/MapDataService/trains/getTrainsData").await;
+    let raw_data =
+        reqwest::get("https://maps.amtrak.com/services/MapDataService/trains/getTrainsData").await;
 
     match raw_data {
         Ok(raw_data) => {
-
             //println!("Raw data successfully downloaded");
 
             match amtk::decrypt(raw_data.text().await.unwrap().as_str()) {
-                Ok(decrypted_string) => {
-                    HttpResponse::Ok()
+                Ok(decrypted_string) => HttpResponse::Ok()
                     .insert_header(("Content-Type", "application/json"))
-                    .body(decrypted_string)
-                },
-                Err(err) => {
-                    HttpResponse::InternalServerError()
+                    .body(decrypted_string),
+                Err(err) => HttpResponse::InternalServerError()
                     .insert_header(("Content-Type", "text/plain"))
-                    .body("Could not decrypt Amtrak data")
-                }
+                    .body("Could not decrypt Amtrak data"),
             }
-        },
-        Err(error) => {
-            HttpResponse::InternalServerError()
-                    .insert_header(("Content-Type", "text/plain"))
-                    .body("Could not fetch Amtrak data")
         }
+        Err(error) => HttpResponse::InternalServerError()
+            .insert_header(("Content-Type", "text/plain"))
+            .body("Could not fetch Amtrak data"),
     }
 }
 
@@ -397,10 +394,7 @@ async fn main() -> std::io::Result<()> {
                         "Access-Control-Allow-Origin",
                         "https://maps.catenarymaps.org",
                     ))
-                    .add((
-                        "Access-Control-Allow-Origin",
-                        "https://catenarymaps.org",
-                    )),
+                    .add(("Access-Control-Allow-Origin", "https://catenarymaps.org")),
             )
             .wrap(actix_block_ai_crawling::BlockAi)
             .app_data(actix_web::web::Data::new(pool.clone()))

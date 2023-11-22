@@ -29,9 +29,9 @@ use fs_extra::dir::get_size;
 mod colour_correction;
 mod convex_hull;
 
+mod fix_broken_lines;
 mod make_prod_index;
 mod shape_functions;
-mod fix_broken_lines;
 struct RealtimeOverride {
     realtimeid: String,
     operatorid: String,
@@ -1170,7 +1170,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         srid: Some(4326),
                                                     })
                                                     .collect(),
-                                            });
+                                            }, &feed.id);
                                             /*
                                               CREATE TABLE IF NOT EXISTS gtfs.shapes (
                                                     onestop_feed_id text NOT NULL,
