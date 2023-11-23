@@ -1400,7 +1400,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let hull_postgres = match num_of_points_polygon {
                                         0 => None,
                                         _ => Some(hull_postgres)
-                                    }
+                                    };
 
                                     if gtfs.routes.len() > 0 as usize {
                                         let _ = client.query(
