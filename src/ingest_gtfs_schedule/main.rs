@@ -438,39 +438,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
         gtfs_agency_id: Option<String>,
     }
 
-    if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
-        let mut feedhashmap: BTreeMap<String, dmfr::Feed> = BTreeMap::new();
 
-        let mut operatorhashmap: BTreeMap<String, dmfr::Operator> = BTreeMap::new();
+    if fs::read_dir("transitland-atlas/feeds").is_err() { 
+        println!("Could not read that directory!");
+        return Err(Box::<dyn std::error::Error>::from("Could not read that directory!"));
+    }
 
-        let mut operator_to_feed_hashmap: BTreeMap<String, Vec<dmfr::OperatorAssociatedFeedsItem>> =
-            BTreeMap::new();
-
-        let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-        let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<OperatorPairInfo>> =
-            BTreeMap::new();
-
-        let feeds_to_discard = vec![
-            "f-9q8y-sfmta",
-            "f-9qc-westcat~ca~us",
-            "f-9q9-actransit",
-            "f-9q9-vta",
-            "f-9q8yy-missionbaytma~ca~us",
-            "f-9qbb-marintransit",
-            "f-9q8-samtrans",
-            "f-9q9-bart",
-            "f-9q9-caltrain",
-            "f-9qc3-riovistadeltabreeze",
-        ];
-
+    let entries = fs::read_dir("transitland-atlas/feeds").unwrap();
+    let mut feedhashmap: BTreeMap<String, dmfr::Feed> = BTreeMap::new();
+    let mut operatorhashmap: BTreeMap<String, dmfr::Operator> = BTreeMap::new();
+    let mut operator_to_feed_hashmap: BTreeMap<String, Vec<dmfr::OperatorAssociatedFeedsItem>> = BTreeMap::new();
+    let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<OperatorPairInfo>> = BTreeMap::new();
+    let feeds_to_discard = vec![
+        "f-9q8y-sfmta",
+        "f-9qc-westcat~ca~us",
+        "f-9q9-actransit",
+        "f-9q9-vta",
+        "f-9q8yy-missionbaytma~ca~us",
+        "f-9qbb-marintransit",
+        "f-9q8-samtrans",
+        "f-9q9-bart",
+        "f-9q9-caltrain",
+        "f-9qc3-riovistadeltabreeze",
+    ];
         for entry in entries {
             if let Ok(entry) = entry {
                 if let Some(file_name) = entry.file_name().to_str() {
                     println!("{}", file_name);
 
-                    let contents =
-                        fs::read_to_string(format!("transitland-atlas/feeds/{}", file_name));
+                    let contents = fs::read_to_string(format!("transitland-atlas/feeds/{}", file_name));
 
                     match contents {
                         Ok(contents) => {
@@ -1606,15 +1603,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .await
                 .unwrap();
         }
-
         println!("Done ingesting all operators");
-
         println!("adding extra lines");
-
         let realtime_override_file = std::fs::File::open("add-realtime-feeds.csv").unwrap();
         let mut realtime_override_reader =
             csv::Reader::from_reader(std::io::BufReader::new(realtime_override_file));
-
         let realtime_overrides = realtime_override_reader
             .records()
             .filter(|x| x.is_ok())
@@ -1623,14 +1616,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 operatorid: x.as_ref().unwrap().clone()[1].to_string(),
             })
             .collect::<Vec<RealtimeOverride>>();
-
         for realtime_override in realtime_overrides {
             client.query(format!("UPDATE {schemaname}.operators SET gtfs_realtime_feeds = 
             (select array_agg(distinct e) from unnest(gtfs_realtime_feeds || '{{{0}}}') e),
             realtime_onestop_feeds_to_gtfs_ids = realtime_onestop_feeds_to_gtfs_ids || '{0}=>null' :: hstore WHERE onestop_operator_id = $1", &realtime_override.realtimeid).as_str(), &[
             &realtime_override.operatorid
         ]).await.unwrap();
-
             client.query(format!("UPDATE {schemaname}.realtime_feeds SET operators = 
             (select array_agg(distinct e) from unnest(operators || '{{{1}}}') e),
              operators_to_gtfs_ids = operators_to_gtfs_ids || '{1}=>null' :: hstore WHERE onestop_feed_id = '{0}'", 
@@ -1640,14 +1631,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .as_str(),&[
             ]).await.unwrap();
         }
-
         for x in 0..1 {
             println!("Waiting for {} seconds", x);
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
-    } else {
-        println!("Could not read that directory!");
-    }
 
     Ok(())
 }
