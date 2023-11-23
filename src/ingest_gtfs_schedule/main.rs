@@ -836,8 +836,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     most_lon = Some(stop_lon);
                                                 }
                                             }
-    
-                                           
                                         }
     
                                         if (*stop).deref().latitude.is_some() {
@@ -865,7 +863,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     }
     
                                     let mut shape_to_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
-                                    let mut  shape_to_text_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
+                                    let mut shape_to_text_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
     
                                     for (trip_id, trip) in &gtfs.trips {
                                         if trip.shape_id.is_some() {
@@ -903,7 +901,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     route_type = $7,
                                     route_label = $8
                                     ;").as_str()).await.unwrap();
-                                    
+
                                     for (shape_id, shape) in &gtfs.shapes {
                                         let mut route_ids: Vec<String> = match gtfs
                                         .trips
@@ -1270,16 +1268,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             client
                                                 .query(
                                                     &statement,
-                                                    &[
-                                                        &feed_id,
-                                                           &trip.id,
-                                                         &trip.service_id,
-                                                        &trip.route_id,
-                                          &trip_headsign,
-                                                  &trip.trip_short_name,
-                                                  &trip.shape_id,
-                                                    &has_stop_headsign,
-                                                    &stop_headsigns_for_trip
+                                                        &[
+                                                            &feed_id,
+                                                            &trip.id,
+                                                            &trip.service_id,
+                                                            &trip.route_id,
+                                                            &trip_headsign,
+                                                            &trip.trip_short_name,
+                                                            &trip.shape_id,
+                                                            &has_stop_headsign,
+                                                            &stop_headsigns_for_trip
                                                        ],
                                                 ).await.unwrap();
 
