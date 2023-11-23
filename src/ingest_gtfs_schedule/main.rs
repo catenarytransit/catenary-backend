@@ -1329,8 +1329,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         .to_postgis_wgs84();
                                     
                                     let hull_postgres = match num_of_points_polygon {
-                                        0 => None,
-                                        _ => Some(hull_postgres)
+                                        0 => geo::Polygon::new(
+                                            geo::LineString::from(vec![
+                                                (most_lon.unwrap(), most_lat.unwrap()),
+                                             (most_lon.unwrap(), least_lat.unwrap()),
+                                             (least_lon.unwrap(), least_lat.unwrap()), (least_lon.unwrap(), most_lat.unwrap()), (most_lon.unwrap(), most_lat.unwrap())]),vec![]).to_postgis_wgs84(),
+                                        _ => hull_postgres
                                     };
 
                                     if gtfs.routes.len() > 0 as usize {
@@ -1366,6 +1370,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &feed.id,
                                             &true,
                                             &(in_ms as i64)
+                                        ]).await.unwrap();
+
+                                        client.execute(
+                                            format!(
+                                                "DELETE FROM {schemaname}.gtfs_errors WHERE onestop_feed_id = $1;"
+                                            ).as_str()
+                                            , &[
+                                            &feed.id,
                                         ]).await.unwrap();
                                     }
                                     }
