@@ -327,7 +327,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         level_id text,
         platform_code text,
         routes text[],
-        route_types int[],
+        route_types smallint[],
         station_feature boolean,
         PRIMARY KEY (onestop_feed_id, gtfs_id)
     )",
