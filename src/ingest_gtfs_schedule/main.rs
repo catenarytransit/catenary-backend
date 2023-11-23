@@ -1321,8 +1321,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                   
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
-                                     (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point, route_types, routes)
-                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;"
+                                     (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point, route_types, routes, station_feature)
+                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING;"
                                     ).as_str()).await.unwrap();
                                     for (stop_id, stop) in &gtfs.stops {
                                        if stop.latitude.is_some() && stop.longitude.is_some() {
@@ -1340,7 +1340,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &stop.description,
                                             &point,
                                             &stop_ids_to_route_types.get(&stop.id),
-                                            &stop_ids_to_route_ids.get(&stop.id)
+                                            &stop_ids_to_route_ids.get(&stop.id),
+                                            &stop.name.contains("Entrance")
                                         ]).await.unwrap();
                                        }
                                     }
