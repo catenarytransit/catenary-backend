@@ -301,6 +301,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         long double precision,
         lat double precision,
         point GEOMETRY(POINT,4326) NOT NULL,
+        route_types int[],
         timezone text,
         wheelchair_boarding int,
         primary_route_type text,
@@ -1161,7 +1162,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 continue;
                                             }
 
-                                            let linestring = fix_broken_lines::fix_broken_lines(ewkb::LineStringT {
+                                            let linestring = ewkb::LineStringT {
                                                 srid: Some(4326),
                                                 points: 
                                                     preshape.map(|point| ewkb::Point {
@@ -1170,7 +1171,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         srid: Some(4326),
                                                     })
                                                     .collect(),
-                                            }, &feed.id);
+                                            };
                                             /*
                                               CREATE TABLE IF NOT EXISTS gtfs.shapes (
                                                     onestop_feed_id text NOT NULL,
