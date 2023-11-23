@@ -7,11 +7,13 @@ pub async fn make_prod_index(client: &tokio_postgres::Client, schemaname: &Strin
 
     client.batch_execute(format!("
     CREATE INDEX IF NOT EXISTS gtfs_static_stops_geom_idx ON {schemaname}.stops USING GIST (point);").as_str()).await.unwrap();
+
+/* 
     println!("making geo index for stop times");
 
     client.batch_execute(format!("
     CREATE INDEX IF NOT EXISTS gtfs_static_stoptimes_geom_idx ON {schemaname}.stoptimes USING GIST (point);").as_str()).await.unwrap();
-    println!("making index for shapes on onestop feed id");
+    println!("making index for shapes on onestop feed id");*/
 
     client
         .batch_execute(
