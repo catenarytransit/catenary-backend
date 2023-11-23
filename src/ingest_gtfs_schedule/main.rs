@@ -81,19 +81,10 @@ pub fn is_uppercase(string: &str) -> bool {
 
 pub fn titlecase_process_new_nooption(input: &String) -> String {
     let mut string = input.clone();
-
-    if string.len() >= 7 {
-        //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systmes
-        if string
-            .as_str()
-            .chars()
-            .all(|s| s.is_ascii_punctuation() || s.is_ascii())
-            == true
-        {
-            string = titlecase(string.as_str());
-        }
+    if string.len() >= 7 && string.as_str().chars().all(|s| s.is_ascii_punctuation() || s.is_ascii()) == true {
+        //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systems
+        string = titlecase(string.as_str());
     }
-
     string
 }
 

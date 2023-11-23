@@ -101,5 +101,5 @@ path = "src/aspen/lib.rs"
 [features]
 #![feature(async_closure)]
 
-[target.'cfg(target_os = "linux")']
-rustflags = ["-C", "target-feature=+crt-static"]
+#[target.'cfg(target_os = "linux")']
+#rustflags = ["-C", "target-feature=+crt-static"]
