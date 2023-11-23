@@ -82,7 +82,13 @@ pub fn is_uppercase(string: &str) -> bool {
 
 pub fn titlecase_process_new_nooption(input: &String) -> String {
     let mut string = input.clone();
-    if string.len() >= 7 && string.as_str().chars().all(|s| s.is_ascii_punctuation() || s.is_ascii()) == true {
+    if string.len() >= 7
+        && string
+            .as_str()
+            .chars()
+            .all(|s| s.is_ascii_punctuation() || s.is_ascii())
+            == true
+    {
         //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systems
         string = titlecase(string.as_str());
     }
@@ -608,27 +614,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                         for feed in operator.associated_feeds.iter() {
                                             if feed.feed_onestop_id.is_some() {
-
-                                                feed_to_operator_pairs_hashmap.entry(feed.feed_onestop_id.as_ref().unwrap().clone())
-                                                .and_modify(|existing_operator_pairs| {
-                                                    existing_operator_pairs.push(
-                                                        OperatorPairInfo {
-                                                            operator_id: operator
-                                                                .onestop_id
-                                                                .clone(),
-                                                            gtfs_agency_id: feed
-                                                                .gtfs_agency_id
-                                                                .clone(),
-                                                        },
-                                                    );
-                                                }).or_insert(vec![OperatorPairInfo {
-                                                    operator_id: operator
-                                                        .onestop_id
-                                                        .clone(),
-                                                    gtfs_agency_id: feed
-                                                        .gtfs_agency_id
-                                                        .clone(),
-                                                }]);
+                                                feed_to_operator_pairs_hashmap
+                                                    .entry(
+                                                        feed.feed_onestop_id
+                                                            .as_ref()
+                                                            .unwrap()
+                                                            .clone(),
+                                                    )
+                                                    .and_modify(|existing_operator_pairs| {
+                                                        existing_operator_pairs.push(
+                                                            OperatorPairInfo {
+                                                                operator_id: operator
+                                                                    .onestop_id
+                                                                    .clone(),
+                                                                gtfs_agency_id: feed
+                                                                    .gtfs_agency_id
+                                                                    .clone(),
+                                                            },
+                                                        );
+                                                    })
+                                                    .or_insert(vec![OperatorPairInfo {
+                                                        operator_id: operator.onestop_id.clone(),
+                                                        gtfs_agency_id: feed.gtfs_agency_id.clone(),
+                                                    }]);
                                             }
                                         }
 
