@@ -6,6 +6,7 @@ use serde_json::Error as SerdeError;
 use gtfs_structures::LocationType;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use geo::CoordsIter;
 use std::collections::HashMap;
 use std::fs;
 use titlecase::titlecase;
@@ -1374,8 +1375,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let hull = convex_hull::convex_hull(&shape_points);
                                     let stop_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
                                     
+                                    let num_of_points_polygon = hull.exterior().coords_count();
+
                                     println!("Convex Hull Algo for {} took {}μs", feed.id, (stop_hull_time - start_hull_time) / 1000);
                                     println!("{} points", shape_points.len());
+
                                     //convert hull to polygon postgres
                                    /*
                                     
@@ -1392,6 +1396,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         */
                                         let hull_postgres = hull
                                         .to_postgis_wgs84();
+                                    
+                                    let hull_postgres = match num_of_points_polygon {
+                                        0 => None,
+                                        _ => Some(hull_postgres)
+                                    }
+
                                     if gtfs.routes.len() > 0 as usize {
                                         let _ = client.query(
                                             format!("INSERT INTO {schemaname}.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids, hull)
