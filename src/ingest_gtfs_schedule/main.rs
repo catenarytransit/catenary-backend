@@ -29,8 +29,9 @@ use fs_extra::dir::get_size;
 mod colour_correction;
 mod convex_hull;
 
+mod fix_broken_lines;
+mod make_prod_index;
 mod shape_functions;
-
 struct RealtimeOverride {
     realtimeid: String,
     operatorid: String,
@@ -291,6 +292,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         long double precision,
         lat double precision,
         point GEOMETRY(POINT,4326) NOT NULL,
+        route_types int[],
         timezone text,
         wheelchair_boarding int,
         primary_route_type text,
@@ -310,7 +312,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-    CREATE TABLE IF NOT EXISTS {}.stoptimes (
+    CREATE UNLOGGED TABLE IF NOT EXISTS {}.stoptimes (
         onestop_feed_id text NOT NULL,
         trip_id text NOT NULL,
         stop_sequence int NOT NULL,
@@ -341,7 +343,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-    CREATE TABLE IF NOT EXISTS {}.routes (
+    CREATE UNLOGGED TABLE IF NOT EXISTS {}.routes (
         route_id text NOT NULL,
         onestop_feed_id text NOT NULL,
         short_name text NOT NULL,
@@ -369,7 +371,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-    CREATE TABLE IF NOT EXISTS {}.shapes (
+    CREATE UNLOGGED TABLE IF NOT EXISTS {}.shapes (
         onestop_feed_id text NOT NULL,
         shape_id text NOT NULL,
         linestring GEOMETRY(LINESTRING,4326) NOT NULL,
@@ -391,7 +393,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-    CREATE TABLE IF NOT EXISTS {}.trips (
+    CREATE UNLOGGED TABLE IF NOT EXISTS {}.trips (
         trip_id text NOT NULL,
         onestop_feed_id text NOT NULL,
         route_id text NOT NULL,
@@ -414,45 +416,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
-    println!("making index");
-
-    client.batch_execute(format!("
-    CREATE INDEX IF NOT EXISTS gtfs_static_geom_idx ON {schemaname}.shapes USING GIST (linestring);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_stops_geom_idx ON {schemaname}.stops USING GIST (point);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_stoptimes_geom_idx ON {schemaname}.stoptimes USING GIST (point);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON {schemaname}.shapes (onestop_feed_id);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);
-
-    CREATE INDEX IF NOT EXISTS gtfs_static_route_type ON {schemaname}.routes (route_type);
-    
-    CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);").as_str(),
-        )
-        .await
-        .unwrap();
-
-    println!("make static hulls...");
-
-    client
-        .batch_execute(
-            format!(
-                "
-        
-        CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);"
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-
-    println!("making martin functions");
+    if is_prod.unwrap_or(false) {
+        println!("making martin functions");
+        make_prod_index::make_prod_index(&client, &schemaname.to_string()).await;
+    }
 
     if is_prod.unwrap_or(false) {
-        shape_functions::render_vector_tile_functions(client).await;
+        shape_functions::render_vector_tile_functions(&client, &schemaname.to_string()).await;
     }
+
+    let _ = client.batch_execute(format!("ALTER TABLE {schemaname}.routes SET UNLOGGED; ALTER TABLE {schemaname}.trips SET UNLOGGED; ALTER TABLE {schemaname}.shapes SET UNLOGGED; ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;").as_str()).await.unwrap();
 
     println!("Finished making database");
 
@@ -1251,7 +1224,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 } else {
                                                     return route_id.to_string();
                                                 }
-                                               }).collect::<Vec<String>>().join(",");
+                                               }).collect::<Vec<String>>().join(",").as_str().replace("Orange County","OC").replace("Inland Empire", "IE").to_string();
         
                                             client.query(&prepared_shapes,
                                          &[
@@ -1430,10 +1403,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     
                                                 }
                                             });
+
                                             for worker in trips_workers {
                                                 let _ = tokio::join!(worker);
                                             }
-
                                                           
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
 

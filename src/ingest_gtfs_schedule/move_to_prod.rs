@@ -1,5 +1,6 @@
 use tokio_postgres::NoTls;
 
+mod make_prod_index;
 mod shape_functions;
 
 #[tokio::main]
@@ -28,9 +29,24 @@ async fn main() {
         }
     });
 
-    println!("Connected to database\nSwapping...");
+    println!("Connected to database");
 
-    shape_functions::render_vector_tile_functions(client).await;
+    println!("Building indexes");
+
+    make_prod_index::make_prod_index(&client, &String::from("gtfs_stage")).await;
+
+    println!("Building martin functions");
+
+    shape_functions::render_vector_tile_functions(&client, &String::from("gtfs_stage")).await;
+
+    println!("Swapping tables");
+
+    client
+        .batch_execute(
+            "BEGIN; DROP SCHEMA gtfs CASCADE; ALTER SCHEMA gtfs_stage RENAME TO gtfs; COMMIT;",
+        )
+        .await
+        .unwrap();
 
     println!("Done!");
 }
