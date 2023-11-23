@@ -3,6 +3,8 @@ use gtfs_structures::Route;
 use gtfs_structures::Trip;
 use itertools::Itertools;
 use serde_json::Error as SerdeError;
+use gtfs_structures::LocationType;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
@@ -59,7 +61,18 @@ pub fn toi64(input: &Option<u32>) -> Option<i64> {
     point: ewkb::Point
 }*/
 
-pub fn route_type_to_int(input: &gtfs_structures::RouteType) -> i16 {
+pub fn location_type_conversion(input: &LocationType) -> i16 {
+    match input {
+        LocationType::StopPoint => 0,
+        LocationType::StopArea => 1,
+        LocationType::StationEntrance => 2,
+        LocationType::GenericNode => 3,
+        LocationType::BoardingArea => 4,
+        LocationType::Unknown(i) => *i,
+    }
+}
+
+pub fn route_type_to_int(input: &RouteType) -> i16 {
     match input {
         RouteType::Tramway => 0,
         RouteType::Subway => 1,
@@ -316,7 +329,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         name text NOT NULL,
         code text,
         gtfs_desc text,
-        location_type int,
+        location_type smallint,
         parent_station text,
         zone_id text,
         url text,
@@ -1321,8 +1334,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                   
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
-                                     (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point, route_types, routes, station_feature)
-                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING;"
+                                     (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point, route_types, routes, location_type, parent_station)
+                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING;"
                                     ).as_str()).await.unwrap();
                                     for (stop_id, stop) in &gtfs.stops {
                                        if stop.latitude.is_some() && stop.longitude.is_some() {
@@ -1341,7 +1354,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &point,
                                             &stop_ids_to_route_types.get(&stop.id),
                                             &stop_ids_to_route_ids.get(&stop.id),
-                                            &stop.name.contains("Entrance")
+                                            &location_type_conversion(&stop.location_type),
+                                            &stop.parent_station
                                         ]).await.unwrap();
                                        }
                                     }
