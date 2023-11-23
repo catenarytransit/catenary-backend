@@ -298,16 +298,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         parent_station text,
         zone_id text,
         url text,
-        long double precision,
-        lat double precision,
         point GEOMETRY(POINT,4326) NOT NULL,
-        route_types int[],
         timezone text,
         wheelchair_boarding int,
         primary_route_type text,
         level_id text,
         platform_code text,
         routes text[],
+        route_types int[],
+        station_feature boolean,
         PRIMARY KEY (onestop_feed_id, gtfs_id)
     )",
                 schemaname
@@ -335,8 +334,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         timepoint int,
         continuous_pickup smallint,
         continuous_drop_off smallint,
-        long double precision,
-        lat double precision,
         point GEOMETRY(POINT,4326) NOT NULL,
         route_id text,
         PRIMARY KEY (onestop_feed_id, trip_id, stop_sequence)
@@ -620,20 +617,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                         for feed in operator.associated_feeds.iter() {
                                             if feed.feed_onestop_id.is_some() {
-                                                if (&feed_to_operator_pairs_hashmap).contains_key(
-                                                    feed.feed_onestop_id.as_ref().unwrap().as_str(),
-                                                ) {
-                                                    let mut existing_operator_pairs =
-                                                        feed_to_operator_pairs_hashmap
-                                                            .get(
-                                                                feed.feed_onestop_id
-                                                                    .as_ref()
-                                                                    .unwrap()
-                                                                    .as_str(),
-                                                            )
-                                                            .unwrap()
-                                                            .clone();
 
+                                                feed_to_operator_pairs_hashmap.entry(feed.feed_onestop_id.as_ref().unwrap().clone())
+                                                .and_modify(|existing_operator_pairs| {
                                                     existing_operator_pairs.push(
                                                         OperatorPairInfo {
                                                             operator_id: operator
@@ -644,51 +630,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                                 .clone(),
                                                         },
                                                     );
-
-                                                    feed_to_operator_pairs_hashmap.insert(
-                                                        feed.feed_onestop_id.clone().unwrap(),
-                                                        existing_operator_pairs,
-                                                    );
-                                                } else {
-                                                    feed_to_operator_pairs_hashmap.insert(
-                                                        feed.feed_onestop_id.clone().unwrap(),
-                                                        vec![OperatorPairInfo {
-                                                            operator_id: operator
-                                                                .onestop_id
-                                                                .clone(),
-                                                            gtfs_agency_id: feed
-                                                                .gtfs_agency_id
-                                                                .clone(),
-                                                        }],
-                                                    );
-                                                }
-
-                                                if (&feed_to_operator_hashmap).contains_key(
-                                                    feed.feed_onestop_id.as_ref().unwrap().as_str(),
-                                                ) {
-                                                    /*&feed_to_operator_hashmap.insert(
-                                                        feed.feed_onestop_id.clone().unwrap(),
-                                                        feed_to_operator_hashmap
-                                                            .get(
-                                                                feed.feed_onestop_id
-                                                                    .as_ref()
-                                                                    .unwrap()
-                                                                    .as_str(),
-                                                            )
-                                                            .unwrap()
-                                                            .clone()
-                                                            .into_iter()
-                                                            .chain(vec![operator
-                                                                .onestop_id
-                                                                .clone()])
-                                                            .collect::<Vec<String>>(),
-                                                    );*/
-                                                } else {
-                                                    /*&feed_to_operator_hashmap.insert(
-                                                        feed.feed_onestop_id.clone().unwrap(),
-                                                        vec![operator.onestop_id.clone()],
-                                                    );*/
-                                                }
+                                                }).or_insert(vec![OperatorPairInfo {
+                                                    operator_id: operator
+                                                        .onestop_id
+                                                        .clone(),
+                                                    gtfs_agency_id: feed
+                                                        .gtfs_agency_id
+                                                        .clone(),
+                                                }]);
                                             }
                                         }
 
@@ -1424,8 +1373,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                       
                                         let stopstatement = client.prepare(format!(
                                             "INSERT INTO {schemaname}.stops
-                                         (onestop_feed_id, gtfs_id, name, code, gtfs_desc, long, lat, point)
-                                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;"
+                                         (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point)
+                                               VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;"
                                         ).as_str()).await.unwrap();
                                         for (stop_id, stop) in &gtfs.stops {
 
@@ -1444,8 +1393,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 &name,
                                                 &stop.code,
                                                 &stop.description,
-                                                &stop.longitude,
-                                                &stop.latitude,
                                                 &point
                                             ]).await.unwrap();
                                            }
