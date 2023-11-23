@@ -102,6 +102,32 @@ pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
     }
 }
 
+pub fn make_hashmap_stops_to_route_types_and_ids(gtfs: &gtfs_structures::Gtfs) -> (HashMap<String, Vec<i32>>, HashMap<String, Vec<String>>) {
+    let mut stop_to_route_types: HashMap<String, Vec<i16>> = HashMap::new();
+    let mut stop_to_route_ids: HashMap<String, Vec<String>> = HashMap::new();
+
+    for (trip_id, trip) in &gtfs.trips {
+        for stoptime in &trip.stop_times {
+     q
+            match gtfs.get_route(&trip.route_id) {
+                Ok(route) => {
+
+                    let route_type_num = route_type_to_int(&route.route_type);
+
+                    stop_to_route_types.entry(stoptime.stop.id).and_modify(|types| 
+                        types.push(route_type_num)).or_insert(vec![route_type_num]);
+
+                    stop_to_route_ids.entry(stoptime.stop.id).and_modify(|types| 
+                        types.push(route.id)).or_insert(vec![route.id]);
+                },
+                _ => {}
+            }
+        }
+    }
+
+    (stop_to_route_types, stop_to_route_ids)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let postgresstring = arguments::parse(std::env::args())
@@ -783,6 +809,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
                                     let mut most_lat: Option<f64> = None;
                                     let mut most_lon: Option<f64> = None;
+
+                                    let (stop_ids_to_route_types,stop_ids_to_route_ids) = make_hashmap_stops_to_route_types_and_ids(&gtfs);
     
                                     //let timestarting = std::time::Instant::now();
     
@@ -951,7 +979,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                                 nameoflinelametro = "adb8bf";
                                                             },
                                                             _ => {
-                                                                nameoflinelametro = "e16710";
+                                                                match route.unwrap().id.as_str() {
+                                                                    "901-13168" => {nameoflinelametro = "fc4c02";},
+                                                                    "910-13168" => {nameoflinelametro = "adb8bf";},
+                                                                    _ => {nameoflinelametro = "e16710";}
+                                                                }
                                                             }
                                                            
                                                         }
@@ -1292,8 +1324,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                   
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
-                                     (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point)
-                                           VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;"
+                                     (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point, route_types, routes)
+                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING;"
                                     ).as_str()).await.unwrap();
                                     for (stop_id, stop) in &gtfs.stops {
                                        if stop.latitude.is_some() && stop.longitude.is_some() {
@@ -1309,7 +1341,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &name,
                                             &stop.code,
                                             &stop.description,
-                                            &point
+                                            &point,
+                                            &stop_ids_to_route_types.get(&stop.id),
+                                            &stop_ids_to_route_ids.get(&stop.id)
                                         ]).await.unwrap();
                                        }
                                     }
