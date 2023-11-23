@@ -71,7 +71,10 @@ pub fn fix_broken_lines(
 
         println!("{} point distance and {} line distance", farthest_points_distance, length);
 
-        if length > farthest_points_distance * 20. && length > 1000. {
+        let ratio = length / farthest_points_distance;
+        println!("Ratio {}",ratio);
+
+        if ratio > 20 && length > 1000. {
             println!("doing travelling salesman");
             
             let points = geo_typed.points().map(|point| (point.x(), point.y())).collect::<Vec<(f64,f64)>>();
