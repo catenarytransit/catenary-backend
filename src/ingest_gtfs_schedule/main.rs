@@ -808,8 +808,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     most_lon = Some(stop_lon);
                                                 }
                                             }
-    
-                                           
                                         }
     
                                         if (*stop).deref().latitude.is_some() {
@@ -837,7 +835,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     }
     
                                     let mut shape_to_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
-                                    let mut  shape_to_text_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
+                                    let mut shape_to_text_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
     
                                     for (trip_id, trip) in &gtfs.trips {
                                         if trip.shape_id.is_some() {
