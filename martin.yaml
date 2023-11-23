@@ -67,10 +67,8 @@ postgres:
         code: text
         gtfs_desc: text
         gtfs_id: text
-        lat: float8
         level_id: text
         location_type: int4
-        long: float8
         name: text
         onestop_feed_id: text
         parent_station: text
@@ -100,8 +98,6 @@ postgres:
         continuous_pickup: int4
         departure_time: int8
         drop_off_type: int4
-        lat: float8
-        long: float8
         onestop_feed_id: text
         pickup_type: int4
         route_id: text
