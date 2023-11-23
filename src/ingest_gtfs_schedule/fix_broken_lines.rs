@@ -69,7 +69,7 @@ pub fn fix_broken_lines(
             }
         };
 
-        println!("{} point distance and {} line distance", farthest_points_distance, length);
+        println!("{} shape size and {} line distance", farthest_points_distance, length);
 
         let ratio = length / farthest_points_distance;
         println!("Ratio {}",ratio);
