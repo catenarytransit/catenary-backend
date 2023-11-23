@@ -102,23 +102,22 @@ pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
     }
 }
 
-pub fn make_hashmap_stops_to_route_types_and_ids(gtfs: &gtfs_structures::Gtfs) -> (HashMap<String, Vec<i32>>, HashMap<String, Vec<String>>) {
+pub fn make_hashmap_stops_to_route_types_and_ids(gtfs: &gtfs_structures::Gtfs) -> (HashMap<String, Vec<i16>>, HashMap<String, Vec<String>>) {
     let mut stop_to_route_types: HashMap<String, Vec<i16>> = HashMap::new();
     let mut stop_to_route_ids: HashMap<String, Vec<String>> = HashMap::new();
 
     for (trip_id, trip) in &gtfs.trips {
         for stoptime in &trip.stop_times {
-     q
             match gtfs.get_route(&trip.route_id) {
                 Ok(route) => {
 
                     let route_type_num = route_type_to_int(&route.route_type);
 
-                    stop_to_route_types.entry(stoptime.stop.id).and_modify(|types| 
+                    stop_to_route_types.entry(stoptime.stop.id.clone()).and_modify(|types| 
                         types.push(route_type_num)).or_insert(vec![route_type_num]);
 
-                    stop_to_route_ids.entry(stoptime.stop.id).and_modify(|types| 
-                        types.push(route.id)).or_insert(vec![route.id]);
+                    stop_to_route_ids.entry(stoptime.stop.id.clone()).and_modify(|types| 
+                        types.push(route.id.clone())).or_insert(vec![route.id.clone()]);
                 },
                 _ => {}
             }
