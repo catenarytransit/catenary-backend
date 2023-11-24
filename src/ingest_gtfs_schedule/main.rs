@@ -131,14 +131,18 @@ pub fn make_hashmap_stops_to_route_types_and_ids(
                     stop_to_route_types
                         .entry(stoptime.stop.id.clone())
                         .and_modify(|types| if !types.contains(&route_type_num) {
-                            types.push(route_type_num)
+                            types.push(route_type_num);
+
+                            types.dedup();
                         })
                         .or_insert(vec![route_type_num]);
 
                     stop_to_route_ids
                         .entry(stoptime.stop.id.clone())
                         .and_modify(|types| if !types.contains(&route.id) {
-                            types.push(route.id.clone())
+                            types.push(route.id.clone());
+
+                            types.dedup();
                         })
                         .or_insert(vec![route.id.clone()]);
                 }
