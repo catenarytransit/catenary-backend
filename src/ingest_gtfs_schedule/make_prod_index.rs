@@ -15,6 +15,8 @@ pub async fn make_prod_index(client: &tokio_postgres::Client, schemaname: &Strin
     CREATE INDEX IF NOT EXISTS gtfs_static_stoptimes_geom_idx ON {schemaname}.stoptimes USING GIST (point);").as_str()).await.unwrap();
     println!("making index for shapes on onestop feed id");*/
 
+    println!("Make spatial index for shapes");
+
     client
         .batch_execute(
             format!(
