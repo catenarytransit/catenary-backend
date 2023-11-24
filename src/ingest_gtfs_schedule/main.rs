@@ -146,8 +146,38 @@ pub fn make_hashmap_stops_to_route_types_and_ids(
             }
         }
     }
-
     (stop_to_route_types, stop_to_route_ids)
+}
+
+    //returns (stop_id_to_children_ids, stop_ids_to_children_route_types)
+    pub fn make_hashmaps_of_children_stop_info(gtfs: &gtfs_structures::Gtfs,
+        stop_to_route_types: &HashMap<String, Vec<i16>>,
+         stop_to_route_ids: &HashMap<String, Vec<String>>) -> (HashMap<String, Vec<String>>, HashMap<String,Vec<i16>>) {
+
+        let mut stop_id_to_children_ids:HashMap<String, Vec<String>> = HashMap::new();
+        let mut stop_ids_to_children_route_types: HashMap<String, Vec<i16>> = HashMap::new();
+
+        for (stop_id, stop) in &gtfs.stops {
+            if stop.parent_station.is_some() {
+                stop_id_to_children_ids.entry(stop.parent_station.as_ref().unwrap().clone())
+                .and_modify(|children_ids| if !children_ids.contains(&stop_id) {children_ids.push(stop_id.clone())})
+                .or_insert(vec![stop_id.clone()]);
+
+                let route_types_for_this_stop = stop_to_route_types.get(stop_id);
+
+                if route_types_for_this_stop.is_some() {
+                    stop_ids_to_children_route_types.entry(stop.parent_station.as_ref().unwrap().clone())
+                    .and_modify(|children_route_types| {
+                        children_route_types.extend(route_types_for_this_stop.unwrap());
+
+                        children_route_types.dedup();
+                    })
+                    .or_insert(route_types_for_this_stop.unwrap().clone());
+                }
+            }
+        }
+
+        (stop_id_to_children_ids, stop_ids_to_children_route_types)
 }
 
 #[tokio::main]
@@ -351,6 +381,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         platform_code text,
         routes text[],
         route_types smallint[],
+        children_ids text[],
+        children_route_types smallint[],
         station_feature boolean,
         PRIMARY KEY (onestop_feed_id, gtfs_id)
     )",
@@ -817,6 +849,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                     let (stop_ids_to_route_types,stop_ids_to_route_ids) = make_hashmap_stops_to_route_types_and_ids(&gtfs);
     
+                                    let (stop_id_to_children_ids, stop_ids_to_children_route_types) = make_hashmaps_of_children_stop_info(&gtfs,&stop_ids_to_route_types,&stop_ids_to_route_ids);
+
                                     //let timestarting = std::time::Instant::now();
     
                                     for (stop_id, stop) in &gtfs.stops {
@@ -1270,8 +1304,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                   
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
-                                     (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point, route_types, routes, location_type, parent_station)
-                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING;"
+                                     (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point, route_types, routes, location_type, parent_station, children_ids, children_route_types)
+                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT DO NOTHING;"
                                     ).as_str()).await.unwrap();
                                     for (stop_id, stop) in &gtfs.stops {
                                        if stop.latitude.is_some() && stop.longitude.is_some() {
@@ -1291,7 +1325,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &stop_ids_to_route_types.get(&stop.id),
                                             &stop_ids_to_route_ids.get(&stop.id),
                                             &location_type_conversion(&stop.location_type),
-                                            &stop.parent_station
+                                            &stop.parent_station,
+                                            &stop_id_to_children_ids.get(&stop.id),
+                                            &stop_ids_to_children_route_types.get(&stop.id)
                                         ]).await.unwrap();
                                        }
                                     }
