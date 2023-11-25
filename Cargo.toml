@@ -88,6 +88,10 @@ name = "move_to_prod"
 path = "src/ingest_gtfs_schedule/move_to_prod.rs"
 
 [[bin]]
+name = "update_functions"
+path = "src/ingest_gtfs_schedule/update_functions.rs"
+
+[[bin]]
 name = "importnopostgres"
 path = "src/ingest_gtfs_schedule/nopostgres.rs"
 
