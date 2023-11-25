@@ -247,10 +247,10 @@ postgres:
       schema: gtfs
       
       # Function name (required)
-      function: busstops
+      function: railstops
       
       # An integer specifying the minimum zoom level
-      minzoom: 6
+      minzoom: 3
       
       # An integer specifying the maximum zoom level. MUST be >= minzoom
       maxzoom: 30
@@ -266,10 +266,10 @@ postgres:
       schema: gtfs
       
       # Function name (required)
-      function: busstops
+      function: otherstops
       
       # An integer specifying the minimum zoom level
-      minzoom: 6
+      minzoom: 3
       
       # An integer specifying the maximum zoom level. MUST be >= minzoom
       maxzoom: 30
