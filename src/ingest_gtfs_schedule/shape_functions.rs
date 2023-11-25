@@ -137,7 +137,7 @@ pub async fn render_vector_tile_functions(client: &tokio_postgres::Client, schem
         4096, 64, true) AS geom,
         onestop_feed_id, name, code, gtfs_desc, location_type, parent_station, zone_id, url, timezone, wheelchair_boarding, level_id, platform_code, routes, route_types, children_ids, children_route_types
     FROM gtfs.stops
-    WHERE (point && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND location_type=2
+    WHERE (point && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (location_type=2 OR location_type=3 OR location_type=4)
     ) as tile WHERE geom IS NOT NULL;
 
     RETURN mvt;
