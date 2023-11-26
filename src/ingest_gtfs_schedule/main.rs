@@ -371,6 +371,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         onestop_feed_id text NOT NULL,
         gtfs_id text NOT NULL,
         name text NOT NULL,
+        displayname text NOT NULL,
         code text,
         gtfs_desc text,
         location_type smallint,
@@ -1305,11 +1306,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                       
                                     println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
                                     }
-                  
+
+                                    
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
-                                     (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point, route_types, routes, location_type, parent_station, children_ids, children_route_types)
-                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT DO NOTHING;"
+                                     (onestop_feed_id, gtfs_id, name, display_name, code, gtfs_desc, point, route_types, routes, location_type, parent_station, children_ids, children_route_types)
+                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT DO NOTHING;"
                                     ).as_str()).await.unwrap();
                                     for (stop_id, stop) in &gtfs.stops {
                                        if stop.latitude.is_some() && stop.longitude.is_some() {
@@ -1319,10 +1321,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             srid: Some(4326),
                                         };
                                         let name = titlecase_process_new_nooption(&stop.name);
+                                        let displayname = name.clone().to_string().replace(" Station","").replace("Northbound","N.B.").replace("Eastbound","E.B.").replace("Southbound","S.B.").replace("Westbound","W.B.");
                                         client.query(&stopstatement, &[
                                             &feed.id,
                                             &stop.id,
                                             &name,
+                                            &displayname,
                                             &stop.code,
                                             &stop.description,
                                             &point,
