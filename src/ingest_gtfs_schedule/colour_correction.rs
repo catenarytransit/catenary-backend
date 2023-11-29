@@ -27,6 +27,7 @@ pub fn fix_background_colour_rgb_feed(feed_id: &String, background: RGB<u8>) -> 
                 return fix_background_colour_rgb(background);
             }
         }
+        "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => RGB::new(23, 114, 172),
         "f-9q5-metro~losangeles" => {
             if (background == WHITE_RGB) {
                 return RGB::new(225, 103, 16);
@@ -59,11 +60,11 @@ pub fn fix_background_colour_rgb_feed_route(
 
                 if metroid.len() == 3 && metroid.chars().nth(0).unwrap() == '7' {
                     return RGB::new(209, 18, 66);
-                } else {
-                    return fix_background_colour_rgb(background);
                 }
+                return fix_background_colour_rgb(background);
             }
         }
+        "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => RGB::new(23, 114, 172),
         "f-9mu-mts" => match route.id.as_str() {
             "280" => RGB::new(7, 103, 56),
             "290" => RGB::new(235, 194, 22),

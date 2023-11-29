@@ -1,7 +1,10 @@
 use bb8::PooledConnection;
+use geo::CoordsIter;
+use gtfs_structures::LocationType;
 use gtfs_structures::Route;
 use gtfs_structures::Trip;
 use itertools::Itertools;
+use serde::Serialize;
 use serde_json::Error as SerdeError;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -59,7 +62,18 @@ pub fn toi64(input: &Option<u32>) -> Option<i64> {
     point: ewkb::Point
 }*/
 
-pub fn route_type_to_int(input: &gtfs_structures::RouteType) -> i16 {
+pub fn location_type_conversion(input: &LocationType) -> i16 {
+    match input {
+        LocationType::StopPoint => 0,
+        LocationType::StopArea => 1,
+        LocationType::StationEntrance => 2,
+        LocationType::GenericNode => 3,
+        LocationType::BoardingArea => 4,
+        LocationType::Unknown(i) => *i,
+    }
+}
+
+pub fn route_type_to_int(input: &RouteType) -> i16 {
     match input {
         RouteType::Tramway => 0,
         RouteType::Subway => 1,
@@ -100,6 +114,74 @@ pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
         Some(s) => Some(titlecase_process_new_nooption(s)),
         None => None,
     }
+}
+
+pub fn make_hashmap_stops_to_route_types_and_ids(
+    gtfs: &gtfs_structures::Gtfs,
+) -> (HashMap<String, Vec<i16>>, HashMap<String, Vec<String>>) {
+    let mut stop_to_route_types: HashMap<String, Vec<i16>> = HashMap::new();
+    let mut stop_to_route_ids: HashMap<String, Vec<String>> = HashMap::new();
+
+    for (trip_id, trip) in &gtfs.trips {
+        for stoptime in &trip.stop_times {
+            match gtfs.get_route(&trip.route_id) {
+                Ok(route) => {
+                    let route_type_num = route_type_to_int(&route.route_type);
+
+                    stop_to_route_types
+                        .entry(stoptime.stop.id.clone())
+                        .and_modify(|types| if !types.contains(&route_type_num) {
+                            types.push(route_type_num);
+
+                            types.dedup();
+                        })
+                        .or_insert(vec![route_type_num]);
+
+                    stop_to_route_ids
+                        .entry(stoptime.stop.id.clone())
+                        .and_modify(|types| if !types.contains(&route.id) {
+                            types.push(route.id.clone());
+
+                            types.dedup();
+                        })
+                        .or_insert(vec![route.id.clone()]);
+                }
+                _ => {}
+            }
+        }
+    }
+    (stop_to_route_types, stop_to_route_ids)
+}
+
+    //returns (stop_id_to_children_ids, stop_ids_to_children_route_types)
+    pub fn make_hashmaps_of_children_stop_info(gtfs: &gtfs_structures::Gtfs,
+        stop_to_route_types: &HashMap<String, Vec<i16>>,
+         stop_to_route_ids: &HashMap<String, Vec<String>>) -> (HashMap<String, Vec<String>>, HashMap<String,Vec<i16>>) {
+
+        let mut stop_id_to_children_ids:HashMap<String, Vec<String>> = HashMap::new();
+        let mut stop_ids_to_children_route_types: HashMap<String, Vec<i16>> = HashMap::new();
+
+        for (stop_id, stop) in &gtfs.stops {
+            if stop.parent_station.is_some() {
+                stop_id_to_children_ids.entry(stop.parent_station.as_ref().unwrap().clone())
+                .and_modify(|children_ids| if !children_ids.contains(&stop_id) {children_ids.push(stop_id.clone())})
+                .or_insert(vec![stop_id.clone()]);
+
+                let route_types_for_this_stop = stop_to_route_types.get(stop_id);
+
+                if route_types_for_this_stop.is_some() {
+                    stop_ids_to_children_route_types.entry(stop.parent_station.as_ref().unwrap().clone())
+                    .and_modify(|children_route_types| {
+                        children_route_types.extend(route_types_for_this_stop.unwrap());
+
+                        children_route_types.dedup();
+                    })
+                    .or_insert(route_types_for_this_stop.unwrap().clone());
+                }
+            }
+        }
+
+        (stop_id_to_children_ids, stop_ids_to_children_route_types)
 }
 
 #[tokio::main]
@@ -289,9 +371,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         onestop_feed_id text NOT NULL,
         gtfs_id text NOT NULL,
         name text NOT NULL,
+        displayname text NOT NULL,
         code text,
         gtfs_desc text,
-        location_type int,
+        location_type smallint,
         parent_station text,
         zone_id text,
         url text,
@@ -302,7 +385,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         level_id text,
         platform_code text,
         routes text[],
-        route_types int[],
+        route_types smallint[],
+        children_ids text[],
+        children_route_types smallint[],
         station_feature boolean,
         PRIMARY KEY (onestop_feed_id, gtfs_id)
     )",
@@ -438,18 +523,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         gtfs_agency_id: Option<String>,
     }
 
-
-    if fs::read_dir("transitland-atlas/feeds").is_err() { 
+    if fs::read_dir("transitland-atlas/feeds").is_err() {
         println!("Could not read that directory!");
-        return Err(Box::<dyn std::error::Error>::from("Could not read that directory!"));
+        return Err(Box::<dyn std::error::Error>::from(
+            "Could not read that directory!",
+        ));
     }
 
     let entries = fs::read_dir("transitland-atlas/feeds").unwrap();
     let mut feedhashmap: BTreeMap<String, dmfr::Feed> = BTreeMap::new();
     let mut operatorhashmap: BTreeMap<String, dmfr::Operator> = BTreeMap::new();
-    let mut operator_to_feed_hashmap: BTreeMap<String, Vec<dmfr::OperatorAssociatedFeedsItem>> = BTreeMap::new();
+    let mut operator_to_feed_hashmap: BTreeMap<String, Vec<dmfr::OperatorAssociatedFeedsItem>> =
+        BTreeMap::new();
     let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<OperatorPairInfo>> = BTreeMap::new();
+    let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<OperatorPairInfo>> =
+        BTreeMap::new();
     let feeds_to_discard = vec![
         "f-9q8y-sfmta",
         "f-9qc-westcat~ca~us",
@@ -469,16 +557,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let contents = fs::read_to_string(format!("transitland-atlas/feeds/{}", file_name));
                 match contents {
                     Ok(contents) => {
-                        let dmfrinfo: Result<
-                            dmfr::DistributedMobilityFeedRegistry,
-                            SerdeError,
-                        > = serde_json::from_str(&contents);
+                        let dmfrinfo: Result<dmfr::DistributedMobilityFeedRegistry, SerdeError> =
+                            serde_json::from_str(&contents);
                         match dmfrinfo {
                             Ok(dmfrinfo) => {
                                 dmfrinfo.feeds.iter().for_each(|feed| {
                                     for eachoperator in feed.operators.clone().into_iter() {
-                                        if feed_to_operator_pairs_hashmap.contains_key(&feed.id)
-                                        {
+                                        if feed_to_operator_pairs_hashmap.contains_key(&feed.id) {
                                             let mut existing_operator_pairs =
                                                 feed_to_operator_pairs_hashmap
                                                     .get(&feed.id)
@@ -488,17 +573,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 operator_id: eachoperator.onestop_id.clone(),
                                                 gtfs_agency_id: None,
                                             });
-                                            feed_to_operator_pairs_hashmap.insert(
-                                                feed.id.clone(),
-                                                existing_operator_pairs,
-                                            );
+                                            feed_to_operator_pairs_hashmap
+                                                .insert(feed.id.clone(), existing_operator_pairs);
                                         } else {
                                             feed_to_operator_pairs_hashmap.insert(
                                                 feed.id.clone(),
                                                 vec![OperatorPairInfo {
-                                                    operator_id: eachoperator
-                                                        .onestop_id
-                                                        .clone(),
+                                                    operator_id: eachoperator.onestop_id.clone(),
                                                     gtfs_agency_id: None,
                                                 }],
                                             );
@@ -511,9 +592,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     .unwrap()
                                                     .clone()
                                                     .into_iter()
-                                                    .chain(vec![eachoperator
-                                                        .onestop_id
-                                                        .clone()])
+                                                    .chain(vec![eachoperator.onestop_id.clone()])
                                                     .collect::<Vec<String>>(),
                                             );
                                         } else {
@@ -541,10 +620,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         feedhashmap.insert(feed.id.clone(), feed.clone());
                                     }
                                     feed.operators.iter().for_each(|operator| {
-                                        operatorhashmap.insert(
-                                            operator.onestop_id.clone(),
-                                            operator.clone(),
-                                        );
+                                        operatorhashmap
+                                            .insert(operator.onestop_id.clone(), operator.clone());
                                         if operator_to_feed_hashmap
                                             .contains_key(&operator.onestop_id)
                                         {
@@ -559,10 +636,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 .unwrap()
                                                 .par_iter()
                                                 .map(|associated_feed| {
-                                                    associated_feed
-                                                        .feed_onestop_id
-                                                        .clone()
-                                                        .unwrap()
+                                                    associated_feed.feed_onestop_id.clone().unwrap()
                                                 })
                                                 .collect::<Vec<String>>();
                                             operator.associated_feeds.iter().for_each(
@@ -597,10 +671,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         if feed.feed_onestop_id.is_some() {
                                             feed_to_operator_pairs_hashmap
                                                 .entry(
-                                                    feed.feed_onestop_id
-                                                        .as_ref()
-                                                        .unwrap()
-                                                        .clone(),
+                                                    feed.feed_onestop_id.as_ref().unwrap().clone(),
                                                 )
                                                 .and_modify(|existing_operator_pairs| {
                                                     existing_operator_pairs.push(
@@ -620,9 +691,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 }]);
                                         }
                                     }
-                                    if operator_to_feed_hashmap
-                                        .contains_key(&operator.onestop_id)
-                                    {
+                                    if operator_to_feed_hashmap.contains_key(&operator.onestop_id) {
                                         //combine the feeds for this operator together
                                         let mut existing_associated_feeds =
                                             operator_to_feed_hashmap
@@ -720,8 +789,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .clone();
         let mut operator_pairs_hashmap: HashMap<String, Option<String>> = HashMap::new();
         for operator_pair in listofoperatorpairs {
-            operator_pairs_hashmap
-                .insert(operator_pair.operator_id, operator_pair.gtfs_agency_id);
+            operator_pairs_hashmap.insert(operator_pair.operator_id, operator_pair.gtfs_agency_id);
         }
         let items: Vec<String> = vec![];
         let operator_id_list = feed_to_operator_hashmap.get(&key).unwrap_or_else(|| &items);
@@ -783,7 +851,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
                                     let mut most_lat: Option<f64> = None;
                                     let mut most_lon: Option<f64> = None;
+
+                                    let (stop_ids_to_route_types,stop_ids_to_route_ids) = make_hashmap_stops_to_route_types_and_ids(&gtfs);
     
+                                    let (stop_id_to_children_ids, stop_ids_to_children_route_types) = make_hashmaps_of_children_stop_info(&gtfs,&stop_ids_to_route_types,&stop_ids_to_route_ids);
+
                                     //let timestarting = std::time::Instant::now();
     
                                     for (stop_id, stop) in &gtfs.stops {
@@ -848,7 +920,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         .get(&trip.route_id)
                                                         .unwrap();
     
-                                                    let color = route.color;
+                                                    let color = colour_correction::fix_background_colour_rgb_feed_route(&feed.id,route.color,route);
     
                                                     shape_to_color_lookup.insert(
                                                     trip.shape_id.as_ref().unwrap().clone(),
@@ -923,41 +995,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }
                                         let color_to_upload =
                                         match feed.id.as_str() {
-                                            "f-9q5-metro~losangeles" => {
-                                                let mut nameoflinelametro = "e16710";
-                                                
-                                                if route_ids.len() > 0 {
-                                                    let route = gtfs.routes.get(&route_ids[0]);
-                                                    if route.is_some() {
-                                                        match route.unwrap().short_name.as_str() {
-                                                            "720" => {
-                                                                nameoflinelametro = "d11242";
-                                                            },
-                                                            "754" => {
-                                                                nameoflinelametro = "d11242";
-                                                            },
-                                                            "761" => {
-                                                                nameoflinelametro = "d11242";
-                                                            },
-                                                            "901" => {
-                                                                nameoflinelametro = "fc4c02";
-                                                            },
-                                                            "950" => {
-                                                                nameoflinelametro = "adb8bf";
-                                                            },
-                                                            "910" => {
-                                                                nameoflinelametro = "adb8bf";
-                                                            },
-                                                            _ => {
-                                                                nameoflinelametro = "e16710";
-                                                            }
-                                                           
-                                                        }
-                                                    }
-                                                       
-                                                }
-                                                String::from(nameoflinelametro)
-                                            },
                                             "f-9qh-metrolinktrains" => {
                                                 if route_ids.len() > 0 {
                                                     let route = gtfs.routes.get(&route_ids[0]);
@@ -970,24 +1007,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     String::from("3a3a3a")
                                                 }
                                             },
-                                            "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => {
-                                                String::from("1772ac")
-                                            },
-                                            "f-9q5b-longbeachtransit" => {
-                                                match shape_to_color_lookup.get(shape_id) {
-                                                    Some(color) => {
-                                                        if (color.r == 255 && color.g == 255 && color.b == 255) {
-                                                            String::from("801f3a")
-                                                        } else {
-                                                            println!("long beach shape not white? {:?}", color);
-                                                            format!("{:02x}{:02x}{:02x}",
-                                                        color.r, color.g, color.b
-                                                        )
-                                                        }
-                                                    },
-                                                    None => String::from("801f3a")
-                                                }
-                                            }
                                             _ => {
                                                 match shape_to_color_lookup.get(shape_id) {
                                                     Some(color) => format!(
@@ -1287,11 +1306,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                       
                                     println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
                                     }
-                  
+
+                                    
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
-                                     (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point)
-                                           VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;"
+                                     (onestop_feed_id, gtfs_id, name, displayname, code, gtfs_desc, point, route_types, routes, location_type, parent_station, children_ids, children_route_types)
+                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT DO NOTHING;"
                                     ).as_str()).await.unwrap();
                                     for (stop_id, stop) in &gtfs.stops {
                                        if stop.latitude.is_some() && stop.longitude.is_some() {
@@ -1301,13 +1321,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             srid: Some(4326),
                                         };
                                         let name = titlecase_process_new_nooption(&stop.name);
+                                        let displayname = name.clone().to_string().replace(" Station","").replace("Northbound","N.B.").replace("Eastbound","E.B.").replace("Southbound","S.B.").replace("Westbound","W.B.");
                                         client.query(&stopstatement, &[
                                             &feed.id,
                                             &stop.id,
                                             &name,
+                                            &displayname,
                                             &stop.code,
                                             &stop.description,
-                                            &point
+                                            &point,
+                                            &stop_ids_to_route_types.get(&stop.id),
+                                            &stop_ids_to_route_ids.get(&stop.id),
+                                            &location_type_conversion(&stop.location_type),
+                                            &stop.parent_station,
+                                            &stop_id_to_children_ids.get(&stop.id),
+                                            &stop_ids_to_children_route_types.get(&stop.id)
                                         ]).await.unwrap();
                                        }
                                     }
@@ -1326,8 +1354,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let hull = convex_hull::convex_hull(&shape_points);
                                     let stop_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
                                     
+                                    let num_of_points_polygon = hull.exterior().coords_count();
+
                                     println!("Convex Hull Algo for {} took {}μs", feed.id, (stop_hull_time - start_hull_time) / 1000);
                                     println!("{} points", shape_points.len());
+
                                     //convert hull to polygon postgres
                                    /*
                                     
@@ -1344,6 +1375,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         */
                                         let hull_postgres = hull
                                         .to_postgis_wgs84();
+                                    
+                                    let hull_postgres = match num_of_points_polygon {
+                                        0 => geo::Polygon::new(
+                                            geo::LineString::from(vec![
+                                                (most_lon.unwrap(), most_lat.unwrap()),
+                                             (most_lon.unwrap(), least_lat.unwrap()),
+                                             (least_lon.unwrap(), least_lat.unwrap()), (least_lon.unwrap(), most_lat.unwrap()), (most_lon.unwrap(), most_lat.unwrap())]),vec![]).to_postgis_wgs84(),
+                                        _ => hull_postgres
+                                    };
+
                                     if gtfs.routes.len() > 0 as usize {
                                         let _ = client.query(
                                             format!("INSERT INTO {schemaname}.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids, hull)
@@ -1377,6 +1418,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &feed.id,
                                             &true,
                                             &(in_ms as i64)
+                                        ]).await.unwrap();
+
+                                        client.execute(
+                                            format!(
+                                                "DELETE FROM {schemaname}.gtfs_errors WHERE onestop_feed_id = $1;"
+                                            ).as_str()
+                                            , &[
+                                            &feed.id,
                                         ]).await.unwrap();
                                     }
                                     }
@@ -1445,12 +1494,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             if !feeds_to_discard
                                 .contains(&(&x.feed_onestop_id).as_ref().unwrap().as_str())
                             {
-                                gtfs_static_feeds.insert(
-                                    x.feed_onestop_id.clone().unwrap(),
-                                    x.gtfs_agency_id,
-                                );
-                                simplified_array_static
-                                    .push(x.feed_onestop_id.clone().unwrap());
+                                gtfs_static_feeds
+                                    .insert(x.feed_onestop_id.clone().unwrap(), x.gtfs_agency_id);
+                                simplified_array_static.push(x.feed_onestop_id.clone().unwrap());
                             }
                         }
                         dmfr::FeedSpec::GtfsRt => {
@@ -1489,7 +1535,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             )
             .await
             .unwrap();
-}
+    }
     println!("Done ingesting all operators");
     println!("adding extra lines");
     let realtime_override_file = std::fs::File::open("add-realtime-feeds.csv").unwrap();
