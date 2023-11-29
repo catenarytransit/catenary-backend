@@ -21,7 +21,7 @@ for zip_file in *.zip; do
     # Unzip the file into the destination folder
     unzip -o "$zip_file" -d "../$destination_folder" &
     echo "Unzipped"
-done &
+done
 wait
 
 echo "Unzipping complete!"
