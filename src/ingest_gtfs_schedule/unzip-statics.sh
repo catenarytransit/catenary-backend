@@ -19,7 +19,7 @@ for zip_file in *.zip; do
     fi
 
     # Unzip the file into the destination folder
-    unzip -o "$zip_file" -d "../$destination_folder"
+    unzip -o "$zip_file" -d "../$destination_folder" &
     echo "Unzipped"
 done &
 wait
