@@ -1315,20 +1315,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     println!("Convex Hull Algo for {} took {}μs", feed.id, (stop_hull_time - start_hull_time) / 1000);
                                     println!("{} points", shape_points.len());
 
-                                    //convert hull to polygon postgres
-                                   /*
-                                    
-                                    let mut polygon = ewkb::EwkbPolygon::new();
-                                    let hull_postgres_line = 
-                                       ewkb::LineStringT {
-                                            srid: Some(4326),
-                                            points: hull.iter().map(|s| ewkb::Point {
-                                                x: s.0,
-                                                y: s.1,
-                                                srid: Some(4326),
-                                            }).collect::<Vec<ewkb::Point>>()
-                                        };
-                                        */
                                         let hull_postgres = hull
                                         .to_postgis_wgs84();
                                     
