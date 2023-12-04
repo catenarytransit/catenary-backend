@@ -130,15 +130,23 @@ pub fn make_hashmap_stops_to_route_types_and_ids(
 
                     stop_to_route_types
                         .entry(stoptime.stop.id.clone())
-                        .and_modify(|types| if !types.contains(&route_type_num) {
-                            types.push(route_type_num)
+                        .and_modify(|types| {
+                            if !types.contains(&route_type_num) {
+                                types.push(route_type_num);
+
+                                types.dedup();
+                            }
                         })
                         .or_insert(vec![route_type_num]);
 
                     stop_to_route_ids
                         .entry(stoptime.stop.id.clone())
-                        .and_modify(|types| if !types.contains(&route.id) {
-                            types.push(route.id.clone())
+                        .and_modify(|types| {
+                            if !types.contains(&route.id) {
+                                types.push(route.id.clone());
+
+                                types.dedup();
+                            }
                         })
                         .or_insert(vec![route.id.clone()]);
                 }
@@ -146,8 +154,45 @@ pub fn make_hashmap_stops_to_route_types_and_ids(
             }
         }
     }
-
     (stop_to_route_types, stop_to_route_ids)
+}
+
+//returns (stop_id_to_children_ids, stop_ids_to_children_route_types)
+pub fn make_hashmaps_of_children_stop_info(
+    gtfs: &gtfs_structures::Gtfs,
+    stop_to_route_types: &HashMap<String, Vec<i16>>,
+    stop_to_route_ids: &HashMap<String, Vec<String>>,
+) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<i16>>) {
+    let mut stop_id_to_children_ids: HashMap<String, Vec<String>> = HashMap::new();
+    let mut stop_ids_to_children_route_types: HashMap<String, Vec<i16>> = HashMap::new();
+
+    for (stop_id, stop) in &gtfs.stops {
+        if stop.parent_station.is_some() {
+            stop_id_to_children_ids
+                .entry(stop.parent_station.as_ref().unwrap().clone())
+                .and_modify(|children_ids| {
+                    if !children_ids.contains(&stop_id) {
+                        children_ids.push(stop_id.clone())
+                    }
+                })
+                .or_insert(vec![stop_id.clone()]);
+
+            let route_types_for_this_stop = stop_to_route_types.get(stop_id);
+
+            if route_types_for_this_stop.is_some() {
+                stop_ids_to_children_route_types
+                    .entry(stop.parent_station.as_ref().unwrap().clone())
+                    .and_modify(|children_route_types| {
+                        children_route_types.extend(route_types_for_this_stop.unwrap());
+
+                        children_route_types.dedup();
+                    })
+                    .or_insert(route_types_for_this_stop.unwrap().clone());
+            }
+        }
+    }
+
+    (stop_id_to_children_ids, stop_ids_to_children_route_types)
 }
 
 #[tokio::main]
@@ -337,6 +382,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         onestop_feed_id text NOT NULL,
         gtfs_id text NOT NULL,
         name text NOT NULL,
+        displayname text NOT NULL,
         code text,
         gtfs_desc text,
         location_type smallint,
@@ -351,6 +397,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         platform_code text,
         routes text[],
         route_types smallint[],
+        children_ids text[],
+        children_route_types smallint[],
         station_feature boolean,
         PRIMARY KEY (onestop_feed_id, gtfs_id)
     )",
@@ -547,41 +595,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 }],
                                             );
                                         }
-                                        if feed_to_operator_hashmap.contains_key(&feed.id) {
-                                            feed_to_operator_hashmap.insert(
-                                                feed.id.clone(),
-                                                feed_to_operator_hashmap
-                                                    .get(&feed.id)
-                                                    .unwrap()
-                                                    .clone()
-                                                    .into_iter()
-                                                    .chain(vec![eachoperator.onestop_id.clone()])
-                                                    .collect::<Vec<String>>(),
-                                            );
-                                        } else {
-                                            feed_to_operator_hashmap.insert(
-                                                feed.id.clone(),
-                                                vec![eachoperator.onestop_id.clone()],
-                                            );
-                                        }
-                                        if operator_to_feed_hashmap
-                                            .contains_key(&eachoperator.onestop_id)
-                                        {
-                                        } else {
-                                            operator_to_feed_hashmap.insert(
-                                                eachoperator.onestop_id.clone(),
-                                                vec![dmfr::OperatorAssociatedFeedsItem {
-                                                    feed_onestop_id: Some(feed.id.clone()),
-                                                    gtfs_agency_id: None,
-                                                }],
-                                            );
-                                        }
+
+                                        feed_to_operator_hashmap
+                                            .entry(feed.id.clone())
+                                            .and_modify(|value| {
+                                                value.push(eachoperator.onestop_id.clone())
+                                            })
+                                            .or_insert(vec![eachoperator.onestop_id.clone()]);
+
+                                        operator_to_feed_hashmap
+                                            .entry(eachoperator.onestop_id)
+                                            .or_insert(vec![dmfr::OperatorAssociatedFeedsItem {
+                                                feed_onestop_id: Some(feed.id.clone()),
+                                                gtfs_agency_id: None,
+                                            }]);
                                     }
                                     //println!("Feed {}: {:#?}", feed.id.clone(), feed);
-                                    if !feedhashmap.contains_key(&feed.id) {
-                                        //feedhashmap.insert(feed.id.clone(), feed.clone());
-                                        feedhashmap.insert(feed.id.clone(), feed.clone());
-                                    }
+                                    feedhashmap.entry(feed.id.clone()).or_insert(feed.clone());
+
                                     feed.operators.iter().for_each(|operator| {
                                         operatorhashmap
                                             .insert(operator.onestop_id.clone(), operator.clone());
@@ -817,6 +848,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                     let (stop_ids_to_route_types,stop_ids_to_route_ids) = make_hashmap_stops_to_route_types_and_ids(&gtfs);
     
+                                    let (stop_id_to_children_ids, stop_ids_to_children_route_types) = make_hashmaps_of_children_stop_info(&gtfs,&stop_ids_to_route_types,&stop_ids_to_route_ids);
+
                                     //let timestarting = std::time::Instant::now();
     
                                     for (stop_id, stop) in &gtfs.stops {
@@ -1267,11 +1300,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                       
                                     println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
                                     }
-                  
+
+                                    
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
-                                     (onestop_feed_id, gtfs_id, name, code, gtfs_desc, point, route_types, routes, location_type, parent_station)
-                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING;"
+                                     (onestop_feed_id, gtfs_id, name, displayname, code, gtfs_desc, point, route_types, routes, location_type, parent_station, children_ids, children_route_types)
+                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT DO NOTHING;"
                                     ).as_str()).await.unwrap();
                                     for (stop_id, stop) in &gtfs.stops {
                                        if stop.latitude.is_some() && stop.longitude.is_some() {
@@ -1281,17 +1315,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             srid: Some(4326),
                                         };
                                         let name = titlecase_process_new_nooption(&stop.name);
+                                        let displayname = name.clone().to_string().replace(" Station","").replace("Northbound","N.B.").replace("Eastbound","E.B.").replace("Southbound","S.B.").replace("Westbound","W.B.");
                                         client.query(&stopstatement, &[
                                             &feed.id,
                                             &stop.id,
                                             &name,
+                                            &displayname,
                                             &stop.code,
                                             &stop.description,
                                             &point,
                                             &stop_ids_to_route_types.get(&stop.id),
                                             &stop_ids_to_route_ids.get(&stop.id),
                                             &location_type_conversion(&stop.location_type),
-                                            &stop.parent_station
+                                            &stop.parent_station,
+                                            &stop_id_to_children_ids.get(&stop.id),
+                                            &stop_ids_to_children_route_types.get(&stop.id)
                                         ]).await.unwrap();
                                        }
                                     }
