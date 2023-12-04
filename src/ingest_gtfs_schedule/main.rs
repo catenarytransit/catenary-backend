@@ -1063,15 +1063,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 })
                                                 .collect(),
                                         };
-                                        /*
-                                          CREATE TABLE IF NOT EXISTS gtfs.shapes (
-                                                onestop_feed_id text NOT NULL,
-                                                shape_id text NOT NULL,
-                                                linestring GEOMETRY(LINESTRING,4326) NOT NULL,
-                                                color text,
-                                                PRIMARY KEY (onestop_feed_id,shape_id)
-                                            );
-                                        */
     
                                         let text_color = match feed.id.as_str() {
                                             "f-9qh-metrolinktrains" => {
