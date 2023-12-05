@@ -1416,13 +1416,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                     },
                     dmfr::FeedSpec::GtfsRt => {
-                                         client.query(format!("INSERT INTO {schemaname}.realtime_feeds (onestop_feed_id, name, operators, operators_to_gtfs_ids)
-                                         VALUES ($1, $2, $3, $4) ON CONFLICT do nothing;").as_str(), &[
-                                        &feed.id,
-                                        &feed.name,
-                                        &operator_pairs_hashmap.iter().map(|(a,b)| a).collect::<Vec<&String>>(),
-                                        &operator_pairs_hashmap
-                                         ]).await.unwrap();
+                            client.query(format!("INSERT INTO {schemaname}.realtime_feeds (onestop_feed_id, name, operators, operators_to_gtfs_ids)
+                            VALUES ($1, $2, $3, $4) ON CONFLICT do nothing;").as_str(), &[
+                            &feed.id,
+                            &feed.name,
+                            &operator_pairs_hashmap.iter().map(|(a,b)| a).collect::<Vec<&String>>(),
+                            &operator_pairs_hashmap
+                        ]).await.unwrap();
                     },
                     _ => {
                         //do nothing
