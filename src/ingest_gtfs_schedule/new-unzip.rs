@@ -25,18 +25,13 @@ fn main() {
                     }
 
                     // Unzip the file into the destination folder
-                    let unzip_result = Command::new("unzip")
-                        .arg("-o")
-                        .arg(zip_file)
-                        .arg("-d")
-                        .arg(&destination_folder)
-                        .status();
+                    let unzip_result = Command::new("unzip").arg("-o").arg(zip_file).arg("-d").arg(&destination_folder).status();
 
-                    if let Err(e) = unzip_result {
-                        eprintln!("Failed to unzip {}: {}", zip_file, e);
-                    } else {
-                        println!("Unzipped {}", zip_file);
-                    }
+                    if unzip_result.is_err() {
+                        eprintln!("Failed to unzip {}: {}", zip_file, unzip_result.unwrap_err());
+                        continue;
+                    } 
+                    println!("Unzipped {}", zip_file);
                 }
             }
         }
