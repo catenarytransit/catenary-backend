@@ -9,14 +9,14 @@ fn main() {
             let mut websocket = accept(stream.unwrap()).unwrap();
             loop {
                 if websocket.can_read() {
-                    let msg = websocket.read_message().unwrap();
+                    let msg = websocket.read().unwrap();
 
                     println!("{:?}", msg.to_string());
 
                     // We do not want to send back ping/pong messages.
                     if msg.is_binary() || msg.is_text() {
                         if websocket.can_write() {
-                            websocket.write_message(msg).unwrap();
+                            websocket.send(msg).unwrap();
                         }
                     }
                 }

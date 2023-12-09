@@ -1,5 +1,3 @@
-use std::cmp::Ordering::Equal;
-
 use geo::coord;
 use geo::ConvexHull;
 use geo::Coord;
