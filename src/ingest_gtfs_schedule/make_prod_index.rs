@@ -17,25 +17,57 @@ pub async fn make_prod_index(client: &tokio_postgres::Client, schemaname: &Strin
 
     println!("Make spatial index for shapes");
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE INDEX IF NOT EXISTS gtfs_static_feed_id ON {schemaname}.shapes (onestop_feed_id);
-    ").as_str()).await.unwrap();
+    "
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
     println!("text index on routes by onestop feed id");
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE INDEX IF NOT EXISTS gtfs_static_feed ON {schemaname}.routes (onestop_feed_id);
-    ").as_str()).await.unwrap();
+    "
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
     println!("route index by route type");
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE INDEX IF NOT EXISTS gtfs_static_route_type ON {schemaname}.routes (route_type);
-    ").as_str()).await.unwrap();
+    "
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
     println!("make static hulls...");
 
-    client.batch_execute(  format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE INDEX IF NOT EXISTS static_hulls ON {schemaname}.static_feeds USING GIST (hull);
-    ").as_str()).await.unwrap();
+    "
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 }

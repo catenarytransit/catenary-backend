@@ -28,23 +28,29 @@ fn transform_for_bay_area(x: String) -> String {
 }
 
 fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
-
     let mut headers = reqwest::header::HeaderMap::new();
 
     match feed_id {
         "f-dp3-metra" => {
-            headers.insert("username", "bb2c71e54d827a4ab47917c426bdb48c".parse().unwrap());
+            headers.insert(
+                "username",
+                "bb2c71e54d827a4ab47917c426bdb48c".parse().unwrap(),
+            );
             headers.insert("Authorization", "Basic YmIyYzcxZTU0ZDgyN2E0YWI0NzkxN2M0MjZiZGI0OGM6ZjhiY2Y4MDBhMjcxNThiZjkwYWVmMTZhZGFhNDRhZDI=".parse().unwrap());
-        },
-        "f-dqc-wmata~rail" => {
-            headers.insert("api_key", "3be3d48087754c4998e6b33b65ec9700".parse().unwrap());
-        },
-        "f-dqc-wmata~bus" => {
-            headers.insert("api_key", "3be3d48087754c4998e6b33b65ec9700".parse().unwrap());
-        },
-        _ => {
-
         }
+        "f-dqc-wmata~rail" => {
+            headers.insert(
+                "api_key",
+                "3be3d48087754c4998e6b33b65ec9700".parse().unwrap(),
+            );
+        }
+        "f-dqc-wmata~bus" => {
+            headers.insert(
+                "api_key",
+                "3be3d48087754c4998e6b33b65ec9700".parse().unwrap(),
+            );
+        }
+        _ => {}
     };
 
     request.headers(headers)

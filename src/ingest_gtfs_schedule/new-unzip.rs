@@ -25,12 +25,21 @@ fn main() {
                     }
 
                     // Unzip the file into the destination folder
-                    let unzip_result = Command::new("unzip").arg("-o").arg(zip_file).arg("-d").arg(&destination_folder).status();
+                    let unzip_result = Command::new("unzip")
+                        .arg("-o")
+                        .arg(zip_file)
+                        .arg("-d")
+                        .arg(&destination_folder)
+                        .status();
 
                     if unzip_result.is_err() {
-                        eprintln!("Failed to unzip {}: {}", zip_file, unzip_result.unwrap_err());
+                        eprintln!(
+                            "Failed to unzip {}: {}",
+                            zip_file,
+                            unzip_result.unwrap_err()
+                        );
                         continue;
-                    } 
+                    }
                     println!("Unzipped {}", zip_file);
                 }
             }
@@ -40,14 +49,22 @@ fn main() {
     println!("Unzipping complete!");
 
     // Flatten each feed
-    let flatten_result = Command::new("cargo").arg("run").arg("--bin").arg("flattenuncompressed").status();
+    let flatten_result = Command::new("cargo")
+        .arg("run")
+        .arg("--bin")
+        .arg("flattenuncompressed")
+        .status();
 
     if let Err(e) = flatten_result {
         eprintln!("Failed to run flattenuncompressed: {}", e);
     }
 
     // Change the permissions
-    let chmod_result = Command::new("chmod").arg("-R").arg("+r").arg(destination_dir).status();
+    let chmod_result = Command::new("chmod")
+        .arg("-R")
+        .arg("+r")
+        .arg(destination_dir)
+        .status();
 
     if let Err(e) = chmod_result {
         eprintln!("Failed to change permissions: {}", e);
