@@ -1,4 +1,5 @@
 use futures::StreamExt;
+use reqwest::Request;
 use serde_json::Error as SerdeError;
 use std::collections::HashMap;
 use std::fs;
@@ -23,6 +24,29 @@ fn transform_for_bay_area(x: String) -> String {
     } else {
         return x;
     }
+}
+
+fn add_auth_headers(&request: Request, feed_id: &str) -> Request {
+
+    let mut headers = reqwest::header::HeaderMap::new();
+
+    match feed_id {
+        "f-dp3-metra" => {
+            headers.insert("username", "bb2c71e54d827a4ab47917c426bdb48c".parse().unwrap());
+            headers.insert("Authorization", "Basic YmIyYzcxZTU0ZDgyN2E0YWI0NzkxN2M0MjZiZGI0OGM6ZjhiY2Y4MDBhMjcxNThiZjkwYWVmMTZhZGFhNDRhZDI=".parse().unwrap());
+        },
+        "f-dqc-wmata~rail" => {
+            headers.insert("api_key", "3be3d48087754c4998e6b33b65ec9700".parse().unwrap());
+        },
+        "f-dqc-wmata~bus" => {
+            headers.insert("api_key", "3be3d48087754c4998e6b33b65ec9700".parse().unwrap());
+        },
+        _ => {
+
+        }
+    };
+
+    request.headers(headers)
 }
 
 #[tokio::main]
@@ -242,13 +266,9 @@ async fn main() {
             futures::stream::iter(vecofstaticstrings.into_iter().map(|staticfeed| async move {
                 let client = ReqwestClient::new();
 
-                let mut request = client.get(&staticfeed.url);
+                let request = client.get(&staticfeed.url);
 
-                if (staticfeed.feed_id == "f-dqc-wmata~rail"
-                    || staticfeed.feed_id == "f-dqc-wmata~bus")
-                {
-                    request = request.header("api_key", "3be3d48087754c4998e6b33b65ec9700");
-                }
+                let request = add_auth_headers(&request, &feed_id);
 
                 let response = request.send().await;
 
