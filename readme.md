@@ -70,7 +70,7 @@ Example endpoints
 
 `http://localhost:5401/gettrip?feed_id=f-9mu-orangecountytransportationauthority&trip_id=10995882`
 
-## For Developers
+## For Contributors
 
 For unix users, running `git config core.hooksPath .githooks` is required.
 Pull requests will not be merged without this.
