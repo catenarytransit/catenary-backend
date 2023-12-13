@@ -58,13 +58,24 @@ fn main() {
     if let Err(e) = flatten_result {
         eprintln!("Failed to run flattenuncompressed: {}", e);
     }
-
     // Change the permissions
     let chmod_result = Command::new("chmod")
         .arg("-R")
         .arg("+r")
         .arg(destination_dir)
         .status();
+    let rm_result = Command::new("find")
+        .arg(destination_dir)
+        .arg("-type")
+        .arg("d")
+        .arg("-name")
+        .arg("__MACOSX")
+        .arg("-prune")
+        .status();
+
+    if let Err(e) = rm_result {
+        eprintln!("Failed to change permissions: {}", e);
+    }
 
     if let Err(e) = chmod_result {
         eprintln!("Failed to change permissions: {}", e);

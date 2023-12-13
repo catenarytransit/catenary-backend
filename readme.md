@@ -25,7 +25,7 @@ cargo run --release --bin transitlanddownload
 
 ### Unzip and format the zip files
 ```bash
-./src/ingest_gtfs_schedule/unzip-statics.sh
+cargo run --release --bin newunzip
 ```
 
 ### Import data into the postgres database
@@ -69,3 +69,10 @@ Example endpoints
 `http://localhost:5401/getroutesperagency?feed_id=f-9mu-orangecountytransportationauthority`
 
 `http://localhost:5401/gettrip?feed_id=f-9mu-orangecountytransportationauthority&trip_id=10995882`
+
+## For Developers
+
+For unix users, running `git config core.hooksPath .githooks` is required.
+Pull requests will not be merged without this.
+
+No option exists for Windows users at the moment. We're working on adding this.
