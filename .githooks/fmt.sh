@@ -23,8 +23,14 @@ if [ $HAS_ISSUES -eq 0 ]; then
     # Define a regular expression to match repeated mash of a single key
     pattern="^([a-zA-Z0-9])\\1+$"
 
+    # Define words to be avoided in commit messages
+    avoid_patterns="^(change|changes|fixes|fix)$"
+
     if [[ $commit_msg =~ $pattern ]]; then
         echo "Error: Commit message is a repeated mash of a single key."
+        exit 1
+    elif [[ $commit_msg =~ $avoid_patterns ]]; then
+        echo "Error: Commit message is 'change', 'changes', 'fixes', or 'fix', which is not allowed."
         exit 1
     fi
 
