@@ -4,6 +4,7 @@ use gtfs_structures::LocationType;
 use gtfs_structures::Route;
 use gtfs_structures::Trip;
 use itertools::Itertools;
+use ordered_float::OrderedFloat;
 use serde::Serialize;
 use serde_json::Error as SerdeError;
 use std::collections::BTreeMap;
@@ -787,9 +788,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         let items: Vec<String> = vec![];
         let operator_id_list = feed_to_operator_hashmap.get(&key).unwrap_or_else(|| &items);
-        handles.push(threaded_rt.spawn(async move 
-            {
-                //it timesout here a lot
+        handles.push(threaded_rt.spawn(async move {
+                    //it timesout here a lot
                 let client = pool.get().await.unwrap();
     
                 //println!("Feed in future {}: {:#?}", key, feed);
@@ -1262,7 +1262,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         srid: Some(4326),
                                                     };
                                             
-
                                                     let stop_headsign:Option<String> = titlecase_process_new(stoptime.stop_headsign.as_ref());
                                                 
                                                     if stoptime.arrival_time.is_some() && stoptime.departure_time.is_some() {
@@ -1292,7 +1291,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
                                     }
 
-                                    
+                                    //Pre-process stops, identify children stops with the same name
+
+                                    //(lat,lon) -> stop_id
+                                    let mut hashmap_of_coords_to_stops: HashMap<(OrderedFloat<f64>,OrderedFloat<f64>),Vec<String>> = HashMap::new();
+
+                                    for (stop_id,stop) in &gtfs.stops {
+                                        if stop.latitude.is_some() && stop.longitude.is_some() {
+                                            hashmap_of_coords_to_stops.entry((
+                                                OrderedFloat(stop.latitude.unwrap()), OrderedFloat(stop.longitude.unwrap())
+                                            ))
+                                            .and_modify(|array| array.push(stop_id.clone()))
+                                            .or_insert(vec![stop_id.clone()]);
+                                        }
+                                    }
+
+                                    let hashmap_of_coords_to_stops: HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), Vec<String>> = hashmap_of_coords_to_stops
+                                    .into_iter()
+                                    .filter(|(k,v)| v.len() >= 2)
+                                    .collect::<HashMap<(OrderedFloat<f64>,OrderedFloat<f64>),Vec<String>>>();
+
+                                    println!("{} Stops that are duplicate points", hashmap_of_coords_to_stops.len());
+
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
                                      (onestop_feed_id, gtfs_id, name, displayname, code, gtfs_desc, point, route_types, routes, location_type, parent_station, children_ids, children_route_types)
