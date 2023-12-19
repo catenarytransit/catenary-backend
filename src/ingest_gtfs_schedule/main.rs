@@ -401,6 +401,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         children_ids text[],
         children_route_types smallint[],
         station_feature boolean,
+        hidden boolean,
+        alias text[],
         PRIMARY KEY (onestop_feed_id, gtfs_id)
     )",
                 schemaname
@@ -1312,6 +1314,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     .collect::<HashMap<(OrderedFloat<f64>,OrderedFloat<f64>),Vec<String>>>();
 
                                     println!("{} Stops that are duplicate points", hashmap_of_coords_to_stops.len());
+
+                                    //criteria for hiding
+                                    //if the 2 stops share the same name, mark them aliases. IF there is a child and parent, mark the children as hidden, pointing torwards the parent station.
+                                    //This resolves a bug (poorly designed GTFS Schedule files) where Los Angeles Metro places 2 rail station stops at the same coordinates.
+                                  
+                                    let mut hashmap_stops_dedup_meta: HashMap<String, (bool, Vec<String>)> = HashMap::new();
+
+                                    for (_,vec) in hashmap_of_coords_to_stops {
+                                        //todo! implement lookup of each group and categorise the stops
+                                    }
 
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
