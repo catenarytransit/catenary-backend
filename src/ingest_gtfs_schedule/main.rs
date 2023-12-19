@@ -178,12 +178,15 @@ pub fn make_hashmaps_of_children_stop_info(
 }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+
     let postgresstring = arguments::parse(std::env::args())
         .expect("Add a postgres string via --postgres <string>")
         .get::<String>("postgres");
+
     let threads = arguments::parse(std::env::args())
         .expect("Add a thread count via --threads <positive int>")
         .get::<usize>("threads");
+
     let threadcount = threads.unwrap();
     let postgresstring = match postgresstring {
         Some(s) => s,
@@ -191,22 +194,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
             panic!("Add a postgres string via --postgres <string>");
         }
     };
+
     let startfresh = arguments::parse(std::env::args())
         .unwrap()
         .get::<bool>("startfresh");
+
     let limittostaticfeed = arguments::parse(std::env::args())
         .unwrap()
         .get::<String>("limittostaticfeed");
+
     let is_prod = arguments::parse(std::env::args())
         .unwrap()
         .get::<bool>("isprod");
+
     let skiptrips = arguments::parse(std::env::args())
         .unwrap()
         .get::<bool>("skiptrips")
         .unwrap_or_else(|| false);
+
     let soft_insert = arguments::parse(std::env::args())
         .unwrap()
         .get::<bool>("softinsert");
+
     let schemaname = match is_prod {
         Some(s) => {
             if s {
@@ -217,109 +226,71 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         None => "gtfs_stage",
     };
-    // Connect to the database.
+    
     let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
-    // The connection object performs the actual communication with the database,
-    // so spawn it off to run on its own.
+
     tokio::spawn(async move {
         if let Err(e) = connection.await {
             eprintln!("connection error: {}", e);
         }
     });
-    client
-        .batch_execute(
-            "
-        CREATE EXTENSION IF NOT EXISTS postgis;
-        CREATE EXTENSION IF NOT EXISTS hstore;
-        ",
-        )
-        .await
-        .unwrap();
+
+    client.batch_execute(
+        "CREATE EXTENSION IF NOT EXISTS postgis;
+        CREATE EXTENSION IF NOT EXISTS hstore;"
+    ).await.unwrap();
+
     if startfresh.unwrap_or(false) {
-        client
-            .batch_execute(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schemaname).as_str())
-            .await
-            .unwrap();
+        client.batch_execute(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schemaname).as_str()).await.unwrap();
     }
-    client
-        .batch_execute(
-            format!(
-                "
-            CREATE SCHEMA IF NOT EXISTS {schemaname};"
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-    client
-        .batch_execute(
-            format!(
-                "CREATE TABLE IF NOT EXISTS {schemaname}.gtfs_errors (
-                onestop_feed_id text PRIMARY KEY,
-                error text
-            )"
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-    client
-        .batch_execute(
-            format!(
-                "CREATE TABLE IF NOT EXISTS {schemaname}.feeds_updated (
-            onestop_feed_id text PRIMARY KEY,
-            created_trips boolean,
-            updated_trips_time_ms bigint
-        );"
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-    client
-        .batch_execute(
-            format!(
-                "CREATE TABLE IF NOT EXISTS {}.static_feeds (
-            onestop_feed_id text PRIMARY KEY,
-            only_realtime_ref text,
-            operators text[],
-            operators_to_gtfs_ids hstore,
-            realtime_onestop_ids text[],
-            realtime_onestop_ids_to_gtfs_ids hstore,
-            max_lat double precision NOT NULL,
-            max_lon double precision NOT NULL,
-            min_lat double precision NOT NULL,
-            min_lon double precision NOT NULL,
-            hull GEOMETRY(POLYGON,4326) NOT NULL
-        );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-    client
-        .batch_execute(
-            format!(
-                "CREATE TABLE IF NOT EXISTS {}.operators (
+
+    client.batch_execute(format!(
+        "CREATE SCHEMA IF NOT EXISTS {schemaname};"
+    ).as_str()).await.unwrap();
+
+    client.batch_execute(format!(
+        "CREATE TABLE IF NOT EXISTS {schemaname}.gtfs_errors (
+        onestop_feed_id text PRIMARY KEY,
+        error text)"
+    ).as_str()).await.unwrap();
+
+    client.batch_execute(format!(
+        "CREATE TABLE IF NOT EXISTS {schemaname}.feeds_updated (
+        onestop_feed_id text PRIMARY KEY,
+        created_trips boolean,
+        updated_trips_time_ms bigint);"
+    ).as_str()).await.unwrap();
+    
+    client.batch_execute(format!(
+        "CREATE TABLE IF NOT EXISTS {}.static_feeds (
+        onestop_feed_id text PRIMARY KEY,
+        only_realtime_ref text,
+        operators text[],
+        operators_to_gtfs_ids hstore,
+        realtime_onestop_ids text[],
+        realtime_onestop_ids_to_gtfs_ids hstore,
+        max_lat double precision NOT NULL,
+        max_lon double precision NOT NULL,
+        min_lat double precision NOT NULL,
+        min_lon double precision NOT NULL,
+        hull GEOMETRY(POLYGON,4326) NOT NULL);",
+        schemaname
+    ).as_str()).await.unwrap();
+
+    client.batch_execute(format!(
+        "CREATE TABLE IF NOT EXISTS {}.operators (
         onestop_operator_id text PRIMARY KEY,
         name text,
         gtfs_static_feeds text[],
         gtfs_realtime_feeds text[],
         static_onestop_feeds_to_gtfs_ids hstore,
         realtime_onestop_feeds_to_gtfs_ids hstore
-    );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE TABLE IF NOT EXISTS {}.realtime_feeds (
+        );",
+        schemaname
+    ).as_str()).await.unwrap();
+
+    client.batch_execute(format!(
+        "CREATE TABLE IF NOT EXISTS {}.realtime_feeds (
         onestop_feed_id text PRIMARY KEY,
         name text,
         operators text[],
@@ -328,18 +299,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         max_lon double precision,
         min_lat double precision,
         min_lon double precision
-    );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE TABLE IF NOT EXISTS {}.stops (
+        );",
+        schemaname
+    ).as_str()).await.unwrap();
+    
+    client.batch_execute(format!(
+        "CREATE TABLE IF NOT EXISTS {}.stops (
         onestop_feed_id text NOT NULL,
         gtfs_id text NOT NULL,
         name text NOT NULL,
@@ -362,18 +327,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         children_route_types smallint[],
         station_feature boolean,
         PRIMARY KEY (onestop_feed_id, gtfs_id)
-    )",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE UNLOGGED TABLE IF NOT EXISTS {}.stoptimes (
+        )",
+        schemaname
+    ).as_str()).await.unwrap();
+    
+    client.batch_execute(format!(
+        "CREATE UNLOGGED TABLE IF NOT EXISTS {}.stoptimes (
         onestop_feed_id text NOT NULL,
         trip_id text NOT NULL,
         stop_sequence int NOT NULL,
@@ -390,18 +349,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         point GEOMETRY(POINT,4326) NOT NULL,
         route_id text,
         PRIMARY KEY (onestop_feed_id, trip_id, stop_sequence)
-    )",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE UNLOGGED TABLE IF NOT EXISTS {}.routes (
+        )",
+        schemaname
+    ).as_str()).await.unwrap();
+
+    client.batch_execute(format!(
+        "CREATE UNLOGGED TABLE IF NOT EXISTS {}.routes (
         route_id text NOT NULL,
         onestop_feed_id text NOT NULL,
         short_name text NOT NULL,
@@ -418,17 +371,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         shapes_list text[],
         PRIMARY KEY (onestop_feed_id, route_id)
     );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE UNLOGGED TABLE IF NOT EXISTS {}.shapes (
+    schemaname
+    ).as_str()).await.unwrap();
+    
+    client.batch_execute(format!(
+        "CREATE UNLOGGED TABLE IF NOT EXISTS {}.shapes (
         onestop_feed_id text NOT NULL,
         shape_id text NOT NULL,
         linestring GEOMETRY(LINESTRING,4326) NOT NULL,
@@ -439,17 +386,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         text_color text,
         PRIMARY KEY (onestop_feed_id,shape_id)
     );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE UNLOGGED TABLE IF NOT EXISTS {}.trips (
+    schemaname
+    ).as_str()).await.unwrap();
+    
+    client.batch_execute(format!(
+        "CREATE UNLOGGED TABLE IF NOT EXISTS {}.trips (
         trip_id text NOT NULL,
         onestop_feed_id text NOT NULL,
         route_id text NOT NULL,
@@ -464,20 +405,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         wheelchair_accessible int,
         bikes_allowed int,
         PRIMARY KEY (onestop_feed_id, trip_id)
-    );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+        );",
+        schemaname
+    ).as_str()).await.unwrap();
+    
     if is_prod.unwrap_or(false) {
         println!("making martin functions");
         make_prod_index::make_prod_index(&client, &schemaname.to_string()).await;
-    }
-    if is_prod.unwrap_or(false) {
         shape_functions::render_vector_tile_functions(&client, &schemaname.to_string()).await;
     }
+
     let _ = client.batch_execute(format!("ALTER TABLE {schemaname}.routes SET UNLOGGED; ALTER TABLE {schemaname}.trips SET UNLOGGED; ALTER TABLE {schemaname}.shapes SET UNLOGGED; ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;").as_str()).await.unwrap();
     println!("Finished making database");
     #[derive(Debug, Clone)]
@@ -485,20 +422,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         operator_id: String,
         gtfs_agency_id: Option<String>,
     }
+
     if fs::read_dir("transitland-atlas/feeds").is_err() {
         println!("Could not read that directory!");
         return Err(Box::<dyn std::error::Error>::from(
             "Could not read that directory!",
         ));
     }
+
     let entries = fs::read_dir("transitland-atlas/feeds").unwrap();
     let mut feedhashmap: BTreeMap<String, dmfr::Feed> = BTreeMap::new();
     let mut operatorhashmap: BTreeMap<String, dmfr::Operator> = BTreeMap::new();
-    let mut operator_to_feed_hashmap: BTreeMap<String, Vec<dmfr::OperatorAssociatedFeedsItem>> =
-        BTreeMap::new();
+    let mut operator_to_feed_hashmap: BTreeMap<String, Vec<dmfr::OperatorAssociatedFeedsItem>> = BTreeMap::new();
     let mut feed_to_operator_hashmap: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<OperatorPairInfo>> =
-        BTreeMap::new();
+    let mut feed_to_operator_pairs_hashmap: BTreeMap<String, Vec<OperatorPairInfo>> = BTreeMap::new();
     let feeds_to_discard = vec![
         "f-9q8y-sfmta",
         "f-9qc-westcat~ca~us",
@@ -1319,10 +1256,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .expect("Time went backwards");
                                         let in_ms = since_the_epoch.as_millis();
-        /*
-        onestop_feed_id text PRIMARY KEY,
-                    created_trips boolean,
-                    updated_trips_time_ms bigint, */
+                                            /*
+                                                onestop_feed_id text PRIMARY KEY,
+                                                created_trips boolean,
+                                                updated_trips_time_ms bigint, 
+                                            */
                                         client.execute(
                                             format!(
                                                 "INSERT INTO {schemaname}.feeds_updated (onestop_feed_id, created_trips, updated_trips_time_ms) VALUES ($1, $2, $3) ON CONFLICT (onestop_feed_id) DO UPDATE SET created_trips = $2, updated_trips_time_ms = $3;"
