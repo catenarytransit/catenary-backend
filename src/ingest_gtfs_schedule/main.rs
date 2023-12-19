@@ -31,19 +31,23 @@ mod convex_hull;
 mod fix_broken_lines;
 mod make_prod_index;
 mod shape_functions;
+
 struct RealtimeOverride {
     realtimeid: String,
     operatorid: String,
 }
+
 pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
 }
+
 pub fn toi64(input: &Option<u32>) -> Option<i64> {
     match input {
         Some(i) => Some(*i as i64),
         None => None,
     }
 }
+
 /*struct StopTimePostgres {
     feed_id: String,
     trip_id: String,
@@ -54,6 +58,7 @@ pub fn toi64(input: &Option<u32>) -> Option<i64> {
     stop_headsign: Option<String>,
     point: ewkb::Point
 }*/
+
 pub fn location_type_conversion(input: &LocationType) -> i16 {
     match input {
         LocationType::StopPoint => 0,
@@ -80,9 +85,11 @@ pub fn route_type_to_int(input: &RouteType) -> i16 {
         RouteType::Other(i) => *i,
     }
 }
+
 pub fn is_uppercase(string: &str) -> bool {
     string.chars().all(char::is_uppercase)
 }
+
 pub fn titlecase_process_new_nooption(input: &String) -> String {
     let mut string = input.clone();
     if string.len() >= 7
@@ -103,9 +110,8 @@ pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
         None => None,
     }
 }
-pub fn make_hashmap_stops_to_route_types_and_ids(
-    gtfs: &gtfs_structures::Gtfs,
-) -> (HashMap<String, Vec<i16>>, HashMap<String, Vec<String>>) {
+
+pub fn make_hashmap_stops_to_route_types_and_ids(gtfs: &gtfs_structures::Gtfs) -> (HashMap<String, Vec<i16>>, HashMap<String, Vec<String>>) {
     let mut stop_to_route_types: HashMap<String, Vec<i16>> = HashMap::new();
     let mut stop_to_route_ids: HashMap<String, Vec<String>> = HashMap::new();
     for (trip_id, trip) in &gtfs.trips {
@@ -780,7 +786,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
                                     let mut least_lat: Option<f64> = None;
                                     let mut least_lon: Option<f64> = None;
-    
                                     let mut most_lat: Option<f64> = None;
                                     let mut most_lon: Option<f64> = None;
                                     let (stop_ids_to_route_types,stop_ids_to_route_ids) = make_hashmap_stops_to_route_types_and_ids(&gtfs);
@@ -835,10 +840,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                            
                                         }
                                     }
-    
                                     let mut shape_to_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
                                     let mut shape_to_text_color_lookup: BTreeMap<String, RGB<u8>> = BTreeMap::new();
-    
                                     for (trip_id, trip) in &gtfs.trips {
                                         if trip.shape_id.is_some() {
                                             if !shape_to_color_lookup
@@ -910,7 +913,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 route_ids.push(value.to_string());
                                             }
                                      }
-                                     
                                      let route_ids:Vec<String> = route_ids.into_iter().unique().collect();
                                      let mut route_type_number = 3;
                                         if route_ids.len() > 0 {
@@ -982,8 +984,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 }
                                                 _ => true,
                                             }
-                                        })
-                                    ;
+                                        });
                                         if preshape.clone().count() < 2 {
                                             println!("Shape {} has less than 2 points", shape_id);
                                             continue;
@@ -1025,29 +1026,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 }
                                             }
                                         };
-    
-                                           // println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
-                                           let route_label:String = route_ids.iter().map(|route_id| {
-                                            let route = gtfs.routes.get(route_id);
-                                            if route.is_some() {
-                                                if route.unwrap().short_name.as_str() == "" {
-                                                  if route.unwrap().long_name.as_str() == "" {
-                                                    return route_id.to_string();
-                                                  } else {
-                                                    return route.unwrap().long_name.clone()
-                                                    .replace("-16168","")
-                                                    .replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW").replace("clockwise", "CW").replace("Clockwise", "CW");
-                                                  }
-                                                } else {
-                                                    return route.unwrap().short_name.clone()
-                                                    .replace("-16168","")
-                                                    .replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW").replace("clockwise", "CW").replace("Clockwise", "CW");
-                                                }
-                                                
-                                            } else {
-                                                return route_id.to_string();
-                                            }
-                                           }).collect::<Vec<String>>().join(",").as_str().replace("Orange County","OC").replace("Inland Empire", "IE").to_string();
+                                        // println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
+                                        let route_label:String = route_ids.iter().map(|route_id| {
+                                         let route = gtfs.routes.get(route_id);
+                                         if route.is_some() {
+                                             if route.unwrap().short_name.as_str() == "" {
+                                               if route.unwrap().long_name.as_str() == "" {
+                                                 return route_id.to_string();
+                                               } else {
+                                                 return route.unwrap().long_name.clone()
+                                                 .replace("-16168","")
+                                                 .replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW").replace("clockwise", "CW").replace("Clockwise", "CW");
+                                               }
+                                             } else {
+                                                 return route.unwrap().short_name.clone()
+                                                 .replace("-16168","")
+                                                 .replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW").replace("clockwise", "CW").replace("Clockwise", "CW");
+                                             }
+                                             
+                                         } else {
+                                             return route_id.to_string();
+                                         }
+                                        }).collect::<Vec<String>>().join(",").as_str().replace("Orange County","OC").replace("Inland Empire", "IE").to_string();
     
                                         client.query(&prepared_shapes,
                                      &[
@@ -1218,8 +1218,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         });
                                         for worker in trips_workers {
                                             let _ = tokio::join!(worker);
-                                        }
-                                                      
+                                        }         
                                     println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
                                     }
                                     //Pre-process stops, identify children stops with the same name
