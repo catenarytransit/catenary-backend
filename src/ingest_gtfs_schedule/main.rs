@@ -404,7 +404,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         children_route_types smallint[],
         station_feature boolean,
         hidden boolean,
-        alias text[],
+        location_alias text[],
         PRIMARY KEY (onestop_feed_id, gtfs_id)
     )",
                 schemaname
@@ -1334,16 +1334,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                        // let dont_hide_this_stop_candidates_stop_ids = dont_hide_this_stop_candidates.iter().map(|stop| stop.id.clone()).collect::<HashSet<String>>();
                                        let dont_hide_this_stop_candidates_names = dont_hide_this_stop_candidates.iter().map(|stop| stop.name.clone()).collect::<HashSet<String>>();
 
+
                                         for stop in list_of_stops {
-                                            if stop.parent_station.is_none() {
-                                                hashmap_stops_dedup_meta.insert(stop.id.clone(), (false,arc_of_stop_ids.clone()));
-                                            } else {
-                                                //todo! implement search for nearby stops with the same name, probably using hexagonal hashing structure search
-                                                //prob not a good idea, since NYC has a good reason
-                                                // Thank you professor Michael Goodrich, I am forever blessed with complexity analysis of algorithms
-                                                //if let gtfs_structures::LocationType::StationEntrance = stop.location_type {}
-                                                hashmap_stops_dedup_meta.insert(stop.id.clone(), (true,arc_of_stop_ids.clone()));
+                                            
+                                        let mut hidden_stops = false;
+
+                                        if stop.parent_station.is_none() {  
+                                            hidden_stops = false;
+                                        } else {
+                                            //todo! implement search for nearby stops with the same name, probably using hexagonal hashing structure search
+                                            //prob not a good idea, since NYC has a good reason
+                                            // Thank you professor Michael Goodrich, I am forever blessed with complexity analysis of algorithms
+                                            if let gtfs_structures::LocationType::StationEntrance = stop.location_type {} else {
+                                                //prevents "7th St/Metro Center" from shadowing "7th St/Metro Center - Metro A & E Lines"
+                                                if dont_hide_this_stop_candidates_names.contains(&stop.name) {
+                                                    hidden_stops = true
+                                                }
                                             }
+                                        }
+
+                                        hashmap_stops_dedup_meta.insert(stop.id.clone(), (hidden_stops,arc_of_stop_ids.clone()));
                                         }
                                     }
 
