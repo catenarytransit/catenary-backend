@@ -5,13 +5,11 @@ use gtfs_structures::Route;
 use gtfs_structures::Trip;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
-use serde::Serialize;
 use serde_json::Error as SerdeError;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use titlecase::titlecase;
-use tokio_postgres::Statement;
 mod dmfr;
 use bb8_postgres::PostgresConnectionManager;
 use futures;
@@ -23,16 +21,13 @@ use rayon::prelude::*;
 use rgb::RGB;
 use std::error::Error;
 use std::ops::Deref;
-use std::rc::Rc;
 use tokio_postgres::NoTls;
 extern crate tokio_threadpool;
 use tokio::runtime;
 extern crate fs_extra;
 use fs_extra::dir::get_size;
-
 mod colour_correction;
 mod convex_hull;
-
 mod fix_broken_lines;
 mod make_prod_index;
 mod shape_functions;
@@ -40,18 +35,15 @@ struct RealtimeOverride {
     realtimeid: String,
     operatorid: String,
 }
-
 pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
 }
-
 pub fn toi64(input: &Option<u32>) -> Option<i64> {
     match input {
         Some(i) => Some(*i as i64),
         None => None,
     }
 }
-
 /*struct StopTimePostgres {
     feed_id: String,
     trip_id: String,
@@ -62,7 +54,6 @@ pub fn toi64(input: &Option<u32>) -> Option<i64> {
     stop_headsign: Option<String>,
     point: ewkb::Point
 }*/
-
 pub fn location_type_conversion(input: &LocationType) -> i16 {
     match input {
         LocationType::StopPoint => 0,
@@ -73,7 +64,6 @@ pub fn location_type_conversion(input: &LocationType) -> i16 {
         LocationType::Unknown(i) => *i,
     }
 }
-
 pub fn route_type_to_int(input: &RouteType) -> i16 {
     match input {
         RouteType::Tramway => 0,
@@ -87,14 +77,12 @@ pub fn route_type_to_int(input: &RouteType) -> i16 {
         RouteType::Coach => 200,
         RouteType::Air => 1100,
         RouteType::Taxi => 1500,
-        RouteType::Other(i) => (*i),
+        RouteType::Other(i) => *i,
     }
 }
-
 pub fn is_uppercase(string: &str) -> bool {
     string.chars().all(char::is_uppercase)
 }
-
 pub fn titlecase_process_new_nooption(input: &String) -> String {
     let mut string = input.clone();
     if string.len() >= 7
@@ -109,43 +97,36 @@ pub fn titlecase_process_new_nooption(input: &String) -> String {
     }
     string
 }
-
 pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
     match input {
         Some(s) => Some(titlecase_process_new_nooption(s)),
         None => None,
     }
 }
-
 pub fn make_hashmap_stops_to_route_types_and_ids(
     gtfs: &gtfs_structures::Gtfs,
 ) -> (HashMap<String, Vec<i16>>, HashMap<String, Vec<String>>) {
     let mut stop_to_route_types: HashMap<String, Vec<i16>> = HashMap::new();
     let mut stop_to_route_ids: HashMap<String, Vec<String>> = HashMap::new();
-
     for (trip_id, trip) in &gtfs.trips {
         for stoptime in &trip.stop_times {
             match gtfs.get_route(&trip.route_id) {
                 Ok(route) => {
                     let route_type_num = route_type_to_int(&route.route_type);
-
                     stop_to_route_types
                         .entry(stoptime.stop.id.clone())
                         .and_modify(|types| {
                             if !types.contains(&route_type_num) {
                                 types.push(route_type_num);
-
                                 types.dedup();
                             }
                         })
                         .or_insert(vec![route_type_num]);
-
                     stop_to_route_ids
                         .entry(stoptime.stop.id.clone())
                         .and_modify(|types| {
                             if !types.contains(&route.id) {
                                 types.push(route.id.clone());
-
                                 types.dedup();
                             }
                         })
@@ -157,7 +138,6 @@ pub fn make_hashmap_stops_to_route_types_and_ids(
     }
     (stop_to_route_types, stop_to_route_ids)
 }
-
 //returns (stop_id_to_children_ids, stop_ids_to_children_route_types)
 pub fn make_hashmaps_of_children_stop_info(
     gtfs: &gtfs_structures::Gtfs,
@@ -166,7 +146,6 @@ pub fn make_hashmaps_of_children_stop_info(
 ) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<i16>>) {
     let mut stop_id_to_children_ids: HashMap<String, Vec<String>> = HashMap::new();
     let mut stop_ids_to_children_route_types: HashMap<String, Vec<i16>> = HashMap::new();
-
     for (stop_id, stop) in &gtfs.stops {
         if stop.parent_station.is_some() {
             stop_id_to_children_ids
@@ -177,65 +156,51 @@ pub fn make_hashmaps_of_children_stop_info(
                     }
                 })
                 .or_insert(vec![stop_id.clone()]);
-
             let route_types_for_this_stop = stop_to_route_types.get(stop_id);
-
             if route_types_for_this_stop.is_some() {
                 stop_ids_to_children_route_types
                     .entry(stop.parent_station.as_ref().unwrap().clone())
                     .and_modify(|children_route_types| {
                         children_route_types.extend(route_types_for_this_stop.unwrap());
-
                         children_route_types.dedup();
                     })
                     .or_insert(route_types_for_this_stop.unwrap().clone());
             }
         }
     }
-
     (stop_id_to_children_ids, stop_ids_to_children_route_types)
 }
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let postgresstring = arguments::parse(std::env::args())
         .expect("Add a postgres string via --postgres <string>")
         .get::<String>("postgres");
-
     let threads = arguments::parse(std::env::args())
         .expect("Add a thread count via --threads <positive int>")
         .get::<usize>("threads");
-
     let threadcount = threads.unwrap();
-
     let postgresstring = match postgresstring {
         Some(s) => s,
         None => {
             panic!("Add a postgres string via --postgres <string>");
         }
     };
-
     let startfresh = arguments::parse(std::env::args())
         .unwrap()
         .get::<bool>("startfresh");
-
     let limittostaticfeed = arguments::parse(std::env::args())
         .unwrap()
         .get::<String>("limittostaticfeed");
-
     let is_prod = arguments::parse(std::env::args())
         .unwrap()
         .get::<bool>("isprod");
-
     let skiptrips = arguments::parse(std::env::args())
         .unwrap()
         .get::<bool>("skiptrips")
         .unwrap_or_else(|| false);
-
     let soft_insert = arguments::parse(std::env::args())
         .unwrap()
         .get::<bool>("softinsert");
-
     let schemaname = match is_prod {
         Some(s) => {
             if s {
@@ -246,10 +211,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         None => "gtfs_stage",
     };
-
     // Connect to the database.
     let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
-
     // The connection object performs the actual communication with the database,
     // so spawn it off to run on its own.
     tokio::spawn(async move {
@@ -257,7 +220,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             eprintln!("connection error: {}", e);
         }
     });
-
     client
         .batch_execute(
             "
@@ -267,14 +229,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     if startfresh.unwrap_or(false) {
         client
             .batch_execute(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schemaname).as_str())
             .await
             .unwrap();
     }
-
     client
         .batch_execute(
             format!(
@@ -285,7 +245,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     client
         .batch_execute(
             format!(
@@ -298,7 +257,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     client
         .batch_execute(
             format!(
@@ -312,7 +270,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     client
         .batch_execute(
             format!(
@@ -335,7 +292,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     client
         .batch_execute(
             format!(
@@ -353,7 +309,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     client
         .batch_execute(
             format!(
@@ -374,7 +329,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     client
         .batch_execute(
             format!(
@@ -409,7 +363,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     client
         .batch_execute(
             format!(
@@ -438,7 +391,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     client
         .batch_execute(
             format!(
@@ -466,7 +418,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     client
         .batch_execute(
             format!(
@@ -488,7 +439,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     client
         .batch_execute(
             format!(
@@ -515,33 +465,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .unwrap();
-
     if is_prod.unwrap_or(false) {
         println!("making martin functions");
         make_prod_index::make_prod_index(&client, &schemaname.to_string()).await;
     }
-
     if is_prod.unwrap_or(false) {
         shape_functions::render_vector_tile_functions(&client, &schemaname.to_string()).await;
     }
-
     let _ = client.batch_execute(format!("ALTER TABLE {schemaname}.routes SET UNLOGGED; ALTER TABLE {schemaname}.trips SET UNLOGGED; ALTER TABLE {schemaname}.shapes SET UNLOGGED; ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;").as_str()).await.unwrap();
-
     println!("Finished making database");
-
     #[derive(Debug, Clone)]
     struct OperatorPairInfo {
         operator_id: String,
         gtfs_agency_id: Option<String>,
     }
-
     if fs::read_dir("transitland-atlas/feeds").is_err() {
         println!("Could not read that directory!");
         return Err(Box::<dyn std::error::Error>::from(
             "Could not read that directory!",
         ));
     }
-
     let entries = fs::read_dir("transitland-atlas/feeds").unwrap();
     let mut feedhashmap: BTreeMap<String, dmfr::Feed> = BTreeMap::new();
     let mut operatorhashmap: BTreeMap<String, dmfr::Operator> = BTreeMap::new();
@@ -567,10 +510,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if let Some(file_name) = entry.file_name().to_str() {
                 println!("{}", file_name);
                 let contents = fs::read_to_string(format!("transitland-atlas/feeds/{}", file_name));
-                match contents {
-                    Ok(contents) => {
+                if contents.is_err() {
+                    continue;
+                }
                         let dmfrinfo: Result<dmfr::DistributedMobilityFeedRegistry, SerdeError> =
-                            serde_json::from_str(&contents);
+                            serde_json::from_str(&contents.unwrap());
                         match dmfrinfo {
                             Ok(dmfrinfo) => {
                                 dmfrinfo.feeds.iter().for_each(|feed| {
@@ -596,14 +540,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 }],
                                             );
                                         }
-
                                         feed_to_operator_hashmap
                                             .entry(feed.id.clone())
                                             .and_modify(|value| {
                                                 value.push(eachoperator.onestop_id.clone())
                                             })
                                             .or_insert(vec![eachoperator.onestop_id.clone()]);
-
                                         operator_to_feed_hashmap
                                             .entry(eachoperator.onestop_id)
                                             .or_insert(vec![dmfr::OperatorAssociatedFeedsItem {
@@ -613,7 +555,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     }
                                     //println!("Feed {}: {:#?}", feed.id.clone(), feed);
                                     feedhashmap.entry(feed.id.clone()).or_insert(feed.clone());
-
                                     feed.operators.iter().for_each(|operator| {
                                         operatorhashmap
                                             .insert(operator.onestop_id.clone(), operator.clone());
@@ -731,9 +672,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                             Err(_) => {}
                         }
-                    }
-                    Err(_) => {}
-                }
             }
         }
     }
@@ -845,11 +783,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
                                     let mut most_lat: Option<f64> = None;
                                     let mut most_lon: Option<f64> = None;
-
                                     let (stop_ids_to_route_types,stop_ids_to_route_ids) = make_hashmap_stops_to_route_types_and_ids(&gtfs);
     
                                     let (stop_id_to_children_ids, stop_ids_to_children_route_types) = make_hashmaps_of_children_stop_info(&gtfs,&stop_ids_to_route_types,&stop_ids_to_route_ids);
-
                                     //let timestarting = std::time::Instant::now();
     
                                     for (stop_id, stop) in &gtfs.stops {
@@ -939,7 +875,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     route_type = $7,
                                     route_label = $8
                                     ;").as_str()).await.unwrap();
-
                                     for (shape_id, shape) in &gtfs.shapes {
                                         let mut route_ids: Vec<String> = match gtfs
                                         .trips
@@ -1236,7 +1171,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             //dedup
                                             stop_headsigns_for_trip.dedup();
                                             let stop_headsigns_for_trip = stop_headsigns_for_trip;
-
                                             client
                                                 .query(
                                                     &statement,
@@ -1252,9 +1186,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                             &stop_headsigns_for_trip
                                                        ],
                                                 ).await.unwrap();
-
                                             for stoptime in &trip.stop_times {
-
                                                 if stoptime.stop.latitude.is_some() && stoptime.stop.longitude.is_some() {
                                                     let point = ewkb::Point {
                                                         x: stoptime.stop.longitude.unwrap(),
@@ -1290,12 +1222,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                       
                                     println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
                                     }
-
                                     //Pre-process stops, identify children stops with the same name
-
                                     //(lat,lon) -> stop_id
                                     let mut hashmap_of_coords_to_stops: HashMap<(OrderedFloat<f64>,OrderedFloat<f64>),Vec<String>> = HashMap::new();
-
                                     for (stop_id,stop) in &gtfs.stops {
                                         if stop.latitude.is_some() && stop.longitude.is_some() {
                                             hashmap_of_coords_to_stops.entry((
@@ -1305,14 +1234,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             .or_insert(vec![stop_id.clone()]);
                                         }
                                     }
-
                                     let hashmap_of_coords_to_stops: HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), Vec<String>> = hashmap_of_coords_to_stops
                                     .into_iter()
                                     .filter(|(k,v)| v.len() >= 2)
                                     .collect::<HashMap<(OrderedFloat<f64>,OrderedFloat<f64>),Vec<String>>>();
-
                                     println!("{} Stops that are duplicate points", hashmap_of_coords_to_stops.len());
-
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
                                      (onestop_feed_id, gtfs_id, name, displayname, code, gtfs_desc, point, route_types, routes, location_type, parent_station, children_ids, children_route_types)
@@ -1360,10 +1286,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let stop_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
                                     
                                     let num_of_points_polygon = hull.exterior().coords_count();
-
                                     println!("Convex Hull Algo for {} took {}μs", feed.id, (stop_hull_time - start_hull_time) / 1000);
                                     println!("{} points", shape_points.len());
-
                                         let hull_postgres = hull
                                         .to_postgis_wgs84();
                                     
@@ -1375,7 +1299,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                              (least_lon.unwrap(), least_lat.unwrap()), (least_lon.unwrap(), most_lat.unwrap()), (most_lon.unwrap(), most_lat.unwrap())]),vec![]).to_postgis_wgs84(),
                                         _ => hull_postgres
                                     };
-
                                     if gtfs.routes.len() > 0 as usize {
                                         let _ = client.query(
                                             format!("INSERT INTO {schemaname}.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids, hull)
@@ -1410,7 +1333,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &true,
                                             &(in_ms as i64)
                                         ]).await.unwrap();
-
                                         client.execute(
                                             format!(
                                                 "DELETE FROM {schemaname}.gtfs_errors WHERE onestop_feed_id = $1;"
@@ -1559,6 +1481,5 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("Waiting for {} seconds", x);
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
-
     Ok(())
 }
