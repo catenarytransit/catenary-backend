@@ -4,34 +4,40 @@ use gtfs_structures::LocationType;
 use gtfs_structures::Route;
 use gtfs_structures::Trip;
 use itertools::Itertools;
-use ordered_float::OrderedFloat;
+use serde::Serialize;
 use serde_json::Error as SerdeError;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use titlecase::titlecase;
+use tokio_postgres::Statement;
 mod dmfr;
 use bb8_postgres::PostgresConnectionManager;
 use futures;
+use std::collections::HashSet;
 use geo_postgis::ToPostgis;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::RouteType;
+use ordered_float::OrderedFloat;
 use postgis::ewkb;
 use rayon::prelude::*;
 use rgb::RGB;
 use std::error::Error;
 use std::ops::Deref;
+use std::rc::Rc;
+use std::sync::Arc;
 use tokio_postgres::NoTls;
 extern crate tokio_threadpool;
 use tokio::runtime;
 extern crate fs_extra;
 use fs_extra::dir::get_size;
+
 mod colour_correction;
 mod convex_hull;
+
 mod fix_broken_lines;
 mod make_prod_index;
 mod shape_functions;
-
 struct RealtimeOverride {
     realtimeid: String,
     operatorid: String,
@@ -69,6 +75,7 @@ pub fn location_type_conversion(input: &LocationType) -> i16 {
         LocationType::Unknown(i) => *i,
     }
 }
+
 pub fn route_type_to_int(input: &RouteType) -> i16 {
     match input {
         RouteType::Tramway => 0,
@@ -82,7 +89,7 @@ pub fn route_type_to_int(input: &RouteType) -> i16 {
         RouteType::Coach => 200,
         RouteType::Air => 1100,
         RouteType::Taxi => 1500,
-        RouteType::Other(i) => *i,
+        RouteType::Other(i) => (*i),
     }
 }
 
@@ -104,6 +111,7 @@ pub fn titlecase_process_new_nooption(input: &String) -> String {
     }
     string
 }
+
 pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
     match input {
         Some(s) => Some(titlecase_process_new_nooption(s)),
@@ -111,28 +119,35 @@ pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
     }
 }
 
-pub fn make_hashmap_stops_to_route_types_and_ids(gtfs: &gtfs_structures::Gtfs) -> (HashMap<String, Vec<i16>>, HashMap<String, Vec<String>>) {
+pub fn make_hashmap_stops_to_route_types_and_ids(
+    gtfs: &gtfs_structures::Gtfs,
+) -> (HashMap<String, Vec<i16>>, HashMap<String, Vec<String>>) {
     let mut stop_to_route_types: HashMap<String, Vec<i16>> = HashMap::new();
     let mut stop_to_route_ids: HashMap<String, Vec<String>> = HashMap::new();
+
     for (trip_id, trip) in &gtfs.trips {
         for stoptime in &trip.stop_times {
             match gtfs.get_route(&trip.route_id) {
                 Ok(route) => {
                     let route_type_num = route_type_to_int(&route.route_type);
+
                     stop_to_route_types
                         .entry(stoptime.stop.id.clone())
                         .and_modify(|types| {
                             if !types.contains(&route_type_num) {
                                 types.push(route_type_num);
+
                                 types.dedup();
                             }
                         })
                         .or_insert(vec![route_type_num]);
+
                     stop_to_route_ids
                         .entry(stoptime.stop.id.clone())
                         .and_modify(|types| {
                             if !types.contains(&route.id) {
                                 types.push(route.id.clone());
+
                                 types.dedup();
                             }
                         })
@@ -144,6 +159,7 @@ pub fn make_hashmap_stops_to_route_types_and_ids(gtfs: &gtfs_structures::Gtfs) -
     }
     (stop_to_route_types, stop_to_route_ids)
 }
+
 //returns (stop_id_to_children_ids, stop_ids_to_children_route_types)
 pub fn make_hashmaps_of_children_stop_info(
     gtfs: &gtfs_structures::Gtfs,
@@ -152,6 +168,7 @@ pub fn make_hashmaps_of_children_stop_info(
 ) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<i16>>) {
     let mut stop_id_to_children_ids: HashMap<String, Vec<String>> = HashMap::new();
     let mut stop_ids_to_children_route_types: HashMap<String, Vec<i16>> = HashMap::new();
+
     for (stop_id, stop) in &gtfs.stops {
         if stop.parent_station.is_some() {
             stop_id_to_children_ids
@@ -162,20 +179,25 @@ pub fn make_hashmaps_of_children_stop_info(
                     }
                 })
                 .or_insert(vec![stop_id.clone()]);
+
             let route_types_for_this_stop = stop_to_route_types.get(stop_id);
+
             if route_types_for_this_stop.is_some() {
                 stop_ids_to_children_route_types
                     .entry(stop.parent_station.as_ref().unwrap().clone())
                     .and_modify(|children_route_types| {
                         children_route_types.extend(route_types_for_this_stop.unwrap());
+
                         children_route_types.dedup();
                     })
                     .or_insert(route_types_for_this_stop.unwrap().clone());
             }
         }
     }
+
     (stop_id_to_children_ids, stop_ids_to_children_route_types)
 }
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
 
@@ -188,6 +210,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .get::<usize>("threads");
 
     let threadcount = threads.unwrap();
+
     let postgresstring = match postgresstring {
         Some(s) => s,
         None => {
@@ -226,8 +249,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         None => "gtfs_stage",
     };
-    
+
+    // Connect to the database.
     let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
+
+    // The connection object performs the actual communication with the database,
+    // so spawn it off to run on its own.
 
     tokio::spawn(async move {
         if let Err(e) = connection.await {
@@ -326,6 +353,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         children_ids text[],
         children_route_types smallint[],
         station_feature boolean,
+        hidden boolean,
+        location_alias text[],
         PRIMARY KEY (onestop_feed_id, gtfs_id)
         )",
         schemaname
@@ -416,7 +445,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let _ = client.batch_execute(format!("ALTER TABLE {schemaname}.routes SET UNLOGGED; ALTER TABLE {schemaname}.trips SET UNLOGGED; ALTER TABLE {schemaname}.shapes SET UNLOGGED; ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;").as_str()).await.unwrap();
+
     println!("Finished making database");
+
     #[derive(Debug, Clone)]
     struct OperatorPairInfo {
         operator_id: String,
@@ -625,6 +656,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .build(manager)
         .await
         .unwrap();
+
     //let threadpool = ThreadPool::new(threadcount);
     let threaded_rt = runtime::Builder::new_multi_thread()
         .worker_threads(threadcount)
@@ -688,11 +720,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
                         if feed.urls.static_current.is_some() {
                             //check if folder exists in the directory
-    
                             //process and upload routes, stops, headways, and shapes etc into postgres
-    
                             //calculate the bounds of the feed,
-    
                             //upload the feed id metadata
     
                             let file_path = format!("gtfs_uncompressed/{}/", key);
@@ -720,11 +749,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
                                     let mut least_lat: Option<f64> = None;
                                     let mut least_lon: Option<f64> = None;
+    
                                     let mut most_lat: Option<f64> = None;
                                     let mut most_lon: Option<f64> = None;
 
                                     let (stop_ids_to_route_types,stop_ids_to_route_ids) = make_hashmap_stops_to_route_types_and_ids(&gtfs);
                                     let (stop_id_to_children_ids, stop_ids_to_children_route_types) = make_hashmaps_of_children_stop_info(&gtfs,&stop_ids_to_route_types,&stop_ids_to_route_ids);
+
                                     //let timestarting = std::time::Instant::now();
     
                                     for (stop_id, stop) in &gtfs.stops {
@@ -852,6 +883,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let route_ids:Vec<String> = route_ids.into_iter().unique().collect();
                                         let mut route_type_number = 3;
 
+
                                         if route_ids.len() > 0 {
                                             let route = gtfs.routes.get(&route_ids[0]);
                                             
@@ -965,9 +997,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 }
                                             }
                                         };
-
                                         // println!("uploading shape {:?} {:?}", &feed.id, &shape_id);
-
                                         let route_label:String = route_ids.iter().map(|route_id| {
                                          let route = gtfs.routes.get(route_id);
                                          if route.is_some() {
@@ -1002,6 +1032,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &route_label
                                         ]).await.unwrap();
                                     }
+
                                     let routes: HashMap<(String, String), (&Route, &PooledConnection<PostgresConnectionManager<NoTls>>)> = gtfs.routes.iter()
                                         .map(|(key, route)| ((key.clone(), feed.id.clone()), (route, &client))).collect();
                                     let routes_clone = routes.clone();
@@ -1114,7 +1145,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             let stop_headsigns_for_trip = stop_headsigns_for_trip;
                                             client.query(
                                                 &statement,
-                                        &[
+                                                &[
                                                     &feed_id,
                                                     &trip.id,
                                                     &trip.service_id,
@@ -1128,6 +1159,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             ).await.unwrap();
 
                                             for stoptime in &trip.stop_times {
+
                                                 if stoptime.stop.latitude.is_some() && stoptime.stop.longitude.is_some() {
                                                     let point = ewkb::Point {
                                                         x: stoptime.stop.longitude.unwrap(),
@@ -1135,6 +1167,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         srid: Some(4326),
                                                     };
                                             
+
                                                     let stop_headsign:Option<String> = titlecase_process_new(stoptime.stop_headsign.as_ref());
                                                 
                                                     if stoptime.arrival_time.is_some() && stoptime.departure_time.is_some() {
@@ -1160,10 +1193,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             let _ = tokio::join!(worker);
                                         }      
                                         println!("{} with {} trips took {}ms", feed.id, gtfs.trips.len(), time.elapsed().as_millis());
-                                    }
+
+
                                     //Pre-process stops, identify children stops with the same name
+
                                     //(lat,lon) -> stop_id
                                     let mut hashmap_of_coords_to_stops: HashMap<(OrderedFloat<f64>,OrderedFloat<f64>),Vec<String>> = HashMap::new();
+
                                     for (stop_id,stop) in &gtfs.stops {
                                         if stop.latitude.is_some() && stop.longitude.is_some() {
                                             hashmap_of_coords_to_stops.entry((
@@ -1180,10 +1216,49 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     .collect::<HashMap<(OrderedFloat<f64>,OrderedFloat<f64>),Vec<String>>>();
 
                                     println!("{} Stops that are duplicate points", hashmap_of_coords_to_stops.len());
+
+                                    //criteria for hiding
+                                    //if the 2 stops share the same name, mark them aliases. IF there is a child and parent, mark the children as hidden, pointing torwards the parent station.
+                                    //This resolves a bug (poorly designed GTFS Schedule files) where Los Angeles Metro places 2 rail station stops at the same coordinates.
+                                  
+                                    let mut hashmap_stops_dedup_meta: HashMap<String, (bool, Arc<Vec<String>>)> = HashMap::new();
+
+                                    for (_,vec_of_stop_ids) in hashmap_of_coords_to_stops {
+                                        let arc_of_stop_ids = Arc::new(vec_of_stop_ids);
+
+                                        //lookup of each group and categorise the stops
+                                        let list_of_stops = arc_of_stop_ids.iter().map(|stop_id| gtfs.stops.get(stop_id).unwrap().clone()).collect::<Vec<Arc<gtfs_structures::Stop>>>();
+                                        let dont_hide_this_stop_candidates = list_of_stops.iter().filter(|stop| stop.parent_station.is_none()).map(|stop| stop.clone()).collect::<Vec<Arc<gtfs_structures::Stop>>>();
+                                       // let dont_hide_this_stop_candidates_stop_ids = dont_hide_this_stop_candidates.iter().map(|stop| stop.id.clone()).collect::<HashSet<String>>();
+                                       let dont_hide_this_stop_candidates_names = dont_hide_this_stop_candidates.iter().map(|stop| stop.name.clone()).collect::<HashSet<String>>();
+
+
+                                        for stop in list_of_stops {
+                                            
+                                        let mut hidden_stops = false;
+
+                                        if stop.parent_station.is_none() {  
+                                            hidden_stops = false;
+                                        } else {
+                                            //todo! implement search for nearby stops with the same name, probably using hexagonal hashing structure search
+                                            //prob not a good idea, since NYC has a good reason
+                                            // Thank you professor Michael Goodrich, I am forever blessed with complexity analysis of algorithms
+                                            if let gtfs_structures::LocationType::StationEntrance = stop.location_type {} else {
+                                                //prevents "7th St/Metro Center" from shadowing "7th St/Metro Center - Metro A & E Lines"
+                                                if dont_hide_this_stop_candidates_names.contains(&stop.name) {
+                                                    hidden_stops = true
+                                                }
+                                            }
+                                        }
+
+                                        hashmap_stops_dedup_meta.insert(stop.id.clone(), (hidden_stops,arc_of_stop_ids.clone()));
+                                        }
+                                    }
+
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
-                                     (onestop_feed_id, gtfs_id, name, displayname, code, gtfs_desc, point, route_types, routes, location_type, parent_station, children_ids, children_route_types)
-                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT DO NOTHING;"
+                                     (onestop_feed_id, gtfs_id, name, displayname, code, gtfs_desc, point, route_types, routes, location_type, parent_station, children_ids, children_route_types, hidden, alias)
+                                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) ON CONFLICT DO NOTHING;"
                                     ).as_str()).await.unwrap();
                                     for (stop_id, stop) in &gtfs.stops {
                                        if stop.latitude.is_some() && stop.longitude.is_some() {
@@ -1194,6 +1269,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         };
                                         let name = titlecase_process_new_nooption(&stop.name);
                                         let displayname = name.clone().to_string().replace(" Station","").replace("Northbound","N.B.").replace("Eastbound","E.B.").replace("Southbound","S.B.").replace("Westbound","W.B.");
+
+                                        let fetch_of_dedup = hashmap_stops_dedup_meta.get(&stop.id);
+
+                                        let hidden_stop = match fetch_of_dedup {
+                                            _ => false,
+                                            Some(fetch_of_dedup) => fetch_of_dedup.0
+                                        };
+
+                                        let alias_names: Option<&Vec<String>> = match fetch_of_dedup {
+                                            _ => None,
+                                            Some(fetch_of_dedup) => Some(fetch_of_dedup.1.deref())
+                                        };
+
                                         client.query(&stopstatement, &[
                                             &feed.id,
                                             &stop.id,
@@ -1207,10 +1295,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &location_type_conversion(&stop.location_type),
                                             &stop.parent_station,
                                             &stop_id_to_children_ids.get(&stop.id),
-                                            &stop_ids_to_children_route_types.get(&stop.id)
+                                            &stop_ids_to_children_route_types.get(&stop.id),
+                                            &hidden_stop,
+                                            &alias_names
                                         ]).await.unwrap();
                                        }
                                     }
+
                                     let start_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
                                     //convex hull calcs
                                     let mut shape_points = gtfs.shapes.iter().map(|(a,b)| b)
@@ -1228,9 +1319,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let stop_hull_time = chrono::prelude::Utc::now().timestamp_nanos_opt().unwrap();
                                     
                                     let num_of_points_polygon = hull.exterior().coords_count();
+
                                     println!("Convex Hull Algo for {} took {}μs", feed.id, (stop_hull_time - start_hull_time) / 1000);
                                     println!("{} points", shape_points.len());
-                                        let hull_postgres = hull.to_postgis_wgs84();
+
+                                    let hull_postgres = hull.to_postgis_wgs84();
                                     
                                     let hull_postgres = match num_of_points_polygon {
                                         0 => geo::Polygon::new(
@@ -1240,6 +1333,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                              (least_lon.unwrap(), least_lat.unwrap()), (least_lon.unwrap(), most_lat.unwrap()), (most_lon.unwrap(), most_lat.unwrap())]),vec![]).to_postgis_wgs84(),
                                         _ => hull_postgres
                                     };
+
                                     if gtfs.routes.len() > 0 as usize {
                                         let _ = client.query(
                                             format!("INSERT INTO {schemaname}.static_feeds (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids, hull)
@@ -1275,6 +1369,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             &true,
                                             &(in_ms as i64)
                                         ]).await.unwrap();
+
                                         client.execute(
                                             format!(
                                                 "DELETE FROM {schemaname}.gtfs_errors WHERE onestop_feed_id = $1;"
@@ -1410,12 +1505,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         realtime_onestop_feeds_to_gtfs_ids = realtime_onestop_feeds_to_gtfs_ids || '{0}=>null' :: hstore WHERE onestop_operator_id = $1", &realtime_override.realtimeid).as_str(), &[
         &realtime_override.operatorid
     ]).await.unwrap();
-        client.query(format!("UPDATE {schemaname}.realtime_feeds SET operators = 
-        (select array_agg(distinct e) from unnest(operators || '{{{1}}}') e),
-         operators_to_gtfs_ids = operators_to_gtfs_ids || '{1}=>null' :: hstore WHERE onestop_feed_id = '{0}'", 
-        &realtime_override.realtimeid,
-        &realtime_override.operatorid,
-    )
+
+        client.query(
+        format!("UPDATE {schemaname}.realtime_feeds SET operators = (select array_agg(distinct e) from unnest(operators || '{{{1}}}') e), operators_to_gtfs_ids = operators_to_gtfs_ids || '{1}=>null' :: hstore WHERE onestop_feed_id = '{0}'", 
+            &realtime_override.realtimeid,
+            &realtime_override.operatorid,
+        )
         .as_str(),&[
         ]).await.unwrap();
     }
@@ -1423,5 +1518,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("Waiting for {} seconds", x);
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+
     Ok(())
 }

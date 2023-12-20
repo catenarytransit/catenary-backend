@@ -25,7 +25,7 @@ cargo run --release --bin transitlanddownload
 
 ### Unzip and format the zip files
 ```bash
-cargo run --release --bin newunzip
+./src/ingest_gtfs_schedule/unzip-statics.sh
 ```
 
 ### Import data into the postgres database

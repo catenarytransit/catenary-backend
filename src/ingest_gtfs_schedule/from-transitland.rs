@@ -228,11 +228,12 @@ async fn main() {
 
         let static_fetches =
             futures::stream::iter(vecofstaticstrings.into_iter().map(|staticfeed| async move {
-                let client =  reqwest::ClientBuilder::new()
-                .deflate(true)
-                .gzip(true)
-                .brotli(true)
-                .build().unwrap();
+                let client = reqwest::ClientBuilder::new()
+                    .deflate(true)
+                    .gzip(true)
+                    .brotli(true)
+                    .build()
+                    .unwrap();
 
                 let request = client.get(&staticfeed.url);
 

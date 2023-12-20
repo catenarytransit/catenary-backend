@@ -397,6 +397,7 @@ async fn main() -> std::io::Result<()> {
                     .add(("Access-Control-Allow-Origin", "https://catenarymaps.org")),
             )
             .wrap(actix_block_ai_crawling::BlockAi)
+            .wrap(middleware::Compress::default())
             .app_data(actix_web::web::Data::new(pool.clone()))
             .route("/", web::get().to(index))
             .service(getroutesperagency)
