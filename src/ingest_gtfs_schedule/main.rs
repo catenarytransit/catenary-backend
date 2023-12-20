@@ -260,65 +260,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    client
-        .batch_execute(
-            "
+    client.batch_execute("
         CREATE EXTENSION IF NOT EXISTS postgis;
         CREATE EXTENSION IF NOT EXISTS hstore;
-        ",
-        )
-        .await
-        .unwrap();
+    ").await.unwrap();
 
     if startfresh.unwrap_or(false) {
-        client
-            .batch_execute(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schemaname).as_str())
-            .await
-            .unwrap();
+        client.batch_execute(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schemaname).as_str()).await.unwrap();
     }
 
-    client
-        .batch_execute(
-            format!(
-                "
-            CREATE SCHEMA IF NOT EXISTS {schemaname};"
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+    client.batch_execute(format!("
+        CREATE SCHEMA IF NOT EXISTS {schemaname};"
+    ).as_str()).await.unwrap();
 
-    client
-        .batch_execute(
-            format!(
-                "CREATE TABLE IF NOT EXISTS {schemaname}.gtfs_errors (
-                onestop_feed_id text PRIMARY KEY,
-                error text
-            )"
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+    client.batch_execute(format!("
+        CREATE TABLE IF NOT EXISTS {schemaname}.gtfs_errors (
+            onestop_feed_id text PRIMARY KEY,
+            error text
+        )"
+    ).as_str()).await.unwrap();
 
-    client
-        .batch_execute(
-            format!(
-                "CREATE TABLE IF NOT EXISTS {schemaname}.feeds_updated (
+    client.batch_execute(format!("
+        CREATE TABLE IF NOT EXISTS {schemaname}.feeds_updated (
             onestop_feed_id text PRIMARY KEY,
             created_trips boolean,
             updated_trips_time_ms bigint
         );"
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+    ).as_str()).await.unwrap();
 
-    client
-        .batch_execute(
-            format!(
-                "CREATE TABLE IF NOT EXISTS {}.static_feeds (
+    client.batch_execute(format!("
+        CREATE TABLE IF NOT EXISTS {}.static_feeds (
             onestop_feed_id text PRIMARY KEY,
             only_realtime_ref text,
             operators text[],
@@ -331,201 +302,146 @@ async fn main() -> Result<(), Box<dyn Error>> {
             min_lon double precision NOT NULL,
             hull GEOMETRY(POLYGON,4326) NOT NULL
         );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+        schemaname
+    ).as_str()).await.unwrap();
 
-    client
-        .batch_execute(
-            format!(
-                "CREATE TABLE IF NOT EXISTS {}.operators (
-        onestop_operator_id text PRIMARY KEY,
-        name text,
-        gtfs_static_feeds text[],
-        gtfs_realtime_feeds text[],
-        static_onestop_feeds_to_gtfs_ids hstore,
-        realtime_onestop_feeds_to_gtfs_ids hstore
-    );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+    client.batch_execute(format!("
+        CREATE TABLE IF NOT EXISTS {}.operators (
+            onestop_operator_id text PRIMARY KEY,
+            name text,
+            gtfs_static_feeds text[],
+            gtfs_realtime_feeds text[],
+            static_onestop_feeds_to_gtfs_ids hstore,
+            realtime_onestop_feeds_to_gtfs_ids hstore
+        );",
+        schemaname
+    ).as_str()).await.unwrap();
 
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE TABLE IF NOT EXISTS {}.realtime_feeds (
-        onestop_feed_id text PRIMARY KEY,
-        name text,
-        operators text[],
-        operators_to_gtfs_ids hstore,
-        max_lat double precision,
-        max_lon double precision,
-        min_lat double precision,
-        min_lon double precision
-    );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+    client.batch_execute(format!("
+        CREATE TABLE IF NOT EXISTS {}.realtime_feeds (
+            onestop_feed_id text PRIMARY KEY,
+            name text,
+            operators text[],
+            operators_to_gtfs_ids hstore,
+            max_lat double precision,
+            max_lon double precision,
+            min_lat double precision,
+            min_lon double precision
+        );",
+        schemaname
+    ).as_str()).await.unwrap();
 
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE TABLE IF NOT EXISTS {}.stops (
-        onestop_feed_id text NOT NULL,
-        gtfs_id text NOT NULL,
-        name text NOT NULL,
-        displayname text NOT NULL,
-        code text,
-        gtfs_desc text,
-        location_type smallint,
-        parent_station text,
-        zone_id text,
-        url text,
-        point GEOMETRY(POINT,4326) NOT NULL,
-        timezone text,
-        wheelchair_boarding int,
-        primary_route_type text,
-        level_id text,
-        platform_code text,
-        routes text[],
-        route_types smallint[],
-        children_ids text[],
-        children_route_types smallint[],
-        station_feature boolean,
-        hidden boolean,
-        location_alias text[],
-        PRIMARY KEY (onestop_feed_id, gtfs_id)
-    )",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+    client.batch_execute(format!("
+        CREATE TABLE IF NOT EXISTS {}.stops (
+            onestop_feed_id text NOT NULL,
+            gtfs_id text NOT NULL,
+            name text NOT NULL,
+            displayname text NOT NULL,
+            code text,
+            gtfs_desc text,
+            location_type smallint,
+            parent_station text,
+            zone_id text,
+            url text,
+            point GEOMETRY(POINT,4326) NOT NULL,
+            timezone text,
+            wheelchair_boarding int,
+            primary_route_type text,
+            level_id text,
+            platform_code text,
+            routes text[],
+            route_types smallint[],
+            children_ids text[],
+            children_route_types smallint[],
+            station_feature boolean,
+            hidden boolean,
+            location_alias text[],
+            PRIMARY KEY (onestop_feed_id, gtfs_id)
+        )",
+        schemaname
+    ).as_str()).await.unwrap();
 
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE UNLOGGED TABLE IF NOT EXISTS {}.stoptimes (
-        onestop_feed_id text NOT NULL,
-        trip_id text NOT NULL,
-        stop_sequence int NOT NULL,
-        arrival_time bigint,
-        departure_time bigint,
-        stop_id text NOT NULL,
-        stop_headsign text,
-        pickup_type int,
-        drop_off_type int,
-        shape_dist_traveled double precision,
-        timepoint int,
-        continuous_pickup smallint,
-        continuous_drop_off smallint,
-        point GEOMETRY(POINT,4326) NOT NULL,
-        route_id text,
-        PRIMARY KEY (onestop_feed_id, trip_id, stop_sequence)
-    )",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+    client.batch_execute(format!("
+        CREATE UNLOGGED TABLE IF NOT EXISTS {}.stoptimes (
+            onestop_feed_id text NOT NULL,
+            trip_id text NOT NULL,
+            stop_sequence int NOT NULL,
+            arrival_time bigint,
+            departure_time bigint,
+            stop_id text NOT NULL,
+            stop_headsign text,
+            pickup_type int,
+            drop_off_type int,
+            shape_dist_traveled double precision,
+            timepoint int,
+            continuous_pickup smallint,
+            continuous_drop_off smallint,
+            point GEOMETRY(POINT,4326) NOT NULL,
+            route_id text,
+            PRIMARY KEY (onestop_feed_id, trip_id, stop_sequence)
+        )",
+        schemaname
+    ).as_str()).await.unwrap();
 
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE UNLOGGED TABLE IF NOT EXISTS {}.routes (
-        route_id text NOT NULL,
-        onestop_feed_id text NOT NULL,
-        short_name text NOT NULL,
-        long_name text NOT NULL,
-        gtfs_desc text,
-        route_type smallint NOT NULL,
-        url text,
-        agency_id text,
-        gtfs_order int,
-        color text,
-        text_color text,
-        continuous_pickup smallint,
-        continuous_drop_off smallint,
-        shapes_list text[],
-        PRIMARY KEY (onestop_feed_id, route_id)
-    );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+    client.batch_execute(format!("
+        CREATE UNLOGGED TABLE IF NOT EXISTS {}.routes (
+            route_id text NOT NULL,
+            onestop_feed_id text NOT NULL,
+            short_name text NOT NULL,
+            long_name text NOT NULL,
+            gtfs_desc text,
+            route_type smallint NOT NULL,
+            url text,
+            agency_id text,
+            gtfs_order int,
+            color text,
+            text_color text,
+            continuous_pickup smallint,
+            continuous_drop_off smallint,
+            shapes_list text[],
+            PRIMARY KEY (onestop_feed_id, route_id)
+        );",
+        schemaname
+    ).as_str()).await.unwrap();
 
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE UNLOGGED TABLE IF NOT EXISTS {}.shapes (
-        onestop_feed_id text NOT NULL,
-        shape_id text NOT NULL,
-        linestring GEOMETRY(LINESTRING,4326) NOT NULL,
-        color text,
-        routes text[],
-        route_type smallint NOT NULL,
-        route_label text,
-        text_color text,
-        PRIMARY KEY (onestop_feed_id,shape_id)
-    );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+    client.batch_execute(format!("
+        CREATE UNLOGGED TABLE IF NOT EXISTS {}.shapes (
+            onestop_feed_id text NOT NULL,
+            shape_id text NOT NULL,
+            linestring GEOMETRY(LINESTRING,4326) NOT NULL,
+            color text,
+            routes text[],
+            route_type smallint NOT NULL,
+            route_label text,
+            text_color text,
+            PRIMARY KEY (onestop_feed_id,shape_id)
+        );",
+        schemaname
+    ).as_str()).await.unwrap();
 
-    client
-        .batch_execute(
-            format!(
-                "
-    CREATE UNLOGGED TABLE IF NOT EXISTS {}.trips (
-        trip_id text NOT NULL,
-        onestop_feed_id text NOT NULL,
-        route_id text NOT NULL,
-        service_id text NOT NULL,
-        trip_headsign text,
-        has_stop_headsign boolean,
-        stop_headsigns text[],
-        trip_short_name text,
-        direction_id int,
-        block_id text,
-        shape_id text,
-        wheelchair_accessible int,
-        bikes_allowed int,
-        PRIMARY KEY (onestop_feed_id, trip_id)
-    );",
-                schemaname
-            )
-            .as_str(),
-        )
-        .await
-        .unwrap();
+    client.batch_execute(format!("
+        CREATE UNLOGGED TABLE IF NOT EXISTS {}.trips (
+            trip_id text NOT NULL,
+            onestop_feed_id text NOT NULL,
+            route_id text NOT NULL,
+            service_id text NOT NULL,
+            trip_headsign text,
+            has_stop_headsign boolean,
+            stop_headsigns text[],
+            trip_short_name text,
+            direction_id int,
+            block_id text,
+            shape_id text,
+            wheelchair_accessible int,
+            bikes_allowed int,
+            PRIMARY KEY (onestop_feed_id, trip_id)
+        );",
+        schemaname
+    ).as_str()).await.unwrap();
 
     if is_prod.unwrap_or(false) {
         println!("making martin functions");
         make_prod_index::make_prod_index(&client, &schemaname.to_string()).await;
-    }
-
-    if is_prod.unwrap_or(false) {
         shape_functions::render_vector_tile_functions(&client, &schemaname.to_string()).await;
     }
 
