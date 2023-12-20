@@ -1359,7 +1359,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                     let stopstatement = client.prepare(format!(
                                         "INSERT INTO {schemaname}.stops
-                                     (onestop_feed_id, gtfs_id, name, displayname, code, gtfs_desc, point, route_types, routes, location_type, parent_station, children_ids, children_route_types, hidden, alias)
+                                     (onestop_feed_id, gtfs_id, name, displayname, code, gtfs_desc, point, route_types, routes, location_type, parent_station, children_ids, children_route_types, hidden, location_alias)
                                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) ON CONFLICT DO NOTHING;"
                                     ).as_str()).await.unwrap();
                                     for (stop_id, stop) in &gtfs.stops {
