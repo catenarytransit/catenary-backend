@@ -1281,13 +1281,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let fetch_of_dedup = hashmap_stops_dedup_meta.get(&stop.id);
 
                                         let hidden_stop = match fetch_of_dedup {
-                                            _ => false,
-                                            Some(fetch_of_dedup) => fetch_of_dedup.0
+                                            Some(fetch_of_dedup) => fetch_of_dedup.0,
+                                            _ => false
                                         };
 
                                         let alias_names: Option<&Vec<String>> = match fetch_of_dedup {
-                                            _ => None,
-                                            Some(fetch_of_dedup) => Some(fetch_of_dedup.1.deref())
+                                            Some(fetch_of_dedup) => Some(fetch_of_dedup.1.deref()),
+                                            _ => None
                                         };
 
                                         client.query(&stopstatement, &[
