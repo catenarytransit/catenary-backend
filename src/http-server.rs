@@ -388,10 +388,6 @@ async fn main() -> std::io::Result<()> {
                     .add(("Server", "Catenary"))
                     .add((
                         "Access-Control-Allow-Origin",
-                        "https://transitmap.kylerchin.com",
-                    ))
-                    .add((
-                        "Access-Control-Allow-Origin",
                         "https://maps.catenarymaps.org",
                     ))
                     .add(("Access-Control-Allow-Origin", "https://catenarymaps.org")),
@@ -407,9 +403,8 @@ async fn main() -> std::io::Result<()> {
             .service(getinitdata)
             .service(microtime)
     })
-    .workers(4);
+    .workers(16);
 
-    // Bind the server to port 8080.
     let _ = builder.bind("127.0.0.1:5401").unwrap().run().await;
 
     Ok(())
