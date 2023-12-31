@@ -861,7 +861,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 && trip.shape_id.as_ref().unwrap()
                                                     == shape_id
                                         })
-                                        .map(|(trip_id, trip)| trip.route_id.clone())
+                                        .map(|(trip_id, trip)| trip.route_id.to_owned())
                                         .collect::<Vec<String>>()
                                         .as_slice()
                                     {
@@ -869,7 +869,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         route_ids => route_ids.to_vec(),
                                     };
                                      if feed.id == "f-9qh-metrolinktrains" {
-                                        let cleanedline = shape_id.clone().replace("in","").replace("out","");
+                                        let cleanedline = shape_id.to_owned().replace("in","").replace("out","");
                                        
                                         println!("cleanedline: {}", &cleanedline);
                                             let value = match cleanedline.as_str() {
@@ -961,7 +961,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             }
                                         })
                                     ;
-                                        if preshape.clone().count() < 2 {
+                                        if preshape.to_owned().count() < 2 {
                                             println!("Shape {} has less than 2 points", shape_id);
                                             continue;
                                         }
@@ -1011,12 +1011,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                   if route.unwrap().long_name.as_str() == "" {
                                                     return route_id.to_string();
                                                   } else {
-                                                    return route.unwrap().long_name.clone()
+                                                    return route.unwrap().long_name.to_owned()
                                                     .replace("-16168","")
                                                     .replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW").replace("clockwise", "CW").replace("Clockwise", "CW");
                                                   }
                                                 } else {
-                                                    return route.unwrap().short_name.clone()
+                                                    return route.unwrap().short_name.to_owned()
                                                     .replace("-16168","")
                                                     .replace("Counterclockwise", "ACW").replace("counterclockwise", "ACW").replace("clockwise", "CW").replace("Clockwise", "CW");
                                                 }
