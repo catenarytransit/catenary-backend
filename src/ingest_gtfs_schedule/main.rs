@@ -819,9 +819,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
                                     for (trip_id, trip) in &gtfs.trips {
                                         if trip.shape_id.is_some() {
-                                            if !shape_to_color_lookup
-                                                .contains_key(&trip.shape_id.as_ref().unwrap().clone())
-                                            {
+                                            if !shape_to_color_lookup.contains_key(&trip.shape_id.as_ref().unwrap().to_owned()) {
                                                 if gtfs.routes.contains_key(&trip.route_id) {
                                                     let route = gtfs
                                                         .routes
@@ -831,11 +829,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     let color = colour_correction::fix_background_colour_rgb_feed_route(&feed.id,route.color,route);
     
                                                     shape_to_color_lookup.insert(
-                                                    trip.shape_id.as_ref().unwrap().clone(),
+                                                    trip.shape_id.as_ref().unwrap().to_owned(),
                                                         color,
                                                     );
                                                     shape_to_text_color_lookup.insert(
-                                                        trip.shape_id.as_ref().unwrap().clone(),
+                                                        trip.shape_id.as_ref().unwrap().to_owned(),
                                                         route.text_color,
                                                     );
                                                 }
