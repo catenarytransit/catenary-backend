@@ -487,170 +487,164 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if let Some(file_name) = entry.file_name().to_str() {
                 println!("{}", file_name);
                 let contents = fs::read_to_string(format!("transitland-atlas/feeds/{}", file_name));
-                match contents {
-                    Ok(contents) => {
-                        let dmfrinfo: Result<dmfr::DistributedMobilityFeedRegistry, SerdeError> =
-                            serde_json::from_str(&contents);
-                        match dmfrinfo {
-                            Ok(dmfrinfo) => {
-                                dmfrinfo.feeds.iter().for_each(|feed| {
-                                    for eachoperator in feed.operators.clone().into_iter() {
-                                        if feed_to_operator_pairs_hashmap.contains_key(&feed.id) {
-                                            let mut existing_operator_pairs =
-                                                feed_to_operator_pairs_hashmap
-                                                    .get(&feed.id)
-                                                    .unwrap()
-                                                    .clone();
-                                            existing_operator_pairs.push(OperatorPairInfo {
-                                                operator_id: eachoperator.onestop_id.clone(),
-                                                gtfs_agency_id: None,
-                                            });
-                                            feed_to_operator_pairs_hashmap
-                                                .insert(feed.id.clone(), existing_operator_pairs);
-                                        } else {
-                                            feed_to_operator_pairs_hashmap.insert(
-                                                feed.id.clone(),
-                                                vec![OperatorPairInfo {
-                                                    operator_id: eachoperator.onestop_id.clone(),
-                                                    gtfs_agency_id: None,
-                                                }],
-                                            );
-                                        }
-
-                                        feed_to_operator_hashmap
-                                            .entry(feed.id.clone())
-                                            .and_modify(|value| {
-                                                value.push(eachoperator.onestop_id.clone())
-                                            })
-                                            .or_insert(vec![eachoperator.onestop_id.clone()]);
-
-                                        operator_to_feed_hashmap
-                                            .entry(eachoperator.onestop_id)
-                                            .or_insert(vec![dmfr::OperatorAssociatedFeedsItem {
-                                                feed_onestop_id: Some(feed.id.clone()),
-                                                gtfs_agency_id: None,
-                                            }]);
-                                    }
-                                    //println!("Feed {}: {:#?}", feed.id.clone(), feed);
-                                    feedhashmap.entry(feed.id.clone()).or_insert(feed.clone());
-
-                                    feed.operators.iter().for_each(|operator| {
-                                        operatorhashmap
-                                            .insert(operator.onestop_id.clone(), operator.clone());
-                                        if operator_to_feed_hashmap
-                                            .contains_key(&operator.onestop_id)
-                                        {
-                                            //combine the feeds for this operator together
-                                            let mut existing_associated_feeds =
-                                                operator_to_feed_hashmap
-                                                    .get(&operator.onestop_id)
-                                                    .unwrap()
-                                                    .clone();
-                                            let existing_feed_ids = operator_to_feed_hashmap
-                                                .get(&operator.onestop_id)
-                                                .unwrap()
-                                                .par_iter()
-                                                .map(|associated_feed| {
-                                                    associated_feed.feed_onestop_id.clone().unwrap()
-                                                })
-                                                .collect::<Vec<String>>();
-                                            operator.associated_feeds.iter().for_each(
-                                                |associated_feed| {
-                                                    if !existing_feed_ids.contains(
-                                                        &associated_feed
-                                                            .feed_onestop_id
-                                                            .clone()
-                                                            .unwrap_or_else(|| feed.id.clone()),
-                                                    ) {
-                                                        existing_associated_feeds
-                                                            .push(associated_feed.clone());
-                                                    }
-                                                },
-                                            );
-                                            operator_to_feed_hashmap.insert(
-                                                operator.onestop_id.clone(),
-                                                existing_associated_feeds,
-                                            );
-                                        } else {
-                                            operator_to_feed_hashmap.insert(
-                                                operator.onestop_id.clone(),
-                                                operator.associated_feeds.clone(),
-                                            );
-                                        }
+                if contents.is_err() {
+                    eprintln!("Error Reading File: {}", contents.unwrap_err());
+                    continue;
+                }
+                let dmfrinfo: Result<dmfr::DistributedMobilityFeedRegistry, SerdeError> = serde_json::from_str(&contents.unwrap());
+                match dmfrinfo {
+                    Ok(dmfrinfo) => {
+                        dmfrinfo.feeds.iter().for_each(|feed| {
+                            for eachoperator in feed.operators.clone().into_iter() {
+                                if feed_to_operator_pairs_hashmap.contains_key(&feed.id) {
+                                    let mut existing_operator_pairs = feed_to_operator_pairs_hashmap.get(&feed.id).unwrap().clone();
+                                    existing_operator_pairs.push(OperatorPairInfo {
+                                        operator_id: eachoperator.onestop_id.clone(),
+                                        gtfs_agency_id: None,
                                     });
-                                });
-                                dmfrinfo.operators.iter().for_each(|operator| {
-                                    operatorhashmap
-                                        .insert(operator.onestop_id.clone(), operator.clone());
-                                    for feed in operator.associated_feeds.iter() {
-                                        if feed.feed_onestop_id.is_some() {
-                                            feed_to_operator_pairs_hashmap
-                                                .entry(
-                                                    feed.feed_onestop_id.as_ref().unwrap().clone(),
-                                                )
-                                                .and_modify(|existing_operator_pairs| {
-                                                    existing_operator_pairs.push(
-                                                        OperatorPairInfo {
-                                                            operator_id: operator
-                                                                .onestop_id
-                                                                .clone(),
-                                                            gtfs_agency_id: feed
-                                                                .gtfs_agency_id
-                                                                .clone(),
-                                                        },
-                                                    );
-                                                })
-                                                .or_insert(vec![OperatorPairInfo {
-                                                    operator_id: operator.onestop_id.clone(),
-                                                    gtfs_agency_id: feed.gtfs_agency_id.clone(),
-                                                }]);
-                                        }
-                                    }
-                                    if operator_to_feed_hashmap.contains_key(&operator.onestop_id) {
-                                        //combine the feeds for this operator together
-                                        let mut existing_associated_feeds =
-                                            operator_to_feed_hashmap
-                                                .get(&operator.onestop_id)
-                                                .unwrap()
-                                                .clone();
-                                        let existing_feed_ids = operator_to_feed_hashmap
+                                    feed_to_operator_pairs_hashmap
+                                        .insert(feed.id.clone(), existing_operator_pairs);
+                                } else {
+                                    feed_to_operator_pairs_hashmap.insert(
+                                        feed.id.clone(),
+                                        vec![OperatorPairInfo {
+                                            operator_id: eachoperator.onestop_id.clone(),
+                                            gtfs_agency_id: None,
+                                        }],
+                                    );
+                                }
+
+                                feed_to_operator_hashmap
+                                    .entry(feed.id.clone())
+                                    .and_modify(|value| {
+                                        value.push(eachoperator.onestop_id.clone())
+                                    })
+                                    .or_insert(vec![eachoperator.onestop_id.clone()]);
+
+                                operator_to_feed_hashmap
+                                    .entry(eachoperator.onestop_id)
+                                    .or_insert(vec![dmfr::OperatorAssociatedFeedsItem {
+                                        feed_onestop_id: Some(feed.id.clone()),
+                                        gtfs_agency_id: None,
+                                    }]);
+                            }
+                            //println!("Feed {}: {:#?}", feed.id.clone(), feed);
+                            feedhashmap.entry(feed.id.clone()).or_insert(feed.clone());
+
+                            feed.operators.iter().for_each(|operator| {
+                                operatorhashmap
+                                    .insert(operator.onestop_id.clone(), operator.clone());
+                                if operator_to_feed_hashmap
+                                    .contains_key(&operator.onestop_id)
+                                {
+                                    //combine the feeds for this operator together
+                                    let mut existing_associated_feeds =
+                                        operator_to_feed_hashmap
                                             .get(&operator.onestop_id)
                                             .unwrap()
-                                            .iter()
-                                            .filter(|associated_feed| {
-                                                associated_feed.feed_onestop_id.is_some()
-                                            })
-                                            .map(|associated_feed| {
-                                                associated_feed.feed_onestop_id.clone().unwrap()
-                                            })
-                                            .collect::<Vec<String>>();
-                                        operator.associated_feeds.iter().for_each(
-                                            |associated_feed| {
-                                                if !existing_feed_ids.contains(
-                                                    &associated_feed
-                                                        .feed_onestop_id
-                                                        .clone()
-                                                        .unwrap(),
-                                                ) {
-                                                    existing_associated_feeds
-                                                        .push(associated_feed.clone());
-                                                }
-                                            },
-                                        );
-                                        operator_to_feed_hashmap.insert(
-                                            operator.onestop_id.clone(),
-                                            existing_associated_feeds,
-                                        );
-                                    } else {
-                                        operator_to_feed_hashmap.insert(
-                                            operator.onestop_id.clone(),
-                                            operator.associated_feeds.clone(),
-                                        );
-                                    }
-                                });
+                                            .clone();
+                                    let existing_feed_ids = operator_to_feed_hashmap
+                                        .get(&operator.onestop_id)
+                                        .unwrap()
+                                        .par_iter()
+                                        .map(|associated_feed| {
+                                            associated_feed.feed_onestop_id.clone().unwrap()
+                                        })
+                                        .collect::<Vec<String>>();
+                                    operator.associated_feeds.iter().for_each(
+                                        |associated_feed| {
+                                            if !existing_feed_ids.contains(
+                                                &associated_feed
+                                                    .feed_onestop_id
+                                                    .clone()
+                                                    .unwrap_or_else(|| feed.id.clone()),
+                                            ) {
+                                                existing_associated_feeds
+                                                    .push(associated_feed.clone());
+                                            }
+                                        },
+                                    );
+                                    operator_to_feed_hashmap.insert(
+                                        operator.onestop_id.clone(),
+                                        existing_associated_feeds,
+                                    );
+                                } else {
+                                    operator_to_feed_hashmap.insert(
+                                        operator.onestop_id.clone(),
+                                        operator.associated_feeds.clone(),
+                                    );
+                                }
+                            });
+                        });
+                        dmfrinfo.operators.iter().for_each(|operator| {
+                            operatorhashmap
+                                .insert(operator.onestop_id.clone(), operator.clone());
+                            for feed in operator.associated_feeds.iter() {
+                                if feed.feed_onestop_id.is_some() {
+                                    feed_to_operator_pairs_hashmap
+                                        .entry(
+                                            feed.feed_onestop_id.as_ref().unwrap().clone(),
+                                        )
+                                        .and_modify(|existing_operator_pairs| {
+                                            existing_operator_pairs.push(
+                                                OperatorPairInfo {
+                                                    operator_id: operator
+                                                        .onestop_id
+                                                        .clone(),
+                                                    gtfs_agency_id: feed
+                                                        .gtfs_agency_id
+                                                        .clone(),
+                                                },
+                                            );
+                                        })
+                                        .or_insert(vec![OperatorPairInfo {
+                                            operator_id: operator.onestop_id.clone(),
+                                            gtfs_agency_id: feed.gtfs_agency_id.clone(),
+                                        }]);
+                                }
                             }
-                            Err(_) => {}
-                        }
+                            if operator_to_feed_hashmap.contains_key(&operator.onestop_id) {
+                                //combine the feeds for this operator together
+                                let mut existing_associated_feeds =
+                                    operator_to_feed_hashmap
+                                        .get(&operator.onestop_id)
+                                        .unwrap()
+                                        .clone();
+                                let existing_feed_ids = operator_to_feed_hashmap
+                                    .get(&operator.onestop_id)
+                                    .unwrap()
+                                    .iter()
+                                    .filter(|associated_feed| {
+                                        associated_feed.feed_onestop_id.is_some()
+                                    })
+                                    .map(|associated_feed| {
+                                        associated_feed.feed_onestop_id.clone().unwrap()
+                                    })
+                                    .collect::<Vec<String>>();
+                                operator.associated_feeds.iter().for_each(
+                                    |associated_feed| {
+                                        if !existing_feed_ids.contains(
+                                            &associated_feed
+                                                .feed_onestop_id
+                                                .clone()
+                                                .unwrap(),
+                                        ) {
+                                            existing_associated_feeds
+                                                .push(associated_feed.clone());
+                                        }
+                                    },
+                                );
+                                operator_to_feed_hashmap.insert(
+                                    operator.onestop_id.clone(),
+                                    existing_associated_feeds,
+                                );
+                            } else {
+                                operator_to_feed_hashmap.insert(
+                                    operator.onestop_id.clone(),
+                                    operator.associated_feeds.clone(),
+                                );
+                            }
+                        });
                     }
                     Err(_) => {}
                 }
