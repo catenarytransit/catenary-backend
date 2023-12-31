@@ -1048,7 +1048,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let route_workers = routes_clone.into_iter().map( |((route_id, feed_id), (route, client))| async move {
                                         let route_type_number = route_type_to_int(&route.route_type);
                                         let shapes_per_route: HashMap<String, Vec<String>> = HashMap::new();
-                                        let mut shape_id_array: Vec<String> =
+                                        let shape_id_array: Vec<String> =
                                             match shapes_per_route.get(&route_id) {
                                                 Some(shape_list) => shape_list.clone(),
                                                 None => vec![],
@@ -1152,21 +1152,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             stop_headsigns_for_trip.dedup();
                                             let stop_headsigns_for_trip = stop_headsigns_for_trip;
 
-                                            client
-                                                .query(
-                                                    &statement,
-                                                        &[
-                                                            &feed_id,
-                                                            &trip.id,
-                                                            &trip.service_id,
-                                                            &trip.route_id,
-                                                            &trip_headsign,
-                                                            &trip.trip_short_name,
-                                                            &trip.shape_id,
-                                                            &has_stop_headsign,
-                                                            &stop_headsigns_for_trip
-                                                       ],
-                                                ).await.unwrap();
+                                            client.query(
+                                                &statement,
+                                        &[
+                                                    &feed_id,
+                                                    &trip.id,
+                                                    &trip.service_id,
+                                                    &trip.route_id,
+                                                    &trip_headsign,
+                                                    &trip.trip_short_name,
+                                                    &trip.shape_id,
+                                                    &has_stop_headsign,
+                                                    &stop_headsigns_for_trip
+                                                ],
+                                            ).await.unwrap();
 
                                             for stoptime in &trip.stop_times {
 
@@ -1195,9 +1194,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                             &point
                                                         ],
                                                     ).await.unwrap();
-                                                    }    }
-                                               
-                                                
+                                                    }    
+                                                }
                                             }
                                         });
                                         for worker in trips_workers {
