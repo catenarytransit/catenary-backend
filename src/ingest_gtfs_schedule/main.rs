@@ -98,7 +98,7 @@ pub fn is_uppercase(string: &str) -> bool {
 }
 
 pub fn titlecase_process_new_nooption(input: &String) -> String {
-    let mut string = input.clone();
+    let mut string = input.to_owned();
     if string.len() >= 7
         && string
             .as_str()
@@ -132,7 +132,7 @@ pub fn make_hashmap_stops_to_route_types_and_ids(
                     let route_type_num = route_type_to_int(&route.route_type);
 
                     stop_to_route_types
-                        .entry(stoptime.stop.id.clone())
+                        .entry(stoptime.stop.id.to_owned())
                         .and_modify(|types| {
                             if !types.contains(&route_type_num) {
                                 types.push(route_type_num);
@@ -143,15 +143,15 @@ pub fn make_hashmap_stops_to_route_types_and_ids(
                         .or_insert(vec![route_type_num]);
 
                     stop_to_route_ids
-                        .entry(stoptime.stop.id.clone())
+                        .entry(stoptime.stop.id.to_owned())
                         .and_modify(|types| {
                             if !types.contains(&route.id) {
-                                types.push(route.id.clone());
+                                types.push(route.id.to_owned());
 
                                 types.dedup();
                             }
                         })
-                        .or_insert(vec![route.id.clone()]);
+                        .or_insert(vec![route.id.to_owned()]);
                 }
                 _ => {}
             }
@@ -172,25 +172,25 @@ pub fn make_hashmaps_of_children_stop_info(
     for (stop_id, stop) in &gtfs.stops {
         if stop.parent_station.is_some() {
             stop_id_to_children_ids
-                .entry(stop.parent_station.as_ref().unwrap().clone())
+                .entry(stop.parent_station.as_ref().unwrap().to_owned())
                 .and_modify(|children_ids| {
                     if !children_ids.contains(&stop_id) {
-                        children_ids.push(stop_id.clone())
+                        children_ids.push(stop_id.to_owned())
                     }
                 })
-                .or_insert(vec![stop_id.clone()]);
+                .or_insert(vec![stop_id.to_owned()]);
 
             let route_types_for_this_stop = stop_to_route_types.get(stop_id);
 
             if route_types_for_this_stop.is_some() {
                 stop_ids_to_children_route_types
-                    .entry(stop.parent_station.as_ref().unwrap().clone())
+                    .entry(stop.parent_station.as_ref().unwrap().to_owned())
                     .and_modify(|children_route_types| {
                         children_route_types.extend(route_types_for_this_stop.unwrap());
 
                         children_route_types.dedup();
                     })
-                    .or_insert(route_types_for_this_stop.unwrap().clone());
+                    .or_insert(route_types_for_this_stop.unwrap().to_owned());
             }
         }
     }
@@ -449,7 +449,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Finished making database");
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, to_owned)]
     struct OperatorPairInfo {
         operator_id: String,
         gtfs_agency_id: Option<String>,
@@ -495,45 +495,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 match dmfrinfo {
                     Ok(dmfrinfo) => {
                         dmfrinfo.feeds.iter().for_each(|feed| {
-                            for eachoperator in feed.operators.clone().into_iter() {
+                            for eachoperator in feed.operators.to_owned().into_iter() {
                                 if feed_to_operator_pairs_hashmap.contains_key(&feed.id) {
-                                    let mut existing_operator_pairs = feed_to_operator_pairs_hashmap.get(&feed.id).unwrap().clone();
+                                    let mut existing_operator_pairs = feed_to_operator_pairs_hashmap.get(&feed.id).unwrap().to_owned();
                                     existing_operator_pairs.push(OperatorPairInfo {
-                                        operator_id: eachoperator.onestop_id.clone(),
+                                        operator_id: eachoperator.onestop_id.to_owned(),
                                         gtfs_agency_id: None,
                                     });
                                     feed_to_operator_pairs_hashmap
-                                        .insert(feed.id.clone(), existing_operator_pairs);
+                                        .insert(feed.id.to_owned(), existing_operator_pairs);
                                 } else {
                                     feed_to_operator_pairs_hashmap.insert(
-                                        feed.id.clone(),
+                                        feed.id.to_owned(),
                                         vec![OperatorPairInfo {
-                                            operator_id: eachoperator.onestop_id.clone(),
+                                            operator_id: eachoperator.onestop_id.to_owned(),
                                             gtfs_agency_id: None,
                                         }],
                                     );
                                 }
 
                                 feed_to_operator_hashmap
-                                    .entry(feed.id.clone())
+                                    .entry(feed.id.to_owned())
                                     .and_modify(|value| {
-                                        value.push(eachoperator.onestop_id.clone())
+                                        value.push(eachoperator.onestop_id.to_owned())
                                     })
-                                    .or_insert(vec![eachoperator.onestop_id.clone()]);
+                                    .or_insert(vec![eachoperator.onestop_id.to_owned()]);
 
                                 operator_to_feed_hashmap
                                     .entry(eachoperator.onestop_id)
                                     .or_insert(vec![dmfr::OperatorAssociatedFeedsItem {
-                                        feed_onestop_id: Some(feed.id.clone()),
+                                        feed_onestop_id: Some(feed.id.to_owned()),
                                         gtfs_agency_id: None,
                                     }]);
                             }
-                            //println!("Feed {}: {:#?}", feed.id.clone(), feed);
-                            feedhashmap.entry(feed.id.clone()).or_insert(feed.clone());
+                            //println!("Feed {}: {:#?}", feed.id.to_owned(), feed);
+                            feedhashmap.entry(feed.id.to_owned()).or_insert(feed.to_owned());
 
                             feed.operators.iter().for_each(|operator| {
                                 operatorhashmap
-                                    .insert(operator.onestop_id.clone(), operator.clone());
+                                    .insert(operator.onestop_id.to_owned(), operator.to_owned());
                                 if operator_to_feed_hashmap
                                     .contains_key(&operator.onestop_id)
                                 {
@@ -542,13 +542,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         operator_to_feed_hashmap
                                             .get(&operator.onestop_id)
                                             .unwrap()
-                                            .clone();
+                                            .to_owned();
                                     let existing_feed_ids = operator_to_feed_hashmap
                                         .get(&operator.onestop_id)
                                         .unwrap()
                                         .par_iter()
                                         .map(|associated_feed| {
-                                            associated_feed.feed_onestop_id.clone().unwrap()
+                                            associated_feed.feed_onestop_id.to_owned().unwrap()
                                         })
                                         .collect::<Vec<String>>();
                                     operator.associated_feeds.iter().for_each(
@@ -556,50 +556,50 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             if !existing_feed_ids.contains(
                                                 &associated_feed
                                                     .feed_onestop_id
-                                                    .clone()
-                                                    .unwrap_or_else(|| feed.id.clone()),
+                                                    .to_owned()
+                                                    .unwrap_or_else(|| feed.id.to_owned()),
                                             ) {
                                                 existing_associated_feeds
-                                                    .push(associated_feed.clone());
+                                                    .push(associated_feed.to_owned());
                                             }
                                         },
                                     );
                                     operator_to_feed_hashmap.insert(
-                                        operator.onestop_id.clone(),
+                                        operator.onestop_id.to_owned(),
                                         existing_associated_feeds,
                                     );
                                 } else {
                                     operator_to_feed_hashmap.insert(
-                                        operator.onestop_id.clone(),
-                                        operator.associated_feeds.clone(),
+                                        operator.onestop_id.to_owned(),
+                                        operator.associated_feeds.to_owned(),
                                     );
                                 }
                             });
                         });
                         dmfrinfo.operators.iter().for_each(|operator| {
                             operatorhashmap
-                                .insert(operator.onestop_id.clone(), operator.clone());
+                                .insert(operator.onestop_id.to_owned(), operator.to_owned());
                             for feed in operator.associated_feeds.iter() {
                                 if feed.feed_onestop_id.is_some() {
                                     feed_to_operator_pairs_hashmap
                                         .entry(
-                                            feed.feed_onestop_id.as_ref().unwrap().clone(),
+                                            feed.feed_onestop_id.as_ref().unwrap().to_owned(),
                                         )
                                         .and_modify(|existing_operator_pairs| {
                                             existing_operator_pairs.push(
                                                 OperatorPairInfo {
                                                     operator_id: operator
                                                         .onestop_id
-                                                        .clone(),
+                                                        .to_owned(),
                                                     gtfs_agency_id: feed
                                                         .gtfs_agency_id
-                                                        .clone(),
+                                                        .to_owned(),
                                                 },
                                             );
                                         })
                                         .or_insert(vec![OperatorPairInfo {
-                                            operator_id: operator.onestop_id.clone(),
-                                            gtfs_agency_id: feed.gtfs_agency_id.clone(),
+                                            operator_id: operator.onestop_id.to_owned(),
+                                            gtfs_agency_id: feed.gtfs_agency_id.to_owned(),
                                         }]);
                                 }
                             }
@@ -609,7 +609,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     operator_to_feed_hashmap
                                         .get(&operator.onestop_id)
                                         .unwrap()
-                                        .clone();
+                                        .to_owned();
                                 let existing_feed_ids = operator_to_feed_hashmap
                                     .get(&operator.onestop_id)
                                     .unwrap()
@@ -618,7 +618,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         associated_feed.feed_onestop_id.is_some()
                                     })
                                     .map(|associated_feed| {
-                                        associated_feed.feed_onestop_id.clone().unwrap()
+                                        associated_feed.feed_onestop_id.to_owned().unwrap()
                                     })
                                     .collect::<Vec<String>>();
                                 operator.associated_feeds.iter().for_each(
@@ -626,22 +626,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         if !existing_feed_ids.contains(
                                             &associated_feed
                                                 .feed_onestop_id
-                                                .clone()
+                                                .to_owned()
                                                 .unwrap(),
                                         ) {
                                             existing_associated_feeds
-                                                .push(associated_feed.clone());
+                                                .push(associated_feed.to_owned());
                                         }
                                     },
                                 );
                                 operator_to_feed_hashmap.insert(
-                                    operator.onestop_id.clone(),
+                                    operator.onestop_id.to_owned(),
                                     existing_associated_feeds,
                                 );
                             } else {
                                 operator_to_feed_hashmap.insert(
-                                    operator.onestop_id.clone(),
-                                    operator.associated_feeds.clone(),
+                                    operator.onestop_id.to_owned(),
+                                    operator.associated_feeds.to_owned(),
                                 );
                             }
                         });
@@ -671,8 +671,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("run db upload now");
     println!("limittostaticfeed {:?}", &limittostaticfeed);
     let client = pool.get().await.unwrap();
-    for (key, feed) in feedhashmap.clone().into_iter() {
-        let pool = pool.clone();
+    for (key, feed) in feedhashmap.to_owned().into_iter() {
+        let pool = pool.to_owned();
         let mut dothetask = true;
         if feeds_to_discard.contains(&key.as_str()) {
             dothetask = false;
@@ -697,7 +697,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let listofoperatorpairs = feed_to_operator_pairs_hashmap
             .get(&feed.id)
             .unwrap_or_else(|| &bruhitfailed)
-            .clone();
+            .to_owned();
         let mut operator_pairs_hashmap: HashMap<String, Option<String>> = HashMap::new();
         for operator_pair in listofoperatorpairs {
             operator_pairs_hashmap.insert(operator_pair.operator_id, operator_pair.gtfs_agency_id);
@@ -1041,14 +1041,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     }
 
                                     let routes: HashMap<(String, String), (&Route, &PooledConnection<PostgresConnectionManager<NoTls>>)> = gtfs.routes.iter()
-                                        .map(|(key, route)| ((key.clone(), feed.id.clone()), (route, &client))).collect();
-                                    let routes_clone = routes.clone();
+                                        .map(|(key, route)| ((key.to_owned(), feed.id.to_owned()), (route, &client))).collect();
+                                    let routes_clone = routes.to_owned();
                                     let route_workers = routes_clone.into_iter().map( |((route_id, feed_id), (route, client))| async move {
                                         let route_type_number = route_type_to_int(&route.route_type);
                                         let shapes_per_route: HashMap<String, Vec<String>> = HashMap::new();
                                         let shape_id_array: Vec<String> =
                                             match shapes_per_route.get(&route_id) {
-                                                Some(shape_list) => shape_list.clone(),
+                                                Some(shape_list) => shape_list.to_owned(),
                                                 None => vec![],
                                             };
                                         let shape_id_array:Vec<String> = shape_id_array.into_iter().unique().collect();
@@ -1077,8 +1077,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         text_color = $11;
                                         ").as_str()).await.unwrap();
                                         let long_name = titlecase_process_new_nooption(&route.long_name);
-                                        client
-                                        .query(
+                                        client.query(
                                             &route_prepared,
                                             &[
                                                 &route_id,
@@ -1118,8 +1117,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let time = std::time::Instant::now();
                                     if skiptrips == false {
                                         let trips: HashMap<(String, String), (&Trip, &PooledConnection<PostgresConnectionManager<NoTls>>)> = gtfs.trips.iter()
-                                        .map(|(key, trip)| ((key.clone(), feed.id.clone()), (trip, &client))).collect();
-                                        let trips_clone = trips.clone();
+                                        .map(|(key, trip)| ((key.to_owned(), feed.id.to_owned()), (trip, &client))).collect();
+                                        let trips_clone = trips.to_owned();
                                         let trips_workers = trips_clone.into_iter().map( |((trip_id, feed_id), (trip, client))| async move {
                                             let statement = client.prepare(format!("INSERT INTO {schemaname}.trips 
                                             (onestop_feed_id, trip_id, service_id, route_id, trip_headsign, trip_short_name, shape_id, has_stop_headsign, stop_headsigns)
@@ -1213,8 +1212,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             hashmap_of_coords_to_stops.entry((
                                                 OrderedFloat(stop.latitude.unwrap()), OrderedFloat(stop.longitude.unwrap())
                                             ))
-                                            .and_modify(|array| array.push(stop_id.clone()))
-                                            .or_insert(vec![stop_id.clone()]);
+                                            .and_modify(|array| array.push(stop_id.to_owned()))
+                                            .or_insert(vec![stop_id.to_owned()]);
                                         }
                                     }
 
@@ -1235,10 +1234,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let arc_of_stop_ids = Arc::new(vec_of_stop_ids);
 
                                         //lookup of each group and categorise the stops
-                                        let list_of_stops = arc_of_stop_ids.iter().map(|stop_id| gtfs.stops.get(stop_id).unwrap().clone()).collect::<Vec<Arc<gtfs_structures::Stop>>>();
-                                        let dont_hide_this_stop_candidates = list_of_stops.iter().filter(|stop| stop.parent_station.is_none()).map(|stop| stop.clone()).collect::<Vec<Arc<gtfs_structures::Stop>>>();
-                                       // let dont_hide_this_stop_candidates_stop_ids = dont_hide_this_stop_candidates.iter().map(|stop| stop.id.clone()).collect::<HashSet<String>>();
-                                       let dont_hide_this_stop_candidates_names = dont_hide_this_stop_candidates.iter().map(|stop| stop.name.clone()).collect::<HashSet<String>>();
+                                        let list_of_stops = arc_of_stop_ids.iter().map(|stop_id| gtfs.stops.get(stop_id).unwrap().to_owned()).collect::<Vec<Arc<gtfs_structures::Stop>>>();
+                                        let dont_hide_this_stop_candidates = list_of_stops.iter().filter(|stop| stop.parent_station.is_none()).map(|stop| stop.to_owned()).collect::<Vec<Arc<gtfs_structures::Stop>>>();
+                                       // let dont_hide_this_stop_candidates_stop_ids = dont_hide_this_stop_candidates.iter().map(|stop| stop.id.to_owned()).collect::<HashSet<String>>();
+                                       let dont_hide_this_stop_candidates_names = dont_hide_this_stop_candidates.iter().map(|stop| stop.name.to_owned()).collect::<HashSet<String>>();
 
 
                                         for stop in list_of_stops {
@@ -1259,7 +1258,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             }
                                         }
 
-                                        hashmap_stops_dedup_meta.insert(stop.id.clone(), (hidden_stops,arc_of_stop_ids.clone()));
+                                        hashmap_stops_dedup_meta.insert(stop.id.to_owned(), (hidden_stops,arc_of_stop_ids.to_owned()));
                                         }
                                     }
 
@@ -1276,7 +1275,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             srid: Some(4326),
                                         };
                                         let name = titlecase_process_new_nooption(&stop.name);
-                                        let displayname = name.clone().to_string().replace(" Station","").replace("Northbound","N.B.").replace("Eastbound","E.B.").replace("Southbound","S.B.").replace("Westbound","W.B.");
+                                        let displayname = name.to_owned().to_string().replace(" Station","").replace("Northbound","N.B.").replace("Eastbound","E.B.").replace("Southbound","S.B.").replace("Westbound","W.B.");
 
                                         let fetch_of_dedup = hashmap_stops_dedup_meta.get(&stop.id);
 
@@ -1427,10 +1426,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         gtfs_static_feeds text[],
              */
         let empty_vec: Vec<dmfr::OperatorAssociatedFeedsItem> = vec![];
-        let listoffeeds = operator_to_feed_hashmap
-            .get(&operator_id)
-            .unwrap_or_else(|| &empty_vec)
-            .clone();
+        let listoffeeds = operator_to_feed_hashmap.get(&operator_id).unwrap_or_else(|| &empty_vec).to_owned();
         let mut gtfs_static_feeds: HashMap<String, Option<String>> = HashMap::new();
         let mut gtfs_realtime_feeds: HashMap<String, Option<String>> = HashMap::new();
         let mut simplified_array_static: Vec<String> = vec![];
@@ -1448,14 +1444,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 .contains(&(&x.feed_onestop_id).as_ref().unwrap().as_str())
                             {
                                 gtfs_static_feeds
-                                    .insert(x.feed_onestop_id.clone().unwrap(), x.gtfs_agency_id);
-                                simplified_array_static.push(x.feed_onestop_id.clone().unwrap());
+                                    .insert(x.feed_onestop_id.to_owned().unwrap(), x.gtfs_agency_id);
+                                simplified_array_static.push(x.feed_onestop_id.to_owned().unwrap());
                             }
                         }
                         dmfr::FeedSpec::GtfsRt => {
                             gtfs_realtime_feeds
-                                .insert(x.feed_onestop_id.clone().unwrap(), x.gtfs_agency_id);
-                            simplified_array_realtime.push(x.feed_onestop_id.clone().unwrap());
+                                .insert(x.feed_onestop_id.to_owned().unwrap(), x.gtfs_agency_id);
+                            simplified_array_realtime.push(x.feed_onestop_id.to_owned().unwrap());
                         }
                         _ => {
                             //do nothing
@@ -1498,8 +1494,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .records()
         .filter(|x| x.is_ok())
         .map(|x| RealtimeOverride {
-            realtimeid: x.as_ref().unwrap().clone()[0].to_string(),
-            operatorid: x.as_ref().unwrap().clone()[1].to_string(),
+            realtimeid: x.as_ref().unwrap().to_owned()[0].to_string(),
+            operatorid: x.as_ref().unwrap().to_owned()[1].to_string(),
         })
         .collect::<Vec<RealtimeOverride>>();
     for realtime_override in realtime_overrides {
