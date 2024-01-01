@@ -449,7 +449,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Finished making database");
 
-    #[derive(Debug, to_owned)]
+    #[derive(Debug, Clone)]
     struct OperatorPairInfo {
         operator_id: String,
         gtfs_agency_id: Option<String>,
