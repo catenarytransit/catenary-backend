@@ -152,7 +152,7 @@ pub async fn gettrip(
 
         match postgresresult {
             Ok(postgresresult) => {
-                let result: Vec<TripPostgres> = Vec::from_iter(|row| TripPostgres {
+                let result: Vec<TripPostgres> = Vec::from_iter(postgresresult.iter().map(|row| TripPostgres {
                     trip_id: row.get(0),
                     onestop_feed_id: row.get(1),
                     route_id: row.get(2),
@@ -164,7 +164,7 @@ pub async fn gettrip(
                     shape_id: row.get(8),
                     wheelchair_accessible: row.get(9),
                     bikes_allowed: row.get(10),
-                });
+                }));
 
                 let json_string = to_string_pretty(&json!(result)).unwrap();
 
@@ -315,7 +315,7 @@ pub async fn getroutesperagency(
                 match postgresresult {
                     Ok(postgresresult) => {
                         let result: Vec<RouteOutPostgres> =
-                            Vec::from_iter(postgresresult.map(|row| RouteOutPostgres {
+                            Vec::from_iter(postgresresult.iter().map(|row| RouteOutPostgres {
                                 onestop_feed_id: row.get(0),
                                 route_id: row.get(1),
                                 short_name: row.get(2),
@@ -377,8 +377,8 @@ pub async fn gtfsingesterrors(
 
         match postgresresult {
             Ok(postgresresult) => {
-                let result: Vec<GtfsIngesterror> =
-                    Vec::from_iter(postgresresult.map(|row| GtfsIngestError {
+                let result: Vec<GtfsIngestError> =
+                    Vec::from_iter(postgresresult.iter().map(|row: &Row| GtfsIngestError {
                         onestop_feed_id: row.get(0),
                         error: row.get(1),
                     }));
