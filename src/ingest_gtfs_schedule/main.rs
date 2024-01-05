@@ -14,7 +14,6 @@ use tokio_postgres::Statement;
 mod dmfr;
 use bb8_postgres::PostgresConnectionManager;
 use futures;
-use std::collections::HashSet;
 use geo_postgis::ToPostgis;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::RouteType;
@@ -22,6 +21,7 @@ use ordered_float::OrderedFloat;
 use postgis::ewkb;
 use rayon::prelude::*;
 use rgb::RGB;
+use std::collections::HashSet;
 use std::error::Error;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -260,35 +260,67 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    client.batch_execute("
+    client
+        .batch_execute(
+            "
         CREATE EXTENSION IF NOT EXISTS postgis;
         CREATE EXTENSION IF NOT EXISTS hstore;
-    ").await.unwrap();
+    ",
+        )
+        .await
+        .unwrap();
 
     if startfresh.unwrap_or(false) {
-        client.batch_execute(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schemaname).as_str()).await.unwrap();
+        client
+            .batch_execute(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schemaname).as_str())
+            .await
+            .unwrap();
     }
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE SCHEMA IF NOT EXISTS {schemaname};"
-    ).as_str()).await.unwrap();
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE TABLE IF NOT EXISTS {schemaname}.gtfs_errors (
             onestop_feed_id text PRIMARY KEY,
             error text
         )"
-    ).as_str()).await.unwrap();
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE TABLE IF NOT EXISTS {schemaname}.feeds_updated (
             onestop_feed_id text PRIMARY KEY,
             created_trips boolean,
             updated_trips_time_ms bigint
         );"
-    ).as_str()).await.unwrap();
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE TABLE IF NOT EXISTS {}.static_feeds (
             onestop_feed_id text PRIMARY KEY,
             only_realtime_ref text,
@@ -302,10 +334,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             min_lon double precision NOT NULL,
             hull GEOMETRY(POLYGON,4326) NOT NULL
         );",
-        schemaname
-    ).as_str()).await.unwrap();
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE TABLE IF NOT EXISTS {}.operators (
             onestop_operator_id text PRIMARY KEY,
             name text,
@@ -314,10 +353,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             static_onestop_feeds_to_gtfs_ids hstore,
             realtime_onestop_feeds_to_gtfs_ids hstore
         );",
-        schemaname
-    ).as_str()).await.unwrap();
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE TABLE IF NOT EXISTS {}.realtime_feeds (
             onestop_feed_id text PRIMARY KEY,
             name text,
@@ -328,10 +374,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             min_lat double precision,
             min_lon double precision
         );",
-        schemaname
-    ).as_str()).await.unwrap();
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE TABLE IF NOT EXISTS {}.stops (
             onestop_feed_id text NOT NULL,
             gtfs_id text NOT NULL,
@@ -358,10 +411,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             location_alias text[],
             PRIMARY KEY (onestop_feed_id, gtfs_id)
         )",
-        schemaname
-    ).as_str()).await.unwrap();
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE UNLOGGED TABLE IF NOT EXISTS {}.stoptimes (
             onestop_feed_id text NOT NULL,
             trip_id text NOT NULL,
@@ -380,10 +440,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             route_id text,
             PRIMARY KEY (onestop_feed_id, trip_id, stop_sequence)
         )",
-        schemaname
-    ).as_str()).await.unwrap();
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE UNLOGGED TABLE IF NOT EXISTS {}.routes (
             route_id text NOT NULL,
             onestop_feed_id text NOT NULL,
@@ -401,10 +468,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             shapes_list text[],
             PRIMARY KEY (onestop_feed_id, route_id)
         );",
-        schemaname
-    ).as_str()).await.unwrap();
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE UNLOGGED TABLE IF NOT EXISTS {}.shapes (
             onestop_feed_id text NOT NULL,
             shape_id text NOT NULL,
@@ -416,10 +490,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             text_color text,
             PRIMARY KEY (onestop_feed_id,shape_id)
         );",
-        schemaname
-    ).as_str()).await.unwrap();
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
-    client.batch_execute(format!("
+    client
+        .batch_execute(
+            format!(
+                "
         CREATE UNLOGGED TABLE IF NOT EXISTS {}.trips (
             trip_id text NOT NULL,
             onestop_feed_id text NOT NULL,
@@ -436,8 +517,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             bikes_allowed int,
             PRIMARY KEY (onestop_feed_id, trip_id)
         );",
-        schemaname
-    ).as_str()).await.unwrap();
+                schemaname
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap();
 
     if is_prod.unwrap_or(false) {
         println!("making martin functions");
@@ -491,13 +576,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     eprintln!("Error Reading File: {}", contents.unwrap_err());
                     continue;
                 }
-                let dmfrinfo: Result<dmfr::DistributedMobilityFeedRegistry, SerdeError> = serde_json::from_str(&contents.unwrap());
+                let dmfrinfo: Result<dmfr::DistributedMobilityFeedRegistry, SerdeError> =
+                    serde_json::from_str(&contents.unwrap());
                 match dmfrinfo {
                     Ok(dmfrinfo) => {
                         dmfrinfo.feeds.iter().for_each(|feed| {
                             for eachoperator in feed.operators.to_owned().into_iter() {
                                 if feed_to_operator_pairs_hashmap.contains_key(&feed.id) {
-                                    let mut existing_operator_pairs = feed_to_operator_pairs_hashmap.get(&feed.id).unwrap().to_owned();
+                                    let mut existing_operator_pairs =
+                                        feed_to_operator_pairs_hashmap
+                                            .get(&feed.id)
+                                            .unwrap()
+                                            .to_owned();
                                     existing_operator_pairs.push(OperatorPairInfo {
                                         operator_id: eachoperator.onestop_id.to_owned(),
                                         gtfs_agency_id: None,
@@ -529,20 +619,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     }]);
                             }
                             //println!("Feed {}: {:#?}", feed.id.to_owned(), feed);
-                            feedhashmap.entry(feed.id.to_owned()).or_insert(feed.to_owned());
+                            feedhashmap
+                                .entry(feed.id.to_owned())
+                                .or_insert(feed.to_owned());
 
                             feed.operators.iter().for_each(|operator| {
                                 operatorhashmap
                                     .insert(operator.onestop_id.to_owned(), operator.to_owned());
-                                if operator_to_feed_hashmap
-                                    .contains_key(&operator.onestop_id)
-                                {
+                                if operator_to_feed_hashmap.contains_key(&operator.onestop_id) {
                                     //combine the feeds for this operator together
-                                    let mut existing_associated_feeds =
-                                        operator_to_feed_hashmap
-                                            .get(&operator.onestop_id)
-                                            .unwrap()
-                                            .to_owned();
+                                    let mut existing_associated_feeds = operator_to_feed_hashmap
+                                        .get(&operator.onestop_id)
+                                        .unwrap()
+                                        .to_owned();
                                     let existing_feed_ids = operator_to_feed_hashmap
                                         .get(&operator.onestop_id)
                                         .unwrap()
@@ -551,8 +640,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             associated_feed.feed_onestop_id.to_owned().unwrap()
                                         })
                                         .collect::<Vec<String>>();
-                                    operator.associated_feeds.iter().for_each(
-                                        |associated_feed| {
+                                    operator
+                                        .associated_feeds
+                                        .iter()
+                                        .for_each(|associated_feed| {
                                             if !existing_feed_ids.contains(
                                                 &associated_feed
                                                     .feed_onestop_id
@@ -562,8 +653,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 existing_associated_feeds
                                                     .push(associated_feed.to_owned());
                                             }
-                                        },
-                                    );
+                                        });
                                     operator_to_feed_hashmap.insert(
                                         operator.onestop_id.to_owned(),
                                         existing_associated_feeds,
@@ -582,20 +672,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             for feed in operator.associated_feeds.iter() {
                                 if feed.feed_onestop_id.is_some() {
                                     feed_to_operator_pairs_hashmap
-                                        .entry(
-                                            feed.feed_onestop_id.as_ref().unwrap().to_owned(),
-                                        )
+                                        .entry(feed.feed_onestop_id.as_ref().unwrap().to_owned())
                                         .and_modify(|existing_operator_pairs| {
-                                            existing_operator_pairs.push(
-                                                OperatorPairInfo {
-                                                    operator_id: operator
-                                                        .onestop_id
-                                                        .to_owned(),
-                                                    gtfs_agency_id: feed
-                                                        .gtfs_agency_id
-                                                        .to_owned(),
-                                                },
-                                            );
+                                            existing_operator_pairs.push(OperatorPairInfo {
+                                                operator_id: operator.onestop_id.to_owned(),
+                                                gtfs_agency_id: feed.gtfs_agency_id.to_owned(),
+                                            });
                                         })
                                         .or_insert(vec![OperatorPairInfo {
                                             operator_id: operator.onestop_id.to_owned(),
@@ -605,11 +687,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                             if operator_to_feed_hashmap.contains_key(&operator.onestop_id) {
                                 //combine the feeds for this operator together
-                                let mut existing_associated_feeds =
-                                    operator_to_feed_hashmap
-                                        .get(&operator.onestop_id)
-                                        .unwrap()
-                                        .to_owned();
+                                let mut existing_associated_feeds = operator_to_feed_hashmap
+                                    .get(&operator.onestop_id)
+                                    .unwrap()
+                                    .to_owned();
                                 let existing_feed_ids = operator_to_feed_hashmap
                                     .get(&operator.onestop_id)
                                     .unwrap()
@@ -621,19 +702,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         associated_feed.feed_onestop_id.to_owned().unwrap()
                                     })
                                     .collect::<Vec<String>>();
-                                operator.associated_feeds.iter().for_each(
-                                    |associated_feed| {
+                                operator
+                                    .associated_feeds
+                                    .iter()
+                                    .for_each(|associated_feed| {
                                         if !existing_feed_ids.contains(
-                                            &associated_feed
-                                                .feed_onestop_id
-                                                .to_owned()
-                                                .unwrap(),
+                                            &associated_feed.feed_onestop_id.to_owned().unwrap(),
                                         ) {
                                             existing_associated_feeds
                                                 .push(associated_feed.to_owned());
                                         }
-                                    },
-                                );
+                                    });
                                 operator_to_feed_hashmap.insert(
                                     operator.onestop_id.to_owned(),
                                     existing_associated_feeds,
@@ -1426,7 +1505,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         gtfs_static_feeds text[],
              */
         let empty_vec: Vec<dmfr::OperatorAssociatedFeedsItem> = vec![];
-        let listoffeeds = operator_to_feed_hashmap.get(&operator_id).unwrap_or_else(|| &empty_vec).to_owned();
+        let listoffeeds = operator_to_feed_hashmap
+            .get(&operator_id)
+            .unwrap_or_else(|| &empty_vec)
+            .to_owned();
         let mut gtfs_static_feeds: HashMap<String, Option<String>> = HashMap::new();
         let mut gtfs_realtime_feeds: HashMap<String, Option<String>> = HashMap::new();
         let mut simplified_array_static: Vec<String> = vec![];
@@ -1443,8 +1525,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             if !feeds_to_discard
                                 .contains(&(&x.feed_onestop_id).as_ref().unwrap().as_str())
                             {
-                                gtfs_static_feeds
-                                    .insert(x.feed_onestop_id.to_owned().unwrap(), x.gtfs_agency_id);
+                                gtfs_static_feeds.insert(
+                                    x.feed_onestop_id.to_owned().unwrap(),
+                                    x.gtfs_agency_id,
+                                );
                                 simplified_array_static.push(x.feed_onestop_id.to_owned().unwrap());
                             }
                         }

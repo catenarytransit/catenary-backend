@@ -152,22 +152,19 @@ pub async fn gettrip(
 
         match postgresresult {
             Ok(postgresresult) => {
-                let mut result: Vec<TripPostgres> = Vec::new();
-                for row in postgresresult {
-                    result.push(TripPostgres {
-                        trip_id: row.get(0),
-                        onestop_feed_id: row.get(1),
-                        route_id: row.get(2),
-                        service_id: row.get(3),
-                        trip_headsign: row.get(4),
-                        trip_short_name: row.get(5),
-                        direction_id: row.get(6),
-                        block_id: row.get(7),
-                        shape_id: row.get(8),
-                        wheelchair_accessible: row.get(9),
-                        bikes_allowed: row.get(10),
-                    });
-                }
+                let result: Vec<TripPostgres> = Vec::from_iter(|row| TripPostgres {
+                    trip_id: row.get(0),
+                    onestop_feed_id: row.get(1),
+                    route_id: row.get(2),
+                    service_id: row.get(3),
+                    trip_headsign: row.get(4),
+                    trip_short_name: row.get(5),
+                    direction_id: row.get(6),
+                    block_id: row.get(7),
+                    shape_id: row.get(8),
+                    wheelchair_accessible: row.get(9),
+                    bikes_allowed: row.get(10),
+                });
 
                 let json_string = to_string_pretty(&json!(result)).unwrap();
 
@@ -317,9 +314,8 @@ pub async fn getroutesperagency(
 
                 match postgresresult {
                     Ok(postgresresult) => {
-                        let mut result: Vec<RouteOutPostgres> = Vec::new();
-                        for row in postgresresult {
-                            result.push(RouteOutPostgres {
+                        let result: Vec<RouteOutPostgres> =
+                            Vec::from_iter(postgresresult.map(|row| RouteOutPostgres {
                                 onestop_feed_id: row.get(0),
                                 route_id: row.get(1),
                                 short_name: row.get(2),
@@ -334,8 +330,7 @@ pub async fn getroutesperagency(
                                 continuous_pickup: row.get(11),
                                 continuous_drop_off: row.get(12),
                                 shapes_list: row.get(13),
-                            });
-                        }
+                            }));
 
                         let json_string = to_string(&json!(result)).unwrap();
 
@@ -351,6 +346,54 @@ pub async fn getroutesperagency(
                             .body("Postgres Error")
                     }
                 }
+            }
+        }
+    } else {
+        HttpResponse::InternalServerError()
+            .insert_header(("Content-Type", "text/plain"))
+            .body("Couldn't connect to pool")
+    }
+}
+
+#[derive(serde::Serialize)]
+struct GtfsIngestError<'a> {
+    onestop_feed_id: &'a str,
+    error: &'a str,
+}
+
+#[actix_web::get("/gtfsingesterrors")]
+pub async fn gtfsingesterrors(
+    pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>,
+    req: HttpRequest,
+) -> impl Responder {
+    let mut client = pool.get().await;
+
+    if client.is_ok() {
+        let mut client = client.unwrap();
+
+        let postgresresult = client
+            .query("SELECT onestop_feed_id, error FROM gtfs.gtfs_errors;", &[])
+            .await;
+
+        match postgresresult {
+            Ok(postgresresult) => {
+                let result: Vec<GtfsIngesterror> =
+                    Vec::from_iter(postgresresult.map(|row| GtfsIngestError {
+                        onestop_feed_id: row.get(0),
+                        error: row.get(1),
+                    }));
+                let json_string = to_string(&json!(result)).unwrap();
+
+                HttpResponse::Ok()
+                    .insert_header(("Content-Type", "application/json"))
+                    .body(json_string)
+            }
+            Err(e) => {
+                println!("No results from postgres");
+
+                HttpResponse::InternalServerError()
+                    .insert_header(("Content-Type", "text/plain"))
+                    .body("Postgres Error")
             }
         }
     } else {
