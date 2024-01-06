@@ -48,5 +48,10 @@ async fn main() {
         .await
         .unwrap();
 
+    println!("Adding Postgis to search path");
+
+    client.batch_execute("ALTER DATABASE gtfs SET search_path = public, postgis;")
+    .await.unwrap();
+
     println!("Done!");
 }
