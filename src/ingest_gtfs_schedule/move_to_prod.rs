@@ -43,7 +43,7 @@ async fn main() {
 
     client
         .batch_execute(
-            "BEGIN; DROP SCHEMA gtfs CASCADE; ALTER SCHEMA gtfs_stage RENAME TO gtfs; COMMIT;",
+            "BEGIN; DROP SCHEMA IF EXISTS gtfs CASCADE; ALTER SCHEMA gtfs_stage RENAME TO gtfs; COMMIT;",
         )
         .await
         .unwrap();
