@@ -238,6 +238,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap()
         .get::<bool>("softinsert");
 
+    let forcewipe = arguments::parse(std::env::args())
+        .unwrap()
+        .get::<bool>("forcewipe")
+        .unwrap_or_else(|| false);
+
+    if (startfresh.unwrap_or(false) && isprod.unwrap_or(false) && forcewipe) {
+        panic!("Cannot wipe the prod server without --forcewipe true");
+    }
+
     let schemaname = match is_prod {
         Some(s) => {
             if s {
