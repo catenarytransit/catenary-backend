@@ -1,15 +1,10 @@
 use geo::CoordsIter;
-use gtfs_structures::LocationType;
-use gtfs_structures::Route;
-use gtfs_structures::Trip;
+use gtfs_structures::{ContinuousPickupDropOff, LocationType, Route, Trip};
 use itertools::Itertools;
-use serde::Serialize;
 use serde_json::Error as SerdeError;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use titlecase::titlecase;
-mod dmfr;
 use futures;
 use geo_postgis::ToPostgis;
 use gtfs_structures::RouteType;
@@ -25,8 +20,8 @@ extern crate tokio_threadpool;
 use tokio::runtime;
 extern crate fs_extra;
 use fs_extra::dir::get_size;
-use sqlx::Executor;
 
+mod dmfr;
 mod colour_correction;
 mod convex_hull;
 
@@ -221,9 +216,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if fs::read_dir("transitland-atlas/feeds").is_err() {
         println!("Could not read that directory!");
-        return Err(Box::<dyn Error>::from(
-            "Could not read that directory!",
-        ));
+        return Err(Box::<dyn Error>::from("Could not read that directory!"));
     }
 
     let entries = fs::read_dir("transitland-atlas/feeds").unwrap();
@@ -412,6 +405,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let pool = database::connect()
         .await
         .expect("Database connection failed");
+    let mut transaction = pool.begin().await?;
 
     let threaded_rt = runtime::Builder::new_multi_thread()
         .worker_threads(threadcount)
@@ -444,8 +438,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 ",
                 feed.id,
             )
-            .fetch_all(&**pool)
-            .await?;
+            .fetch_all(&mut *transaction)
+            .await
+            .unwrap();
             if already_done.len() == 1 {
                 dothetask = false;
                 // println!("Already done {}", &feed.id);
@@ -572,7 +567,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                         let color = colour_correction::fix_background_colour_rgb_feed_route(&feed.id,route.color,route);
 
                                                         shape_to_color_lookup.insert(
-                                                        trip.shape_id.as_ref().unwrap().to_owned(),
+                                                            trip.shape_id.as_ref().unwrap().to_owned(),
                                                             color,
                                                         );
                                                         shape_to_text_color_lookup.insert(
@@ -765,20 +760,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 ",
                                                 &feed.id,
                                                 shape_id,
-                                                linestring,
+                                                wkb::Encode(linestring) as _,
                                                 colour_correction::fix_background_colour(color_to_upload.as_str()),
                                                 colour_correction::fix_foreground_colour(color_to_upload.as_str(),text_color.as_str()),
                                                 route_ids,
                                                 route_type_number,
-                                                route_label
+                                                route_label,
                                             )
-                                            .execute(&**pool)
-                                            .await?;
+                                            .execute(&mut transaction)
+                                            .await
+                                            .unwrap();
                                         }
 
-                                        let routes: HashMap<(String, String), (&Route)> = gtfs.routes.iter()
+                                        let routes: HashMap<(String, String), &Route> = gtfs.routes.iter()
                                             .map(|(key, route)| ((key.to_owned(), feed.id.to_owned()), route)).collect();
-                                        let route_workers = routes.to_owned().into_iter().map( |((route_id, feed_id), (route))| async move {
+                                        let route_workers = routes.to_owned().into_iter().map( |((route_id, feed_id), route)| async move {
                                             let route_type_number = route_type_to_int(&route.route_type);
                                             let shapes_per_route: HashMap<String, Vec<String>> = HashMap::new();
                                             let shape_id_array: Vec<String> = match shapes_per_route.get(&route_id) {
@@ -807,8 +803,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 route.url,
                                                 route.agency_id,
                                                 i32::try_from(route.order.unwrap_or_else(|| 0)).ok(),
-                                                colour_correction::fix_background_colour_rgb_feed_route(&feed_id,route.color, &route),
-                                                colour_correction::fix_foreground_colour_rgb_feed(&feed_id, route.color, route.text_color),
+                                                &colour_correction::fix_background_colour_rgb_feed_route(&feed_id,route.color, &route).into(),
+                                                &colour_correction::fix_foreground_colour_rgb_feed(&feed_id, route.color, route.text_color).into(),
                                                 (match route.continuous_pickup {
                                                     ContinuousPickupDropOff::Continuous => 0,
                                                     ContinuousPickupDropOff::NotAvailable => 1,
@@ -823,10 +819,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     ContinuousPickupDropOff::CoordinateWithDriver => 3,
                                                     ContinuousPickupDropOff::Unknown(i) => i,
                                                 }),
-                                                shape_id_array,
+                                                &shape_id_array,
                                             )
-                                            .execute(&**pool)
-                                            .await?;
+                                            .execute(&mut *transaction)
+                                            .await
+                                            .unwrap();
                                         });
                                         for worker in route_workers {
                                             let _ = tokio::join!(worker);
@@ -835,10 +832,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                         let time = std::time::Instant::now();
                                         if skiptrips == false {
-                                            let trips: HashMap<(String, String), (&Trip)> = gtfs.trips.iter()
+                                            let trips: HashMap<(String, String), &Trip> = gtfs.trips.iter()
                                                 .map(|(key, trip)| ((key.to_owned(), feed.id.to_owned()), trip)).collect();
                                             let trips_clone = trips.to_owned();
-                                            let trips_workers = trips_clone.into_iter().map(|((trip_id, feed_id), (trip))| async move {
+                                            let trips_workers = trips_clone.into_iter().map(|((trip_id, feed_id), trip)| async move {
                                                 let trip_headsign = titlecase_process_new(trip.trip_headsign.as_ref());
                                                 //calculate if any stop time has a stop headsign
                                                 let has_stop_headsign = trip.stop_times.iter().any(|stoptime| {
@@ -849,6 +846,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 }).collect::<Vec<Option<&String>>>().into_iter().unique().collect::<Vec<Option<&String>>>();
                                                 //dedup
                                                 stop_headsigns_for_trip.dedup();
+                                                let stop_headsigns_for_trip = stop_headsigns_for_trip
+                                                    .iter()
+                                                    .flat_map(|&x| x)
+                                                    .cloned()
+                                                    .collect();
 
                                                 sqlx::query!(
                                                     "
@@ -867,10 +869,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     trip.trip_short_name,
                                                     trip.shape_id,
                                                     has_stop_headsign,
-                                                    stop_headsigns_for_trip,
+                                                    &stop_headsigns_for_trip,
                                                 )
-                                                .execute(&**pool)
-                                                .await?;
+                                                .execute(&mut *transaction)
+                                                .await
+                                                .unwrap();
 
                                                 for stoptime in &trip.stop_times {
                                                     if stoptime.stop.latitude.is_some() && stoptime.stop.longitude.is_some() {
@@ -899,10 +902,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                                 toi64(&stoptime.arrival_time),
                                                                 toi64(&stoptime.departure_time),
                                                                 stop_headsign,
-                                                                point,
+                                                                wkb::Encode(point) as _,
                                                             )
-                                                            .execute(&**pool)
-                                                            .await?;
+                                                            .execute(&mut transaction)
+                                                            .await
+                                                            .unwrap();
                                                         }
                                                     }
                                                 }
@@ -1011,7 +1015,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     displayname,
                                                     stop.code,
                                                     stop.description,
-                                                    point,
+                                                    wkb::Encode(point) as _,
                                                     stop_ids_to_route_types.get(&stop.id),
                                                     stop_ids_to_route_ids.get(&stop.id),
                                                     location_type_conversion(&stop.location_type),
@@ -1021,8 +1025,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     hidden_stop,
                                                     alias_names,
                                                 )
-                                                .execute(&**pool)
-                                                .await?;
+                                                .execute(&mut *transaction)
+                                                .await
+                                                .unwrap();
                                             }
                                         }
 
@@ -1076,12 +1081,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 most_lon,
                                                 least_lat,
                                                 least_lon,
-                                                operator_pairs_hashmap.par_iter().map(|(a,b)| a).collect::<Vec<&String>>(),
-                                                operator_pairs_hashmap,
-                                                hull_postgres,
+                                                operator_pairs_hashmap.iter().map(|(a,b)| a.clone()).collect::<Vec<String>>().as_slice(),
+                                                serde_json::to_value(operator_pairs_hashmap).unwrap(),
+                                                wkb::Encode(hull_postgres) as _,
                                             )
-                                            .connect(&**pool)
-                                            .await?;
+                                            .execute(&mut *transaction)
+                                            .await
+                                            .unwrap();
 
                                             if skiptrips == false {
                                                 //get current unix timestamp
@@ -1102,8 +1108,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     true,
                                                     in_ms as i64,
                                                 )
-                                                .execute(&**pool)
-                                                .await?;
+                                                .execute(&mut *transaction)
+                                                .await
+                                                .unwrap();
 
                                                 sqlx::query!(
                                                     "
@@ -1112,8 +1119,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     ",
                                                     feed.id
                                                 )
-                                                .execute(&**pool)
-                                                .await?;
+                                                .execute(&mut *transaction)
+                                                .await
+                                                .unwrap();
                                             }
                                         }
                                     },
@@ -1131,8 +1139,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             feed.id,
                                             errormsg,
                                         )
-                                        .execute(&**pool)
-                                        .await?;
+                                        .execute(&mut *transaction)
+                                        .await
+                                        .unwrap();
                                     }
                                 }
                             }
@@ -1149,11 +1158,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             ",
                             feed.id,
                             feed.name,
-                            operator_pairs_hashmap.iter().map(|(a,b)| a).collect::<Vec<&String>>(),
-                            operator_pairs_hashmap
+                            operator_pairs_hashmap.iter().map(|(a,b)| a.clone()).collect::<Vec<String>>().as_slice(),
+                            serde_json::to_value(operator_pairs_hashmap).unwrap(),
                         )
-                        .execute(&**pool)
-                        .await?;
+                        .execute(&mut *transaction)
+                        .await
+                        .unwrap();
                     },
                     _ => {
                         //do nothing
@@ -1224,13 +1234,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ",
             operator.onestop_id,
             operator.name,
-            simplified_array_static,
-            simplified_array_realtime,
-            gtfs_static_feeds,
-            gtfs_realtime_feeds,
+            &simplified_array_static,
+            &simplified_array_realtime,
+            serde_json::to_value(gtfs_static_feeds)?,
+            serde_json::to_value(gtfs_realtime_feeds)?,
         )
-        .execute(&**pool)
-        .await?;
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
     }
     println!("Done ingesting all operators");
     println!("adding extra lines");
@@ -1249,28 +1260,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
         sqlx::query!(
             "
             UPDATE gtfs.operators
-            SET gtfs_realtime_feeds = (SELECT ARRAY_AGG(DISTINCT e) FROM unnest(gtfs_realtime_feeds || '{{{0}}}') e),
-                realtime_onestop_feeds_to_gtfs_ids = realtime_onestop_feeds_to_gtfs_ids || '{0}=>null'::hstore
-            WHERE onestop_operator_id = $1
+            SET gtfs_realtime_feeds = (SELECT ARRAY_AGG(DISTINCT e) FROM UNNEST(gtfs_realtime_feeds || ARRAY[1]) e),
+                realtime_onestop_feeds_to_gtfs_ids = realtime_onestop_feeds_to_gtfs_ids || jsonb_build_object('{1}', NULL)
+            WHERE onestop_operator_id = $2
             ",
             realtime_override.realtimeid,
             realtime_override.operatorid,
         )
-        .execute(&**pool)
-        .await?;
+        .execute(&mut transaction)
+        .await
+        .unwrap();
 
         sqlx::query!(
             "
             UPDATE gtfs.realtime_feeds
-            SET operators = (SELECT ARRAY_AGG(DISTINCT e) FROM UNNEST(operators || '{{{2}}}') e),
-                operators_to_gtfs_ids = operators_to_gtfs_ids || '{2}=>null'::hstore
-            WHERE onestop_feed_id = $1",
+            SET operators = (SELECT ARRAY_AGG(DISTINCT e) FROM UNNEST(operators || ARRAY[$2]) e),
+                operators_to_gtfs_ids = operators_to_gtfs_ids || jsonb_build_object('{2}', NULL)
+            WHERE onestop_feed_id = $1
+            ",
             &realtime_override.realtimeid,
             &realtime_override.operatorid,
         )
-        .execute(&**pool)
-        .await?;
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
     }
+    transaction.commit().await?;
+
     for x in 0..1 {
         println!("Waiting for {} seconds", x);
         std::thread::sleep(std::time::Duration::from_secs(1));

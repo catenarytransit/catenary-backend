@@ -47,7 +47,7 @@ impl AspenRpc for AspenServer {
         trips: Option<Vec<u8>>,
         alerts: Option<Vec<u8>>,
     ) -> bool {
-        import_kactus::new_rt_kactus(realtime_feed_id, vehicles, trips, alerts).await
+        import_kactus::new_rt_kactus(realtime_feed_id, vehicles).await
     }
 }
 

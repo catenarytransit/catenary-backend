@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 mod dmfr;
-use bb8_postgres::PostgresConnectionManager;
 use clap::Parser;
 use futures;
 use gtfs_structures::ContinuousPickupDropOff;
@@ -27,6 +26,8 @@ use tokio_threadpool::ThreadPool;
 
 extern crate fs_extra;
 use fs_extra::dir::get_size;
+
+mod database;
 
 pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
@@ -62,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // Connect to the database.
-    let (client, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
+    let (_, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
 
     // The connection object performs the actual communication with the database,
     // so spawn it off to run on its own.
@@ -282,16 +283,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        let manager = PostgresConnectionManager::new(postgresstring.parse().unwrap(), NoTls);
-
-        let pool = bb8::Pool::builder()
-            .retry_connection(true)
-            .connection_timeout(std::time::Duration::from_secs(99999))
-            .idle_timeout(Some(std::time::Duration::from_secs(99999)))
-            .build(manager)
-            .await
-            .unwrap();
-
         //let threadpool = ThreadPool::new(threadcount);
 
         let threaded_rt = runtime::Builder::new_multi_thread()
@@ -303,11 +294,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut handles = vec![];
 
         for (key, feed) in feedhashmap.clone().into_iter() {
-            let pool = pool.clone();
             handles.push(threaded_rt.spawn(async move {
-                //it timesout here a lot
-                let mut client = pool.get().await.unwrap();
-
                 //println!("Feed in future {}: {:#?}", key, feed);
 
                 let mut dothetask = true;

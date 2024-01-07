@@ -1,5 +1,4 @@
 CREATE EXTENSION postgis;
-CREATE EXTENSION hstore;
 
 CREATE SCHEMA gtfs;
 
@@ -18,9 +17,9 @@ CREATE TABLE gtfs.static_feeds (
     onestop_feed_id text PRIMARY KEY,
     only_realtime_ref text,
     operators text[],
-    operators_to_gtfs_ids hstore,
+    operators_to_gtfs_ids JSONB,
     realtime_onestop_ids text[],
-    realtime_onestop_ids_to_gtfs_ids hstore,
+    realtime_onestop_ids_to_gtfs_ids JSONB,
     max_lat double precision NOT NULL,
     max_lon double precision NOT NULL,
     min_lat double precision NOT NULL,
@@ -33,15 +32,15 @@ CREATE TABLE gtfs.operators (
     name text,
     gtfs_static_feeds text[],
     gtfs_realtime_feeds text[],
-    static_onestop_feeds_to_gtfs_ids hstore,
-    realtime_onestop_feeds_to_gtfs_ids hstore
+    static_onestop_feeds_to_gtfs_ids JSONB,
+    realtime_onestop_feeds_to_gtfs_ids JSONB
 );
 
 CREATE TABLE gtfs.realtime_feeds (
     onestop_feed_id text PRIMARY KEY,
     name text,
     operators text[],
-    operators_to_gtfs_ids hstore,
+    operators_to_gtfs_ids JSONB,
     max_lat double precision,
     max_lon double precision,
     min_lat double precision,
@@ -59,7 +58,7 @@ CREATE TABLE gtfs.stops (
     parent_station text,
     zone_id text,
     url text,
-    point GEOMETRY(POINT,4326) NOT NULL,
+    point GEOMETRY(POINT, 4326) NOT NULL,
     timezone text,
     wheelchair_boarding int,
     primary_route_type text,
@@ -89,7 +88,7 @@ CREATE UNLOGGED TABLE gtfs.stoptimes (
     timepoint int,
     continuous_pickup smallint,
     continuous_drop_off smallint,
-    point GEOMETRY(POINT,4326) NOT NULL,
+    point GEOMETRY(POINT, 4326) NOT NULL,
     route_id text,
     PRIMARY KEY (onestop_feed_id, trip_id, stop_sequence)
 );
@@ -115,7 +114,7 @@ CREATE UNLOGGED TABLE gtfs.routes (
 CREATE UNLOGGED TABLE gtfs.shapes (
     onestop_feed_id text NOT NULL,
     shape_id text NOT NULL,
-    linestring GEOMETRY(LINESTRING,4326) NOT NULL,
+    linestring GEOMETRY(LINESTRING, 4326) NOT NULL,
     color text,
     routes text[],
     route_type smallint NOT NULL,

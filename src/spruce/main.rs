@@ -1,10 +1,8 @@
-use actix::{fut, ActorContext, ActorFuture, ContextFutureSpawner, WrapFuture};
-use actix::{Actor, Addr, Running, StreamHandler};
-use actix::{AsyncContext, Handler};
+use actix::ActorContext;
+use actix::{Actor, StreamHandler};
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
-use actix_web_actors::ws::Message::Text;
-use std::time::Instant;
+
 /// Define HTTP actor
 pub struct SpruceWs {}
 
@@ -31,8 +29,6 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SpruceWs {
             Ok(ws::Message::Continuation(_)) => {
                 ctx.stop();
             }
-            Ok(ws::Message::Nop) => (),
-            Ok(Text(s)) => (),
             Err(e) => std::panic::panic_any(e),
             _ => (),
         }
