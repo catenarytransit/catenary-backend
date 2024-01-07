@@ -763,11 +763,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 wkb::Encode(linestring) as _,
                                                 colour_correction::fix_background_colour(color_to_upload.as_str()),
                                                 colour_correction::fix_foreground_colour(color_to_upload.as_str(),text_color.as_str()),
-                                                route_ids,
+                                                &route_ids,
                                                 route_type_number,
                                                 route_label,
                                             )
-                                            .execute(&mut transaction)
+                                            .execute(&mut *transaction)
                                             .await
                                             .unwrap();
                                         }
@@ -904,7 +904,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                                 stop_headsign,
                                                                 wkb::Encode(point) as _,
                                                             )
-                                                            .execute(&mut transaction)
+                                                            .execute(&mut *transaction)
                                                             .await
                                                             .unwrap();
                                                         }
@@ -1260,14 +1260,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         sqlx::query!(
             "
             UPDATE gtfs.operators
-            SET gtfs_realtime_feeds = (SELECT ARRAY_AGG(DISTINCT e) FROM UNNEST(gtfs_realtime_feeds || ARRAY[1]) e),
+            SET gtfs_realtime_feeds = (SELECT ARRAY_AGG(DISTINCT e) FROM UNNEST(gtfs_realtime_feeds || ARRAY[$1]) e),
                 realtime_onestop_feeds_to_gtfs_ids = realtime_onestop_feeds_to_gtfs_ids || jsonb_build_object('{1}', NULL)
             WHERE onestop_operator_id = $2
             ",
             realtime_override.realtimeid,
             realtime_override.operatorid,
         )
-        .execute(&mut transaction)
+        .execute(&mut *transaction)
         .await
         .unwrap();
 

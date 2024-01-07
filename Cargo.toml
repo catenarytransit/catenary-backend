@@ -69,6 +69,7 @@ ordered-float = "4.2.0"
 thiserror = "1.0.56"
 dotenvy = "0.15.7"
 geozero = "0.11.0"
+wkb = "0.7.1"
 
 [[bin]]
 name = "http_server"

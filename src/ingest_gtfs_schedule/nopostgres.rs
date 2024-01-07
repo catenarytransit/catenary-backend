@@ -1,50 +1,23 @@
-use futures::StreamExt;
 use serde_json::Error as SerdeError;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 mod dmfr;
-use clap::Parser;
 use futures;
-use gtfs_structures::ContinuousPickupDropOff;
-use gtfs_structures::Error as GtfsError;
-use gtfs_structures::PickupDropOffType;
 use gtfs_structures::RouteType;
-use postgis::{ewkb, LineString};
 use rgb::RGB;
 use std::error::Error;
-use std::fs::File;
-use std::io::copy;
-use std::io::Write;
-use std::ops::Deref;
-use tokio_postgres::Client;
-use tokio_postgres::{Error as PostgresError, NoTls};
-extern crate tokio_threadpool;
-use std::sync::mpsc::channel;
 use tokio::runtime;
-use tokio_threadpool::ThreadPool;
 
 extern crate fs_extra;
 use fs_extra::dir::get_size;
-
-mod database;
 
 pub fn path_exists(path: &str) -> bool {
     fs::metadata(path).is_ok()
 }
 
-#[derive(Parser, Debug)]
-struct Args {
-    #[arg(long)]
-    postgres: String,
-    #[arg(long)]
-    threads: usize,
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let args = Args::parse();
-
     let postgresstring = arguments::parse(std::env::args())
         .unwrap()
         .get::<String>("postgres");
@@ -61,17 +34,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             panic!("You need a postgres string");
         }
     };
-
-    // Connect to the database.
-    let (_, connection) = tokio_postgres::connect(&postgresstring, NoTls).await?;
-
-    // The connection object performs the actual communication with the database,
-    // so spawn it off to run on its own.
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("connection error: {}", e);
-        }
-    });
 
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
         let mut feedhashmap: BTreeMap<String, dmfr::Feed> = BTreeMap::new();
