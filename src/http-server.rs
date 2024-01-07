@@ -1,22 +1,47 @@
-#![feature(future_join)]
-use actix_web::dev::Service;
+use actix_web::http::StatusCode;
 use actix_web::middleware::DefaultHeaders;
-use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
-use bb8::Pool;
-use qstring::QString;
-use r2d2_postgres::{postgres::NoTls, PostgresConnectionManager};
-use serde_json::to_string;
-use serde_json::{json, to_string_pretty};
+use actix_web::{middleware, web, App, HttpResponse, HttpServer, Responder};
+use serde::{Deserialize, Serialize};
+use service::quicli::prelude::{error, info, warn};
+use sqlx::migrate::MigrateDatabase;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{Connection, PgConnection, PgPool, Postgres};
 use std::collections::HashMap;
-use std::future::join;
-use std::time::UNIX_EPOCH;
+use std::str::FromStr;
 use std::time::{Duration, SystemTime};
-use tokio_postgres::types::private::BytesMut;
-use tokio_postgres::types::ToSql;
-use tokio_postgres::Client;
-use tokio_postgres::{Error as PostgresError, Row};
 
-#[derive(serde::Serialize)]
+mod database;
+
+#[derive(thiserror::Error, Debug)]
+pub enum CatenaryError {
+    #[error("Could not connect to database pool: {0}")]
+    DatabasePool(#[from] bb8::RunError<tokio_postgres::error::Error>),
+    #[error("Could not connect to database: {0}")]
+    Database(#[from] tokio_postgres::error::Error),
+    #[error("Could not fetch Amtrak data: {0}")]
+    AmtrakFetch(#[from] reqwest::Error),
+    #[error("Could not decrypt Amtrak data: {0}")]
+    AmtrakDecrypt(#[from] amtk::DecryptionError),
+}
+
+impl actix_web::ResponseError for CatenaryError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            CatenaryError::DatabasePool(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            CatenaryError::Database(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            CatenaryError::AmtrakFetch(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            CatenaryError::AmtrakDecrypt(..) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn error_response(&self) -> HttpResponse {
+        HttpResponse::build(self.status_code())
+            .insert_header(("Content-Type", "text/plain"))
+            .body(self.to_string())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 struct StaticFeed {
     onestop_feed_id: String,
     max_lat: f64,
@@ -27,14 +52,14 @@ struct StaticFeed {
     operators_hashmap: HashMap<String, Option<String>>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Serialize, Deserialize)]
 struct RealtimeFeedPostgres {
     onestop_feed_id: String,
     operators: Vec<String>,
     operators_to_gtfs_ids: HashMap<String, Option<String>>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Serialize, Deserialize)]
 struct OperatorPostgres {
     onestop_operator_id: String,
     name: String,
@@ -44,19 +69,19 @@ struct OperatorPostgres {
     realtime_onestop_feeds_to_gtfs_ids: HashMap<String, Option<String>>,
 }
 
-async fn index(req: HttpRequest) -> impl Responder {
+async fn index() -> impl Responder {
     HttpResponse::Ok()
         .insert_header(("Content-Type", "text/plain"))
         .body("Hello world!")
 }
 
-async fn robots(req: HttpRequest) -> impl Responder {
+async fn robots() -> impl Responder {
     HttpResponse::Ok()
         .insert_header(("Content-Type", "text/plain"))
         .body("User-agent: GPTBot\nDisallow: /\nUser-agent: Google-Extended\nDisallow: /")
 }
 
-#[derive(serde::Serialize)]
+#[derive(Serialize, Deserialize)]
 struct RouteOutPostgres {
     onestop_feed_id: String,
     route_id: String,
@@ -74,7 +99,7 @@ struct RouteOutPostgres {
     shapes_list: Vec<String>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Serialize, Deserialize)]
 struct TripPostgres {
     trip_id: String,
     onestop_feed_id: String,
@@ -90,7 +115,7 @@ struct TripPostgres {
 }
 
 #[actix_web::get("/microtime")]
-pub async fn microtime(req: HttpRequest) -> impl Responder {
+pub async fn microtime() -> impl Responder {
     HttpResponse::Ok()
         .insert_header(("Content-Type", "text/plain"))
         .body(format!(
@@ -103,327 +128,229 @@ pub async fn microtime(req: HttpRequest) -> impl Responder {
 }
 
 #[actix_web::get("/amtrakproxy")]
-pub async fn amtrakproxy(req: HttpRequest) -> impl Responder {
+pub async fn amtrak_proxy() -> Result<HttpResponse, CatenaryError> {
     let raw_data =
-        reqwest::get("https://maps.amtrak.com/services/MapDataService/trains/getTrainsData").await;
+        reqwest::get("https://maps.amtrak.com/services/MapDataService/trains/getTrainsData")
+            .await
+            .map_err(CatenaryError::AmtrakFetch)?;
 
-    match raw_data {
-        Ok(raw_data) => {
-            //println!("Raw data successfully downloaded");
+    let decrypted_string = amtk::decrypt(raw_data.text().await.unwrap().as_str())?;
 
-            match amtk::decrypt(raw_data.text().await.unwrap().as_str()) {
-                Ok(decrypted_string) => HttpResponse::Ok()
-                    .insert_header(("Content-Type", "application/json"))
-                    .body(decrypted_string),
-                Err(err) => HttpResponse::InternalServerError()
-                    .insert_header(("Content-Type", "text/plain"))
-                    .body("Could not decrypt Amtrak data"),
-            }
-        }
-        Err(error) => HttpResponse::InternalServerError()
-            .insert_header(("Content-Type", "text/plain"))
-            .body("Could not fetch Amtrak data"),
-    }
+    Ok(HttpResponse::Ok().json(decrypted_string))
+}
+
+#[derive(Serialize, Deserialize)]
+struct GetTripQuery {
+    feed_id: String,
+    trip_id: String,
 }
 
 #[actix_web::get("/gettrip")]
-pub async fn gettrip(
+pub async fn get_trip(
     pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>,
-    req: HttpRequest,
-) -> impl Responder {
-    let mut client = pool.get().await;
+    web::Query(query): web::Query<GetTripQuery>,
+) -> Result<HttpResponse, CatenaryError> {
+    let client = pool.get().await?;
 
-    if client.is_ok() {
-        let mut client = client.unwrap();
-        let query_str = req.query_string(); // "name=ferret"
-        let qs = QString::from(query_str);
-        let req_feed_id = qs.get("feed_id").unwrap();
-        let trip_id = qs.get("trip_id").unwrap();
+    let result: Vec<TripPostgres> = client
+        .query(
+            "SELECT trip_id, onestop_feed_id,
+            route_id, service_id, trip_headsign, trip_short_name, direction_id,
+            block_id, shape_id, wheelchair_accessible, bikes_allowed FROM gtfs.trips
+            WHERE onestop_feed_id = $1 AND trip_id = $2;",
+            &[&query.feed_id, &query.trip_id],
+        )
+        .await?
+        .iter()
+        .map(|row| TripPostgres {
+            trip_id: row.get(0),
+            onestop_feed_id: row.get(1),
+            route_id: row.get(2),
+            service_id: row.get(3),
+            trip_headsign: row.get(4),
+            trip_short_name: row.get(5),
+            direction_id: row.get(6),
+            block_id: row.get(7),
+            shape_id: row.get(8),
+            wheelchair_accessible: row.get(9),
+            bikes_allowed: row.get(10),
+        })
+        .collect();
 
-        let postgresresult = client
-            .query(
-                "SELECT trip_id, onestop_feed_id, 
-        route_id, service_id, trip_headsign, trip_short_name, direction_id, 
-        block_id, shape_id, wheelchair_accessible, bikes_allowed FROM gtfs.trips
-         WHERE onestop_feed_id = $1 AND trip_id = $2;",
-                &[&req_feed_id, &trip_id],
-            )
-            .await;
+    Ok(HttpResponse::Ok().json(result))
+}
 
-        match postgresresult {
-            Ok(postgresresult) => {
-                let result: Vec<TripPostgres> = Vec::from_iter(postgresresult.iter().map(|row| TripPostgres {
-                    trip_id: row.get(0),
-                    onestop_feed_id: row.get(1),
-                    route_id: row.get(2),
-                    service_id: row.get(3),
-                    trip_headsign: row.get(4),
-                    trip_short_name: row.get(5),
-                    direction_id: row.get(6),
-                    block_id: row.get(7),
-                    shape_id: row.get(8),
-                    wheelchair_accessible: row.get(9),
-                    bikes_allowed: row.get(10),
-                }));
-
-                let json_string = to_string_pretty(&json!(result)).unwrap();
-
-                HttpResponse::Ok()
-                    .insert_header(("Content-Type", "application/json"))
-                    .body(json_string)
-            }
-            Err(e) => {
-                println!("{:?}", e);
-                println!("No results from postgres");
-
-                HttpResponse::InternalServerError()
-                    .insert_header(("Content-Type", "text/plain"))
-                    .body("Postgres Error")
-            }
-        }
-    } else {
-        HttpResponse::InternalServerError()
-            .insert_header(("Content-Type", "text/plain"))
-            .body("Couldn't connect to pool")
-    }
+#[derive(Serialize, Deserialize)]
+struct InitialData {
+    s: Vec<StaticFeed>,
+    o: Vec<OperatorPostgres>,
+    r: Vec<RealtimeFeedPostgres>,
 }
 
 //this endpoint is used to load the initial static feeds, realtime feeds, and operators
 #[actix_web::get("/getinitdata")]
-pub async fn getinitdata(
+pub async fn get_init_data(
     pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>,
-    req: HttpRequest,
-) -> impl Responder {
-    let mut client = pool.get().await;
+) -> Result<HttpResponse, CatenaryError> {
+    let client = pool.get().await?;
 
-    if client.is_ok() {
-        let mut client = client.unwrap();
+    // (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
+    let statics = client.query(
+        "SELECT
+        onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids
+        FROM gtfs.static_feeds;",
+        &[],
+    );
 
-        // (onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids)
-        let statics = client.query(
-            "SELECT
-    onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids
-     FROM gtfs.static_feeds;",
-            &[],
-        );
+    let operators = client.query(
+        "SELECT onestop_operator_id,
+        name,
+        gtfs_static_feeds,
+        gtfs_realtime_feeds,
+        static_onestop_feeds_to_gtfs_ids,
+        realtime_onestop_feeds_to_gtfs_ids FROM gtfs.operators;",
+        &[],
+    );
 
-        let operators = client.query(
-            "SELECT onestop_operator_id, 
-    name, 
-    gtfs_static_feeds, 
-    gtfs_realtime_feeds, 
-    static_onestop_feeds_to_gtfs_ids, 
-    realtime_onestop_feeds_to_gtfs_ids FROM gtfs.operators;",
-            &[],
-        );
+    let realtime = client.query(
+        "SELECT onestop_feed_id, operators, operators_to_gtfs_ids FROM gtfs.realtime_feeds;",
+        &[],
+    );
 
-        let realtime = client.query(
-            "SELECT onestop_feed_id, operators, operators_to_gtfs_ids FROM gtfs.realtime_feeds;",
-            &[],
-        );
+    let (statics_result, operators_result, realtime_result) =
+        futures::try_join!(statics, operators, realtime).unwrap();
 
-        let runqueries = join!(statics, operators, realtime).await;
+    let operators_result: Vec<OperatorPostgres> = operators_result
+        .iter()
+        .map(|row| OperatorPostgres {
+            onestop_operator_id: row.get(0),
+            name: row.get(1),
+            gtfs_static_feeds: row.get(2),
+            gtfs_realtime_feeds: row.get(3),
+            static_onestop_feeds_to_gtfs_ids: row.get(4),
+            realtime_onestop_feeds_to_gtfs_ids: row.get(5),
+        })
+        .collect();
 
-        let operators_result: Vec<OperatorPostgres> = runqueries
-            .1
-            .unwrap()
-            .iter()
-            .map(|row| OperatorPostgres {
-                onestop_operator_id: row.get(0),
-                name: row.get(1),
-                gtfs_static_feeds: row.get(2),
-                gtfs_realtime_feeds: row.get(3),
-                static_onestop_feeds_to_gtfs_ids: row.get(4),
-                realtime_onestop_feeds_to_gtfs_ids: row.get(5),
-            })
-            .collect();
+    let statics_result: Vec<StaticFeed> = statics_result
+        .iter()
+        .map(|row| StaticFeed {
+            onestop_feed_id: row.get(0),
+            max_lat: row.get(1),
+            max_lon: row.get(2),
+            min_lat: row.get(3),
+            min_lon: row.get(4),
+            operators: row.get(5),
+            operators_hashmap: row.get(6),
+        })
+        .collect();
 
-        let statics_result: Vec<StaticFeed> = runqueries
-            .0
-            .unwrap()
-            .iter()
-            .map(|row| StaticFeed {
-                onestop_feed_id: row.get(0),
-                max_lat: row.get(1),
-                max_lon: row.get(2),
-                min_lat: row.get(3),
-                min_lon: row.get(4),
-                operators: row.get(5),
-                operators_hashmap: row.get(6),
-            })
-            .collect();
+    let realtime_result: Vec<RealtimeFeedPostgres> = realtime_result
+        .iter()
+        .map(|row| RealtimeFeedPostgres {
+            onestop_feed_id: row.get(0),
+            operators: row.get(1),
+            operators_to_gtfs_ids: row.get(2),
+        })
+        .collect();
 
-        let realtime_result: Vec<RealtimeFeedPostgres> = runqueries
-            .2
-            .unwrap()
-            .iter()
-            .map(|row| RealtimeFeedPostgres {
-                onestop_feed_id: row.get(0),
-                operators: row.get(1),
-                operators_to_gtfs_ids: row.get(2),
-            })
-            .collect();
+    Ok(HttpResponse::Ok().json(InitialData {
+        s: statics_result,
+        o: operators_result,
+        r: realtime_result,
+    }))
+}
 
-        return HttpResponse::Ok()
-            .insert_header(("Content-Type", "application/json"))
-            .body(format!(
-                "{{\"s\":{},\"o\":{},\"r\":{}}}",
-                to_string(&statics_result).unwrap(),
-                to_string(&operators_result).unwrap(),
-                to_string(&realtime_result).unwrap()
-            ));
-    }
-
-    HttpResponse::InternalServerError()
-        .insert_header(("Content-Type", "application/json"))
-        .body("{}")
+#[derive(Serialize, Deserialize)]
+struct GetRoutesPerAgencyQuery {
+    feed_id: String,
 }
 
 //given a static feed id, return all routes and the basic metadata with it
 #[actix_web::get("/getroutesperagency")]
-pub async fn getroutesperagency(
+pub async fn get_routes_per_agency(
     pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>,
-    req: HttpRequest,
-) -> impl Responder {
-    let mut client = pool.get().await;
+    web::Query(query): web::Query<GetRoutesPerAgencyQuery>,
+) -> Result<HttpResponse, CatenaryError> {
+    let client = pool.get().await?;
 
-    if client.is_ok() {
-        let mut client = client.unwrap();
-        let query_str = req.query_string(); // "name=ferret"
-        let qs = QString::from(query_str);
-        let req_feed_id = qs.get("feed_id"); // "ferret"
+    let result: Vec<RouteOutPostgres> = client
+        .query(
+            "SELECT onestop_feed_id, route_id,
+            short_name, long_name, gtfs_desc, route_type, url, agency_id,
+            gtfs_order,
+            color,
+            text_color,
+            continuous_pickup,
+            continuous_drop_off,
+            shapes_list FROM gtfs.routes WHERE onestop_feed_id = $1;",
+            &[&query.feed_id],
+        )
+        .await?
+        .iter()
+        .map(|row| RouteOutPostgres {
+            onestop_feed_id: row.get(0),
+            route_id: row.get(1),
+            short_name: row.get(2),
+            long_name: row.get(3),
+            desc: row.get(4),
+            route_type: row.get(5),
+            url: row.get(6),
+            agency_id: row.get(7),
+            gtfs_order: row.get(8),
+            color: row.get(9),
+            text_color: row.get(10),
+            continuous_pickup: row.get(11),
+            continuous_drop_off: row.get(12),
+            shapes_list: row.get(13),
+        })
+        .collect();
 
-        match req_feed_id {
-            None => HttpResponse::InternalServerError()
-                .insert_header(("Content-Type", "text/plain"))
-                .body("No feed_id specified"),
-            Some(req_feed_id) => {
-                let postgresresult = client
-                    .query(
-                        "SELECT onestop_feed_id, route_id,
-     short_name, long_name, gtfs_desc, route_type, url, agency_id,
-     gtfs_order,
-     color,
-     text_color,
-     continuous_pickup,
-     continuous_drop_off,
-     shapes_list FROM gtfs.routes WHERE onestop_feed_id = $1;",
-                        &[&req_feed_id],
-                    )
-                    .await;
-
-                match postgresresult {
-                    Ok(postgresresult) => {
-                        let result: Vec<RouteOutPostgres> =
-                            Vec::from_iter(postgresresult.iter().map(|row| RouteOutPostgres {
-                                onestop_feed_id: row.get(0),
-                                route_id: row.get(1),
-                                short_name: row.get(2),
-                                long_name: row.get(3),
-                                desc: row.get(4),
-                                route_type: row.get(5),
-                                url: row.get(6),
-                                agency_id: row.get(7),
-                                gtfs_order: row.get(8),
-                                color: row.get(9),
-                                text_color: row.get(10),
-                                continuous_pickup: row.get(11),
-                                continuous_drop_off: row.get(12),
-                                shapes_list: row.get(13),
-                            }));
-
-                        let json_string = to_string(&json!(result)).unwrap();
-
-                        HttpResponse::Ok()
-                            .insert_header(("Content-Type", "application/json"))
-                            .body(json_string)
-                    }
-                    Err(e) => {
-                        println!("No results from postgres");
-
-                        HttpResponse::InternalServerError()
-                            .insert_header(("Content-Type", "text/plain"))
-                            .body("Postgres Error")
-                    }
-                }
-            }
-        }
-    } else {
-        HttpResponse::InternalServerError()
-            .insert_header(("Content-Type", "text/plain"))
-            .body("Couldn't connect to pool")
-    }
+    Ok(HttpResponse::Ok().json(result))
 }
 
-#[derive(serde::Serialize)]
-struct GtfsIngestError<'a> {
-    onestop_feed_id: &'a str,
-    error: &'a str,
+#[derive(Serialize, Deserialize)]
+struct GtfsIngestError {
+    onestop_feed_id: String,
+    error: String,
 }
 
 #[actix_web::get("/gtfsingesterrors")]
-pub async fn gtfsingesterrors(
-    pool: web::Data<bb8::Pool<bb8_postgres::PostgresConnectionManager<NoTls>>>,
-    req: HttpRequest,
-) -> impl Responder {
-    let mut client = pool.get().await;
+pub async fn gtfs_ingest_errors(pool: web::Data<PgPool>) -> Result<HttpResponse, CatenaryError> {
+    let client = pool.get().await?;
 
-    if client.is_ok() {
-        let mut client = client.unwrap();
+    let result: Vec<GtfsIngestError> =
+        sqlx::query!("SELECT onestop_feed_id, error FROM gtfs.gtfs_errors")
+            .fetch_all(&**pool)
+            .await?
+            .iter()
+            .map(|row| GtfsIngestError {
+                onestop_feed_id: row.get(0),
+                error: row.get(1),
+            })
+            .collect();
 
-        let postgresresult = client
-            .query("SELECT onestop_feed_id, error FROM gtfs.gtfs_errors;", &[])
-            .await;
-
-        match postgresresult {
-            Ok(postgresresult) => {
-                let result: Vec<GtfsIngestError> =
-                    Vec::from_iter(postgresresult.iter().map(|row: &Row| GtfsIngestError {
-                        onestop_feed_id: row.get(0),
-                        error: row.get(1),
-                    }));
-                let json_string = to_string(&json!(result)).unwrap();
-
-                HttpResponse::Ok()
-                    .insert_header(("Content-Type", "application/json"))
-                    .body(json_string)
-            }
-            Err(e) => {
-                println!("No results from postgres");
-
-                HttpResponse::InternalServerError()
-                    .insert_header(("Content-Type", "text/plain"))
-                    .body("Postgres Error")
-            }
-        }
-    } else {
-        HttpResponse::InternalServerError()
-            .insert_header(("Content-Type", "text/plain"))
-            .body("Couldn't connect to pool")
-    }
+    Ok(HttpResponse::Ok().json(result))
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let postgresstring = arguments::parse(std::env::args())
-        .unwrap()
-        .get::<String>("postgres");
+    dotenvy::dotenv().ok();
 
-    let postgresstring = match postgresstring {
-        Some(s) => s,
-        None => {
-            println!("Postgres string not avaliable, using default");
-            "host=localhost user=postgres".to_string()
-        }
-    };
+    info!(
+        "Starting Catenary on {}",
+        dotenvy::var("BIND_ADDR").unwrap()
+    );
 
-    // Connect to the database.
-    let manager: bb8_postgres::PostgresConnectionManager<NoTls> =
-        bb8_postgres::PostgresConnectionManager::new(postgresstring.parse().unwrap(), NoTls);
-    let pool = bb8::Pool::builder().build(manager).await.unwrap();
+    database::check_for_migrations()
+        .await
+        .expect("An error occurred while running migrations.");
 
-    // Create a new HTTP server.
-    let builder = HttpServer::new(move || {
+    let pool = database::connect()
+        .await
+        .expect("Database connection failed");
+
+    HttpServer::new(move || {
         App::new()
             .wrap(
                 DefaultHeaders::new()
@@ -437,19 +364,18 @@ async fn main() -> std::io::Result<()> {
             )
             .wrap(actix_block_ai_crawling::BlockAi)
             .wrap(middleware::Compress::default())
-            .app_data(actix_web::web::Data::new(pool.clone()))
+            .app_data(web::Data::new(pool.clone()))
             .route("/", web::get().to(index))
-            .service(getroutesperagency)
+            .service(get_routes_per_agency)
             .route("robots.txt", web::get().to(robots))
-            .service(gettrip)
-            .service(amtrakproxy)
-            .service(getinitdata)
-            .service(gtfsingesterrors)
+            .service(get_trip)
+            .service(amtrak_proxy)
+            .service(get_init_data)
+            .service(gtfs_ingest_errors)
             .service(microtime)
     })
-    .workers(16);
-
-    let _ = builder.bind("127.0.0.1:5401").unwrap().run().await;
-
-    Ok(())
+    .workers(16)
+    .bind(dotenvy::var("BIND_ADDR").unwrap())?
+    .run()
+    .await
 }

@@ -48,7 +48,6 @@ bb8-postgres = "0.8.1"
 bb8 = "0.8.1"
 threadpool = {version = "1.8.1"}
 tokio-threadpool = "0.1.18"
-qstring = "0.7.2"
 rand = "0.8.5"
 titlecase = "2.2.1"
 rayon = "1.8.0"
@@ -71,6 +70,8 @@ amtk = "0.1.0"
 geojson = "0.24.1"
 travelling_salesman = "1.1.22"
 ordered-float = "4.2.0"
+thiserror = "1.0.56"
+dotenvy = "0.15.7"
 
 [[bin]]
 name = "http_server"
@@ -83,14 +84,6 @@ path = "src/ingest_gtfs_schedule/from-transitland.rs"
 [[bin]]
 name = "import"
 path = "src/ingest_gtfs_schedule/main.rs"
-
-[[bin]]
-name = "move_to_prod"
-path = "src/ingest_gtfs_schedule/move_to_prod.rs"
-
-[[bin]]
-name = "update_functions"
-path = "src/ingest_gtfs_schedule/update_functions.rs"
 
 [[bin]]
 name = "importnopostgres"
@@ -115,9 +108,3 @@ path = "src/aspen/lib.rs"
 [[bin]]
 name = "spruce"
 path = "src/spruce/main.rs"
-
-[features]
-#![feature(async_closure)]
-
-#[target.'cfg(target_os = "linux")']
-#rustflags = ["-C", "target-feature=+crt-static"]
