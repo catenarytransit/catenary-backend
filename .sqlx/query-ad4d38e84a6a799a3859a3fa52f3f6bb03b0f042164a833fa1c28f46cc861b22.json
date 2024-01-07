@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT onestop_feed_id, route_id, short_name, long_name, gtfs_desc, route_type, url, agency_id, gtfs_order,\n                color, text_color, continuous_pickup, continuous_drop_off, shapes_list\n            FROM gtfs.routes\n            WHERE onestop_feed_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "onestop_feed_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "route_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "short_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "long_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "gtfs_desc",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "route_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 6,
+        "name": "url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "agency_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "gtfs_order",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "color",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "text_color",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "continuous_pickup",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 12,
+        "name": "continuous_drop_off",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 13,
+        "name": "shapes_list",
+        "type_info": "TextArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "ad4d38e84a6a799a3859a3fa52f3f6bb03b0f042164a833fa1c28f46cc861b22"
+}

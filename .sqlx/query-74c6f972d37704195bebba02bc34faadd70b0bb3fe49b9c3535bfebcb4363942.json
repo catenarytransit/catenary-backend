@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT onestop_feed_id, created_trips, updated_trips_time_ms\n                FROM gtfs.feeds_updated\n                WHERE onestop_feed_id = $1\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "onestop_feed_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "created_trips",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "updated_trips_time_ms",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "74c6f972d37704195bebba02bc34faadd70b0bb3fe49b9c3535bfebcb4363942"
+}

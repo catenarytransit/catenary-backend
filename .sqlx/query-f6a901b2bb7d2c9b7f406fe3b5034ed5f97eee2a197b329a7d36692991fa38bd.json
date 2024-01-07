@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT onestop_operator_id, name, gtfs_static_feeds, gtfs_realtime_feeds, static_onestop_feeds_to_gtfs_ids,\n            realtime_onestop_feeds_to_gtfs_ids\n        FROM gtfs.operators\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "onestop_operator_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "gtfs_static_feeds",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 3,
+        "name": "gtfs_realtime_feeds",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 4,
+        "name": "static_onestop_feeds_to_gtfs_ids",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "realtime_onestop_feeds_to_gtfs_ids",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "f6a901b2bb7d2c9b7f406fe3b5034ed5f97eee2a197b329a7d36692991fa38bd"
+}

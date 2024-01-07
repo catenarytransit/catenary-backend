@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT trip_id, onestop_feed_id, route_id, service_id, trip_headsign, trip_short_name, direction_id,\n            block_id, shape_id, wheelchair_accessible, bikes_allowed\n        FROM gtfs.trips\n        WHERE onestop_feed_id = $1 AND trip_id = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "trip_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "onestop_feed_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "route_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "service_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "trip_headsign",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "trip_short_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "direction_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "block_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "shape_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "wheelchair_accessible",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "bikes_allowed",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "ba8d15394cd81a8e29d08e6b116ba89738a385e6c9501c35a1ed4db3fb3a3b69"
+}

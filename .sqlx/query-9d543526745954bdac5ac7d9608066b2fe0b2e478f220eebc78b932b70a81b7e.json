@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                                                    INSERT INTO gtfs.feeds_updated (\n                                                        onestop_feed_id, created_trips, updated_trips_time_ms\n                                                    )\n                                                    VALUES ($1, $2, $3)\n                                                    ON CONFLICT (onestop_feed_id)\n                                                    DO UPDATE SET created_trips = $2, updated_trips_time_ms = $3\n                                                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bool",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9d543526745954bdac5ac7d9608066b2fe0b2e478f220eebc78b932b70a81b7e"
+}

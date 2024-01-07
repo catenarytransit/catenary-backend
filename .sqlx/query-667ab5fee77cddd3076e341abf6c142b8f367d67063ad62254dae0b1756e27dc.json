@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                            INSERT INTO gtfs.realtime_feeds (\n                                onestop_feed_id, name, operators, operators_to_gtfs_ids\n                            )\n                            VALUES ($1, $2, $3, $4)\n                            ON CONFLICT DO NOTHING\n                            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "TextArray",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "667ab5fee77cddd3076e341abf6c142b8f367d67063ad62254dae0b1756e27dc"
+}

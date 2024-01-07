@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                                            INSERT INTO gtfs.gtfs_errors (onestop_feed_id, error)\n                                            VALUES ($1, $2)\n                                            ON CONFLICT (onestop_feed_id) DO UPDATE SET error = $2\n                                            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "585bfdb2b6b29cb48f3e3b5b21eca259755137048d260b68fe4f7319c4e2f650"
+}

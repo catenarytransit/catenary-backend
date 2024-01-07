@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT onestop_feed_id, max_lat, max_lon, min_lat, min_lon, operators, operators_to_gtfs_ids\n        FROM gtfs.static_feeds\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "onestop_feed_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "max_lat",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "max_lon",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "min_lat",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "min_lon",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "operators",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 6,
+        "name": "operators_to_gtfs_ids",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "9ef4abb74685dc6fb83d8a2965ab87ee60646e7c61ba4553f705eb2bfd00d5ff"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                                                    DELETE FROM gtfs.gtfs_errors\n                                                    WHERE onestop_feed_id = $1\n                                                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3dbd6ae1c082a63a0e34caf7fc6cea7c69fc442b695e9ca4be96a34217813cbc"
+}

@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT onestop_feed_id, operators, operators_to_gtfs_ids\n        FROM gtfs.realtime_feeds\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "onestop_feed_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "operators",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 2,
+        "name": "operators_to_gtfs_ids",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "72257b04d05772e11b622816a780361eb16c85f67f6badbfaac2e144b017c4c2"
+}
