@@ -53,6 +53,8 @@ Moving the `gtfs_stage` set of tables to `gtfs` is really simple
 cargo run --bin move_to_prod -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple"
 ```
 
+Move to prod **deletes the current production database, renames the staging and then commits the change**.
+
 You're all done! Data is fully ready for serving to users!
 
 ## Running the Application
