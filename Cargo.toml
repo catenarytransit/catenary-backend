@@ -71,38 +71,15 @@ amtk = "0.1.0"
 geojson = "0.24.1"
 travelling_salesman = "1.1.22"
 ordered-float = "4.2.0"
+dotenvy = "0.15.7"
+
+[[bin]]
+name = "import"
+path = "src/next_db/import.rs"
 
 [[bin]]
 name = "http_server"
 path = "src/http-server.rs"
-
-[[bin]]
-name = "transitlanddownload"
-path = "src/ingest_gtfs_schedule/from-transitland.rs"
-
-[[bin]]
-name = "import"
-path = "src/ingest_gtfs_schedule/main.rs"
-
-[[bin]]
-name = "move_to_prod"
-path = "src/ingest_gtfs_schedule/move_to_prod.rs"
-
-[[bin]]
-name = "update_functions"
-path = "src/ingest_gtfs_schedule/update_functions.rs"
-
-[[bin]]
-name = "importnopostgres"
-path = "src/ingest_gtfs_schedule/nopostgres.rs"
-
-[[bin]]
-name = "flattenuncompressed"
-path = "src/ingest_gtfs_schedule/flatten.rs"
-
-[[bin]]
-name = "newunzip"
-path = "src/ingest_gtfs_schedule/new-unzip.rs"
 
 [[bin]]
 name = "aspen"
