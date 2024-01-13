@@ -8,7 +8,7 @@ sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev pos
 Loading in data into the Postgres database is a multistep process. Ensure your postgres database is working and your password is set correctly.
 
 ### Download the Transitland repo
-Transitland acts as an initial source of knowledge for Catenary-Backend, and associates static feeds and realtime feeds together.
+Transitland acts as an initial source of knowledge for Catenary-Backend, and associates static feeds and realtime feeds together. We run a fork of transitland to add additional datasets that the upstream maintainers may not approve of.
 Download and Update it via:
 ```bash
 git submodule init && git submodule update
@@ -16,48 +16,6 @@ git submodule init && git submodule update
 
 If you already have it, remember to git pull / merge changes
 To do this, cd into the folder `transitland-atlas` and run `git pull`
-
-### Download GTFS static data
-This downloads the world's GTFS Static Data. This step may take a while, so go play some Minecraft / touch grass and come back when it's all finished!
-```bash
-cargo run --release --bin transitlanddownload
-```
-
-### Unzip and format the zip files
-```bash
-./src/ingest_gtfs_schedule/unzip-statics.sh
-```
-
-### Import data into the postgres database
-
-```bash
-cargo run --release --bin import -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple" --threads 25 --startfresh true --isprod false
-```
-
-This command writes to `gtfs_stage`. 
-Omit startfresh if you would want to wipe the staging directory.
-
-For safety reasons, you are unable to wipe the `gtfs` schema, which is the production database, from this version.
-
-You can also write to production, especially loading in a single agency, like this.
-
-```bash
-cargo run --release --bin import -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple" --threads 25 --startfresh false --limittostaticfeed f-9q9-caltrain --isprod true
-```
-
-### Moving staging to be the new production database.
-
-Moving the `gtfs_stage` set of tables to `gtfs` is really simple
-
-```bash
-cargo run --bin move_to_prod -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple"
-```
-
-Move to prod **deletes the current production database, renames the staging and then commits the change**.
-
-You're all done! Data is fully ready for serving to users!
-
-## Running the Application
 
 ### Install Systemd Service
 ```bash
@@ -78,3 +36,18 @@ For unix users, running `git config core.hooksPath .githooks` is required.
 Pull requests will not be merged without this.
 
 No option exists for Windows users at the moment. Please try WSL Ubuntu for the moment. We're working on adding this.
+
+### SQL notes
+We've switched to sqlx for our queries. For development, you'll need to know these few commands.
+
+1. `cargo sqlx database drop`
+This drops your old development database so you can create a new one.
+
+2. `cargo sqlx database create`
+This creates a new sqlx database
+
+3. `cargo sqlx migrate run`
+This initialises the base tables and functions required to ingest our dataset.
+
+4. `cargo sqlx prepare --workspace`
+This will compile your sql code into .sqlx representation into the folder `.sqlx`, so that future code compilation no longer requires sqlx. The `.sqlx` folder is written into the Git history to assist other contributors without access to a working database. If a merge conflict occurs, the folder should be deleted and regenerated before reuploading.

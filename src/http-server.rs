@@ -152,19 +152,20 @@ pub async fn gettrip(
 
         match postgresresult {
             Ok(postgresresult) => {
-                let result: Vec<TripPostgres> = Vec::from_iter(postgresresult.iter().map(|row| TripPostgres {
-                    trip_id: row.get(0),
-                    onestop_feed_id: row.get(1),
-                    route_id: row.get(2),
-                    service_id: row.get(3),
-                    trip_headsign: row.get(4),
-                    trip_short_name: row.get(5),
-                    direction_id: row.get(6),
-                    block_id: row.get(7),
-                    shape_id: row.get(8),
-                    wheelchair_accessible: row.get(9),
-                    bikes_allowed: row.get(10),
-                }));
+                let result: Vec<TripPostgres> =
+                    Vec::from_iter(postgresresult.iter().map(|row| TripPostgres {
+                        trip_id: row.get(0),
+                        onestop_feed_id: row.get(1),
+                        route_id: row.get(2),
+                        service_id: row.get(3),
+                        trip_headsign: row.get(4),
+                        trip_short_name: row.get(5),
+                        direction_id: row.get(6),
+                        block_id: row.get(7),
+                        shape_id: row.get(8),
+                        wheelchair_accessible: row.get(9),
+                        bikes_allowed: row.get(10),
+                    }));
 
                 let json_string = to_string_pretty(&json!(result)).unwrap();
 

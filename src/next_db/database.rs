@@ -1,9 +1,10 @@
+//Written by Emma Alexia
 use service::quicli::prelude::info;
+use sqlx::migrate;
 use sqlx::migrate::MigrateDatabase;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Connection, PgConnection, PgPool, Postgres};
 use std::time::Duration;
-use sqlx::migrate;
 
 pub async fn connect() -> Result<PgPool, sqlx::Error> {
     info!("Initializing database connection");
@@ -30,6 +31,7 @@ pub async fn connect() -> Result<PgPool, sqlx::Error> {
     Ok(pool)
 }
 
+//Written by Emma Alexia
 pub async fn check_for_migrations() -> Result<(), sqlx::Error> {
     let uri = dotenvy::var("DATABASE_URL").expect("`DATABASE_URL` not in .env");
     let uri = uri.as_str();
