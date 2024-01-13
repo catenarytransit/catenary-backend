@@ -3,6 +3,7 @@ use reqwest::Client as ReqwestClient;
 use reqwest::Request;
 use reqwest::RequestBuilder;
 use serde_json::Error as SerdeError;
+use core::slice::SlicePattern;
 use std::collections::HashMap;
 use std::fs;
 mod dmfr;
@@ -13,7 +14,7 @@ use std::io::Write;
 
 //Written by Kyler Chin
 
-//yes im intentionally leaking the API key. I don't care, they are free. This is for your convienence.
+//This particular API key was published intentionally. This is for your convienence.
 fn transform_for_bay_area(x: String) -> String {
     //.replace("https://api.511.org/transit/datafeeds?operator_id=RG", "https://api.511.org/transit/datafeeds?operator_id=RG&api_key=094f6bc5-9d6a-4529-bfb3-6f1bc4d809d9")
 
@@ -57,12 +58,21 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
     request.headers(headers)
 }
 
-struct EligibleFeeds {
+//It's giving UC Berkeley lab assignment!!! 🐻💅🐻💅
+pub struct DownloadedFeedsInformation {
     feed_id: String,
     url: String,
+    hash: Option<u64>,
+    download_timestamp_ms: u64,
+    operation_success: bool,
+    reingest: bool,
+    //left intentionally as u64 to enable storage and display to the user
+    byte_size: Option<u64>,
+    duration_download: Option<u64>,
+    http_response_code: Option<String>,
 }
 
-pub async fn download_return_eligible_feeds() {
+pub async fn download_return_eligible_feeds() -> Vec<DownloadedFeedsInformation> {
     let threads: usize = 32;
 
     let _ = fs::create_dir("gtfs_static_zips");
@@ -221,7 +231,14 @@ pub async fn download_return_eligible_feeds() {
 
                 let request = add_auth_headers(request, &staticfeed.feed_id);
 
+                let start = SystemTime::now();
+                let current_unix_ms_time = start
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards").as_millis();
+
                 let response = request.send().await;
+
+                let duration = SystemTime::now().duration_since(start).expect("Time went backwards").as_millis();
 
                 match response {
                     Ok(response) => {
@@ -232,7 +249,16 @@ pub async fn download_return_eligible_feeds() {
                         let bytes_result = response.bytes().await;
 
                         if bytes_result.is_ok() {
-                            let _ = out.write(&(bytes_result.unwrap()));
+                            let bytes_result = bytes_result.unwrap();
+                            let data = bytes_result.as_ref();
+                            let hash = seahash::hash(data);
+
+                            //if the dataset is brand new, mark as success, save the file 
+
+                            // this is accomplished by checking in the sql table `gtfs.static_download_attempts`
+                            //if hash exists in the table AND the ingestion operation did not fail, cancel.
+                            //if hash doesn't exist write the file to disk
+                            let _ = out.write(&(bytes_result));
                             println!("Finished writing {}", &staticfeed.feed_id);
                         }
                     }
@@ -245,8 +271,8 @@ pub async fn download_return_eligible_feeds() {
                 }
             }))
             .buffer_unordered(threads)
-            .collect::<Vec<()>>();
+            .collect::<Vec<DownloadedFeedsInformation>>();
 
-        static_fetches.await;
+        static_fetches.await
     }
 }
