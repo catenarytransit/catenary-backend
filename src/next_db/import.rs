@@ -1,5 +1,6 @@
-// Initial version 3 of ingest: Kyler Chin
-//This was heavily inspired and copied from Emma Alexia, thank you Emma!
+// Initial version 3 of ingest written by Kyler Chin
+// This was heavily inspired and copied from Emma Alexia, thank you Emma!
+// Removal of the attribution is not allowed, as covered under the AGPL license
 
 use service::quicli::prelude::info;
 use sqlx::migrate::MigrateDatabase;
