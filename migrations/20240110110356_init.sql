@@ -6,10 +6,11 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE SCHEMA IF NOT EXISTS gtfs;
 
 CREATE TABLE IF NOT EXISTS gtfs.static_download_attempts (
-   onestop_feed_id text,
-   file_hash text,
-   downloaded_unix_time_ms bigint,
+   onestop_feed_id text NOT NULL,
+   file_hash bigint NOT NULL,
+   downloaded_unix_time_ms bigint NOT NULL,
    ingested boolean,
+   failed boolean,
    PRIMARY KEY (onestop_feed_id, downloaded_unix_time_ms)
 );
 
@@ -68,7 +69,7 @@ CREATE TABLE gtfs.realtime_feeds (
 
 CREATE TABLE gtfs.ingested (
     static_onestop_id text NOT NULL,
-    file_hash text NOT NULL,
+    file_hash bigint NOT NULL,
     attempt_id text NOT NULL,
     ingest_start_unix_time_ms bigint,
     ingesting_in_progress boolean,
