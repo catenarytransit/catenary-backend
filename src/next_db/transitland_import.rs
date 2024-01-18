@@ -1,9 +1,9 @@
+use core::slice::SlicePattern;
 use futures::StreamExt;
 use reqwest::Client as ReqwestClient;
 use reqwest::Request;
 use reqwest::RequestBuilder;
 use serde_json::Error as SerdeError;
-use core::slice::SlicePattern;
 use std::collections::HashMap;
 use std::fs;
 mod dmfr;
@@ -233,12 +233,16 @@ pub async fn download_return_eligible_feeds() -> Vec<DownloadedFeedsInformation>
 
                 let start = SystemTime::now();
                 let current_unix_ms_time = start
-                .duration_since(UNIX_EPOCH)
-                .expect("Time went backwards").as_millis();
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time went backwards")
+                    .as_millis();
 
                 let response = request.send().await;
 
-                let duration = SystemTime::now().duration_since(start).expect("Time went backwards").as_millis();
+                let duration = SystemTime::now()
+                    .duration_since(start)
+                    .expect("Time went backwards")
+                    .as_millis();
 
                 match response {
                     Ok(response) => {
@@ -253,7 +257,7 @@ pub async fn download_return_eligible_feeds() -> Vec<DownloadedFeedsInformation>
                             let data = bytes_result.as_ref();
                             let hash = seahash::hash(data);
 
-                            //if the dataset is brand new, mark as success, save the file 
+                            //if the dataset is brand new, mark as success, save the file
 
                             // this is accomplished by checking in the sql table `gtfs.static_download_attempts`
                             //if hash exists in the table AND the ingestion operation did not fail, cancel.
