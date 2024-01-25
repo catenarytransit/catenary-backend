@@ -16,7 +16,7 @@ mod transitland_import;
 async fn main() {
     info!("Initializing database connection");
 
-    let mut pool = database::connect()
+    let pool = database::connect()
         .await
         .expect("Database connection failed");
     let mut transaction = pool.begin().await.unwrap();
@@ -24,5 +24,5 @@ async fn main() {
     //migrate database
     let _ = database::check_for_migrations().await;
 
-    let eligible_feeds = transitland_import::download_return_eligible_feeds(&mut pool).await;
+    let eligible_feeds = transitland_import::download_return_eligible_feeds(&pool).await;
 }

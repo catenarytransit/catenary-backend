@@ -74,7 +74,7 @@ pub struct DownloadedFeedsInformation {
     http_response_code: Option<String>,
 }
 
-pub async fn download_return_eligible_feeds(pool: &mut sqlx::Pool<sqlx::Postgres>) -> Result<Vec<DownloadedFeedsInformation>, ()> {
+pub async fn download_return_eligible_feeds(pool: &sqlx::Pool<sqlx::Postgres>) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
 
     let _ = fs::create_dir("gtfs_static_zips");
@@ -286,7 +286,7 @@ pub async fn download_return_eligible_feeds(pool: &mut sqlx::Pool<sqlx::Postgres
                             let hash_str = hash.to_string();
 
                             let download_attempt_db = sqlx::query_as!(DownloadAttempt,
-                                "select * from gtfs.static_download_attempts WHERE file_hash::TEXT = ?", hash_str).fetch_all(pool).await;
+                            "SELECT * FROM gtfs.static_download_attempts WHERE file_hash = $1;", hash_str).fetch_all(pool).await;
 
                             //if the dataset is brand new, mark as success, save the file
 
