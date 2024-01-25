@@ -431,7 +431,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-        CREATE UNLOGGED TABLE IF NOT EXISTS {}.stoptimes (
+        CREATE TABLE IF NOT EXISTS {}.stoptimes (
             onestop_feed_id text NOT NULL,
             trip_id text NOT NULL,
             stop_sequence int NOT NULL,
@@ -460,7 +460,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-        CREATE UNLOGGED TABLE IF NOT EXISTS {}.routes (
+        CREATE TABLE IF NOT EXISTS {}.routes (
             route_id text NOT NULL,
             onestop_feed_id text NOT NULL,
             short_name text NOT NULL,
@@ -488,7 +488,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-        CREATE UNLOGGED TABLE IF NOT EXISTS {}.shapes (
+        CREATE TABLE IF NOT EXISTS {}.shapes (
             onestop_feed_id text NOT NULL,
             shape_id text NOT NULL,
             linestring GEOMETRY(LINESTRING,4326) NOT NULL,
@@ -510,7 +510,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .batch_execute(
             format!(
                 "
-        CREATE UNLOGGED TABLE IF NOT EXISTS {}.trips (
+        CREATE TABLE IF NOT EXISTS {}.trips (
             trip_id text NOT NULL,
             onestop_feed_id text NOT NULL,
             route_id text NOT NULL,
