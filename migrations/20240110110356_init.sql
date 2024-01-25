@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS gtfs.static_download_attempts (
    PRIMARY KEY (onestop_feed_id, downloaded_unix_time_ms)
 );
 
+CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.static_download_attempts (file_hash);
+
 CREATE TABLE gtfs.static_feeds (
     onestop_feed_id text PRIMARY KEY,
     only_realtime_ref text,
