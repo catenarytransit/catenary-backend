@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS hstore;
 
 CREATE TABLE IF NOT EXISTS gtfs.static_download_attempts (
    onestop_feed_id text NOT NULL,
-   file_hash bigint NOT NULL,
+   file_hash text NOT NULL,
    downloaded_unix_time_ms bigint NOT NULL,
    ingested boolean,
    failed boolean,

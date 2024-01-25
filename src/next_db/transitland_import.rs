@@ -211,11 +211,11 @@ pub async fn download_return_eligible_feeds(pool: &mut sqlx::Pool<sqlx::Postgres
             url: String,
         }
 
-        #[derive(Debug)]
+        #[derive(Debug,Clone)]
         struct DownloadAttempt {
             onestop_feed_id: String,
-            file_hash: u64,
-            downloaded_unix_time_ms: u64,
+            file_hash: String,
+            downloaded_unix_time_ms: i64,
             ingested: bool,
             failed: bool
         }
@@ -283,8 +283,10 @@ pub async fn download_return_eligible_feeds(pool: &mut sqlx::Pool<sqlx::Postgres
 
                             answer.hash = Some(hash);
 
+                            let hash_str = hash.to_string();
+
                             let download_attempt_db = sqlx::query_as!(DownloadAttempt,
-                                "select * from gtfs.static_download_attempts WHERE file_hash::BIGINT = ?;").fetch_all(pool).await;
+                                "select * from gtfs.static_download_attempts WHERE file_hash::TEXT = ?", hash_str).fetch_all(pool).await;
 
                             //if the dataset is brand new, mark as success, save the file
 
