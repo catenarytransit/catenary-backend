@@ -1,4 +1,3 @@
-use core::slice::SlicePattern;
 use futures::StreamExt;
 use reqwest::Client as ReqwestClient;
 use reqwest::Request;
@@ -6,6 +5,8 @@ use reqwest::RequestBuilder;
 use serde_json::Error as SerdeError;
 use std::collections::HashMap;
 use std::fs;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 mod dmfr;
 use futures;
 use std::fs::File;
@@ -65,14 +66,15 @@ pub struct DownloadedFeedsInformation {
     hash: Option<u64>,
     download_timestamp_ms: u64,
     operation_success: bool,
-    reingest: bool,
+    //tells the server to ingest this tag
+    ingest: bool,
     //left intentionally as u64 to enable storage and display to the user
     byte_size: Option<u64>,
     duration_download: Option<u64>,
     http_response_code: Option<String>,
 }
 
-pub async fn download_return_eligible_feeds() -> Vec<DownloadedFeedsInformation> {
+pub async fn download_return_eligible_feeds(pool: &sqlx::Pool<sqlx::Postgres>) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
 
     let _ = fs::create_dir("gtfs_static_zips");
@@ -203,9 +205,19 @@ pub async fn download_return_eligible_feeds() -> Vec<DownloadedFeedsInformation>
             }
         }
 
+        #[derive(Clone)]
         struct StaticFeedToDownload {
             feed_id: String,
             url: String,
+        }
+
+        #[derive(Debug)]
+        struct DownloadAttempt {
+            onestop_feed_id: String,
+            file_hash: u64,
+            downloaded_unix_time_ms: u64,
+            ingested: bool,
+            failed: bool
         }
 
         println!("Downloading zip files now");
@@ -244,10 +256,22 @@ pub async fn download_return_eligible_feeds() -> Vec<DownloadedFeedsInformation>
                     .expect("Time went backwards")
                     .as_millis();
 
+                    let mut answer = DownloadedFeedsInformation {
+                        feed_id: staticfeed.feed_id.clone(),
+                        url: staticfeed.url.clone(),
+                        hash: None,
+                        download_timestamp_ms: current_unix_ms_time as u64,
+                        operation_success: false,
+                        ingest: false,
+                        byte_size: None,
+                        duration_download: Some(duration as u64),
+                        http_response_code: None
+                    };
+
                 match response {
                     Ok(response) => {
                         let mut out =
-                            File::create(format!("gtfs_static_zips/{}.zip", &staticfeed.feed_id))
+                            File::create(format!("gtfs_static_zips/{}.zip", staticfeed.feed_id.clone()))
                                 .expect("failed to create file");
 
                         let bytes_result = response.bytes().await;
@@ -257,26 +281,38 @@ pub async fn download_return_eligible_feeds() -> Vec<DownloadedFeedsInformation>
                             let data = bytes_result.as_ref();
                             let hash = seahash::hash(data);
 
+                            answer.hash = Some(hash);
+
+                            let download_attempt_db = sqlx::query_as!(DownloadAttempt,
+                                "select * from gtfs.static_download_attempts where file_hash = ?",
+                            &hash).fetch_all(&mut pool).await;
+
                             //if the dataset is brand new, mark as success, save the file
 
                             // this is accomplished by checking in the sql table `gtfs.static_download_attempts`
                             //if hash exists in the table AND the ingestion operation did not fail, cancel.
                             //if hash doesn't exist write the file to disk
                             let _ = out.write(&(bytes_result));
-                            println!("Finished writing {}", &staticfeed.feed_id);
+                            println!("Finished writing {}", &staticfeed.clone().feed_id);
                         }
                     }
                     Err(error) => {
                         println!(
                             "Error with downloading {}: {}",
-                            &staticfeed.url, &staticfeed.url
+                            &staticfeed.feed_id,
+                            &staticfeed.url
                         );
                     }
                 }
-            }))
+
+                answer
+            }
+        ))
             .buffer_unordered(threads)
             .collect::<Vec<DownloadedFeedsInformation>>();
 
-        static_fetches.await
+        Ok(static_fetches.await)
+    } else {
+        return Err(());
     }
 }

@@ -24,5 +24,5 @@ async fn main() {
     //migrate database
     let _ = database::check_for_migrations().await;
 
-    let eligible_feeds = transitland_import::download_return_eligible_feeds().await;
+    let eligible_feeds = transitland_import::download_return_eligible_feeds(&pool).await;
 }

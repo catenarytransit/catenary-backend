@@ -4,6 +4,7 @@
 
 CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE SCHEMA IF NOT EXISTS gtfs;
+CREATE EXTENSION IF NOT EXISTS hstore;
 
 CREATE TABLE IF NOT EXISTS gtfs.static_download_attempts (
    onestop_feed_id text NOT NULL,
@@ -93,7 +94,7 @@ CREATE TABLE gtfs.agencies (
     agency_lang text,
     agency_phone text,
     agency_fare_url	text,
-    agency_fare_url hstore,
+    agency_fare_url_lang hstore,
     PRIMARY KEY (static_onestop_id, attempt_id, agency_id)
 );
 
@@ -104,7 +105,7 @@ CREATE TABLE gtfs.routes (
     short_name text NOT NULL,
     short_name_lang hstore,
     long_name text NOT NULL,
-    long_name hstore,
+    long_name_lang hstore,
     gtfs_desc text,
     route_type smallint NOT NULL,
     url text,
@@ -156,7 +157,7 @@ CREATE TABLE gtfs.stops (
     attempt_id text NOT NULL,
     gtfs_id text NOT NULL,
     name text NOT NULL,
-    name_lang text hstore,
+    name_lang hstore,
     displayname text NOT NULL,
     code text,
     gtfs_desc text,

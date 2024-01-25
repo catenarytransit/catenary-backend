@@ -32,13 +32,16 @@ Example endpoints
 
 ## For Contributors
 
-For unix users, running `git config core.hooksPath .githooks` is required.
-Pull requests will not be merged without this.
+For unix users, running `git config core.hooksPath .githooks` is recommended.
+Good commit messages are required to contribute to this project.
 
 No option exists for Windows users at the moment. Please try WSL Ubuntu for the moment. We're working on adding this.
 
 ### SQL notes
 We've switched to sqlx for our queries. For development, you'll need to know these few commands.
+
+0. `cargo install sqlx-cli`
+Install SQLx onto your system. You'll only need to do this once / when there are sqlx updates.
 
 1. `cargo sqlx database drop`
 This drops your old development database so you can create a new one.
@@ -51,3 +54,7 @@ This initialises the base tables and functions required to ingest our dataset.
 
 4. `cargo sqlx prepare --workspace`
 This will compile your sql code into .sqlx representation into the folder `.sqlx`, so that future code compilation no longer requires sqlx. The `.sqlx` folder is written into the Git history to assist other contributors without access to a working database. If a merge conflict occurs, the folder should be deleted and regenerated before reuploading.
+
+### Common Database debugging
+
+Is Postgis not installing? This page may be helpful: https://trac.osgeo.org/postgis/wiki/UsersWikiPostGIS3UbuntuPGSQLApt
