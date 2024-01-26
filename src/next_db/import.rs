@@ -14,6 +14,7 @@ mod dmfr;
 use std::sync::Arc;
 
 mod get_feeds_meta;
+mod refresh_metadata_tables;
 mod transitland_download;
 
 #[tokio::main]
@@ -28,9 +29,12 @@ async fn main() {
     //migrate database
     let _ = database::check_for_migrations().await;
 
-    let transitland_metadata: Arc<get_feeds_meta::TransitlandMetadata> = Arc::from(get_feeds_meta::generate_transitland_metadata());
+    let transitland_metadata: Arc<get_feeds_meta::TransitlandMetadata> =
+        Arc::from(get_feeds_meta::generate_transitland_metadata());
 
-    let eligible_feeds = transitland_download::download_return_eligible_feeds(transitland_metadata.clone(), &pool).await;
+    let eligible_feeds =
+        transitland_download::download_return_eligible_feeds(transitland_metadata.clone(), &pool)
+            .await;
 
     let feeds_to_discard: HashSet<&str> = HashSet::from_iter(vec![
         "f-9q8y-sfmta",
@@ -44,4 +48,6 @@ async fn main() {
         "f-9q9-caltrain",
         "f-9qc3-riovistadeltabreeze",
     ]);
+
+    let _ = refresh_metadata_tables::refresh_feed_meta(transitland_metadata.clone(), &pool);
 }

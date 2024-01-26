@@ -1,19 +1,16 @@
+use crate::dmfr;
+use futures;
 use futures::StreamExt;
 use reqwest::Client as ReqwestClient;
 use reqwest::Request;
 use reqwest::RequestBuilder;
-use serde_json::Error as SerdeError;
-use std::collections::HashMap;
 use std::fs;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
-use crate::dmfr;
-use futures;
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::copy;
 use std::io::Write;
 use std::sync::Arc;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 #[derive(Clone)]
 struct StaticFeedToDownload {
@@ -32,6 +29,7 @@ struct DownloadAttempt {
     failed: bool,
 }
 //Written by Kyler Chin
+//You are required under the APGL license to retain this annotation
 
 //This particular API key was published intentionally. This is for your convienence.
 fn transform_for_bay_area(x: String) -> String {

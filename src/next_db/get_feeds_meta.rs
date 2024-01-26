@@ -20,7 +20,7 @@ pub struct TransitlandMetadata {
     pub operatorhashmap: Arc<HashMap<OperatorId, dmfr::Operator>>,
     pub operator_to_feed_hashmap: Arc<HashMap<OperatorId, Vec<dmfr::OperatorAssociatedFeedsItem>>>,
     pub feed_to_operator_hashmap: Arc<HashMap<FeedId, Vec<OperatorId>>>,
-    pub feed_to_operator_pairs_hashmap: Arc<HashMap<FeedId, Vec<OperatorPairInfo>>>
+    pub feed_to_operator_pairs_hashmap: Arc<HashMap<FeedId, Vec<OperatorPairInfo>>>,
 }
 
 pub fn generate_transitland_metadata() -> TransitlandMetadata {
@@ -215,6 +215,6 @@ pub fn generate_transitland_metadata() -> TransitlandMetadata {
         operatorhashmap: Arc::from(operatorhashmap),
         operator_to_feed_hashmap: Arc::from(operator_to_feed_hashmap),
         feed_to_operator_hashmap: Arc::from(feed_to_operator_hashmap),
-        feed_to_operator_pairs_hashmap: Arc::from(feed_to_operator_pairs_hashmap)
+        feed_to_operator_pairs_hashmap: Arc::from(feed_to_operator_pairs_hashmap),
     }
 }

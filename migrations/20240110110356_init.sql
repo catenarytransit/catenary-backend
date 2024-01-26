@@ -20,15 +20,15 @@ CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.stati
 CREATE TABLE gtfs.static_feeds (
     onestop_feed_id text PRIMARY KEY,
     only_realtime_ref text,
-    operators text[],
-    operators_to_gtfs_ids JSONB,
-    realtime_onestop_ids text[],
-    realtime_onestop_ids_to_gtfs_ids JSONB,
+    operators text[] NOT NULL,
+    operators_to_gtfs_ids JSONB NOT NULL,
+    realtime_onestop_ids text[] NOT NULL,
+    realtime_onestop_ids_to_gtfs_ids JSONB NOT NULL,
     max_lat double precision NOT NULL,
     max_lon double precision NOT NULL,
     min_lat double precision NOT NULL,
     min_lon double precision NOT NULL,
-    hull GEOMETRY(POLYGON,4326) NOT NULL
+    hull GEOMETRY(POLYGON,4326)
 );
 
 -- this dataset may be missing
