@@ -52,7 +52,7 @@ This creates a new sqlx database
 3. `cargo sqlx migrate run`
 This initialises the base tables and functions required to ingest our dataset.
 
-4. `cargo sqlx prepare --workspace`
+4. `cargo sqlx prepare`
 This will compile your sql code into .sqlx representation into the folder `.sqlx`, so that future code compilation no longer requires sqlx. The `.sqlx` folder is written into the Git history to assist other contributors without access to a working database. If a merge conflict occurs, the folder should be deleted and regenerated before reuploading.
 
 ### Common Database debugging

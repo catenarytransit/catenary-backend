@@ -13,6 +13,20 @@ use std::fs::File;
 use std::io::copy;
 use std::io::Write;
 
+#[derive(Clone)]
+struct StaticFeedToDownload {
+    feed_id: String,
+    url: String,
+}
+
+#[derive(Debug,Clone)]
+struct DownloadAttempt {
+    onestop_feed_id: String,
+    file_hash: String,
+    downloaded_unix_time_ms: i64,
+    ingested: bool,
+    failed: bool
+}
 //Written by Kyler Chin
 
 //This particular API key was published intentionally. This is for your convienence.
@@ -205,20 +219,6 @@ pub async fn download_return_eligible_feeds(pool: &sqlx::Pool<sqlx::Postgres>) -
             }
         }
 
-        #[derive(Clone)]
-        struct StaticFeedToDownload {
-            feed_id: String,
-            url: String,
-        }
-
-        #[derive(Debug,Clone)]
-        struct DownloadAttempt {
-            onestop_feed_id: String,
-            file_hash: String,
-            downloaded_unix_time_ms: i64,
-            ingested: bool,
-            failed: bool
-        }
 
         println!("Downloading zip files now");
 
@@ -270,6 +270,7 @@ pub async fn download_return_eligible_feeds(pool: &sqlx::Pool<sqlx::Postgres>) -
 
                 match response {
                     Ok(response) => {
+                        answer.http_response_code = Some(response.status().as_str().to_string());
                         let mut out =
                             File::create(format!("gtfs_static_zips/{}.zip", staticfeed.feed_id.clone()))
                                 .expect("failed to create file");
@@ -287,6 +288,30 @@ pub async fn download_return_eligible_feeds(pool: &sqlx::Pool<sqlx::Postgres>) -
 
                             let download_attempt_db = sqlx::query_as!(DownloadAttempt,
                             "SELECT * FROM gtfs.static_download_attempts WHERE file_hash = $1;", hash_str).fetch_all(pool).await;
+
+                            match download_attempt_db {
+                                Ok(download_attempt_db) => {
+
+                                    answer.operation_success = true;
+
+                                    if download_attempt_db.len() == 0 {
+                                        answer.ingest = true;
+                                    } else {
+                                        let check_for_sucesses = download_attempt_db.iter().find(|&x| x.ingested == true);
+
+                                        if check_for_sucesses.is_some() {
+                                            answer.ingest = false;
+                                        } else {
+                                            //no successes have occured
+                                            //search through zookeeper tree for current pending operations (todo!)
+                                            answer.ingest = true;
+                                        }
+                                    }
+                                },
+                                Err(error) => {
+                                    answer.operation_success = false;
+                                }
+                            }
 
                             //if the dataset is brand new, mark as success, save the file
 
