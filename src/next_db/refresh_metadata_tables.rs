@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use crate::get_feeds_meta;
-use std::collections::{HashSet,HashMap};
 use crate::dmfr;
+use crate::get_feeds_meta;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 // Written by Kyler Chin at Catenary Transit Initiatives
 // https://github.com/CatenaryTransit/catenary-backend
@@ -32,7 +32,8 @@ pub async fn refresh_feed_meta(
 
     for (operator_id, operator) in transitland_meta.operatorhashmap.iter() {
         let empty_vec: Vec<dmfr::OperatorAssociatedFeedsItem> = vec![];
-        let listoffeeds = transitland_meta.operator_to_feed_hashmap
+        let listoffeeds = transitland_meta
+            .operator_to_feed_hashmap
             .get(operator_id.as_str())
             .unwrap_or_else(|| &empty_vec)
             .to_owned();
@@ -44,8 +45,12 @@ pub async fn refresh_feed_meta(
         for x in listoffeeds {
             //get type
             if x.feed_onestop_id.is_some() {
-                if transitland_meta.feedhashmap.contains_key((&x.feed_onestop_id).as_ref().unwrap()) {
-                    let feed = transitland_meta.feedhashmap
+                if transitland_meta
+                    .feedhashmap
+                    .contains_key((&x.feed_onestop_id).as_ref().unwrap())
+                {
+                    let feed = transitland_meta
+                        .feedhashmap
                         .get((&x.feed_onestop_id).as_ref().unwrap())
                         .unwrap();
                     match feed.spec {
@@ -76,15 +81,20 @@ pub async fn refresh_feed_meta(
                     &operator.onestop_id,
                     &operator.name,
                     // gtfs_static_feeds text[]
-                    &serde_json::json!(simplified_array_static),
+                    &simplified_array_static,
                     //gtfs_realtime_feeds text[]
-                    &serde_json::json!(simplified_array_realtime),
+                    &simplified_array_realtime,
                     //static_onestop_feeds_to_gtfs_ids JSONB,
-                    &gtfs_static_feeds,
+                    &serde_json::json!(serde_json::map::Map::from_iter(gtfs_static_feeds.iter()
+                    .map(|(key,value)| {
+                        (key.clone(), serde_json::json!(value.clone()))
+                    })
+                )),
                     //realtime_onestop_feeds_to_gtfs_ids JSONB
-                    &gtfs_realtime_feeds
+                    &serde_json::json!(serde_json::map::Map::from_iter(gtfs_realtime_feeds.iter().map(|(key,value)| {
+                        (key.clone(), serde_json::json!(value.clone()))
+                    })))
         ).execute(pool).await;
-            
         }
     }
 }
