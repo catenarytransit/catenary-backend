@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct OperatorPairInfo {
-    operator_id: String,
-    gtfs_agency_id: Option<String>,
+    pub operator_id: String,
+    pub gtfs_agency_id: Option<String>,
 }
 
 pub type FeedId = String;

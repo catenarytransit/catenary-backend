@@ -24,10 +24,6 @@ CREATE TABLE gtfs.static_feeds (
     operators_to_gtfs_ids JSONB NOT NULL,
     realtime_onestop_ids text[] NOT NULL,
     realtime_onestop_ids_to_gtfs_ids JSONB NOT NULL,
-    max_lat double precision NOT NULL,
-    max_lon double precision NOT NULL,
-    min_lat double precision NOT NULL,
-    min_lon double precision NOT NULL,
     hull GEOMETRY(POLYGON,4326)
 );
 

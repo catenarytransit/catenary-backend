@@ -1,8 +1,8 @@
 use crate::dmfr;
 use crate::get_feeds_meta;
+use crate::get_feeds_meta::OperatorPairInfo;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
 // Written by Kyler Chin at Catenary Transit Initiatives
 // https://github.com/CatenaryTransit/catenary-backend
 //You are required under the APGL license to retain this annotation as is
@@ -53,6 +53,18 @@ pub async fn refresh_feed_meta(
                         .feedhashmap
                         .get((&x.feed_onestop_id).as_ref().unwrap())
                         .unwrap();
+                    let bruhitfailed: Vec<OperatorPairInfo> = vec![];
+                    let listofoperatorpairs = transitland_meta
+                        .feed_to_operator_pairs_hashmap
+                        .get(&feed.id)
+                        .unwrap_or_else(|| &bruhitfailed)
+                        .to_owned();
+                    let mut operator_pairs_hashmap: HashMap<String, Option<String>> =
+                        HashMap::new();
+                    for operator_pair in listofoperatorpairs {
+                        operator_pairs_hashmap
+                            .insert(operator_pair.operator_id, operator_pair.gtfs_agency_id);
+                    }
                     match feed.spec {
                         dmfr::FeedSpec::Gtfs => {
                             if !feeds_to_discard
@@ -69,6 +81,19 @@ pub async fn refresh_feed_meta(
                             gtfs_realtime_feeds
                                 .insert(x.feed_onestop_id.to_owned().unwrap(), x.gtfs_agency_id);
                             simplified_array_realtime.push(x.feed_onestop_id.to_owned().unwrap());
+
+                            let operators_owned = operator_pairs_hashmap.iter().map(|(a,b)| a.clone()).collect::<Vec<String>>();
+
+                            let _ = sqlx::query!("INSERT INTO gtfs.realtime_feeds (onestop_feed_id, name, operators, operators_to_gtfs_ids)
+                            VALUES ($1, $2, $3, $4) ON CONFLICT (onestop_feed_id) DO UPDATE SET name = $2, operators = $3, operators_to_gtfs_ids = $4;",
+                            &feed.id,
+                            &"",
+                            &operators_owned.as_slice(),
+                            &serde_json::json!(serde_json::map::Map::from_iter(operator_pairs_hashmap.iter().map(|(key,value)| {
+                                (key.clone(), serde_json::json!(value.clone()))
+                            })
+                        ))
+                        ).execute(pool).await;
                         }
                         _ => {
                             //do nothing
