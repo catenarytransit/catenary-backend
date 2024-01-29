@@ -207,6 +207,14 @@ CREATE TABLE gtfs.stoptimes (
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id, stop_sequence)
 );
 
+CREATE TABLE IF NOT EXISTS {schemaname}.gtfs_errors (
+            onestop_feed_id text NOT NULL,
+            error text NOT NULL,
+            attempt_id text,
+            file_hash text,
+            PRIMARY KEY (onestop_feed_id, attempt_id)
+);
+
 CREATE INDEX gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
 CREATE INDEX gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
 CREATE INDEX gtfs_static_feed_id ON gtfs.shapes (onestop_feed_id);
