@@ -102,6 +102,45 @@ pub async fn microtime(req: HttpRequest) -> impl Responder {
         ))
 }
 
+#[actix_web::get("/nanotime")]
+pub async fn nanotime(req: HttpRequest) -> impl Responder {
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "text/plain"))
+        .body(format!(
+            "{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+}
+
+#[actix_web::get("/metrolinktrackproxy")]
+pub async fn metrolinktrackproxy(req: HttpRequest) -> impl Responder {
+    let raw_data = reqwest::get("https://metrolinktrains.com/rtt/StationScheduleList.json").await;
+
+    match raw_data {
+        Ok(raw_data) => {
+
+            let raw_text = raw_data.text().await;
+
+            match raw_text {
+                Ok(raw_text) => {
+                    HttpResponse::Ok()
+                    .insert_header(("Content-Type", "application/json"))
+                    .body(raw_text)
+                },
+                Err(error) => HttpResponse::InternalServerError()
+                .insert_header(("Content-Type", "text/plain"))
+                .body("Could not fetch Metrolink data")
+            }
+        },
+        Err(error) => HttpResponse::InternalServerError()
+            .insert_header(("Content-Type", "text/plain"))
+            .body("Could not fetch Metrolink data")
+    }
+}
+
 #[actix_web::get("/amtrakproxy")]
 pub async fn amtrakproxy(req: HttpRequest) -> impl Responder {
     let raw_data =
@@ -446,6 +485,8 @@ async fn main() -> std::io::Result<()> {
             .service(getinitdata)
             .service(gtfsingesterrors)
             .service(microtime)
+            .service(nanotime)
+            .service(metrolinktrackproxy)
     })
     .workers(16);
 
