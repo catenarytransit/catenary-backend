@@ -413,8 +413,7 @@ pub async fn gtfsingesterrors(
         let postgresresult = client
             .query("SELECT onestop_feed_id, error FROM gtfs.gtfs_errors;", &[])
             .await;
-
-        match postgresresult {
+match postgresresult {
             Ok(postgresresult) => {
                 let result: Vec<GtfsIngestError> =
                     Vec::from_iter(postgresresult.iter().map(|row: &Row| GtfsIngestError {
@@ -444,18 +443,51 @@ pub async fn gtfsingesterrors(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // initialize and populate string postgresstring
+    // for psql credentials as command line option
     let postgresstring = arguments::parse(std::env::args())
         .unwrap()
         .get::<String>("postgres");
-
-    let postgresstring = match postgresstring {
+    // take in environment variable as psql credentials
+    use std::ffi;
+    struct postgresenv {
+        host: std::ffi::OsString,
+        username: std::ffi::OsString,
+        password: std::ffi::OsString,
+    }
+    use std::env;
+    let postgresserver = postgresenv {
+        host: match env::var_os("POSTGRES_HOST") {
+            Some(OsString) => OsString,
+            None => std::ffi::OsString::from("localhost"),
+        },
+        username: match env::var_os("POSTGRES_USER") {
+            Some(OsString) => OsString,
+            None => std::ffi::OsString::from("postgres"),
+        },
+        password: match env::var_os("POSTGRES_PASSWORD") {
+            Some(OsString) => OsString,
+            None => std::ffi::OsString::from(""),
+        },
+    };
+    // filters `s postgresstring` for text;
+    // if empty then matches for env variable;
+    // finally if none, commits localhost psql 
+    // and "postgres" user for psql as psql
+    // credentials 
+    let mut postgresstring = match postgresstring {
         Some(s) => s,
         None => {
-            println!("Postgres string not avaliable, using default");
-            "host=localhost user=postgres".to_string()
-        }
+            format!("host={} user={}",
+                postgresserver.host.to_str().unwrap(),
+                postgresserver.username.to_str().unwrap())
+        },
     };
-
+    //println!("{}", postgresstring);
+    if !(postgresserver.password.is_empty()) {
+        postgresstring.push_str(" password=");
+        postgresstring.push_str(postgresserver.password.to_str().unwrap());
+    }
     // Connect to the database.
     let manager: bb8_postgres::PostgresConnectionManager<NoTls> =
         bb8_postgres::PostgresConnectionManager::new(postgresstring.parse().unwrap(), NoTls);
@@ -493,4 +525,4 @@ async fn main() -> std::io::Result<()> {
     let _ = builder.bind("127.0.0.1:5401").unwrap().run().await;
 
     Ok(())
-}
+} 
