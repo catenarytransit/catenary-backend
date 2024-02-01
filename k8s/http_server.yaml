@@ -29,10 +29,6 @@ spec:
               name: gtfs-static-webserve-port
           command:
             - http_server
-            - -- postgres
-            - host=
-            - user=
-            - password=
       volumes:
         - name: gtfs-static-db-vol
           configMap:
