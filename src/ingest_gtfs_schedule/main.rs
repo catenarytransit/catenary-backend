@@ -539,8 +539,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         shape_functions::render_vector_tile_functions(&client, &schemaname.to_string()).await;
     }
 
-    let _ = client.batch_execute(format!("ALTER TABLE {schemaname}.routes SET UNLOGGED; ALTER TABLE {schemaname}.trips SET UNLOGGED; ALTER TABLE {schemaname}.shapes SET UNLOGGED; ALTER TABLE {schemaname}.stoptimes SET UNLOGGED;").as_str()).await.unwrap();
-
     println!("Finished making database");
 
     #[derive(Debug, Clone)]
