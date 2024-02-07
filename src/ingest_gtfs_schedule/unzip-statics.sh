@@ -19,7 +19,8 @@ for zip_file in *.zip; do
     fi
 
     # Unzip the file into the destination folder
-    unzip -o "$zip_file" -d "../$destination_folder" &
+    #unzip -UUo "$zip_file" -d "../$destination_folder" &
+    7za x -y $zip_file -o../$destination_folder
     echo "Unzipped"
 done
 wait
