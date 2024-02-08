@@ -192,11 +192,6 @@ async fn main() {
 
         let mut vecofstaticstrings: Vec<staticfeedtodownload> = vec![];
 
-        vecofstaticstrings.push(staticfeedtodownload {
-            feed_id: "f-anteaterexpress".to_string(),
-            url: "https://github.com/CatenaryMaps/zotgtfs/raw/main/anteater_gtfs.zip".to_string(),
-        });
-
         for (key, feed) in feedhashmap.clone().into_iter() {
             //   println!("{} / {:#?}", key, value);
 
