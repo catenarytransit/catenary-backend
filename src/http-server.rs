@@ -102,6 +102,19 @@ pub async fn microtime(req: HttpRequest) -> impl Responder {
         ))
 }
 
+#[actix_web::get("/ntpns")]
+pub async fn ntpns(req: HttpRequest) -> impl Responder {
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "text/plain"))
+        .body(format!(
+            "{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_micros()
+        ))
+}
+
 #[actix_web::get("/amtrakproxy")]
 pub async fn amtrakproxy(req: HttpRequest) -> impl Responder {
     let raw_data =

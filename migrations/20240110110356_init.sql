@@ -21,9 +21,10 @@ CREATE TABLE gtfs.static_feeds (
     onestop_feed_id text NOT NULL PRIMARY KEY,
     only_realtime_ref text,
     operators text[] NOT NULL,
-    operators_to_gtfs_ids JSONB NOT NULL,
+    operators_to_gtfs_ids hstore NOT NULL,
     realtime_onestop_ids text[] NOT NULL,
-    realtime_onestop_ids_to_gtfs_ids JSONB NOT NULL,
+    realtime_onestop_ids_to_gtfs_ids hstore NOT NULL,
+    chateau text NOT NULL,
     hull GEOMETRY(POLYGON,4326)
 );
 
@@ -43,6 +44,7 @@ CREATE TABLE gtfs.feed_info (
     feed_contact_email text,
     feed_contact_url text,
     attempt_id text,
+    chateau text,
     PRIMARY KEY (onestop_feed_id, attempt_id, feed_publisher_name)
 );
 
@@ -51,19 +53,20 @@ CREATE TABLE gtfs.operators (
     name text,
     gtfs_static_feeds text[],
     gtfs_realtime_feeds text[],
-    static_onestop_feeds_to_gtfs_ids JSONB,
-    realtime_onestop_feeds_to_gtfs_ids JSONB
+    static_onestop_feeds_to_gtfs_ids hstore,
+    realtime_onestop_feeds_to_gtfs_ids hstore
 );
 
 CREATE TABLE gtfs.realtime_feeds (
     onestop_feed_id text PRIMARY KEY,
     name text,
     operators text[],
-    operators_to_gtfs_ids JSONB,
+    operators_to_gtfs_ids hstore,
     max_lat double precision,
     max_lon double precision,
     min_lat double precision,
-    min_lon double precision
+    min_lon double precision,
+    chateau text NOT NULL,
 );
 
 CREATE TABLE gtfs.ingested (
@@ -93,6 +96,7 @@ CREATE TABLE gtfs.agencies (
     agency_phone text,
     agency_fare_url	text,
     agency_fare_url_lang hstore,
+    chateau text NOT NULL,
     PRIMARY KEY (static_onestop_id, attempt_id, agency_id)
 );
 
@@ -115,6 +119,7 @@ CREATE TABLE gtfs.routes (
     continuous_pickup smallint,
     continuous_drop_off smallint,
     shapes_list text[],
+    chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
 );
 
@@ -128,6 +133,7 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
     route_type smallint NOT NULL,
     route_label text,
     text_color text,
+    chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, shape_id)
 );
 
@@ -147,6 +153,7 @@ CREATE TABLE gtfs.trips (
     shape_id text,
     wheelchair_accessible int,
     bikes_allowed int,
+    chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id)
 );
 
@@ -177,6 +184,7 @@ CREATE TABLE gtfs.stops (
     children_route_types smallint[],
     station_feature boolean,
     hidden boolean,
+    chateau text NOT NULL,
     location_alias text[],
     tts_stop_lang hstore,
     PRIMARY KEY (onestop_feed_id, attempt_id, gtfs_id)
@@ -200,6 +208,7 @@ CREATE TABLE gtfs.stoptimes (
     continuous_drop_off smallint,
     point GEOMETRY(POINT, 4326) NOT NULL,
     route_id text,
+    chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id, stop_sequence)
 );
 
@@ -208,13 +217,14 @@ CREATE TABLE IF NOT EXISTS {schemaname}.gtfs_errors (
             error text NOT NULL,
             attempt_id text,
             file_hash text,
+            chateau text NOT NULL,
             PRIMARY KEY (onestop_feed_id, attempt_id)
 );
 
 CREATE INDEX gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
 CREATE INDEX gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
-CREATE INDEX gtfs_static_feed_id ON gtfs.shapes (onestop_feed_id);
-CREATE INDEX gtfs_static_feed ON gtfs.routes (onestop_feed_id);
+CREATE INDEX gtfs_static_feed_id ON gtfs.shapes (chateau);
+CREATE INDEX gtfs_static_feed ON gtfs.routes (chateaus);
 CREATE INDEX gtfs_static_route_type ON gtfs.routes (route_type);
 CREATE INDEX static_hulls ON gtfs.static_feeds USING GIST (hull);
 
@@ -229,7 +239,7 @@ CREATE FUNCTION gtfs.busonly(z integer, x integer, y integer)
             ST_Transform(linestring, 3857),
             ST_TileEnvelope(z, x, y),
             4096, 64, true) AS geom,
-            onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
+            chateau, onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
         FROM gtfs.shapes
         WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (route_type = 3 OR route_type = 11 OR route_type = 200)
     ) as tile WHERE geom IS NOT NULL;
@@ -249,7 +259,7 @@ CREATE FUNCTION gtfs.notbus(z integer, x integer, y integer)
         ST_Transform(linestring, 3857),
         ST_TileEnvelope(z, x, y),
         4096, 64, true) AS geom,
-        onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
+        chateau, onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
     FROM gtfs.shapes
     WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND route_type != 3 AND route_type != 11
     ) as tile WHERE geom IS NOT NULL;
@@ -269,7 +279,7 @@ CREATE FUNCTION gtfs.localrail(z integer, x integer, y integer)
         ST_Transform(linestring, 3857),
         ST_TileEnvelope(z, x, y),
         4096, 64, true) AS geom,
-        onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
+        chateau, onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
     FROM gtfs.shapes
     WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (route_type = 0 OR route_type = 1 OR route_type = 5 OR route_type = 12)
     ) as tile WHERE geom IS NOT NULL;
@@ -289,7 +299,7 @@ CREATE FUNCTION gtfs.intercityrail(z integer, x integer, y integer)
         ST_Transform(linestring, 3857),
         ST_TileEnvelope(z, x, y),
         4096, 64, true) AS geom,
-        onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
+        chateau, onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
     FROM gtfs.shapes
     WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (route_type = 2)
     ) as tile WHERE geom IS NOT NULL;
@@ -309,7 +319,7 @@ CREATE FUNCTION gtfs.other(z integer, x integer, y integer)
         ST_Transform(linestring, 3857),
         ST_TileEnvelope(z, x, y),
         4096, 64, true) AS geom,
-        onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
+        chateau, onestop_feed_id, shape_id, color, routes, route_type, route_label, text_color
     FROM gtfs.shapes
     WHERE (linestring && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (route_type = 4 OR route_type = 6 OR route_type = 7)
     ) as tile WHERE geom IS NOT NULL;
@@ -329,7 +339,7 @@ CREATE FUNCTION gtfs.stationfeatures(z integer, x integer, y integer)
         ST_Transform(point, 3857),
         ST_TileEnvelope(z, x, y),
         4096, 64, true) AS geom,
-        onestop_feed_id, name, displayname, code, gtfs_desc, location_type, parent_station, zone_id, url, timezone, wheelchair_boarding, level_id, platform_code, routes, route_types, children_ids, children_route_types
+        chateau, onestop_feed_id, name, displayname, code, gtfs_desc, location_type, parent_station, zone_id, url, timezone, wheelchair_boarding, level_id, platform_code, routes, route_types, children_ids, children_route_types
     FROM gtfs.stops
     WHERE (point && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (location_type=2 OR location_type=3 OR location_type=4)
     ) as tile WHERE geom IS NOT NULL;
@@ -349,7 +359,7 @@ CREATE FUNCTION gtfs.busstops(z integer, x integer, y integer)
         ST_Transform(point, 3857),
         ST_TileEnvelope(z, x, y),
         4096, 64, true) AS geom,
-        onestop_feed_id,  REPLACE (name, 'Station','') as name, displayname, code, gtfs_desc, location_type, parent_station, zone_id, url, timezone, wheelchair_boarding, level_id, platform_code, routes, route_types, children_ids, children_route_types, hidden
+        chateau, onestop_feed_id, REPLACE (name, 'Station','') as name, displayname, code, gtfs_desc, location_type, parent_station, zone_id, url, timezone, wheelchair_boarding, level_id, platform_code, routes, route_types, children_ids, children_route_types, hidden
     FROM gtfs.stops
     WHERE (point && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (ARRAY[3,11,200,1700,1500,1702]::smallint[] && route_types::smallint[] OR ARRAY[3,11,200,1700,1500,1702]::smallint[] && children_route_types::smallint[]) AND hidden = false
     ) as tile WHERE geom IS NOT NULL;
@@ -369,7 +379,7 @@ CREATE FUNCTION gtfs.railstops(z integer, x integer, y integer)
         ST_Transform(point, 3857),
         ST_TileEnvelope(z, x, y),
         4096, 64, true) AS geom,
-        onestop_feed_id, REPLACE (name, 'Station','') as name, displayname, code, gtfs_desc, location_type, parent_station, zone_id, url, timezone, wheelchair_boarding, level_id, platform_code, routes, route_types, children_ids, children_route_types, hidden
+        chateau, onestop_feed_id, REPLACE (name, 'Station','') as name, displayname, code, gtfs_desc, location_type, parent_station, zone_id, url, timezone, wheelchair_boarding, level_id, platform_code, routes, route_types, children_ids, children_route_types, hidden
     FROM gtfs.stops
     WHERE (point && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (ARRAY[0,1,2,5,12]::smallint[] && route_types::smallint[] OR ARRAY[0,1,2,5,12]::smallint[] && children_route_types::smallint[]) AND hidden = false
     ) as tile WHERE geom IS NOT NULL;
@@ -389,7 +399,7 @@ CREATE FUNCTION gtfs.otherstops(z integer, x integer, y integer)
         ST_Transform(point, 3857),
         ST_TileEnvelope(z, x, y),
         4096, 64, true) AS geom,
-        onestop_feed_id, REPLACE (name, 'Station','') as name, displayname, code, gtfs_desc, location_type, parent_station, zone_id, url, timezone, wheelchair_boarding, level_id, platform_code, routes, route_types, children_ids, children_route_types
+        chateau, onestop_feed_id, REPLACE (name, 'Station','') as name, displayname, code, gtfs_desc, location_type, parent_station, zone_id, url, timezone, wheelchair_boarding, level_id, platform_code, routes, route_types, children_ids, children_route_types
     FROM gtfs.stops
     WHERE (point && ST_Transform(ST_TileEnvelope(z, x, y), 4326)) AND (ARRAY[4,6,7]::smallint[] && route_types::smallint[] OR ARRAY[4,6,7]::smallint[] && children_route_types::smallint[])
     ) as tile WHERE geom IS NOT NULL;
