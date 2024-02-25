@@ -82,7 +82,10 @@ pub async fn refresh_feed_meta(
                                 .insert(x.feed_onestop_id.to_owned().unwrap(), x.gtfs_agency_id);
                             simplified_array_realtime.push(x.feed_onestop_id.to_owned().unwrap());
 
-                            let operators_owned = operator_pairs_hashmap.iter().map(|(a,b)| a.clone()).collect::<Vec<String>>();
+                            let operators_owned = operator_pairs_hashmap
+                                .iter()
+                                .map(|(a, b)| a.clone())
+                                .collect::<Vec<String>>();
 
                             let _ = sqlx::query!("INSERT INTO gtfs.realtime_feeds (onestop_feed_id, name, operators, operators_to_gtfs_ids)
                             VALUES ($1, $2, $3, $4) ON CONFLICT (onestop_feed_id) DO UPDATE SET name = $2, operators = $3, operators_to_gtfs_ids = $4;",

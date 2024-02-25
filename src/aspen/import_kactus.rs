@@ -18,7 +18,7 @@ pub async fn new_rt_kactus(
 ) -> bool {
     //decode Vec<u8> into gtfs_rt::FeedMessage
 
-    if (vehicles.is_some()) {
+    if vehicles.is_some() {
         let decoded_gtfs_vehicles =
             kactus::parse_protobuf_message(vehicles.as_ref().unwrap().as_slice());
 
