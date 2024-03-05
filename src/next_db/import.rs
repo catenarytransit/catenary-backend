@@ -10,7 +10,6 @@ use sqlx::{Connection, PgConnection, PgPool, Postgres};
 use std::time::Duration;
 mod database;
 use std::collections::HashSet;
-mod dmfr;
 use std::sync::Arc;
 
 mod get_feeds_meta;

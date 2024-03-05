@@ -1,4 +1,4 @@
-use crate::dmfr;
+use dmfr::*;
 use serde_json::Error as SerdeError;
 use std::fs;
 
