@@ -30,3 +30,6 @@ dependencies:
   - name: zookeeper
     version: 12.12.0
     repository: https://charts.bitnami.com/bitnami
+  - name: kubernetes-dashboard
+    version: 7.1.2
+    repository: https://kubernetes.github.io/dashboard/
