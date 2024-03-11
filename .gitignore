@@ -15,3 +15,5 @@ gtfs_schedules/
 gtfs_static_zips/
 gtfs_static_zips
 gtfs_uncompressed/
+cilium-linux-amd64.tar.gz
+cilium-linux-amd64.tar.gz*
