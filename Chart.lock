@@ -1,0 +1,9 @@
+dependencies:
+- name: yugabyte
+  repository: https://charts.yugabyte.com
+  version: 2.20.2
+- name: zookeeper
+  repository: https://charts.bitnami.com/bitnami
+  version: 12.12.0
+digest: sha256:cb909ba6964c418d29f032b910633a8157a855709b630d902917ee553742db62
+generated: "2024-03-11T13:31:41.395125131-07:00"
