@@ -74,6 +74,7 @@ ordered-float = "4.2.0"
 dotenvy = "0.15.7"
 seahash = "4.1.0"
 dmfr = "0.1.0"
+chateau = {git = "https://github.com/catenarytransit/chateau"}
 
 [[bin]]
 name = "import"
