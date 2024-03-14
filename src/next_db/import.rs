@@ -19,8 +19,7 @@ use chateau::chateau;
 use dmfr_folder_reader::ReturnDmfrAnalysis;
 use dmfr_folder_reader::read_folders;
 
-#[tokio::main]
-async fn main() {
+async fn run_ingest() {
     let feeds_to_discard: HashSet<&str> = HashSet::from_iter(vec![
         "f-9q8y-sfmta",
         "f-9qc-westcat~ca~us",
@@ -50,9 +49,24 @@ async fn main() {
         let eligible_feeds =
         transitland_download::download_return_eligible_feeds(&dmfr_result, &pool)
             .await;
+
+        
+        let chateau_result = chateau(&dmfr_result);
+
+        //pivot table chateau table into HashMap<FeedId, ChateauId>
+
+        //refresh the metadata for anything that's changed
+
+        //insert the feeds that are new
+
+        //determine if the old one should be deleted, if so, delete it
     }
 
-    let chateau_result = chateau(&dmfr_result);
 
     //let _ = refresh_metadata_tables::refresh_feed_meta(transitland_metadata.clone(), &pool);
+}
+
+#[tokio::main]
+async fn main() {
+    run_ingest().await;
 }
