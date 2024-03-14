@@ -75,6 +75,7 @@ dotenvy = "0.15.7"
 seahash = "4.1.0"
 dmfr = "0.1.0"
 chateau = {git = "https://github.com/catenarytransit/chateau"}
+dmfr-folder-reader = {git = "https://github.com/catenarytransit/dmfr-folder-reader"}
 
 [[bin]]
 name = "import"

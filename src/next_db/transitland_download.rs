@@ -1,3 +1,4 @@
+use dmfr_folder_reader::ReturnDmfrAnalysis;
 use futures;
 use futures::StreamExt;
 use reqwest::Client as ReqwestClient;
@@ -90,7 +91,7 @@ pub struct DownloadedFeedsInformation {
 }
 
 pub async fn download_return_eligible_feeds(
-    transitland_meta: Arc<get_feeds_meta::TransitlandMetadata>,
+    transitland_meta: &ReturnDmfrAnalysis,
     pool: &sqlx::Pool<sqlx::Postgres>,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
@@ -100,7 +101,7 @@ pub async fn download_return_eligible_feeds(
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
         println!("Downloading zip files now");
 
-        let feeds_to_download = transitland_meta.feedhashmap.iter().filter(|(_, feed)| match feed.spec {
+        let feeds_to_download = transitland_meta.feed_hashmap.iter().filter(|(_, feed)| match feed.spec {
             dmfr::FeedSpec::Gtfs => true,
             _ => false,
         } && feed.urls.static_current.is_some()).map(|(string, feed)| StaticFeedToDownload {

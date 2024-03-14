@@ -12,29 +12,15 @@ mod database;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-mod get_feeds_meta;
 mod refresh_metadata_tables;
 mod transitland_download;
 
+use chateau::chateau;
+use dmfr_folder_reader::ReturnDmfrAnalysis;
+use dmfr_folder_reader::read_folders;
+
 #[tokio::main]
 async fn main() {
-    info!("Initializing database connection");
-
-    let pool = database::connect()
-        .await
-        .expect("Database connection failed");
-    let mut transaction = pool.begin().await.unwrap();
-
-    //migrate database
-    let _ = database::check_for_migrations().await;
-
-    let transitland_metadata: Arc<get_feeds_meta::TransitlandMetadata> =
-        Arc::from(get_feeds_meta::generate_transitland_metadata());
-
-    let eligible_feeds =
-        transitland_download::download_return_eligible_feeds(transitland_metadata.clone(), &pool)
-            .await;
-
     let feeds_to_discard: HashSet<&str> = HashSet::from_iter(vec![
         "f-9q8y-sfmta",
         "f-9qc-westcat~ca~us",
@@ -48,5 +34,25 @@ async fn main() {
         "f-9qc3-riovistadeltabreeze",
     ]);
 
-    let _ = refresh_metadata_tables::refresh_feed_meta(transitland_metadata.clone(), &pool);
+    info!("Initializing database connection");
+
+    let pool = database::connect()
+        .await
+        .expect("Database connection failed");
+    let mut transaction = pool.begin().await.unwrap();
+
+    //migrate database
+    let _ = database::check_for_migrations().await;
+
+    let dmfr_result = read_folders("./transitland-atlas/");
+
+    if dmfr_result.feed_hashmap.len() > 100 && dmfr_result.operator_hashmap.len() > 100 {
+        let eligible_feeds =
+        transitland_download::download_return_eligible_feeds(&dmfr_result, &pool)
+            .await;
+    }
+
+    let chateau_result = chateau(&dmfr_result);
+
+    //let _ = refresh_metadata_tables::refresh_feed_meta(transitland_metadata.clone(), &pool);
 }
