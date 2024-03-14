@@ -18,8 +18,6 @@ struct StaticFeedToDownload {
     url: String,
 }
 
-use crate::get_feeds_meta;
-
 #[derive(Debug, Clone)]
 struct DownloadAttempt {
     onestop_feed_id: String,
