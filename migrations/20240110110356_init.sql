@@ -19,11 +19,6 @@ CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.stati
 
 CREATE TABLE gtfs.static_feeds (
     onestop_feed_id text NOT NULL PRIMARY KEY,
---    only_realtime_ref text,
---    operators text[] NOT NULL,
---    operators_to_gtfs_ids hstore NOT NULL,
---    realtime_onestop_ids text[] NOT NULL,
---    realtime_onestop_ids_to_gtfs_ids hstore NOT NULL,
     chateau text NOT NULL,
     hull GEOMETRY(POLYGON,4326)
 );
@@ -62,19 +57,21 @@ CREATE TABLE gtfs.realtime_feeds (
     name text,
     -- operators text[],
     -- operators_to_gtfs_ids hstore,
-    max_lat double precision,
-    max_lon double precision,
-    min_lat double precision,
-    min_lon double precision,
+    --max_lat double precision,
+    --max_lon double precision,
+    --min_lat double precision,
+    --min_lon double precision,
     chateau text NOT NULL,
 );
 
-CREATE TABLE gtfs.ingested (
+CREATE TABLE gtfs.ingested_static (
     static_onestop_id text NOT NULL,
+    -- hash of the zip file
     file_hash bigint NOT NULL,
     attempt_id text NOT NULL,
     ingest_start_unix_time_ms bigint,
     ingesting_in_progress boolean,
+    -- is ready
     production boolean,
     deleted boolean,
     feed_expiration_date date,
@@ -212,7 +209,7 @@ CREATE TABLE gtfs.stoptimes (
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id, stop_sequence)
 );
 
-CREATE TABLE IF NOT EXISTS {schemaname}.gtfs_errors (
+CREATE TABLE IF NOT EXISTS gtfs.gtfs_errors (
             onestop_feed_id text NOT NULL,
             error text NOT NULL,
             attempt_id text,
