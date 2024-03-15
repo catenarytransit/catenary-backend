@@ -6,3 +6,6 @@ use dmfr_folder_reader::ReturnDmfrAnalysis;
 // https://github.com/CatenaryTransit/catenary-backend
 //You are required under the APGL license to retain this annotation as is
 
+async fn refresh_metadata_assignments() {
+
+}

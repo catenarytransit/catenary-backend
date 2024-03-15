@@ -19,11 +19,11 @@ CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.stati
 
 CREATE TABLE gtfs.static_feeds (
     onestop_feed_id text NOT NULL PRIMARY KEY,
-    only_realtime_ref text,
-    operators text[] NOT NULL,
-    operators_to_gtfs_ids hstore NOT NULL,
-    realtime_onestop_ids text[] NOT NULL,
-    realtime_onestop_ids_to_gtfs_ids hstore NOT NULL,
+--    only_realtime_ref text,
+--    operators text[] NOT NULL,
+--    operators_to_gtfs_ids hstore NOT NULL,
+--    realtime_onestop_ids text[] NOT NULL,
+--    realtime_onestop_ids_to_gtfs_ids hstore NOT NULL,
     chateau text NOT NULL,
     hull GEOMETRY(POLYGON,4326)
 );
@@ -48,20 +48,20 @@ CREATE TABLE gtfs.feed_info (
     PRIMARY KEY (onestop_feed_id, attempt_id, feed_publisher_name)
 );
 
-CREATE TABLE gtfs.operators (
-    onestop_operator_id text PRIMARY KEY,
-    name text,
-    gtfs_static_feeds text[],
-    gtfs_realtime_feeds text[],
-    static_onestop_feeds_to_gtfs_ids hstore,
-    realtime_onestop_feeds_to_gtfs_ids hstore
-);
+--CREATE TABLE gtfs.operators (
+--    onestop_operator_id text PRIMARY KEY,
+--    name text,
+--    gtfs_static_feeds text[],
+--    gtfs_realtime_feeds text[],
+--    static_onestop_feeds_to_gtfs_ids hstore,
+--    realtime_onestop_feeds_to_gtfs_ids hstore
+--);
 
 CREATE TABLE gtfs.realtime_feeds (
     onestop_feed_id text PRIMARY KEY,
     name text,
-    operators text[],
-    operators_to_gtfs_ids hstore,
+    -- operators text[],
+    -- operators_to_gtfs_ids hstore,
     max_lat double precision,
     max_lon double precision,
     min_lat double precision,
