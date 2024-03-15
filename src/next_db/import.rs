@@ -6,6 +6,7 @@ use service::quicli::prelude::info;
 use sqlx::migrate::MigrateDatabase;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::query;
+use std::error::Error;
 use sqlx::{Connection, PgConnection, PgPool, Postgres};
 use std::time::Duration;
 mod database;
@@ -19,7 +20,7 @@ use chateau::chateau;
 use dmfr_folder_reader::ReturnDmfrAnalysis;
 use dmfr_folder_reader::read_folders;
 
-async fn run_ingest() {
+async fn run_ingest() -> Result<(), Box<dyn Error>> {
     let feeds_to_discard: HashSet<&str> = HashSet::from_iter(vec![
         "f-9q8y-sfmta",
         "f-9qc-westcat~ca~us",
@@ -43,7 +44,7 @@ async fn run_ingest() {
     //migrate database
     let _ = database::check_for_migrations().await;
 
-    let dmfr_result = read_folders("./transitland-atlas/");
+    let dmfr_result = read_folders("./transitland-atlas/")?;
 
     if dmfr_result.feed_hashmap.len() > 100 && dmfr_result.operator_hashmap.len() > 100 {
         let eligible_feeds =
@@ -62,11 +63,12 @@ async fn run_ingest() {
         //determine if the old one should be deleted, if so, delete it
     }
 
+    Ok(())
 
     //let _ = refresh_metadata_tables::refresh_feed_meta(transitland_metadata.clone(), &pool);
 }
 
 #[tokio::main]
 async fn main() {
-    run_ingest().await;
+    let _ = run_ingest().await;
 }
