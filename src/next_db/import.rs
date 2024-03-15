@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 mod refresh_metadata_tables;
 mod transitland_download;
+mod chateau_postprocess;
 
 use chateau::chateau;
 use dmfr_folder_reader::ReturnDmfrAnalysis;
@@ -55,6 +56,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
         let chateau_result = chateau(&dmfr_result);
 
         //pivot table chateau table into HashMap<FeedId, ChateauId>
+        let feed_id_to_chateau_lookup = chateau_postprocess::feed_id_to_chateau_id_pivot_table(&chateau_result);
 
         //refresh the metadata for anything that's changed
 

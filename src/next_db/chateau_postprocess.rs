@@ -1,0 +1,18 @@
+use chateau::Chateau;
+use std::collections::HashMap;
+
+pub fn feed_id_to_chateau_id_pivot_table(chateaus: &HashMap<String, Chateau>) -> HashMap<String, String> {
+    let mut result: HashMap<String, String> = HashMap::new();
+
+    for (_, chateau) in chateaus.iter() {
+        for realtime_id in chateau.realtime_feeds.iter() {
+            result.insert(realtime_id.clone(), chateau.chateau_id.clone());
+        }
+
+        for static_id in chateau.static_feeds.iter() {
+            result.insert(static_id.clone(), chateau.chateau_id.clone());
+        }
+    }
+
+    result
+}
