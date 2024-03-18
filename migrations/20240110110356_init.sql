@@ -23,6 +23,8 @@ CREATE TABLE gtfs.static_feeds (
     hull GEOMETRY(POLYGON,4326)
 );
 
+CREATE INDEX static_hulls ON gtfs.static_feeds USING GIST (hull);
+
 -- this dataset may be missing
 -- if the feed start end date or end date is missing, replace the file
 -- switch data asap ASAP if the start date is before the current date
@@ -120,6 +122,9 @@ CREATE TABLE gtfs.routes (
     PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
 );
 
+CREATE INDEX gtfs_static_feed ON gtfs.routes (chateaus);
+CREATE INDEX gtfs_static_route_type ON gtfs.routes (route_type);
+
 CREATE TABLE IF NOT EXISTS gtfs.shapes (
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
@@ -133,6 +138,9 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
     chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, shape_id)
 );
+
+CREATE INDEX gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
+CREATE INDEX gtfs_static_feed_id ON gtfs.shapes (chateau);
 
 CREATE TABLE gtfs.trips (
     trip_id text NOT NULL,
@@ -187,6 +195,8 @@ CREATE TABLE gtfs.stops (
     PRIMARY KEY (onestop_feed_id, attempt_id, gtfs_id)
 );
 
+CREATE INDEX gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
+
 CREATE TABLE gtfs.stoptimes (
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
@@ -217,13 +227,6 @@ CREATE TABLE IF NOT EXISTS gtfs.gtfs_errors (
             chateau text NOT NULL,
             PRIMARY KEY (onestop_feed_id, attempt_id)
 );
-
-CREATE INDEX gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
-CREATE INDEX gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
-CREATE INDEX gtfs_static_feed_id ON gtfs.shapes (chateau);
-CREATE INDEX gtfs_static_feed ON gtfs.routes (chateaus);
-CREATE INDEX gtfs_static_route_type ON gtfs.routes (route_type);
-CREATE INDEX static_hulls ON gtfs.static_feeds USING GIST (hull);
 
 CREATE FUNCTION gtfs.busonly(z integer, x integer, y integer)
     RETURNS bytea AS $$
