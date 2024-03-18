@@ -21,6 +21,8 @@ use chateau::chateau;
 use dmfr_folder_reader::read_folders;
 use dmfr_folder_reader::ReturnDmfrAnalysis;
 
+use crate::transitland_download::DownloadedFeedsInformation;
+
 async fn run_ingest() -> Result<(), Box<dyn Error>> {
     //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
     let feeds_to_discard: HashSet<&str> = HashSet::from_iter(vec![
@@ -63,13 +65,35 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
         let feed_id_to_chateau_lookup =
             chateau_postprocess::feed_id_to_chateau_id_pivot_table(&chateau_result);
 
-        //refresh the metadata for anything that's changed
+        // count eligible feeds that are marked ingest == true using a filter and .len()
+
+        let mut counter_of_eligible_feeds: Option<usize> = match &eligible_feeds {
+            Ok(eligible_feeds) => {
+                Some(eligible_feeds.iter().filter(|download_feed_info| download_feed_info.ingest == true).collect::<Vec<&DownloadedFeedsInformation>>().len())
+            }
+            Err(_) => None
+        };
+
+        // debug print to output
+        match counter_of_eligible_feeds {
+            Some(counter_of_eligible_feeds) => {
+                println!("{} feeds marked ready for schedule ingestion.", counter_of_eligible_feeds);
+            },
+            None => {
+                println!("Unable to get eligible feed list.");
+            }
+        }
+
+          //refresh the metadata for anything that's changed
 
         //insert the feeds that are new
 
         if let Ok(eligible_feeds) = eligible_feeds {
-            println!("{} feeds are eligible for insertion", eligible_feeds.len());
-            for eligible_feed in eligible_feeds.iter() {}
+            for eligible_feed in eligible_feeds.iter() {
+                if eligible_feed.ingest == true {
+                    
+                }
+            }
         }
 
         //determine if the old one should be deleted, if so, delete it
