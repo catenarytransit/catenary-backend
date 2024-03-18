@@ -161,6 +161,7 @@ pub async fn download_return_eligible_feeds(
                 };
 
                 match response {
+                    // The download request did return a response and the connection did not drop
                     Ok(response) => {
                         answer.http_response_code = Some(response.status().as_str().to_string());
                         let mut out = File::create(format!(
@@ -169,6 +170,7 @@ pub async fn download_return_eligible_feeds(
                         ))
                         .expect("failed to create file");
 
+                        // get raw bytes
                         let bytes_result = response.bytes().await;
 
                         if let Ok(bytes_result) = bytes_result {
@@ -180,6 +182,7 @@ pub async fn download_return_eligible_feeds(
                             answer.hash = Some(hash);
                             answer.byte_size = Some(byte_length as u64);
 
+                            // stringify the hash
                             let hash_str = hash.to_string();
 
                             //query the SQL database for any ingests that have the same zip
