@@ -19,12 +19,12 @@ struct StaticFeedToDownload {
 }
 
 #[derive(Debug, Clone)]
-struct DownloadAttempt {
-    onestop_feed_id: String,
-    file_hash: String,
-    downloaded_unix_time_ms: i64,
-    ingested: bool,
-    failed: bool,
+pub struct DownloadAttempt {
+    pub onestop_feed_id: String,
+    pub file_hash: String,
+    pub downloaded_unix_time_ms: i64,
+    pub ingested: bool,
+    pub failed: bool,
 }
 //Written by Kyler Chin
 //You are required under the APGL license to retain this annotation
@@ -48,6 +48,7 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
     let mut headers = reqwest::header::HeaderMap::new();
 
     match feed_id {
+        // Metra is the primary commuter rail system in Chicago, Illinois, USA
         "f-dp3-metra" => {
             headers.insert(
                 "username",
@@ -55,6 +56,7 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
             );
             headers.insert("Authorization", "Basic YmIyYzcxZTU0ZDgyN2E0YWI0NzkxN2M0MjZiZGI0OGM6ZjhiY2Y4MDBhMjcxNThiZjkwYWVmMTZhZGFhNDRhZDI=".parse().unwrap());
         }
+        //Washington Metropolitan Area Transit Authority in Washington D.C., Maryland, Virginia in USA
         "f-dqc-wmata~rail" => {
             headers.insert(
                 "api_key",
@@ -75,18 +77,26 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
 
 //It's giving UC Berkeley lab assignment!!! 🐻💅🐻💅
 pub struct DownloadedFeedsInformation {
-    feed_id: String,
-    url: String,
-    hash: Option<u64>,
-    download_timestamp_ms: u64,
-    operation_success: bool,
-    //tells the server to ingest this tag
-    ingest: bool,
-    //left intentionally as u64 to enable storage and display to the user
-    byte_size: Option<u64>,
-    duration_download: Option<u64>,
-    http_response_code: Option<String>,
+    pub feed_id: String,
+    pub url: String,
+    pub hash: Option<u64>,
+    pub download_timestamp_ms: u64,
+    pub operation_success: bool,
+    //tells the pipeline to ingest this zip file
+    pub ingest: bool,
+    //store this data as u64 to enable storage and display to the user
+    pub byte_size: Option<u64>,
+    pub duration_download: Option<u64>,
+    pub http_response_code: Option<String>,
 }
+
+// This is an efficient method to scan all static ingests and only insert what is new.
+// The previous system inserted absolutely everything, which was slow and consumed massive amounts of memory
+
+// Go through every single feed url, download the file, get the hash
+// if the file is new, ingest it, if it's new, do a comparison to the previous hash of the zip inserted. If the hashes are different, then mark as ingest
+
+// the parent task in import.rs is in charge of assigning it to other threads + task scheduling, this portion is only for downloading and seeing what is eligible for download
 
 pub async fn download_return_eligible_feeds(
     transitland_meta: &ReturnDmfrAnalysis,
@@ -108,7 +118,10 @@ pub async fn download_return_eligible_feeds(
         });
 
         let static_fetches =
+        //perform the downloads as a future stream, so only the thread count is allowed
             futures::stream::iter(feeds_to_download.into_iter().map(|staticfeed| async move {
+                
+                //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
                 let client = reqwest::ClientBuilder::new()
                     .deflate(true)
                     .gzip(true)
@@ -120,6 +133,7 @@ pub async fn download_return_eligible_feeds(
 
                 let request = add_auth_headers(request, &staticfeed.feed_id);
 
+                //calculate how long the download takes
                 let start = SystemTime::now();
                 let current_unix_ms_time = start
                     .duration_since(UNIX_EPOCH)
@@ -133,6 +147,7 @@ pub async fn download_return_eligible_feeds(
                     .expect("Time went backwards")
                     .as_millis();
 
+                // say that the download state was unsuccessful by default, and insert the duration
                 let mut answer = DownloadedFeedsInformation {
                     feed_id: staticfeed.feed_id.clone(),
                     url: staticfeed.url.clone(),
@@ -156,16 +171,20 @@ pub async fn download_return_eligible_feeds(
 
                         let bytes_result = response.bytes().await;
 
-                        if bytes_result.is_ok() {
-                            let bytes_result = bytes_result.unwrap();
+                        if let Ok(bytes_result) = bytes_result {
                             let data = bytes_result.as_ref();
+                            let byte_length = data.len();
+                            // fast hashing algorithm of the bytes
                             let hash = seahash::hash(data);
 
                             answer.hash = Some(hash);
+                            answer.byte_size = Some(byte_length as u64);
 
                             let hash_str = hash.to_string();
 
-                            let download_attempt_db = sqlx::query_as!(
+                            //query the SQL database for any ingests that have the same zip
+                            //maybe switch to pgx for this query?
+                            let download_attempts_postgres_lookup = sqlx::query_as!(
                                 DownloadAttempt,
                                 "SELECT * FROM gtfs.static_download_attempts WHERE file_hash = $1;",
                                 hash_str
@@ -173,36 +192,42 @@ pub async fn download_return_eligible_feeds(
                             .fetch_all(pool)
                             .await;
 
-                            match download_attempt_db {
-                                Ok(download_attempt_db) => {
+                         //if the dataset is brand new, mark as success, save the file
+
+                            // this is accomplished by checking in the sql table `gtfs.static_download_attempts`
+                            //if hash exists in the table AND the ingestion operation did not fail, cancel.
+                            //if hash doesn't exist write the file to disk
+
+                            match download_attempts_postgres_lookup {
+                                Ok( download_attempts_postgres_lookup) => {
                                     answer.operation_success = true;
 
-                                    if download_attempt_db.len() == 0 {
+                                        // this zip file has never been seen before! Insert it!
+                                    if  download_attempts_postgres_lookup.len() == 0 {
                                         answer.ingest = true;
                                     } else {
-                                        let check_for_sucesses = download_attempt_db
+
+                                        // a previous succcessful ingest has happened
+                                        let check_for_previous_insert_sucesses =  download_attempts_postgres_lookup
                                             .iter()
                                             .find(|&x| x.ingested == true);
 
-                                        if check_for_sucesses.is_some() {
+                                            //thus, don't perform the ingest
+                                        if check_for_previous_insert_sucesses.is_some() {
                                             answer.ingest = false;
                                         } else {
-                                            //no successes have occured
+                                            //no successes have occured, reattempt this zip file
                                             //search through zookeeper tree for current pending operations (todo!)
                                             answer.ingest = true;
                                         }
                                     }
                                 }
                                 Err(error) => {
+                                    //could not connect to the postgres, or this query failed. Don't ingest without access to postgres
                                     answer.operation_success = false;
                                 }
                             }
-
-                            //if the dataset is brand new, mark as success, save the file
-
-                            // this is accomplished by checking in the sql table `gtfs.static_download_attempts`
-                            //if hash exists in the table AND the ingestion operation did not fail, cancel.
-                            //if hash doesn't exist write the file to disk
+                           
                             let _ = out.write(&(bytes_result));
                             println!("Finished writing {}", &staticfeed.clone().feed_id);
                         }
