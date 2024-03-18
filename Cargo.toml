@@ -78,8 +78,8 @@ chateau = {git = "https://github.com/catenarytransit/chateau"}
 dmfr-folder-reader = {git = "https://github.com/catenarytransit/dmfr-folder-reader"}
 
 [[bin]]
-name = "import"
-path = "src/next_db/import.rs"
+name = "maple"
+path = "src/maple/gtfs_import.rs"
 
 [[bin]]
 name = "http_server"

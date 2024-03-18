@@ -89,11 +89,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
         //insert the feeds that are new
 
         if let Ok(eligible_feeds) = eligible_feeds {
-            for eligible_feed in eligible_feeds.iter() {
-                if eligible_feed.ingest == true {
-                    
-                }
-            }
+            let to_ingest_feeds = eligible_feeds.iter().filter(|download_feed_info| download_feed_info.ingest == true).collect::<Vec<&DownloadedFeedsInformation>>();
+
+            
         }
 
         //determine if the old one should be deleted, if so, delete it
