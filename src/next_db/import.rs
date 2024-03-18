@@ -22,6 +22,7 @@ use dmfr_folder_reader::ReturnDmfrAnalysis;
 use dmfr_folder_reader::read_folders;
 
 async fn run_ingest() -> Result<(), Box<dyn Error>> {
+    //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
     let feeds_to_discard: HashSet<&str> = HashSet::from_iter(vec![
         "f-9q8y-sfmta",
         "f-9qc-westcat~ca~us",
@@ -45,14 +46,18 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
     //migrate database
     let _ = database::check_for_migrations().await;
 
+    // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
+    // See https://github.com/catenarytransit/dmfr-folder-reader
     let dmfr_result = read_folders("./transitland-atlas/")?;
 
+    // The DMFR result dataset looks genuine, with over 100 pieces of data!
     if dmfr_result.feed_hashmap.len() > 100 && dmfr_result.operator_hashmap.len() > 100 {
         let eligible_feeds =
         transitland_download::download_return_eligible_feeds(&dmfr_result, &pool)
             .await;
-
         
+        // Performs depth first search to find groups of feed urls associated with each other
+        // See https://github.com/catenarytransit/chateau for the source code
         let chateau_result = chateau(&dmfr_result);
 
         //pivot table chateau table into HashMap<FeedId, ChateauId>
@@ -64,7 +69,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
         if let Ok(eligible_feeds) = eligible_feeds {
             for eligible_feed in eligible_feeds.iter() {
-                
+
             }
         }
 
