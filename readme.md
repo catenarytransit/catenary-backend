@@ -1,3 +1,13 @@
+## Architecture
+
+Catenary Backend is a distributed system comprised of microservices operating in Kubernetes. The system is designed for fault tolerance, high-avaliability, and native execution speed in x86-64 using the Rust systems programming language.
+
+- **Maple**: GTFS Downloader and ingestion engine
+- **Prairie**: Routing Preprocessor and execution engine (Research and design in progress)
+- **Kactus**: Distributed system to query for GTFS-rt and other realtime data
+- **Aspen**: Processing of realtime data and dynamic insertion into other engines
+- **Spruce**: API server for frontend to perform queries
+
 ## Install Dependencies
 
 ```bash
@@ -23,12 +33,6 @@ sudo cp transitbackend.service /etc/systemd/system/transitbackend.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now transitbackend.service
 ```
-
-Example endpoints
-
-`http://localhost:5401/getroutesperagency?feed_id=f-9mu-orangecountytransportationauthority`
-
-`http://localhost:5401/gettrip?feed_id=f-9mu-orangecountytransportationauthority&trip_id=10995882`
 
 ## For Contributors
 
