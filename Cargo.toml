@@ -79,7 +79,7 @@ dmfr-folder-reader = {git = "https://github.com/catenarytransit/dmfr-folder-read
 
 [[bin]]
 name = "maple"
-path = "src/maple/gtfs_import.rs"
+path = "src/maple/main.rs"
 
 [[bin]]
 name = "http_server"

@@ -8,6 +8,10 @@ Catenary Backend is a distributed system comprised of microservices operating in
 - **Aspen**: Processing of realtime data and dynamic insertion into other engines
 - **Spruce**: API server for frontend to perform queries
 
+The kubernetes configuration is generated using Helm templates. See Helm's documentation for further information on that.
+
+The code is heavily commented, go to each folder in src for more information.
+
 ## Install Dependencies
 
 ```bash
