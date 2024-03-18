@@ -13,6 +13,8 @@ mod database;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+mod gtfs_handlers;
+
 mod chateau_postprocess;
 mod refresh_metadata_tables;
 mod transitland_download;
@@ -94,15 +96,14 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
             // for now, use a thread pool
             // in the future, map reduce this job out to worker servers
 
+            // Process looks like this
             // Unzip the file and handle any folder nesting
-
             // process into GTFS representation
-
             // run function to insert GTFS raw data
-
             // use k/d tree presentation to calculate line optimisation and transfer patterns (not clear how this works, needs further research)
-
             // hand off to routing algorithm preprocessing engine Prarie (needs further research and development)
+
+            
         }
 
         //determine if the old one should be deleted, if so, delete it
