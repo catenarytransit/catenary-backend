@@ -6,20 +6,20 @@ use service::quicli::prelude::info;
 use sqlx::migrate::MigrateDatabase;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::query;
-use std::error::Error;
 use sqlx::{Connection, PgConnection, PgPool, Postgres};
+use std::error::Error;
 use std::time::Duration;
 mod database;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+mod chateau_postprocess;
 mod refresh_metadata_tables;
 mod transitland_download;
-mod chateau_postprocess;
 
 use chateau::chateau;
-use dmfr_folder_reader::ReturnDmfrAnalysis;
 use dmfr_folder_reader::read_folders;
+use dmfr_folder_reader::ReturnDmfrAnalysis;
 
 async fn run_ingest() -> Result<(), Box<dyn Error>> {
     //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
@@ -53,24 +53,23 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
     // The DMFR result dataset looks genuine, with over 100 pieces of data!
     if dmfr_result.feed_hashmap.len() > 100 && dmfr_result.operator_hashmap.len() > 100 {
         let eligible_feeds =
-        transitland_download::download_return_eligible_feeds(&dmfr_result, &pool)
-            .await;
-        
+            transitland_download::download_return_eligible_feeds(&dmfr_result, &pool).await;
+
         // Performs depth first search to find groups of feed urls associated with each other
         // See https://github.com/catenarytransit/chateau for the source code
         let chateau_result = chateau(&dmfr_result);
 
         //pivot table chateau table into HashMap<FeedId, ChateauId>
-        let feed_id_to_chateau_lookup = chateau_postprocess::feed_id_to_chateau_id_pivot_table(&chateau_result);
+        let feed_id_to_chateau_lookup =
+            chateau_postprocess::feed_id_to_chateau_id_pivot_table(&chateau_result);
 
         //refresh the metadata for anything that's changed
 
         //insert the feeds that are new
 
         if let Ok(eligible_feeds) = eligible_feeds {
-            for eligible_feed in eligible_feeds.iter() {
-
-            }
+            println!("{} feeds are eligible for insertion", eligible_feeds.len());
+            for eligible_feed in eligible_feeds.iter() {}
         }
 
         //determine if the old one should be deleted, if so, delete it
