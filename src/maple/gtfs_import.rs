@@ -91,7 +91,18 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
         if let Ok(eligible_feeds) = eligible_feeds {
             let to_ingest_feeds = eligible_feeds.iter().filter(|download_feed_info| download_feed_info.ingest == true).collect::<Vec<&DownloadedFeedsInformation>>();
 
-            
+            // for now, use a thread pool
+            // in the future, map reduce this job out to worker servers
+
+            // Unzip the file and handle any folder nesting
+
+            // process into GTFS representation
+
+            // run function to insert GTFS raw data
+
+            // use k/d tree presentation to calculate line optimisation and transfer patterns (not clear how this works, needs further research)
+
+            // hand off to routing algorithm preprocessing engine Prarie (needs further research and development)
         }
 
         //determine if the old one should be deleted, if so, delete it
