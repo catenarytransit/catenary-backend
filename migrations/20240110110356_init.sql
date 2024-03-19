@@ -123,7 +123,7 @@ CREATE TABLE gtfs.routes (
     PRIMARY KEY (onestop_feed_id, attempt_id, agency_id, route_id)
 );
 
-CREATE INDEX gtfs_static_feed ON gtfs.routes (chateaus);
+CREATE INDEX gtfs_static_feed ON gtfs.routes (chateau);
 CREATE INDEX gtfs_static_route_type ON gtfs.routes (route_type);
 
 CREATE TABLE IF NOT EXISTS gtfs.shapes (
@@ -413,18 +413,18 @@ CREATE FUNCTION gtfs.otherstops(z integer, x integer, y integer)
     END
     $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE TABLE IF NOT EXISTS gtfs.realtime_passwords {
+CREATE TABLE IF NOT EXISTS gtfs.realtime_passwords (
     onestop_feed_id text NOT NULL PRIMARY KEY,
     passwords text[],
     header_auth_key text,
     header_auth_value_prefix text,
-    url_auth_key text,
-}
+    url_auth_key text
+);
 
-CREATE TABLE IF NOT EXISTS gtfs.static_passwords {
+CREATE TABLE IF NOT EXISTS gtfs.static_passwords (
     onestop_feed_id text NOT NULL PRIMARY KEY,
     passwords text[],
     header_auth_key text,
     header_auth_value_prefix text,
-    url_auth_key text,
-}
+    url_auth_key text
+);

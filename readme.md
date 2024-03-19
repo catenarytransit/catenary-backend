@@ -49,6 +49,13 @@ No option exists for Windows users at the moment. Please try WSL Ubuntu for the 
 
 See https://www.postgresql.org/download
 
+PostGIS is also required like 
+```bash
+sudo apt install postgresql-16-postgis-3
+```
+
+See https://trac.osgeo.org/postgis/wiki/UsersWikiPostGIS3UbuntuPGSQLApt for more instructions
+
 ### SQL notes
 We've switched to sqlx for our queries. For development, you'll need to know these few commands.
 
