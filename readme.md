@@ -45,6 +45,10 @@ Good commit messages are required to contribute to this project.
 
 No option exists for Windows users at the moment. Please try WSL Ubuntu for the moment. We're working on adding this.
 
+### Installation of Postgres
+
+See https://www.postgresql.org/download
+
 ### SQL notes
 We've switched to sqlx for our queries. For development, you'll need to know these few commands.
 
@@ -53,6 +57,7 @@ Install SQLx onto your system. You'll only need to do this once / when there are
 
 1. `cargo sqlx database drop`
 This drops your old development database so you can create a new one.
+If this doesn't work, you can run `DROP DATABASE catenary WITH (FORCE)` in the psql shell.
 
 2. `cargo sqlx database create`
 This creates a new sqlx database

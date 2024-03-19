@@ -44,6 +44,16 @@ pub struct DownloadedFeedsInformation {
     pub http_response_code: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StaticPassword {
+    onestop_feed_id: String,
+    passwords: Vec<String>,
+    header_auth_key: Option<String>,
+    // this would be "Bearer" so the header would insert Authorization: Bearer {key}
+    header_auth_value_prefix: Option<String>,
+    url_auth_key: Option<String>
+}
+
 // This is an efficient method to scan all static ingests and only insert what is new.
 // The previous system inserted absolutely everything, which was slow and consumed massive amounts of memory
 
@@ -62,6 +72,8 @@ pub async fn download_return_eligible_feeds(
 
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
         println!("Downloading zip files now");
+
+        let static_passwords = sqlx::query_as!(StaticPassword,"SELECT * FROM gtfs.static_passwords;");
 
         let feeds_to_download = transitland_meta.feed_hashmap.iter().filter(|(_, feed)| match feed.spec {
             dmfr::FeedSpec::Gtfs => true,
