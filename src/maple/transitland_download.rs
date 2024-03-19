@@ -47,7 +47,7 @@ pub struct DownloadedFeedsInformation {
 #[derive(Debug, Clone)]
 pub struct StaticPassword {
     onestop_feed_id: String,
-    passwords: Vec<String>,
+    passwords: Option<Vec<String>>,
     header_auth_key: Option<String>,
     // this would be "Bearer" so the header would insert Authorization: Bearer {key}
     header_auth_value_prefix: Option<String>,
