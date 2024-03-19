@@ -413,6 +413,7 @@ CREATE TABLE IF NOT EXISTS gtfs.realtime_passwords {
     onestop_feed_id text NOT NULL PRIMARY KEY,
     passwords text[],
     header_auth_key text,
+    header_auth_value_prefix text,
     url_auth_key text,
 }
 
@@ -420,5 +421,6 @@ CREATE TABLE IF NOT EXISTS gtfs.static_passwords {
     onestop_feed_id text NOT NULL PRIMARY KEY,
     passwords text[],
     header_auth_key text,
+    header_auth_value_prefix text,
     url_auth_key text,
 }
