@@ -29,52 +29,6 @@ pub struct DownloadAttempt {
 //Written by Kyler Chin
 //You are required under the APGL license to retain this annotation
 
-//This particular API key was published intentionally. This is for your convienence.
-fn transform_for_bay_area(x: String) -> String {
-    //.replace("https://api.511.org/transit/datafeeds?operator_id=RG", "https://api.511.org/transit/datafeeds?operator_id=RG&api_key=094f6bc5-9d6a-4529-bfb3-6f1bc4d809d9")
-
-    if x.contains("api.511.org") {
-        let mut a = x;
-
-        a.push_str("&api_key=094f6bc5-9d6a-4529-bfb3-6f1bc4d809d9");
-
-        return a;
-    } else {
-        return x;
-    }
-}
-
-fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
-    let mut headers = reqwest::header::HeaderMap::new();
-
-    match feed_id {
-        // Metra is the primary commuter rail system in Chicago, Illinois, USA
-        "f-dp3-metra" => {
-            headers.insert(
-                "username",
-                "bb2c71e54d827a4ab47917c426bdb48c".parse().unwrap(),
-            );
-            headers.insert("Authorization", "Basic YmIyYzcxZTU0ZDgyN2E0YWI0NzkxN2M0MjZiZGI0OGM6ZjhiY2Y4MDBhMjcxNThiZjkwYWVmMTZhZGFhNDRhZDI=".parse().unwrap());
-        }
-        //Washington Metropolitan Area Transit Authority in Washington D.C., Maryland, Virginia in USA
-        "f-dqc-wmata~rail" => {
-            headers.insert(
-                "api_key",
-                "3be3d48087754c4998e6b33b65ec9700".parse().unwrap(),
-            );
-        }
-        "f-dqc-wmata~bus" => {
-            headers.insert(
-                "api_key",
-                "3be3d48087754c4998e6b33b65ec9700".parse().unwrap(),
-            );
-        }
-        _ => {}
-    };
-
-    request.headers(headers)
-}
-
 //It's giving UC Berkeley lab assignment!!! 🐻💅🐻💅
 pub struct DownloadedFeedsInformation {
     pub feed_id: String,
@@ -114,7 +68,7 @@ pub async fn download_return_eligible_feeds(
             _ => false,
         } && feed.urls.static_current.is_some()).map(|(string, feed)| StaticFeedToDownload {
             feed_id: feed.id.clone(),
-            url: transform_for_bay_area(feed.urls.static_current.as_ref().unwrap().to_string()),
+            url: feed.urls.static_current.as_ref().unwrap().to_string(),
         });
 
         let static_fetches =
@@ -130,8 +84,6 @@ pub async fn download_return_eligible_feeds(
                     .unwrap();
 
                 let request = client.get(&staticfeed.url);
-
-                let request = add_auth_headers(request, &staticfeed.feed_id);
 
                 //calculate how long the download takes
                 let start = SystemTime::now();
