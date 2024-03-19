@@ -13,7 +13,7 @@ fn main() {
 
     //spawn the thread to listen to be a leader
     thread::spawn(|| {
-
+        //read passwords and dynamically update passwords from postgres
     });
 
     //worker thread

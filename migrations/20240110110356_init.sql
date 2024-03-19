@@ -120,7 +120,7 @@ CREATE TABLE gtfs.routes (
     continuous_drop_off smallint,
     shapes_list text[],
     chateau text NOT NULL,
-    PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
+    PRIMARY KEY (onestop_feed_id, attempt_id, agency_id, route_id)
 );
 
 CREATE INDEX gtfs_static_feed ON gtfs.routes (chateaus);
@@ -129,6 +129,7 @@ CREATE INDEX gtfs_static_route_type ON gtfs.routes (route_type);
 CREATE TABLE IF NOT EXISTS gtfs.shapes (
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
+    agency_id text,
     shape_id text NOT NULL,
     linestring GEOMETRY(LINESTRING, 4326) NOT NULL,
     color text,
@@ -137,13 +138,14 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
     route_label text,
     text_color text,
     chateau text NOT NULL,
-    PRIMARY KEY (onestop_feed_id, attempt_id, shape_id)
+    PRIMARY KEY (onestop_feed_id, attempt_id, agency_id, shape_id)
 );
 
 CREATE INDEX gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
 CREATE INDEX gtfs_static_feed_id ON gtfs.shapes (chateau);
 
 CREATE TABLE gtfs.trips (
+    agency_id text,
     trip_id text NOT NULL,
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
@@ -160,12 +162,13 @@ CREATE TABLE gtfs.trips (
     wheelchair_accessible int,
     bikes_allowed int,
     chateau text NOT NULL,
-    PRIMARY KEY (onestop_feed_id, attempt_id, trip_id)
+    PRIMARY KEY (onestop_feed_id, attempt_id, agency_id, trip_id)
 );
 
 CREATE TABLE gtfs.stops (
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
+    agency_id text,
     gtfs_id text NOT NULL,
     name text NOT NULL,
     name_lang hstore,
@@ -193,13 +196,14 @@ CREATE TABLE gtfs.stops (
     chateau text NOT NULL,
     location_alias text[],
     tts_stop_lang hstore,
-    PRIMARY KEY (onestop_feed_id, attempt_id, gtfs_id)
+    PRIMARY KEY (onestop_feed_id, attempt_id, agency_id, gtfs_id)
 );
 
 CREATE INDEX gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
 
 CREATE TABLE gtfs.stoptimes (
     onestop_feed_id text NOT NULL,
+    agency_id text,
     attempt_id text NOT NULL,
     trip_id text NOT NULL,
     stop_sequence int NOT NULL,
@@ -217,7 +221,7 @@ CREATE TABLE gtfs.stoptimes (
     point GEOMETRY(POINT, 4326) NOT NULL,
     route_id text,
     chateau text NOT NULL,
-    PRIMARY KEY (onestop_feed_id, attempt_id, trip_id, stop_sequence)
+    PRIMARY KEY (onestop_feed_id, attempt_id, agency_id, trip_id, stop_sequence)
 );
 
 CREATE TABLE IF NOT EXISTS gtfs.gtfs_errors (
