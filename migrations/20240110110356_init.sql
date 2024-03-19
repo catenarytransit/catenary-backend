@@ -64,6 +64,7 @@ CREATE TABLE gtfs.realtime_feeds (
     --min_lat double precision,
     --min_lon double precision,
     chateau text NOT NULL,
+    fetch_interval_ms integer
 );
 
 CREATE TABLE gtfs.ingested_static (
@@ -407,3 +408,17 @@ CREATE FUNCTION gtfs.otherstops(z integer, x integer, y integer)
     RETURN mvt;
     END
     $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TABLE IF NOT EXISTS gtfs.realtime_passwords {
+    onestop_feed_id text NOT NULL PRIMARY KEY,
+    passwords text[],
+    header_auth_key text,
+    url_auth_key text,
+}
+
+CREATE TABLE IF NOT EXISTS gtfs.static_passwords {
+    onestop_feed_id text NOT NULL PRIMARY KEY,
+    passwords text[],
+    header_auth_key text,
+    url_auth_key text,
+}
