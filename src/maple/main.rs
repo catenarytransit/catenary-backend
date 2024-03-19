@@ -26,6 +26,9 @@ use dmfr_folder_reader::ReturnDmfrAnalysis;
 use crate::transitland_download::DownloadedFeedsInformation;
 
 async fn run_ingest() -> Result<(), Box<dyn Error>> {
+
+    // TODO! Ensure git submodule transitland-atlas downloads and updates correctly
+
     //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
     let feeds_to_discard: HashSet<&str> = HashSet::from_iter(vec![
         "f-9q8y-sfmta",
@@ -104,6 +107,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
             // hand off to routing algorithm preprocessing engine Prarie (needs further research and development)
 
             
+            // Folder unzip time!
+
+            // perform additional checks to ensure feed is not a zip bomb
+
         }
 
         //determine if the old one should be deleted, if so, delete it
