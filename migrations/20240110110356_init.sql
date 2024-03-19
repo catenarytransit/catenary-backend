@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS gtfs.static_download_attempts (
    downloaded_unix_time_ms bigint NOT NULL,
    ingested boolean NOT NULL,
    failed boolean NOT NULL,
+   http_response_code text,
    PRIMARY KEY (onestop_feed_id, downloaded_unix_time_ms)
 );
 
@@ -20,6 +21,7 @@ CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.stati
 CREATE TABLE gtfs.static_feeds (
     onestop_feed_id text NOT NULL PRIMARY KEY,
     chateau text NOT NULL,
+    previous_chateau_name text NOT NULL,
     hull GEOMETRY(POLYGON,4326)
 );
 
@@ -42,6 +44,8 @@ CREATE TABLE gtfs.feed_info (
     chateau text,
     PRIMARY KEY (onestop_feed_id, attempt_id, feed_publisher_name)
 );
+
+CREATE INDEX IF NOT EXISTS chateau_feed_info ON gtfs.feed_info (chateau);
 
 --CREATE TABLE gtfs.operators (
 --    onestop_operator_id text PRIMARY KEY,
@@ -97,6 +101,8 @@ CREATE TABLE gtfs.agencies (
     PRIMARY KEY (static_onestop_id, attempt_id, agency_id)
 );
 
+CREATE INDEX IF NOT EXISTS agencies_chateau ON gtfs.agencies (chateau);
+
 CREATE TABLE gtfs.routes (
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
@@ -120,6 +126,8 @@ CREATE TABLE gtfs.routes (
     PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
 );
 
+CREATE INDEX IF NOT EXISTS routes_chateau ON gtfs.agencies (chateau);
+
 CREATE TABLE IF NOT EXISTS gtfs.shapes (
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
@@ -133,6 +141,8 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
     chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, shape_id)
 );
+
+CREATE INDEX IF NOT EXISTS shapes_chateau ON gtfs.shapes (chateau);
 
 CREATE TABLE gtfs.trips (
     trip_id text NOT NULL,
@@ -153,6 +163,8 @@ CREATE TABLE gtfs.trips (
     chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id)
 );
+
+CREATE TABLE IF NOT EXISTS trips_chateau ON gtfs.trips (chateau);
 
 CREATE TABLE gtfs.stops (
     onestop_feed_id text NOT NULL,
