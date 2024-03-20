@@ -22,6 +22,7 @@ mod transitland_download;
 use chateau::chateau;
 use dmfr_folder_reader::read_folders;
 use dmfr_folder_reader::ReturnDmfrAnalysis;
+use git2::Repository;
 
 use crate::transitland_download::DownloadedFeedsInformation;
 
@@ -29,7 +30,37 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
     const maple_ingestion_version: i32 = 1;
 
-    // TODO! Ensure git submodule transitland-atlas downloads and updates correctly
+    //Ensure git submodule transitland-atlas downloads and updates correctly
+    match Repository::open("./") {
+        Ok(repo) => {
+            match repo.find_submodule("transitland-atlas") {
+                Ok(transitland_submodule) => {
+                    println!("Submodule found.");
+    
+                    let mut transitland_submodule = transitland_submodule;
+                    
+                    match transitland_submodule.update(true, None) {
+                        Ok(update) => {
+                            println!("Submodule updated.");
+                        },
+                        Err(update_err) => {
+                            eprintln!("Unable to update submodule");
+
+                            // don't need to fail if can't reach github servers for now
+                        }
+                    }
+                },
+                Err(find_submodule) => {
+                    eprintln!("Can't find submodule!");
+                    return Err(Box::new(find_submodule));
+                }
+            }
+        },
+        Err(repo_err) => {
+            eprintln!("Can't find own repo!");
+            return Err(Box::new(repo_err));
+        }
+    }
 
     //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
     let feeds_to_discard: HashSet<&str> = HashSet::from_iter(vec![

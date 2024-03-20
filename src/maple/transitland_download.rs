@@ -60,7 +60,7 @@ pub async fn download_return_eligible_feeds(
     transitland_meta: &ReturnDmfrAnalysis,
     pool: &sqlx::Pool<sqlx::Postgres>,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
-    let threads: usize = 16;
+    let threads: usize = 32;
 
     let _ = fs::create_dir("gtfs_static_zips");
 

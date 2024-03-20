@@ -79,6 +79,7 @@ dmfr-folder-reader = {git = "https://github.com/catenarytransit/dmfr-folder-read
 tokio-zookeeper = "0.2.1"
 uuid = "1.8.0"
 zip = "0.6.6"
+git2 = "0.18.3"
 
 [[bin]]
 name = "maple"
