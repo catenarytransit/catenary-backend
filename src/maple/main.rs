@@ -66,6 +66,7 @@ fn update_transitland_submodule() -> Result<(), Box<dyn Error>> {
 async fn run_ingest() -> Result<(), Box<dyn Error>> {
     const maple_ingestion_version: i32 = 1;
 
+    //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
     match update_transitland_submodule() {
         Ok(_) => {},
         Err(err) => {
