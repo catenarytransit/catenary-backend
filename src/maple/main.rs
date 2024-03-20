@@ -26,9 +26,7 @@ use git2::Repository;
 
 use crate::transitland_download::DownloadedFeedsInformation;
 
-async fn run_ingest() -> Result<(), Box<dyn Error>> {
-    const maple_ingestion_version: i32 = 1;
-
+fn update_transitland_submodule() -> Result<(), Box<dyn Error>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly
     match Repository::open("./") {
         Ok(repo) => {
@@ -41,11 +39,14 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                     match transitland_submodule.update(true, None) {
                         Ok(update) => {
                             println!("Submodule updated.");
+
+                            Ok(())
                         }
                         Err(update_err) => {
                             eprintln!("Unable to update submodule");
 
                             // don't need to fail if can't reach github servers for now
+                            Ok(())
                         }
                     }
                 }
@@ -58,6 +59,17 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
         Err(repo_err) => {
             eprintln!("Can't find own repo!");
             return Err(Box::new(repo_err));
+        }
+    }
+}
+
+async fn run_ingest() -> Result<(), Box<dyn Error>> {
+    const maple_ingestion_version: i32 = 1;
+
+    match update_transitland_submodule() {
+        Ok(_) => {},
+        Err(err) => {
+            return Err(err);
         }
     }
 
