@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS gtfs.static_download_attempts (
    downloaded_unix_time_ms bigint NOT NULL,
    ingested boolean NOT NULL,
    failed boolean NOT NULL,
+   ingestion_version integer NOT NULL,
+   mark_for_redo boolean NOT NULL,
    PRIMARY KEY (onestop_feed_id, downloaded_unix_time_ms)
 );
 

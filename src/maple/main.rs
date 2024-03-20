@@ -27,6 +27,8 @@ use crate::transitland_download::DownloadedFeedsInformation;
 
 async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
+    const maple_ingestion_version: i32 = 1;
+
     // TODO! Ensure git submodule transitland-atlas downloads and updates correctly
 
     //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
@@ -114,6 +116,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
         }
 
         //determine if the old one should be deleted, if so, delete it
+    } else {
+        eprintln!("Not enough data in transitland!");
     }
 
     Ok(())
