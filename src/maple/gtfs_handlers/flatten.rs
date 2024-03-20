@@ -8,6 +8,6 @@ fn flatten_feed(feed_id: &str) -> Result<(), Box<dyn Error>> {
     // unzip
 
     // go into folder and unnest folders
-    
+
     Ok(())
 }

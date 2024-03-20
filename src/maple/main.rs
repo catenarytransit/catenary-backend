@@ -27,7 +27,6 @@ use git2::Repository;
 use crate::transitland_download::DownloadedFeedsInformation;
 
 async fn run_ingest() -> Result<(), Box<dyn Error>> {
-
     const maple_ingestion_version: i32 = 1;
 
     //Ensure git submodule transitland-atlas downloads and updates correctly
@@ -36,26 +35,26 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
             match repo.find_submodule("transitland-atlas") {
                 Ok(transitland_submodule) => {
                     println!("Submodule found.");
-    
+
                     let mut transitland_submodule = transitland_submodule;
-                    
+
                     match transitland_submodule.update(true, None) {
                         Ok(update) => {
                             println!("Submodule updated.");
-                        },
+                        }
                         Err(update_err) => {
                             eprintln!("Unable to update submodule");
 
                             // don't need to fail if can't reach github servers for now
                         }
                     }
-                },
+                }
                 Err(find_submodule) => {
                     eprintln!("Can't find submodule!");
                     return Err(Box::new(find_submodule));
                 }
             }
-        },
+        }
         Err(repo_err) => {
             eprintln!("Can't find own repo!");
             return Err(Box::new(repo_err));
@@ -106,28 +105,38 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
         // count eligible feeds that are marked ingest == true using a filter and .len()
 
         let mut counter_of_eligible_feeds: Option<usize> = match &eligible_feeds {
-            Ok(eligible_feeds) => {
-                Some(eligible_feeds.iter().filter(|download_feed_info| download_feed_info.ingest == true).collect::<Vec<&DownloadedFeedsInformation>>().len())
-            }
-            Err(_) => None
+            Ok(eligible_feeds) => Some(
+                eligible_feeds
+                    .iter()
+                    .filter(|download_feed_info| download_feed_info.ingest == true)
+                    .collect::<Vec<&DownloadedFeedsInformation>>()
+                    .len(),
+            ),
+            Err(_) => None,
         };
 
         // debug print to output
         match counter_of_eligible_feeds {
             Some(counter_of_eligible_feeds) => {
-                println!("{} feeds marked ready for schedule ingestion.", counter_of_eligible_feeds);
-            },
+                println!(
+                    "{} feeds marked ready for schedule ingestion.",
+                    counter_of_eligible_feeds
+                );
+            }
             None => {
                 println!("Unable to get eligible feed list.");
             }
         }
 
-          //refresh the metadata for anything that's changed
+        //refresh the metadata for anything that's changed
 
         //insert the feeds that are new
 
         if let Ok(eligible_feeds) = eligible_feeds {
-            let to_ingest_feeds = eligible_feeds.iter().filter(|download_feed_info| download_feed_info.ingest == true).collect::<Vec<&DownloadedFeedsInformation>>();
+            let to_ingest_feeds = eligible_feeds
+                .iter()
+                .filter(|download_feed_info| download_feed_info.ingest == true)
+                .collect::<Vec<&DownloadedFeedsInformation>>();
 
             // for now, use a thread pool
             // in the future, map reduce this job out to worker servers
@@ -139,11 +148,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
             // use k/d tree presentation to calculate line optimisation and transfer patterns (not clear how this works, needs further research)
             // hand off to routing algorithm preprocessing engine Prarie (needs further research and development)
 
-            
             // Folder unzip time!
 
             // perform additional checks to ensure feed is not a zip bomb
-
         }
 
         //determine if the old one should be deleted, if so, delete it

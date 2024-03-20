@@ -1,3 +1,4 @@
+use crate::gtfs_handlers::DownloadAttempt;
 use dmfr_folder_reader::ReturnDmfrAnalysis;
 use futures;
 use futures::StreamExt;
@@ -9,10 +10,9 @@ use std::fs::File;
 use std::io::copy;
 use std::io::Write;
 use std::sync::Arc;
-use std::time::SystemTime;
 use std::time::Duration;
+use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use crate::gtfs_handlers::DownloadAttempt;
 
 #[derive(Clone)]
 struct StaticFeedToDownload {
@@ -45,7 +45,7 @@ pub struct StaticPassword {
     pub header_auth_key: Option<String>,
     // this would be "Bearer" so the header would insert Authorization: Bearer {key}
     pub header_auth_value_prefix: Option<String>,
-    pub url_auth_key: Option<String>
+    pub url_auth_key: Option<String>,
 }
 
 // This is an efficient method to scan all static ingests and only insert what is new.
@@ -67,7 +67,8 @@ pub async fn download_return_eligible_feeds(
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
         println!("Downloading zip files now");
 
-        let static_passwords = sqlx::query_as!(StaticPassword,"SELECT * FROM gtfs.static_passwords;");
+        let static_passwords =
+            sqlx::query_as!(StaticPassword, "SELECT * FROM gtfs.static_passwords;");
 
         let feeds_to_download = transitland_meta.feed_hashmap.iter().filter(|(_, feed)| match feed.spec {
             dmfr::FeedSpec::Gtfs => true,
