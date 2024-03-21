@@ -12,7 +12,7 @@ pub fn flatten_feed(feed_id: &str) -> Result<(), Box<dyn Error>> {
     let target_path = format!("gtfs_uncompressed/{}", feed_id);
 
     // Attempt to open file and pass back error if failed
-    let mut file = File::open("foo.txt")?;
+    let mut file = File::open(source_path)?;
     let mut buf: Vec<u8> = vec![];
 
     // read bytes and pass back error if unable to read
