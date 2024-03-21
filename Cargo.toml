@@ -25,7 +25,7 @@ csv = "1.3"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.33", features = ["full"] }
 futures = "0.3"
-gtfs-structures = "0.41"
+gtfs-structures = {git = "https://github.com/catenarytransit/gtfs-structure", branch = "allow-clone"}
 tungstenite = "0.21.0"
 postgres = "0.19.7"
 postgis = "0.9.0"
