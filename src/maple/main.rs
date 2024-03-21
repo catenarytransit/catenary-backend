@@ -241,10 +241,14 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
              let pool = Arc::new(pool);
 
-            rt.spawn(async move {
+            rt.spawn(
+                {
+                    let pool = Arc::clone(&pool);
+                    async move {
                 for (feed_id, _) in unzip_feeds.iter().filter(|unzipped_feed| unzipped_feed.1 == true) {
-                    gtfs_process_feed(&feed_id, pool);
+                    let gtfs_process_result = gtfs_process_feed(&feed_id, &pool).await; 
                 }
+            }
             });
         }
 
