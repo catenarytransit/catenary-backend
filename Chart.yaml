@@ -30,6 +30,6 @@ dependencies:
   - name: kubernetes-dashboard
     version: 7.1.2
     repository: https://kubernetes.github.io/dashboard/
-  - name: postgresql
+  - name: postgresql-ha
     version: 15.1.0
     repository: https://charts.bitnami.com/bitnami
