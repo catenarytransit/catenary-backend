@@ -4,6 +4,8 @@
 
 use service::quicli::prelude::info;
 use sqlx::migrate::MigrateDatabase;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::query;
 use sqlx::{Connection, PgConnection, PgPool, Postgres};
@@ -12,12 +14,17 @@ use std::time::Duration;
 mod database;
 use std::collections::HashSet;
 use std::sync::Arc;
+use threadpool::ThreadPool;
+use tokio::runtime;
 
 mod gtfs_handlers;
 
 mod chateau_postprocess;
 mod refresh_metadata_tables;
 mod transitland_download;
+mod gtfs_process;
+
+use gtfs_process::gtfs_process_feed;
 
 use chateau::chateau;
 use dmfr_folder_reader::read_folders;
@@ -220,6 +227,25 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
             // create thread pool
             // process GTFS and insert into system
+
+            // This will spawn a work-stealing runtime with 4 worker threads.
+            let rt = runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .thread_name_fn(|| {
+                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                format!("catenary-maple-ingest-{}", id)
+             })
+            .build()
+            .unwrap();
+
+             let pool = Arc::new(pool);
+
+            rt.spawn(async move {
+                for (feed_id, _) in unzip_feeds.iter().filter(|unzipped_feed| unzipped_feed.1 == true) {
+                    gtfs_process_feed(&feed_id, pool);
+                }
+            });
         }
 
         //determine if the old one should be deleted, if so, delete it
