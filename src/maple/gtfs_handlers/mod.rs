@@ -5,6 +5,7 @@ pub mod convex_hull;
 pub mod enum_to_int;
 pub mod flatten;
 pub mod stops_associated_items;
+pub mod shape_colour_calculator;
 
 #[derive(Debug, Clone)]
 pub struct DownloadAttempt {
