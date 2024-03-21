@@ -11,11 +11,11 @@ pub fn fix_background_colour_rgb(background: RGB<u8>) -> RGB<u8> {
 }
 
 pub fn fix_background_colour_rgb_feed_route(
-    feed_id: &String,
+    feed_id: &str,
     background: RGB<u8>,
     route: &gtfs_structures::Route,
 ) -> RGB<u8> {
-    match feed_id.as_str() {
+    match feed_id {
         "f-9q5b-longbeachtransit" => {
             match route.id.as_str() {
                 "1" => RGB::new(247, 161, 129),
@@ -91,11 +91,11 @@ pub fn fix_foreground_colour_rgb(background: RGB<u8>, foreground: RGB<u8>) -> RG
 }
 
 pub fn fix_foreground_colour_rgb_feed(
-    feed_id: &String,
+    feed_id: &str,
     background: RGB<u8>,
     foreground: RGB<u8>,
 ) -> RGB<u8> {
-    match feed_id.as_str() {
+    match feed_id {
         "f-9q5b-longbeachtransit" => WHITE_RGB,
         _ => fix_foreground_colour_rgb(background, foreground),
     }
