@@ -431,5 +431,5 @@ CREATE TABLE IF NOT EXISTS gtfs.static_passwords (
     passwords text[],
     header_auth_key text,
     header_auth_value_prefix text,
-    url_auth_key text,
+    url_auth_key text
 );
