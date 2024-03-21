@@ -22,8 +22,10 @@ mod transitland_download;
 use chateau::chateau;
 use dmfr_folder_reader::read_folders;
 use dmfr_folder_reader::ReturnDmfrAnalysis;
+use futures::StreamExt;
 use git2::Repository;
 
+use crate::gtfs_handlers::maple_ingestion_version;
 use crate::transitland_download::DownloadedFeedsInformation;
 
 fn update_transitland_submodule() -> Result<(), Box<dyn Error>> {
@@ -64,15 +66,8 @@ fn update_transitland_submodule() -> Result<(), Box<dyn Error>> {
 }
 
 async fn run_ingest() -> Result<(), Box<dyn Error>> {
-    const maple_ingestion_version: i32 = 1;
-
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
-    match update_transitland_submodule() {
-        Ok(_) => {},
-        Err(err) => {
-            return Err(err);
-        }
-    }
+    let _ = update_transitland_submodule()?;
 
     //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
     let feeds_to_discard: HashSet<&str> = HashSet::from_iter(vec![
@@ -161,9 +156,56 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
             // use k/d tree presentation to calculate line optimisation and transfer patterns (not clear how this works, needs further research)
             // hand off to routing algorithm preprocessing engine Prarie (needs further research and development)
 
-            // Folder unzip time!
+            // 1. update metadata
+            futures::stream::iter(eligible_feeds.iter()
+            .map(|eligible_feed|
+                {
+                    async move {
+                        let sql_query = sqlx::query!("INSERT INTO gtfs.static_download_attempts 
+                            (onestop_feed_id, url, file_hash, downloaded_unix_time_ms, ingested, failed, http_response_code, mark_for_redo, ingestion_version)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        ",
+                        eligible_feed.feed_id, 
+                        eligible_feed.url,
+                        match eligible_feed.hash {
+                            Some(hash) => Some(format!("{}", hash)),
+                            None => None
+                        }, 
+                        eligible_feed.download_timestamp_ms as i64, 
+                        false,
+                        !eligible_feed.operation_success,
+                        eligible_feed.http_response_code,
+                        false,
+                        maple_ingestion_version
+                        );
+                    }
+                }
+            )).buffer_unordered(100).collect::<Vec<_>>().await;
 
-            // perform additional checks to ensure feed is not a zip bomb
+            // 2. Unzip folders
+            let unzip_feeds: Vec<(String, bool)> =
+                futures::stream::iter(to_ingest_feeds.into_iter().map(
+                    |to_ingest_feed| async move {
+                        let flatten_feed_result =
+                            gtfs_handlers::flatten::flatten_feed(to_ingest_feed.feed_id.as_str());
+
+                        (to_ingest_feed.feed_id.clone(), flatten_feed_result.is_ok())
+                    },
+                ))
+                .buffer_unordered(8)
+                .collect::<Vec<(String, bool)>>()
+                .await;
+
+            let successful_unzip_feeds_count =
+                unzip_feeds.iter().map(|x| x.1).collect::<Vec<bool>>().len();
+
+            println!(
+                "{} of {} unzipped",
+                successful_unzip_feeds_count,
+                unzip_feeds.len()
+            );
+
+            // todo! perform additional checks to ensure feed is not a zip bomb
         }
 
         //determine if the old one should be deleted, if so, delete it

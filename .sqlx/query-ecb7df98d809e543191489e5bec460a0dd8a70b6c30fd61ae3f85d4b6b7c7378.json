@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT * FROM gtfs.static_passwords;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "onestop_feed_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "passwords",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 2,
+        "name": "header_auth_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "header_auth_value_prefix",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "url_auth_key",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "ecb7df98d809e543191489e5bec460a0dd8a70b6c30fd61ae3f85d4b6b7c7378"
+}

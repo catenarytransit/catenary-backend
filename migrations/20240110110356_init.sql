@@ -8,13 +8,30 @@ CREATE EXTENSION IF NOT EXISTS hstore;
 
 CREATE TABLE IF NOT EXISTS gtfs.static_download_attempts (
    onestop_feed_id text NOT NULL,
-   file_hash text NOT NULL,
+   file_hash text,
    downloaded_unix_time_ms bigint NOT NULL,
    ingested boolean NOT NULL,
+   url text NOT NULL,
    failed boolean NOT NULL,
    ingestion_version integer NOT NULL,
    mark_for_redo boolean NOT NULL,
+   http_response_code text,
    PRIMARY KEY (onestop_feed_id, downloaded_unix_time_ms)
+);
+
+CREATE TABLE gtfs.ingested_static (
+    static_onestop_id text NOT NULL,
+    -- hash of the zip file
+    file_hash bigint NOT NULL,
+    attempt_id text NOT NULL,
+    ingest_start_unix_time_ms bigint,
+    ingesting_in_progress boolean,
+    -- is ready
+    production boolean,
+    deleted boolean,
+    feed_expiration_date date,
+    feed_start_date date,
+    PRIMARY KEY (static_onestop_id, ingest_start_unix_time_ms)
 );
 
 CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.static_download_attempts (file_hash);
@@ -67,21 +84,6 @@ CREATE TABLE gtfs.realtime_feeds (
     --min_lon double precision,
     chateau text NOT NULL,
     fetch_interval_ms integer
-);
-
-CREATE TABLE gtfs.ingested_static (
-    static_onestop_id text NOT NULL,
-    -- hash of the zip file
-    file_hash bigint NOT NULL,
-    attempt_id text NOT NULL,
-    ingest_start_unix_time_ms bigint,
-    ingesting_in_progress boolean,
-    -- is ready
-    production boolean,
-    deleted boolean,
-    feed_expiration_date date,
-    feed_start_date date,
-    PRIMARY KEY (static_onestop_id, ingest_start_unix_time_ms)
 );
 
 CREATE TABLE gtfs.agencies (

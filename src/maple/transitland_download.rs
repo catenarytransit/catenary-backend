@@ -14,6 +14,8 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use crate::gtfs_handlers::maple_ingestion_version;
+
 #[derive(Clone)]
 struct StaticFeedToDownload {
     pub feed_id: String,
@@ -29,6 +31,7 @@ pub struct DownloadedFeedsInformation {
     pub url: String,
     pub hash: Option<u64>,
     pub download_timestamp_ms: u64,
+    // did ingestion complete, None for in progress
     pub operation_success: bool,
     //tells the pipeline to ingest this zip file
     pub ingest: bool,
@@ -173,16 +176,16 @@ pub async fn download_return_eligible_feeds(
                                         //if hash doesn't exist write the file to disk
             
                                         match download_attempts_postgres_lookup {
-                                            Ok( download_attempts_postgres_lookup) => {
+                                            Ok(download_attempts_postgres_lookup) => {
                                                 answer.operation_success = true;
             
                                                     // this zip file has never been seen before! Insert it!
-                                                if  download_attempts_postgres_lookup.len() == 0 {
+                                                if download_attempts_postgres_lookup.len() == 0 {
                                                     answer.ingest = true;
                                                 } else {
             
                                                     // a previous succcessful ingest has happened
-                                                    let check_for_previous_insert_sucesses =  download_attempts_postgres_lookup
+                                                    let check_for_previous_insert_sucesses = download_attempts_postgres_lookup
                                                         .iter()
                                                         .find(|&x| x.ingested == true);
             
