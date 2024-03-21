@@ -4,6 +4,19 @@ use std::fs::File;
 use std::io::Cursor;
 use std::io::Read;
 use std::path::PathBuf;
+use std::fs::{read_dir, remove_file};
+
+fn delete_zip_files(dir_path: &str) -> std::io::Result<()> {
+    for entry in read_dir(dir_path)? {
+      let entry = entry?;
+      let path = entry.path();
+      if path.is_file() && path.extension().map_or(false, |ext| ext == "zip") {
+        // don't crash if you can't delete the zips
+        let _ = remove_file(path);
+      }
+    }
+    Ok(())
+  }
 
 // Extracts a sub zip file and uses it as the parent folder
 pub fn extract_sub_zip(feed_id: &str, sub_folder: &str) -> Result<(), Box<dyn Error>> {
@@ -16,9 +29,12 @@ pub fn extract_sub_zip(feed_id: &str, sub_folder: &str) -> Result<(), Box<dyn Er
  
      // read bytes and pass back error if unable to read
      let read = file.read_to_end(&mut buf)?;
-     let target_dir = PathBuf::from(target_path);
+     let target_dir = PathBuf::from(target_path.as_str());
 
      zip_extract::extract(Cursor::new(buf), &target_dir, true)?;
+
+     //delete excess zip files
+     delete_zip_files(target_path.as_str())?;
 
      Ok(())
 }
