@@ -69,8 +69,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
     let _ = update_transitland_submodule()?;
 
-    //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
-    let feeds_to_discard: HashSet<&str> = HashSet::from_iter(vec![
+        //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
+    let feeds_to_discard: HashSet<&'static str> = HashSet::from_iter(vec![
         "f-9q8y-sfmta",
         "f-9qc-westcat~ca~us",
         "f-9q9-actransit",
@@ -81,6 +81,17 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
         "f-9q9-bart",
         "f-9q9-caltrain",
         "f-9qc3-riovistadeltabreeze",
+        "f-9q8z-goldengateferry",
+        "f-9q9j-dumbartonexpress",
+        "f-9qc2-trideltatransit",
+        "f-9q9p-sanfranciscobayferry",
+        "f-9qc-vinenapacounty",
+        "f-9qb-smart",
+        "f-9qc60-vacavillecitycoach",
+        "f-9q9jy-unioncitytransit",
+        "f-sfo~airtrain~shuttles",
+        "f-9qbdx-santarosacitybus",
+        "f-9q9-acealtamontcorridorexpress"
     ]);
 
     info!("Initializing database connection");
@@ -100,7 +111,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
     // The DMFR result dataset looks genuine, with over 100 pieces of data!
     if dmfr_result.feed_hashmap.len() > 100 && dmfr_result.operator_hashmap.len() > 100 {
         let eligible_feeds =
-            transitland_download::download_return_eligible_feeds(&dmfr_result, &pool).await;
+            transitland_download::download_return_eligible_feeds(&dmfr_result, &pool, &feeds_to_discard).await;
 
         // Performs depth first search to find groups of feed urls associated with each other
         // See https://github.com/catenarytransit/chateau for the source code
