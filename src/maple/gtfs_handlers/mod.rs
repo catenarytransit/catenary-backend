@@ -3,6 +3,7 @@ use std::collections::HashSet;
 pub mod colour_correction;
 pub mod convex_hull;
 pub mod flatten;
+pub mod stops_associated_items;
 
 #[derive(Debug, Clone)]
 pub struct DownloadAttempt {

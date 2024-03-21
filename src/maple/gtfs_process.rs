@@ -13,5 +13,15 @@ pub async fn gtfs_process_feed(
 
     let gtfs = gtfs_structures::Gtfs::new(path.as_str())?;
 
+    let (stop_ids_to_route_types, stop_ids_to_route_ids) =
+        make_hashmap_stops_to_route_types_and_ids(&gtfs);
+
+    let (stop_id_to_children_ids, stop_ids_to_children_route_types) =
+        make_hashmaps_of_children_stop_info(
+            &gtfs,
+            &stop_ids_to_route_types,
+            &stop_ids_to_route_ids,
+        );
+
     Ok(())
 }
