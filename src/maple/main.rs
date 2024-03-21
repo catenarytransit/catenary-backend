@@ -197,7 +197,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                 .await;
 
             let successful_unzip_feeds_count =
-                unzip_feeds.iter().map(|x| x.1).collect::<Vec<bool>>().len();
+                unzip_feeds.iter().map(|x| x.1 == true).collect::<Vec<bool>>().len();
 
             println!(
                 "{} of {} unzipped",

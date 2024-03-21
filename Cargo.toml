@@ -3,6 +3,9 @@ name = "catenary-backend"
 version = "0.1.0"
 edition = "2021"
 
+[build]
+rustflags = ["-Z", "threads=8"]
+
 [lints.rust]
 unused_must_use = "deny"
 non_ascii_idents = "deny"
