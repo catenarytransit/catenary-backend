@@ -164,8 +164,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
             // Unzip the file and handle any folder nesting
             // process into GTFS representation
             // run function to insert GTFS raw data
-            // use k/d tree presentation to calculate line optimisation and transfer patterns (not clear how this works, needs further research)
-            // hand off to routing algorithm preprocessing engine Prarie (needs further research and development)
+            // (todo) use k/d tree presentation to calculate line optimisation and transfer patterns (not clear how this works, needs further research)
+            // (todo) hand off to routing algorithm preprocessing engine Prarie (needs further research and development)
 
             // 1. update metadata
             futures::stream::iter(eligible_feeds.iter()
@@ -217,6 +217,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
             );
 
             // todo! perform additional checks to ensure feed is not a zip bomb
+
+            // create thread pool
+            // process GTFS and insert into system
         }
 
         //determine if the old one should be deleted, if so, delete it
