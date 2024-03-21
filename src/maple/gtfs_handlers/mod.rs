@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 pub mod colour_correction;
 pub mod convex_hull;
+pub mod enum_to_int;
 pub mod flatten;
 pub mod stops_associated_items;
 

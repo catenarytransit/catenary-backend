@@ -1,3 +1,4 @@
+use crate::gtfs_handlers::enum_to_int::route_type_to_int;
 use std::collections::{HashMap, HashSet};
 
 pub fn make_hashmap_stops_to_route_types_and_ids(
@@ -40,7 +41,6 @@ pub fn make_hashmap_stops_to_route_types_and_ids(
 pub fn make_hashmaps_of_children_stop_info(
     gtfs: &gtfs_structures::Gtfs,
     stop_to_route_types: &HashMap<String, HashSet<i16>>,
-    stop_to_route_ids: &HashMap<String, HashSet<String>>,
 ) -> (
     HashMap<String, HashSet<String>>,
     HashMap<String, HashSet<i16>>,

@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::sync::Arc;
 
+use crate::gtfs_handlers::stops_associated_items::*;
+
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
 
@@ -17,11 +19,7 @@ pub async fn gtfs_process_feed(
         make_hashmap_stops_to_route_types_and_ids(&gtfs);
 
     let (stop_id_to_children_ids, stop_ids_to_children_route_types) =
-        make_hashmaps_of_children_stop_info(
-            &gtfs,
-            &stop_ids_to_route_types,
-            &stop_ids_to_route_ids,
-        );
+        make_hashmaps_of_children_stop_info(&gtfs, &stop_ids_to_route_types);
 
     Ok(())
 }
