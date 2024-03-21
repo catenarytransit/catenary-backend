@@ -101,7 +101,7 @@ CREATE TABLE gtfs.agencies (
     agency_fare_url	text,
     agency_fare_url_lang hstore,
     chateau text NOT NULL,
-    PRIMARY KEY (static_onestop_id, attempt_id, agency_id)
+    PRIMARY KEY (static_onestop_id, attempt_id)
 );
 
 CREATE TABLE gtfs.routes (
@@ -124,7 +124,7 @@ CREATE TABLE gtfs.routes (
     continuous_drop_off smallint,
     shapes_list text[],
     chateau text NOT NULL,
-    PRIMARY KEY (onestop_feed_id, attempt_id, agency_id, route_id)
+    PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
 );
 
 CREATE INDEX gtfs_static_feed ON gtfs.routes (chateau);
@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
     route_label text,
     text_color text,
     chateau text NOT NULL,
-    PRIMARY KEY (onestop_feed_id, attempt_id, agency_id, shape_id)
+    PRIMARY KEY (onestop_feed_id, attempt_id, shape_id)
 );
 
 CREATE INDEX gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
@@ -166,7 +166,7 @@ CREATE TABLE gtfs.trips (
     wheelchair_accessible int,
     bikes_allowed int,
     chateau text NOT NULL,
-    PRIMARY KEY (onestop_feed_id, attempt_id, agency_id, trip_id)
+    PRIMARY KEY (onestop_feed_id, attempt_id, trip_id)
 );
 
 CREATE TABLE gtfs.stops (
@@ -200,7 +200,7 @@ CREATE TABLE gtfs.stops (
     chateau text NOT NULL,
     location_alias text[],
     tts_stop_lang hstore,
-    PRIMARY KEY (onestop_feed_id, attempt_id, agency_id, gtfs_id)
+    PRIMARY KEY (onestop_feed_id, attempt_id, gtfs_id)
 );
 
 CREATE INDEX gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
@@ -225,7 +225,7 @@ CREATE TABLE gtfs.stoptimes (
     point GEOMETRY(POINT, 4326) NOT NULL,
     route_id text,
     chateau text NOT NULL,
-    PRIMARY KEY (onestop_feed_id, attempt_id, agency_id, trip_id, stop_sequence)
+    PRIMARY KEY (onestop_feed_id, attempt_id, trip_id, stop_sequence)
 );
 
 CREATE TABLE IF NOT EXISTS gtfs.gtfs_errors (
