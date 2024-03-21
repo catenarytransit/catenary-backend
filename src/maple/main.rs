@@ -4,12 +4,12 @@
 
 use service::quicli::prelude::info;
 use sqlx::migrate::MigrateDatabase;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::query;
 use sqlx::{Connection, PgConnection, PgPool, Postgres};
 use std::error::Error;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 mod database;
 use std::collections::HashSet;
@@ -20,9 +20,9 @@ use tokio::runtime;
 mod gtfs_handlers;
 
 mod chateau_postprocess;
+mod gtfs_process;
 mod refresh_metadata_tables;
 mod transitland_download;
-mod gtfs_process;
 
 use gtfs_process::gtfs_process_feed;
 
@@ -76,7 +76,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
     let _ = update_transitland_submodule()?;
 
-        //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
+    //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
     let feeds_to_discard: HashSet<&'static str> = HashSet::from_iter(vec![
         "f-9q8y-sfmta",
         "f-9qc-westcat~ca~us",
@@ -98,7 +98,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
         "f-9q9jy-unioncitytransit",
         "f-sfo~airtrain~shuttles",
         "f-9qbdx-santarosacitybus",
-        "f-9q9-acealtamontcorridorexpress"
+        "f-9q9-acealtamontcorridorexpress",
     ]);
 
     info!("Initializing database connection");
@@ -117,8 +117,12 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
     // The DMFR result dataset looks genuine, with over 100 pieces of data!
     if dmfr_result.feed_hashmap.len() > 100 && dmfr_result.operator_hashmap.len() > 100 {
-        let eligible_feeds =
-            transitland_download::download_return_eligible_feeds(&dmfr_result, &pool, &feeds_to_discard).await;
+        let eligible_feeds = transitland_download::download_return_eligible_feeds(
+            &dmfr_result,
+            &pool,
+            &feeds_to_discard,
+        )
+        .await;
 
         // Performs depth first search to find groups of feed urls associated with each other
         // See https://github.com/catenarytransit/chateau for the source code
@@ -214,8 +218,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                 .collect::<Vec<(String, bool)>>()
                 .await;
 
-            let successful_unzip_feeds_count =
-                unzip_feeds.iter().map(|x| x.1 == true).collect::<Vec<bool>>().len();
+            let successful_unzip_feeds_count = unzip_feeds
+                .iter()
+                .map(|x| x.1 == true)
+                .collect::<Vec<bool>>()
+                .len();
 
             println!(
                 "{} of {} unzipped",
@@ -230,25 +237,27 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
             // This will spawn a work-stealing runtime with 4 worker threads.
             let rt = runtime::Builder::new_multi_thread()
-            .worker_threads(4)
-            .thread_name_fn(|| {
-                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                format!("catenary-maple-ingest-{}", id)
-             })
-            .build()
-            .unwrap();
+                .worker_threads(4)
+                .thread_name_fn(|| {
+                    static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                    let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                    format!("catenary-maple-ingest-{}", id)
+                })
+                .build()
+                .unwrap();
 
-             let pool = Arc::new(pool);
+            let pool = Arc::new(pool);
 
-            rt.spawn(
-                {
-                    let pool = Arc::clone(&pool);
-                    async move {
-                for (feed_id, _) in unzip_feeds.iter().filter(|unzipped_feed| unzipped_feed.1 == true) {
-                    let gtfs_process_result = gtfs_process_feed(&feed_id, &pool).await; 
+            rt.spawn({
+                let pool = Arc::clone(&pool);
+                async move {
+                    for (feed_id, _) in unzip_feeds
+                        .iter()
+                        .filter(|unzipped_feed| unzipped_feed.1 == true)
+                    {
+                        let gtfs_process_result = gtfs_process_feed(&feed_id, &pool).await;
+                    }
                 }
-            }
             });
         }
 

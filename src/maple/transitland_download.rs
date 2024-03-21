@@ -5,6 +5,7 @@ use futures::StreamExt;
 use reqwest::Client as ReqwestClient;
 use reqwest::Request;
 use reqwest::RequestBuilder;
+use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::copy;
@@ -13,7 +14,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use std::collections::HashSet;
 
 use crate::gtfs_handlers::maple_ingestion_version;
 
@@ -63,7 +63,7 @@ pub struct StaticPassword {
 pub async fn download_return_eligible_feeds(
     transitland_meta: &ReturnDmfrAnalysis,
     pool: &sqlx::Pool<sqlx::Postgres>,
-    feeds_to_discard: &HashSet<&'static str>
+    feeds_to_discard: &HashSet<&'static str>,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
 
@@ -75,15 +75,22 @@ pub async fn download_return_eligible_feeds(
         let static_passwords =
             sqlx::query_as!(StaticPassword, "SELECT * FROM gtfs.static_passwords;");
 
-        let feeds_to_download = transitland_meta.feed_hashmap.iter().filter(|(_, feed)| 
-        !feeds_to_discard.contains(&feed.id.as_str())
-        && match feed.spec {
-            dmfr::FeedSpec::Gtfs => true,
-            _ => false,
-        } && feed.urls.static_current.is_some()).map(|(string, feed)| StaticFeedToDownload {
-            feed_id: feed.id.clone(),
-            url: feed.urls.static_current.as_ref().unwrap().to_string(),
-        }).collect::<Vec<StaticFeedToDownload>>();
+        let feeds_to_download = transitland_meta
+            .feed_hashmap
+            .iter()
+            .filter(|(_, feed)| {
+                !feeds_to_discard.contains(&feed.id.as_str())
+                    && match feed.spec {
+                        dmfr::FeedSpec::Gtfs => true,
+                        _ => false,
+                    }
+                    && feed.urls.static_current.is_some()
+            })
+            .map(|(string, feed)| StaticFeedToDownload {
+                feed_id: feed.id.clone(),
+                url: feed.urls.static_current.as_ref().unwrap().to_string(),
+            })
+            .collect::<Vec<StaticFeedToDownload>>();
 
         let download_progress: Arc<std::sync::Mutex<u16>> = Arc::new(std::sync::Mutex::new(0));
         let total_feeds_to_download = feeds_to_download.len();
