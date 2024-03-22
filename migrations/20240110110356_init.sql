@@ -8,12 +8,30 @@ CREATE EXTENSION IF NOT EXISTS hstore;
 
 CREATE TABLE IF NOT EXISTS gtfs.static_download_attempts (
    onestop_feed_id text NOT NULL,
-   file_hash text NOT NULL,
+   file_hash text,
    downloaded_unix_time_ms bigint NOT NULL,
    ingested boolean NOT NULL,
+   url text NOT NULL,
    failed boolean NOT NULL,
+   ingestion_version integer NOT NULL,
+   mark_for_redo boolean NOT NULL,
    http_response_code text,
    PRIMARY KEY (onestop_feed_id, downloaded_unix_time_ms)
+);
+
+CREATE TABLE gtfs.ingested_static (
+    static_onestop_id text NOT NULL,
+    -- hash of the zip file
+    file_hash bigint NOT NULL,
+    attempt_id text NOT NULL,
+    ingest_start_unix_time_ms bigint,
+    ingesting_in_progress boolean,
+    -- is ready
+    production boolean,
+    deleted boolean,
+    feed_expiration_date date,
+    feed_start_date date,
+    PRIMARY KEY (static_onestop_id, ingest_start_unix_time_ms)
 );
 
 CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.static_download_attempts (file_hash);
@@ -24,6 +42,8 @@ CREATE TABLE gtfs.static_feeds (
     previous_chateau_name text NOT NULL,
     hull GEOMETRY(POLYGON,4326)
 );
+
+CREATE INDEX static_hulls ON gtfs.static_feeds USING GIST (hull);
 
 -- this dataset may be missing
 -- if the feed start end date or end date is missing, replace the file
@@ -66,21 +86,7 @@ CREATE TABLE gtfs.realtime_feeds (
     --min_lat double precision,
     --min_lon double precision,
     chateau text NOT NULL,
-);
-
-CREATE TABLE gtfs.ingested_static (
-    static_onestop_id text NOT NULL,
-    -- hash of the zip file
-    file_hash bigint NOT NULL,
-    attempt_id text NOT NULL,
-    ingest_start_unix_time_ms bigint,
-    ingesting_in_progress boolean,
-    -- is ready
-    production boolean,
-    deleted boolean,
-    feed_expiration_date date,
-    feed_start_date date,
-    PRIMARY KEY (static_onestop_id, ingest_start_unix_time_ms)
+    fetch_interval_ms integer
 );
 
 CREATE TABLE gtfs.agencies (
@@ -89,16 +95,16 @@ CREATE TABLE gtfs.agencies (
     agency_id text NOT NULL,
     attempt_id text NOT NULL,
     agency_name text NOT NULL,
-    agency_name_lang hstore,
+    agency_name_translations hstore,
     agency_url text NOT NULL,
-    agency_url_lang hstore,
+    agency_url_translations hstore,
     agency_timezone text NOT NULL,
     agency_lang text,
     agency_phone text,
     agency_fare_url	text,
-    agency_fare_url_lang hstore,
+    agency_fare_url_translations hstore,
     chateau text NOT NULL,
-    PRIMARY KEY (static_onestop_id, attempt_id, agency_id)
+    PRIMARY KEY (static_onestop_id, attempt_id)
 );
 
 CREATE INDEX IF NOT EXISTS agencies_chateau ON gtfs.agencies (chateau);
@@ -108,13 +114,13 @@ CREATE TABLE gtfs.routes (
     attempt_id text NOT NULL,
     route_id text NOT NULL,
     short_name text NOT NULL,
-    short_name_lang hstore,
+    short_name_translations hstore,
     long_name text NOT NULL,
-    long_name_lang hstore,
+    long_name_translations hstore,
     gtfs_desc text,
     route_type smallint NOT NULL,
     url text,
-    url_lang hstore,
+    url_translations hstore,
     agency_id text,
     gtfs_order int,
     color text,
@@ -126,11 +132,13 @@ CREATE TABLE gtfs.routes (
     PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
 );
 
-CREATE INDEX IF NOT EXISTS routes_chateau ON gtfs.agencies (chateau);
+CREATE INDEX gtfs_routes_chateau_index ON gtfs.routes (chateau);
+CREATE INDEX gtfs_routes_type_index ON gtfs.routes (route_type);
 
 CREATE TABLE IF NOT EXISTS gtfs.shapes (
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
+    agency_id text,
     shape_id text NOT NULL,
     linestring GEOMETRY(LINESTRING, 4326) NOT NULL,
     color text,
@@ -143,15 +151,17 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
 );
 
 CREATE INDEX IF NOT EXISTS shapes_chateau ON gtfs.shapes (chateau);
+CREATE INDEX shapes_linestring_index ON gtfs.shapes USING GIST (linestring);
 
 CREATE TABLE gtfs.trips (
+    agency_id text,
     trip_id text NOT NULL,
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
     route_id text NOT NULL,
     service_id text NOT NULL,
     trip_headsign text,
-    trip_headsign_lang hstore,
+    trip_headsign_translations hstore,
     has_stop_headsign boolean,
     stop_headsigns text[],
     trip_short_name text,
@@ -169,13 +179,14 @@ CREATE TABLE IF NOT EXISTS trips_chateau ON gtfs.trips (chateau);
 CREATE TABLE gtfs.stops (
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
+    agency_id text,
     gtfs_id text NOT NULL,
     name text NOT NULL,
-    name_lang hstore,
+    name_translations hstore,
     displayname text NOT NULL,
     code text,
     gtfs_desc text,
-    gtfs_desc_lang hstore,
+    gtfs_desc_translations hstore,
     location_type smallint,
     parent_station text,
     zone_id text,
@@ -186,7 +197,7 @@ CREATE TABLE gtfs.stops (
     primary_route_type text,
     level_id text,
     platform_code text,
-    platform_code_lang hstore,
+    platform_code_translations hstore,
     routes text[],
     route_types smallint[],
     children_ids text[],
@@ -195,12 +206,15 @@ CREATE TABLE gtfs.stops (
     hidden boolean,
     chateau text NOT NULL,
     location_alias text[],
-    tts_stop_lang hstore,
+    tts_stop_translations hstore,
     PRIMARY KEY (onestop_feed_id, attempt_id, gtfs_id)
 );
 
+CREATE INDEX gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
+
 CREATE TABLE gtfs.stoptimes (
     onestop_feed_id text NOT NULL,
+    agency_id text,
     attempt_id text NOT NULL,
     trip_id text NOT NULL,
     stop_sequence int NOT NULL,
@@ -208,7 +222,7 @@ CREATE TABLE gtfs.stoptimes (
     departure_time bigint,
     stop_id text NOT NULL,
     stop_headsign text,
-    stop_headsign_lang text,
+    stop_headsign_translations hstore,
     pickup_type int,
     drop_off_type int,
     shape_dist_traveled double precision,
@@ -229,13 +243,6 @@ CREATE TABLE IF NOT EXISTS gtfs.gtfs_errors (
             chateau text NOT NULL,
             PRIMARY KEY (onestop_feed_id, attempt_id)
 );
-
-CREATE INDEX gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
-CREATE INDEX gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
-CREATE INDEX gtfs_static_feed_id ON gtfs.shapes (chateau);
-CREATE INDEX gtfs_static_feed ON gtfs.routes (chateaus);
-CREATE INDEX gtfs_static_route_type ON gtfs.routes (route_type);
-CREATE INDEX static_hulls ON gtfs.static_feeds USING GIST (hull);
 
 CREATE FUNCTION gtfs.busonly(z integer, x integer, y integer)
     RETURNS bytea AS $$
@@ -416,3 +423,20 @@ CREATE FUNCTION gtfs.otherstops(z integer, x integer, y integer)
     RETURN mvt;
     END
     $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TABLE IF NOT EXISTS gtfs.realtime_passwords (
+    onestop_feed_id text NOT NULL PRIMARY KEY,
+    passwords text[],
+    header_auth_key text,
+    header_auth_value_prefix text,
+    url_auth_key text,
+    interval_ms integer
+);
+
+CREATE TABLE IF NOT EXISTS gtfs.static_passwords (
+    onestop_feed_id text NOT NULL PRIMARY KEY,
+    passwords text[],
+    header_auth_key text,
+    header_auth_value_prefix text,
+    url_auth_key text
+);

@@ -1,7 +1,10 @@
 use chateau::Chateau;
 use std::collections::HashMap;
 
-pub fn feed_id_to_chateau_id_pivot_table(chateaus: &HashMap<String, Chateau>) -> HashMap<String, String> {
+//reverses the chateau association to get HashMap<FeedId, ChateauId>
+pub fn feed_id_to_chateau_id_pivot_table(
+    chateaus: &HashMap<String, Chateau>,
+) -> HashMap<String, String> {
     let mut result: HashMap<String, String> = HashMap::new();
 
     for (_, chateau) in chateaus.iter() {

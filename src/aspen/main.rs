@@ -30,7 +30,6 @@ struct Flags {
 #[derive(Clone)]
 struct AspenServer(SocketAddr);
 
-#[tarpc::server]
 impl AspenRpc for AspenServer {
     async fn hello(self, _: context::Context, name: String) -> String {
         let sleep_time =

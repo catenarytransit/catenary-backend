@@ -3,6 +3,9 @@ name = "catenary-backend"
 version = "0.1.0"
 edition = "2021"
 
+[build]
+rustflags = ["-Z", "threads=8"]
+
 [lints.rust]
 unused_must_use = "deny"
 non_ascii_idents = "deny"
@@ -22,7 +25,7 @@ csv = "1.3"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.33", features = ["full"] }
 futures = "0.3"
-gtfs-structures = "0.41"
+gtfs-structures = "0.41.2"
 tungstenite = "0.21.0"
 postgres = "0.19.7"
 postgis = "0.9.0"
@@ -35,7 +38,7 @@ rust_decimal = "1.32.0"
 sqlx = { version = "0.7.2", features = ["postgres", "runtime-tokio-rustls", "json"] }
 serde_json = "1.0.107"
 actix-web = "4.4.0"
-regress = "0.7.1"
+regress = "0.9"
 color-eyre = {version = "0.6.2", features = ["url", "issue-url"]}
 fasthash = "0.4.0"
 rgb = "0.8.36"
@@ -46,7 +49,7 @@ r2d2 = "0.8.10"
 r2d2_postgres = "0.18.1"
 bb8-postgres = "0.8.1"
 bb8 = "0.8.1"
-threadpool = {version = "1.8.1"}
+threadpool = "1.8.1"
 tokio-threadpool = "0.1.18"
 qstring = "0.7.2"
 rand = "0.8.5"
@@ -55,16 +58,15 @@ rayon = "1.8.0"
 chrono = "0.4.31"
 geo-types = "0.7.11"
 geo-postgis = "0.2.2"
-geo = "0.27.0"
-tarpc = {version = "0.33.0", features = ["full"]}
+geo = "0.28.0"
+tarpc = {version = "0.34.0", features = ["full"]}
 anyhow = "1.0.75"
 tracing = "0.1.40"
 service = "0.0.0"
-tokio-serde = "0.8.0"
+tokio-serde = "0.9"
 tracing-subscriber = "0.3.17"
 futures-util = "0.3.29"
 actix_block_ai_crawling = "0.2.8"
-kactus = {git = "https://github.com/catenarytransit/kactus-gtfs-rt"}
 actix = "0.13.1"
 actix-web-actors = "4.2.0"
 amtk = "0.1.0"
@@ -76,22 +78,27 @@ seahash = "4.1.0"
 dmfr = "0.1.0"
 chateau = {git = "https://github.com/catenarytransit/chateau"}
 dmfr-folder-reader = {git = "https://github.com/catenarytransit/dmfr-folder-reader"}
+tokio-zookeeper = "0.2.1"
+uuid = "1.8.0"
+zip = "0.6.6"
+git2 = "0.18.3"
+zip-extract = "0.1.3"
 
 [[bin]]
-name = "import"
-path = "src/next_db/import.rs"
+name = "maple"
+path = "src/maple/main.rs"
 
 [[bin]]
 name = "http_server"
 path = "src/http-server.rs"
 
-[[bin]]
-name = "aspen"
-path = "src/aspen/main.rs"
+#[[bin]]
+#name = "aspen"
+#path = "src/aspen/main.rs"
 
-[lib]
-name = "aspenlib"
-path = "src/aspen/lib.rs"
+#[lib]
+#name = "aspenlib"
+#path = "src/aspen/lib.rs"
 
 [[bin]]
 name = "spruce"

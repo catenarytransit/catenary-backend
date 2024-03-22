@@ -1,3 +1,17 @@
+## Architecture
+
+Catenary Backend is a distributed system comprised of microservices operating in Kubernetes. The system is designed for fault tolerance, high-avaliability, and native execution speed in x86-64 using the Rust systems programming language.
+
+- **Maple**: GTFS Downloader and ingestion engine
+- **Prairie**: Routing Preprocessor and execution engine (Research and design in progress)
+- **Kactus**: Distributed system to query for GTFS-rt and other realtime data
+- **Aspen**: Processing of realtime data and dynamic insertion into other engines
+- **Spruce**: API server for frontend to perform queries
+
+The kubernetes configuration is generated using Helm templates. See Helm's documentation for further information on that.
+
+The code is heavily commented, go to each folder in src for more information.
+
 ## Install Dependencies
 
 ```bash
@@ -24,18 +38,23 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now transitbackend.service
 ```
 
-Example endpoints
-
-`http://localhost:5401/getroutesperagency?feed_id=f-9mu-orangecountytransportationauthority`
-
-`http://localhost:5401/gettrip?feed_id=f-9mu-orangecountytransportationauthority&trip_id=10995882`
-
 ## For Contributors
 
 For unix users, running `git config core.hooksPath .githooks` is recommended.
 Good commit messages are required to contribute to this project.
 
 No option exists for Windows users at the moment. Please try WSL Ubuntu for the moment. We're working on adding this.
+
+### Installation of Postgres
+
+See https://www.postgresql.org/download
+
+PostGIS is also required like 
+```bash
+sudo apt install postgresql-16-postgis-3
+```
+
+See https://trac.osgeo.org/postgis/wiki/UsersWikiPostGIS3UbuntuPGSQLApt for more instructions
 
 ### SQL notes
 We've switched to sqlx for our queries. For development, you'll need to know these few commands.
@@ -45,6 +64,7 @@ Install SQLx onto your system. You'll only need to do this once / when there are
 
 1. `cargo sqlx database drop`
 This drops your old development database so you can create a new one.
+If this doesn't work, you can run `DROP DATABASE catenary WITH (FORCE)` in the psql shell.
 
 2. `cargo sqlx database create`
 This creates a new sqlx database
