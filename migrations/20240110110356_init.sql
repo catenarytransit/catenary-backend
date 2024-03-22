@@ -211,6 +211,7 @@ CREATE TABLE gtfs.stops (
 );
 
 CREATE INDEX gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
+CREATE INDEX stops_chateau_idx on gtfs.stops (chateau);
 
 CREATE TABLE gtfs.stoptimes (
     onestop_feed_id text NOT NULL,
