@@ -203,10 +203,14 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                     }
                 }
             )).buffer_unordered(100).collect::<Vec<_>>().await;
-            
+
             let pool = Arc::new(pool);
 
-            let _ = refresh_metadata_tables::refresh_metadata_assignments(&dmfr_result, &chateau_result, &Arc::clone(&pool));
+            let _ = refresh_metadata_tables::refresh_metadata_assignments(
+                &dmfr_result,
+                &chateau_result,
+                &Arc::clone(&pool),
+            );
 
             // 2. Unzip folders
             let unzip_feeds: Vec<(String, bool)> =
@@ -258,12 +262,20 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                         .filter(|unzipped_feed| unzipped_feed.1 == true)
                     {
                         let gtfs_process_result = gtfs_process_feed(&feed_id, &pool).await;
+
+                        if gtfs_process_result.is_ok() {
+                            // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
+
+                            //CREATE entry in gtfs.ingested_static
+
+                            //determine if the old one should be deleted, if so, delete it
+                        } else {
+                            //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
+                        }
                     }
                 }
             });
         }
-
-        //determine if the old one should be deleted, if so, delete it
     } else {
         eprintln!("Not enough data in transitland!");
     }
