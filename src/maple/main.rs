@@ -203,6 +203,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                     }
                 }
             )).buffer_unordered(100).collect::<Vec<_>>().await;
+            
+            let pool = Arc::new(pool);
+
+            let _ = refresh_metadata_tables::refresh_metadata_assignments(&dmfr_result, &chateau_result, &Arc::clone(&pool));
 
             // 2. Unzip folders
             let unzip_feeds: Vec<(String, bool)> =
@@ -246,8 +250,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                 .build()
                 .unwrap();
 
-            let pool = Arc::new(pool);
-
             rt.spawn({
                 let pool = Arc::clone(&pool);
                 async move {
@@ -267,8 +269,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
-
-    //let _ = refresh_metadata_tables::refresh_feed_meta(transitland_metadata.clone(), &pool);
 }
 
 #[tokio::main]
