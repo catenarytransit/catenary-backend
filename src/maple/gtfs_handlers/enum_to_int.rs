@@ -1,3 +1,6 @@
+use gtfs_structures::LocationType;
+use gtfs_structures::RouteType;
+
 pub fn location_type_conversion(input: &LocationType) -> i16 {
     match input {
         LocationType::StopPoint => 0,
