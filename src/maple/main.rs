@@ -269,6 +269,14 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                             //CREATE entry in gtfs.ingested_static
 
                             //determine if the old one should be deleted, if so, delete it
+
+                            //algorithm:
+                            //call function to clean old gtfs feeds, accepting feed_id, sqlx pool as arguments
+                            //greedy algorithm starts from newest feeds and examines date ranges, and works successively towards older feeds, assigning date ranges to feeds not already taken.
+                            //data structure can be a Vec of (start_date, end_date, attempt_id or hash)
+                            // older feeds cannot claim dates that are after a newer feed's experation date
+                            //any feed that does not have a date range any
+                            more or is sufficiently old (over 5 days old) is wiped
                         } else {
                             //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
                         }
