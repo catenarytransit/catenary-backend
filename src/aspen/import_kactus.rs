@@ -1,3 +1,5 @@
+extern crate catenary;
+
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-mta~nyc~rt~subway~1~2~3~4~5~6~7",
     "f-mta~nyc~rt~subway~a~c~e",
@@ -20,7 +22,7 @@ pub async fn new_rt_kactus(
 
     if vehicles.is_some() {
         let decoded_gtfs_vehicles =
-            kactus::parse_protobuf_message(vehicles.as_ref().unwrap().as_slice());
+            catenary::gtfs_rt_handlers::parse_protobuf_message(vehicles.as_ref().unwrap().as_slice());
 
         if decoded_gtfs_vehicles.is_ok() {
             if MAKE_VEHICLES_FEED_LIST.contains(&realtime_feed_id.as_str()) {

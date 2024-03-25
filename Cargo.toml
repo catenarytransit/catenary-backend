@@ -3,6 +3,9 @@ name = "catenary-backend"
 version = "0.1.0"
 edition = "2021"
 
+[library]
+name = "catenary"
+
 [build]
 rustflags = ["-Z", "threads=8"]
 
