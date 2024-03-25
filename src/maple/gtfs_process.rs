@@ -10,6 +10,8 @@ use crate::gtfs_handlers::enum_to_int::route_type_to_int;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::stops_associated_items::*;
 
+use crate::gtfs_handlers::rename_route_labels::*;
+
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
 
@@ -108,6 +110,30 @@ pub async fn gtfs_process_feed(
             Some(color) => format!("{:02x}{:02x}{:02x}", color.r, color.g, color.b),
             None => String::from("000000"),
         };
+
+        let route_label: String = route_ids
+            .iter()
+            .map(|route_id| {
+                let route = gtfs.routes.get(route_id);
+                match route {
+                    Some(route) => match route.short_name.is_some() {
+                        true => route.short_name.to_owned(),
+                        false => match route.long_name.is_some() {
+                            true => route.long_name.to_owned(),
+                            false => None,
+                        },
+                    },
+                    _ => None,
+                }
+            })
+            .filter(|route_label| route_label.is_some())
+            .map(|route_label| rename_route_string(route_label.as_ref().unwrap().to_owned()))
+            .collect::<Vec<String>>()
+            .join(",")
+            .as_str()
+            .replace("Orange County", "OC")
+            .replace("Inland Empire", "IE")
+            .to_string();
     }
 
     Ok(())

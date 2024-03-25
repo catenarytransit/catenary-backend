@@ -4,6 +4,7 @@ pub mod colour_correction;
 pub mod convex_hull;
 pub mod enum_to_int;
 pub mod flatten;
+pub mod rename_route_labels;
 pub mod shape_colour_calculator;
 pub mod stops_associated_items;
 

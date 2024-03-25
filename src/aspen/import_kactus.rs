@@ -21,8 +21,9 @@ pub async fn new_rt_kactus(
     //decode Vec<u8> into gtfs_rt::FeedMessage
 
     if vehicles.is_some() {
-        let decoded_gtfs_vehicles =
-            catenary::gtfs_rt_handlers::parse_protobuf_message(vehicles.as_ref().unwrap().as_slice());
+        let decoded_gtfs_vehicles = catenary::gtfs_rt_handlers::parse_protobuf_message(
+            vehicles.as_ref().unwrap().as_slice(),
+        );
 
         if decoded_gtfs_vehicles.is_ok() {
             if MAKE_VEHICLES_FEED_LIST.contains(&realtime_feed_id.as_str()) {
