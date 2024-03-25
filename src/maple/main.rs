@@ -18,6 +18,7 @@ use threadpool::ThreadPool;
 use tokio::runtime;
 
 mod gtfs_handlers;
+mod gtfs_ingestion_sequence;
 
 mod chateau_postprocess;
 mod gtfs_process;
