@@ -276,7 +276,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                             //data structure can be a Vec of (start_date, end_date, attempt_id or hash)
                             // older feeds cannot claim dates that are after a newer feed's experation date
                             //any feed that does not have a date range any
-                            more or is sufficiently old (over 5 days old) is wiped
+                           // more or is sufficiently old (over 5 days old) is wiped
                         } else {
                             //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
                         }
