@@ -39,6 +39,7 @@ CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.stati
 CREATE TABLE gtfs.static_feeds (
     onestop_feed_id text NOT NULL PRIMARY KEY,
     chateau text NOT NULL,
+    previous_chateau_name text NOT NULL,
     hull GEOMETRY(POLYGON,4326)
 );
 
@@ -63,6 +64,8 @@ CREATE TABLE gtfs.feed_info (
     chateau text,
     PRIMARY KEY (onestop_feed_id, attempt_id, feed_publisher_name)
 );
+
+CREATE INDEX IF NOT EXISTS chateau_feed_info ON gtfs.feed_info (chateau);
 
 --CREATE TABLE gtfs.operators (
 --    onestop_operator_id text PRIMARY KEY,
@@ -104,6 +107,8 @@ CREATE TABLE gtfs.agencies (
     PRIMARY KEY (static_onestop_id, attempt_id)
 );
 
+CREATE INDEX IF NOT EXISTS agencies_chateau ON gtfs.agencies (chateau);
+
 CREATE TABLE gtfs.routes (
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
@@ -127,8 +132,8 @@ CREATE TABLE gtfs.routes (
     PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
 );
 
-CREATE INDEX gtfs_static_feed ON gtfs.routes (chateau);
-CREATE INDEX gtfs_static_route_type ON gtfs.routes (route_type);
+CREATE INDEX gtfs_routes_chateau_index ON gtfs.routes (chateau);
+CREATE INDEX gtfs_routes_type_index ON gtfs.routes (route_type);
 
 CREATE TABLE IF NOT EXISTS gtfs.shapes (
     onestop_feed_id text NOT NULL,
@@ -145,8 +150,8 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
     PRIMARY KEY (onestop_feed_id, attempt_id, shape_id)
 );
 
-CREATE INDEX gtfs_static_geom_idx ON gtfs.shapes USING GIST (linestring);
-CREATE INDEX gtfs_static_feed_id ON gtfs.shapes (chateau);
+CREATE INDEX IF NOT EXISTS shapes_chateau ON gtfs.shapes (chateau);
+CREATE INDEX shapes_linestring_index ON gtfs.shapes USING GIST (linestring);
 
 CREATE TABLE gtfs.trips (
     agency_id text,
@@ -168,6 +173,8 @@ CREATE TABLE gtfs.trips (
     chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id)
 );
+
+CREATE TABLE IF NOT EXISTS trips_chateau ON gtfs.trips (chateau);
 
 CREATE TABLE gtfs.stops (
     onestop_feed_id text NOT NULL,
@@ -204,6 +211,7 @@ CREATE TABLE gtfs.stops (
 );
 
 CREATE INDEX gtfs_static_stops_geom_idx ON gtfs.stops USING GIST (point);
+CREATE INDEX stops_chateau_idx on gtfs.stops (chateau);
 
 CREATE TABLE gtfs.stoptimes (
     onestop_feed_id text NOT NULL,
