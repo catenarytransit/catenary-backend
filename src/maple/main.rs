@@ -3,12 +3,12 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 // Initial version 3 of ingest written by Kyler Chin
 // This was heavily inspired and copied from Emma Alexia, thank you Emma!
 // Removal of the attribution is not allowed, as covered under the AGPL license
+use catenary::postgres_tools::get_connection_pool;
 use diesel::prelude::*;
 use dotenvy::dotenv;
 use service::quicli::prelude::info;
 use std::collections::HashSet;
 use std::env;
-use catenary::postgres_tools::get_connection_pool;
 use std::error::Error;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -17,9 +17,9 @@ use std::time::Duration;
 use threadpool::ThreadPool;
 use tokio::runtime;
 
+use diesel::insert_into;
 use futures::StreamExt;
 use git2::Repository;
-use diesel::insert_into;
 
 mod gtfs_handlers;
 mod gtfs_ingestion_sequence;
@@ -106,13 +106,13 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
     info!("Initializing database connection");
 
-        // get connection pool from database pool
-        let conn_pool: CatenaryPostgresPool<'_> = get_connection_pool().await;
-        let arc_conn_pool: Arc<CatenaryPostgresPool<'_>> = Arc::new(conn_pool);
-        
-        let conn_pool = arc_conn_pool.as_ref();
-        let conn_pre = conn_pool.get().await;
-        let conn = &mut conn_pre?;
+    // get connection pool from database pool
+    let conn_pool: CatenaryPostgresPool<'_> = get_connection_pool().await;
+    let arc_conn_pool: Arc<CatenaryPostgresPool<'_>> = Arc::new(conn_pool);
+
+    let conn_pool = arc_conn_pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre?;
 
     // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
     // See https://github.com/catenarytransit/dmfr-folder-reader
@@ -182,32 +182,32 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
             // (todo) hand off to routing algorithm preprocessing engine Prarie (needs further research and development)
 
             // 2. update metadata
-            futures::stream::iter(eligible_feeds.iter()
-            .map(|eligible_feed|
-                {
-                    async move {
-                       /* let sql_query = sqlx::query!("INSERT INTO gtfs.static_download_attempts 
-                            (onestop_feed_id, url, file_hash, downloaded_unix_time_ms, ingested, failed, http_response_code, mark_for_redo, ingestion_version)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                        ",
-                        eligible_feed.feed_id, 
-                        eligible_feed.url,
-                        match eligible_feed.hash {
-                            Some(hash) => Some(format!("{}", hash)),
-                            None => None
-                        }, 
-                        eligible_feed.download_timestamp_ms as i64, 
-                        false,
-                        !eligible_feed.operation_success,
-                        eligible_feed.http_response_code,
-                        false,
-                        MAPLE_INGESTION_VERSION
-                        );
+            futures::stream::iter(eligible_feeds.iter().map(|eligible_feed| {
+                async move {
+                    /* let sql_query = sqlx::query!("INSERT INTO gtfs.static_download_attempts
+                        (onestop_feed_id, url, file_hash, downloaded_unix_time_ms, ingested, failed, http_response_code, mark_for_redo, ingestion_version)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ",
+                    eligible_feed.feed_id,
+                    eligible_feed.url,
+                    match eligible_feed.hash {
+                        Some(hash) => Some(format!("{}", hash)),
+                        None => None
+                    },
+                    eligible_feed.download_timestamp_ms as i64,
+                    false,
+                    !eligible_feed.operation_success,
+                    eligible_feed.http_response_code,
+                    false,
+                    MAPLE_INGESTION_VERSION
+                    );
 
-                        let _ = insert_into()*/
-                    }
+                    let _ = insert_into()*/
                 }
-            )).buffer_unordered(100).collect::<Vec<_>>().await;
+            }))
+            .buffer_unordered(100)
+            .collect::<Vec<_>>()
+            .await;
 
             // 3. Assign Attempt IDs to each feed_id that is ready to ingest
 
@@ -216,7 +216,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                 &chateau_result,
                 Arc::clone(&arc_conn_pool),
             );
-            
 
             // 4. Unzip folders
             let unzip_feeds: Vec<(String, bool)> =
@@ -270,7 +269,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                         let conn_pool = arc_conn_pool.as_ref();
                         let conn_pre = conn_pool.get().await;
                         let conn = &mut conn_pre.unwrap();
-                        let gtfs_process_result = gtfs_process_feed(&feed_id, Arc::clone(&arc_conn_pool), "", "").await;
+                        let gtfs_process_result =
+                            gtfs_process_feed(&feed_id, Arc::clone(&arc_conn_pool), "", "").await;
 
                         if gtfs_process_result.is_ok() {
                             // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested

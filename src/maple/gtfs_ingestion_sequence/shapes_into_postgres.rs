@@ -1,10 +1,10 @@
+use diesel_async::RunQueryDsl;
 use postgis::ewkb;
 use rgb::RGB;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
-use diesel_async::RunQueryDsl;
 
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::enum_to_int::route_type_to_int;
@@ -24,8 +24,8 @@ pub async fn shapes_into_postgres(
     attempt_id: &str,
 ) -> Result<(), Box<dyn Error>> {
     let conn_pool = arc_conn_pool.as_ref();
-        let conn_pre = conn_pool.get().await;
-        let conn = &mut conn_pre?;
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre?;
 
     for (shape_id, shape) in gtfs.shapes.iter() {
         let mut route_ids: HashSet<String> = gtfs
@@ -89,72 +89,78 @@ pub async fn shapes_into_postgres(
 
         //Lines are only valid in postgres if they contain 2 or more points
         if preshape.len() >= 2 {
-            let linestring:postgis_diesel::types::LineString<postgis_diesel::types::Point> = postgis_diesel::types::LineString {
-                srid: Some(4326),
-                points: preshape
-                    .iter()
-                    .map(|point| postgis_diesel::types::Point {
-                        x: point.longitude,
-                        y: point.latitude,
-                        srid: Some(4326),
-                    })
-                    .collect(),
+            let linestring: postgis_diesel::types::LineString<postgis_diesel::types::Point> =
+                postgis_diesel::types::LineString {
+                    srid: Some(4326),
+                    points: preshape
+                        .iter()
+                        .map(|point| postgis_diesel::types::Point {
+                            x: point.longitude,
+                            y: point.latitude,
+                            srid: Some(4326),
+                        })
+                        .collect(),
+                };
+
+            let text_color = match shape_to_text_color_lookup.get(shape_id) {
+                Some(color) => format!("{:02x}{:02x}{:02x}", color.r, color.g, color.b),
+                None => String::from("000000"),
             };
-       
 
-        let text_color = match shape_to_text_color_lookup.get(shape_id) {
-            Some(color) => format!("{:02x}{:02x}{:02x}", color.r, color.g, color.b),
-            None => String::from("000000"),
-        };
-
-        //creates a text label for the shape to be displayed with on the map
-        //todo! change this with i18n
-        let route_label: String = route_ids
-            .iter()
-            .map(|route_id| {
-                let route = gtfs.routes.get(route_id);
-                match route {
-                    Some(route) => match route.short_name.is_some() {
-                        true => route.short_name.to_owned(),
-                        false => match route.long_name.is_some() {
-                            true => route.long_name.to_owned(),
-                            false => None,
+            //creates a text label for the shape to be displayed with on the map
+            //todo! change this with i18n
+            let route_label: String = route_ids
+                .iter()
+                .map(|route_id| {
+                    let route = gtfs.routes.get(route_id);
+                    match route {
+                        Some(route) => match route.short_name.is_some() {
+                            true => route.short_name.to_owned(),
+                            false => match route.long_name.is_some() {
+                                true => route.long_name.to_owned(),
+                                false => None,
+                            },
                         },
-                    },
-                    _ => None,
-                }
-            })
-            .filter(|route_label| route_label.is_some())
-            .map(|route_label| rename_route_string(route_label.as_ref().unwrap().to_owned()))
-            .collect::<Vec<String>>()
-            .join(",")
-            .as_str()
-            .replace("Orange County", "OC")
-            .replace("Inland Empire", "IE")
-            .to_string();
+                        _ => None,
+                    }
+                })
+                .filter(|route_label| route_label.is_some())
+                .map(|route_label| rename_route_string(route_label.as_ref().unwrap().to_owned()))
+                .collect::<Vec<String>>()
+                .join(",")
+                .as_str()
+                .replace("Orange County", "OC")
+                .replace("Inland Empire", "IE")
+                .to_string();
 
-        let shape_value: catenary::models::Shape = catenary::models::Shape {
-            onestop_feed_id: feed_id.to_string(),
-        attempt_id: attempt_id.to_string(),
-        shape_id: shape_id.clone(),
-        chateau: chateau_id.to_string(),
-        linestring:linestring,
-        color: Some(color_to_upload),
-        routes: Some(route_ids.iter().map(|route_id| Some(route_id.to_string())).collect()),
-        route_type: route_type_number,
-        route_label: Some(route_label),
-        route_label_translations: None,
-        text_color: Some(text_color),
-        };
+            let shape_value: catenary::models::Shape = catenary::models::Shape {
+                onestop_feed_id: feed_id.to_string(),
+                attempt_id: attempt_id.to_string(),
+                shape_id: shape_id.clone(),
+                chateau: chateau_id.to_string(),
+                linestring: linestring,
+                color: Some(color_to_upload),
+                routes: Some(
+                    route_ids
+                        .iter()
+                        .map(|route_id| Some(route_id.to_string()))
+                        .collect(),
+                ),
+                route_type: route_type_number,
+                route_label: Some(route_label),
+                route_label_translations: None,
+                text_color: Some(text_color),
+            };
 
-        {
-            use catenary::schema::gtfs::shapes::dsl::*;
+            {
+                use catenary::schema::gtfs::shapes::dsl::*;
 
-        diesel::insert_into(shapes)
-            .values(shape_value)
-            .execute(conn).await?;
+                diesel::insert_into(shapes)
+                    .values(shape_value)
+                    .execute(conn)
+                    .await?;
+            }
         }
-    }
     }
 
     Ok(())

@@ -1,25 +1,34 @@
+use bb8::Pool;
+use db_pool::r#async::ConnectionPool;
+use db_pool::r#async::DatabasePool;
+use db_pool::r#async::DatabasePoolBuilderTrait;
+use db_pool::r#async::DieselAsyncPostgresBackend;
+use db_pool::r#async::DieselBb8;
+use db_pool::r#async::Reusable;
+use db_pool::PrivilegedPostgresConfig;
 use diesel::prelude::*;
 use diesel::prelude::*;
 use dotenvy::dotenv;
-use bb8::Pool;
 use std::env;
 use std::error::Error;
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::OnceCell;
-use db_pool::r#async::ConnectionPool;
-use db_pool::r#async::DieselAsyncPostgresBackend;
-use db_pool::r#async::Reusable;
-use db_pool::r#async::DatabasePool;
-use db_pool::r#async::DieselBb8;
-use db_pool::PrivilegedPostgresConfig;
-use db_pool::r#async::DatabasePoolBuilderTrait;
 
-pub type CatenaryPostgresPool<'a> = db_pool::r#async::Reusable<'a, db_pool::r#async::ConnectionPool<db_pool::r#async::DieselAsyncPostgresBackend<db_pool::r#async::DieselBb8>>>;
-pub type CatenaryPostgresConnection<'b> = &'b mut bb8::PooledConnection<'b, diesel_async::pooled_connection::AsyncDieselConnectionManager<diesel_async::pg::AsyncPgConnection>>;
+pub type CatenaryPostgresPool<'a> = db_pool::r#async::Reusable<
+    'a,
+    db_pool::r#async::ConnectionPool<
+        db_pool::r#async::DieselAsyncPostgresBackend<db_pool::r#async::DieselBb8>,
+    >,
+>;
+pub type CatenaryPostgresConnection<'b> = &'b mut bb8::PooledConnection<
+    'b,
+    diesel_async::pooled_connection::AsyncDieselConnectionManager<
+        diesel_async::pg::AsyncPgConnection,
+    >,
+>;
 
-pub async fn get_connection_pool(
-) -> CatenaryPostgresPool<'static> {
+pub async fn get_connection_pool() -> CatenaryPostgresPool<'static> {
     static POOL: OnceCell<DatabasePool<DieselAsyncPostgresBackend<DieselBb8>>> =
         OnceCell::const_new();
 
