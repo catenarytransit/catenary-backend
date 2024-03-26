@@ -96,8 +96,8 @@ name = "maple"
 path = "src/maple/main.rs"
 
 [[bin]]
-name = "http_server"
-path = "src/http-server.rs"
+name = "birch"
+path = "src/birch/server.rs"
 
 [[bin]]
 name = "aspen"

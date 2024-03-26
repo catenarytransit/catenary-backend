@@ -178,9 +178,9 @@ pub async fn download_return_eligible_feeds(
 
                                         //query the SQL database for any ingests that have the same zip
                                         let download_attempts_postgres_lookup = static_download_attempts
-                                        .filter(hash.eq(&hash))
-                                        .load::<StaticDownloadAttempt>(conn)
-                                        .await;
+                                            .filter(file_hash.eq(hash_str))
+                                            .load::<StaticDownloadAttempt>(conn)
+                                            .await;
             
                                      //if the dataset is brand new, mark as success, save the file
             

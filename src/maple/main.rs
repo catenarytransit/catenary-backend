@@ -199,6 +199,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                         false,
                         MAPLE_INGESTION_VERSION
                         );
+
+                        let _ = insert_into()
                     }
                 }
             )).buffer_unordered(100).collect::<Vec<_>>().await;
