@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use threadpool::ThreadPool;
 use tokio::runtime;
-
+use std::collections::HashMap;
 use diesel::insert_into;
 use futures::StreamExt;
 use git2::Repository;
@@ -259,6 +259,15 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                 .build()
                 .unwrap();
 
+            let attempt_ids:HashMap<String,String> = {
+                let mut attempt_ids = HashMap::new();
+                for (feed_id, _) in unzip_feeds.iter() {
+                    let attempt_id = format!("{}-{}", feed_id, chrono::Utc::now().timestamp_millis());
+                    attempt_ids.insert(feed_id.clone(), attempt_id);
+                }
+                attempt_ids
+            };
+
             rt.spawn({
                 let arc_conn_pool = Arc::clone(&arc_conn_pool);
                 async move {
@@ -269,27 +278,36 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                         let conn_pool = arc_conn_pool.as_ref();
                         let conn_pre = conn_pool.get().await;
                         let conn = &mut conn_pre.unwrap();
-                        let gtfs_process_result =
-                            gtfs_process_feed(&feed_id, Arc::clone(&arc_conn_pool), "", "").await;
+                        let attempt_id = attempt_ids.get(feed_id).unwrap();
+                        if let Some(chateau_id) = feed_id_to_chateau_lookup.get(feed_id) {
+                            // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
+                            let gtfs_process_result = gtfs_process_feed(
+                                &feed_id,
+                                Arc::clone(&arc_conn_pool),
+                                chateau_id,
+                                attempt_id,
+                            )
+                            .await;
 
-                        if gtfs_process_result.is_ok() {
-                            // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
+                            if gtfs_process_result.is_ok() {
+                                // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
 
-                            //CREATE entry in gtfs.ingested_static
+                                //CREATE entry in gtfs.ingested_static
 
-                            //determine if the old one should be deleted, if so, delete it
+                                //determine if the old one should be deleted, if so, delete it
 
-                            //algorithm:
-                            // If the latest file does not contain a feed info, wipe all old feeds and put the latest file into production
+                                //algorithm:
+                                // If the latest file does not contain a feed info, wipe all old feeds and put the latest file into production
 
-                            //call function to clean old gtfs feeds, accepting feed_id, sqlx pool as arguments
-                            //greedy algorithm starts from newest feeds and examines date ranges, and works successively towards older feeds, assigning date ranges to feeds not already taken.
-                            //data structure can be a Vec of (start_date, end_date, attempt_id or hash)
-                            // older feeds cannot claim dates that are after a newer feed's experation date
-                            //any feed that does not have a date range any
-                            // more or is sufficiently old (over 5 days old) is wiped
-                        } else {
-                            //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
+                                //call function to clean old gtfs feeds, accepting feed_id, sqlx pool as arguments
+                                //greedy algorithm starts from newest feeds and examines date ranges, and works successively towards older feeds, assigning date ranges to feeds not already taken.
+                                //data structure can be a Vec of (start_date, end_date, attempt_id or hash)
+                                // older feeds cannot claim dates that are after a newer feed's experation date
+                                //any feed that does not have a date range any
+                                // more or is sufficiently old (over 5 days old) is wiped
+                            } else {
+                                //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
+                            }
                         }
                     }
                 }

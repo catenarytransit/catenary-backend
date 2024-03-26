@@ -68,21 +68,20 @@ pub async fn shapes_into_postgres(
 
         //backround colour to use
         let route = match route_ids.iter().nth(0) {
-           Some(route_id) => gtfs.routes.get(route_id),
-           None => None,
+            Some(route_id) => gtfs.routes.get(route_id),
+            None => None,
         };
 
         let bg_color = match shape_to_color_lookup.get(shape_id) {
-            Some(color) => 
-                match route {
-                    Some(route) =>  colour_correction::fix_background_colour_rgb_feed_route(
-                        feed_id,
-                        color.clone(),
-                        route
-                    ),
-                    None => color.clone()
-                },
-                None => RGB::new(0, 0, 0)
+            Some(color) => match route {
+                Some(route) => colour_correction::fix_background_colour_rgb_feed_route(
+                    feed_id,
+                    color.clone(),
+                    route,
+                ),
+                None => color.clone(),
+            },
+            None => RGB::new(0, 0, 0),
         };
 
         let bg_color_string = format!("{:02x}{:02x}{:02x}", bg_color.r, bg_color.g, bg_color.b);
