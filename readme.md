@@ -6,7 +6,8 @@ Catenary Backend is a distributed system comprised of microservices operating in
 - **Prairie**: Routing Preprocessor and execution engine (Research and design in progress)
 - **Kactus**: Distributed system to query for GTFS-rt and other realtime data
 - **Aspen**: Processing of realtime data and dynamic insertion into other engines
-- **Spruce**: API server for frontend to perform queries
+- **Spruce**: Websocket server for frontend to stream data to and from backend
+- **Birch**: General API server
 
 The kubernetes configuration is generated using Helm templates. See Helm's documentation for further information on that.
 
