@@ -1,3 +1,4 @@
+-- Your SQL goes here
 -- Add migration script here
 -- Initial version 3 of ingest: Kyler Chin
 -- This was heavily inspired and copied from Emma Alexia, thank you Emma!
@@ -81,7 +82,7 @@ CREATE INDEX IF NOT EXISTS chateau_feed_info ON gtfs.feed_info (chateau);
 --    name text,
 --    gtfs_static_feeds text[],
 --    gtfs_realtime_feeds text[],
---    static_onestop_feeds_to_gtfs_ids hstore,
+--    static_onestop_feeds_to_gtfs_ids jsonb,
 --    realtime_onestop_feeds_to_gtfs_ids hstore
 --);
 
@@ -89,7 +90,7 @@ CREATE TABLE gtfs.realtime_feeds (
     onestop_feed_id text PRIMARY KEY,
     name text,
     -- operators text[],
-    -- operators_to_gtfs_ids hstore,
+    -- operators_to_gtfs_ids jsonb,
     --max_lat double precision,
     --max_lon double precision,
     --min_lat double precision,
@@ -104,14 +105,14 @@ CREATE TABLE gtfs.agencies (
     agency_id text NOT NULL,
     attempt_id text NOT NULL,
     agency_name text NOT NULL,
-    agency_name_translations hstore,
+    agency_name_translations jsonb,
     agency_url text NOT NULL,
-    agency_url_translations hstore,
+    agency_url_translations jsonb,
     agency_timezone text NOT NULL,
     agency_lang text,
     agency_phone text,
     agency_fare_url	text,
-    agency_fare_url_translations hstore,
+    agency_fare_url_translations jsonb,
     chateau text NOT NULL,
     PRIMARY KEY (static_onestop_id, attempt_id)
 );
@@ -123,13 +124,13 @@ CREATE TABLE gtfs.routes (
     attempt_id text NOT NULL,
     route_id text NOT NULL,
     short_name text NOT NULL,
-    short_name_translations hstore,
+    short_name_translations jsonb,
     long_name text NOT NULL,
-    long_name_translations hstore,
+    long_name_translations jsonb,
     gtfs_desc text,
     route_type smallint NOT NULL,
     url text,
-    url_translations hstore,
+    url_translations jsonb,
     agency_id text,
     gtfs_order int,
     color text,
@@ -153,7 +154,7 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
     routes text[],
     route_type smallint NOT NULL,
     route_label text,
-    route_label_translations hstore,
+    route_label_translations jsonb,
     text_color text,
     chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, shape_id)
@@ -169,7 +170,7 @@ CREATE TABLE gtfs.trips (
     route_id text NOT NULL,
     service_id text NOT NULL,
     trip_headsign text,
-    trip_headsign_translations hstore,
+    trip_headsign_translations jsonb,
     has_stop_headsign boolean,
     stop_headsigns text[],
     trip_short_name text,
@@ -189,11 +190,11 @@ CREATE TABLE gtfs.stops (
     attempt_id text NOT NULL,
     gtfs_id text NOT NULL,
     name text NOT NULL,
-    name_translations hstore,
+    name_translations jsonb,
     displayname text NOT NULL,
     code text,
     gtfs_desc text,
-    gtfs_desc_translations hstore,
+    gtfs_desc_translations jsonb,
     location_type smallint,
     parent_station text,
     zone_id text,
@@ -204,7 +205,7 @@ CREATE TABLE gtfs.stops (
     primary_route_type text,
     level_id text,
     platform_code text,
-    platform_code_translations hstore,
+    platform_code_translations jsonb,
     routes text[],
     route_types smallint[],
     children_ids text[],
@@ -213,7 +214,7 @@ CREATE TABLE gtfs.stops (
     hidden boolean,
     chateau text NOT NULL,
     location_alias text[],
-    tts_stop_translations hstore,
+    tts_stop_translations jsonb,
     PRIMARY KEY (onestop_feed_id, attempt_id, gtfs_id)
 );
 
@@ -229,7 +230,7 @@ CREATE TABLE gtfs.stoptimes (
     departure_time bigint,
     stop_id text NOT NULL,
     stop_headsign text,
-    stop_headsign_translations hstore,
+    stop_headsign_translations jsonb,
     pickup_type int,
     drop_off_type int,
     shape_dist_traveled double precision,

@@ -126,16 +126,22 @@ pub async fn shapes_into_postgres(
             .replace("Inland Empire", "IE")
             .to_string();
 
-            /* 
+             
         let sql_shape_insert = sqlx::query!("INSERT INTO gtfs.shapes
-        (onestop_feed_id, attempt_id, shape_id, linestring, color, routes, route_type, route_label, route_label_translations, text_colour, chateau) 
-        VALUES ($1, $2, $3, $4, $5, $6,$7,$8, $9, $10, $11)",
+        (onestop_feed_id, attempt_id, shape_id, linestring, color, routes, route_type, route_label, route_label_translations, text_color, chateau) 
+        VALUES ($1, $2, $3, $4::geometry, $5, $6,$7,$8, $9, $10, $11)",
         feed_id,
         attempt_id,
         shape_id,
-        linestring,
+        wkb::Encode(linestring) as _,
         color_to_upload,
-        );*/
+        route_ids,
+        route_type_number,
+        route_label,
+        HashMap::new(),
+        text_color,
+        chateau_id
+        );
     }
 
     Ok(())

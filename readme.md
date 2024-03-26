@@ -57,23 +57,15 @@ sudo apt install postgresql-16-postgis-3
 See https://trac.osgeo.org/postgis/wiki/UsersWikiPostGIS3UbuntuPGSQLApt for more instructions
 
 ### SQL notes
-We've switched to sqlx for our queries. For development, you'll need to know these few commands.
+We've switched to diesel for our queries. Read the diesel documentation to learn how to use it.
+https://diesel.rs/guides/getting-started.html
 
-0. `cargo install sqlx-cli`
-Install SQLx onto your system. You'll only need to do this once / when there are sqlx updates.
-
-1. `cargo sqlx database drop`
-This drops your old development database so you can create a new one.
-If this doesn't work, you can run `DROP DATABASE catenary WITH (FORCE)` in the psql shell.
-
-2. `cargo sqlx database create`
-This creates a new sqlx database
-
-3. `cargo sqlx migrate run`
-This initialises the base tables and functions required to ingest our dataset.
-
-4. `cargo sqlx prepare`
-This will compile your sql code into .sqlx representation into the folder `.sqlx`, so that future code compilation no longer requires sqlx. The `.sqlx` folder is written into the Git history to assist other contributors without access to a working database. If a merge conflict occurs, the folder should be deleted and regenerated before reuploading.
+Lib PQ is also required to install the diesel cli. Only postgres is required.
+Example
+```bash
+sudo apt-get install libpq-dev
+cargo install diesel_cli --no-default-features --features postgres
+```
 
 ### Common Database debugging
 

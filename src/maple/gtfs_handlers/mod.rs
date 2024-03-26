@@ -21,4 +21,4 @@ pub struct DownloadAttempt {
     pub http_response_code: Option<String>,
 }
 
-pub const maple_ingestion_version: i32 = 1;
+pub const MAPLE_INGESTION_VERSION: i32 = 1;
