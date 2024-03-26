@@ -49,7 +49,7 @@ pub fn fix_background_colour_rgb_feed_route(
                 "191" => RGB::new(139, 157, 208),
                 "192" => RGB::new(237, 72, 154),
                 "405" => RGB::new(0, 181, 236),
-                _ => fix_background_colour_rgb(background),
+                _ => fix_background_colour_rgb(background.clone()),
             }
         }
         "f-9q5-metro~losangeles" => {
@@ -61,7 +61,7 @@ pub fn fix_background_colour_rgb_feed_route(
                 if metroid.len() == 3 && metroid.chars().nth(0).unwrap() == '7' {
                     return RGB::new(209, 18, 66);
                 }
-                return fix_background_colour_rgb(background);
+                return fix_background_colour_rgb(background.clone());
             }
         }
         "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => RGB::new(23, 114, 172),
@@ -76,9 +76,9 @@ pub fn fix_background_colour_rgb_feed_route(
             "215" => RGB::new(59, 192, 225),
             "225" => RGB::new(41, 52, 144),
             "227" => RGB::new(123, 194, 77),
-            _ => fix_background_colour_rgb(background),
+            _ => fix_background_colour_rgb(background.clone()),
         },
-        _ => fix_background_colour_rgb(background),
+        _ => fix_background_colour_rgb(background.clone()),
     }
 }
 

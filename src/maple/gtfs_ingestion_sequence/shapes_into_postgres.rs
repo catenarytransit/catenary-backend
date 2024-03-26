@@ -23,6 +23,7 @@ pub async fn shapes_into_postgres(
     chateau_id: &str,
     attempt_id: &str,
 ) -> Result<(), Box<dyn Error>> {
+    //establish a connection to the database
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
@@ -65,17 +66,33 @@ pub async fn shapes_into_postgres(
             }
         }
 
-        let color_to_upload = match shape_to_color_lookup.get(shape_id) {
-            Some(color) => format!("{:02x}{:02x}{:02x}", color.r, color.g, color.b),
-            None => String::from("3a3a3a"),
+        //backround colour to use
+        let route = match route_ids.iter().nth(0) {
+           Some(route_id) => gtfs.routes.get(route_id),
+           None => None,
         };
+
+        let bg_color = match shape_to_color_lookup.get(shape_id) {
+            Some(color) => 
+                match route {
+                    Some(route) =>  colour_correction::fix_background_colour_rgb_feed_route(
+                        feed_id,
+                        color.clone(),
+                        route
+                    ),
+                    None => color.clone()
+                },
+                None => RGB::new(0, 0, 0)
+        };
+
+        let bg_color_string = format!("{:02x}{:02x}{:02x}", bg_color.r, bg_color.g, bg_color.b);
 
         // Metro Los Angeles often has geometry that includes sections that are part of the railyard or are currently in construction
         let preshape: Vec<gtfs_structures::Shape> = match feed_id {
             "f-9q5-metro~losangeles~rail" => shape
                 .clone()
                 .into_iter()
-                .filter(|point| match color_to_upload.as_str() {
+                .filter(|point| match bg_color_string.as_str() {
                     //remove points from Metro Los Angeles B/D that are east of Los Angeles Union Station
                     "eb131b" => point.longitude < -118.2335698,
                     "a05da5" => point.longitude < -118.2335698,
@@ -133,13 +150,14 @@ pub async fn shapes_into_postgres(
                 .replace("Inland Empire", "IE")
                 .to_string();
 
+            //Create structure to insert
             let shape_value: catenary::models::Shape = catenary::models::Shape {
                 onestop_feed_id: feed_id.to_string(),
                 attempt_id: attempt_id.to_string(),
                 shape_id: shape_id.clone(),
                 chateau: chateau_id.to_string(),
                 linestring: linestring,
-                color: Some(color_to_upload),
+                color: Some(bg_color_string),
                 routes: Some(
                     route_ids
                         .iter()
@@ -152,6 +170,7 @@ pub async fn shapes_into_postgres(
                 text_color: Some(text_color),
             };
 
+            //run insertion
             {
                 use catenary::schema::gtfs::shapes::dsl::*;
 
