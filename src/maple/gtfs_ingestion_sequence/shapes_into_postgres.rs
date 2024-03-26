@@ -1,26 +1,32 @@
-use diesel::PgConnection;
 use postgis::ewkb;
 use rgb::RGB;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
+use diesel_async::RunQueryDsl;
 
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::enum_to_int::route_type_to_int;
 use crate::gtfs_handlers::rename_route_labels::*;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::stops_associated_items::*;
+use catenary::postgres_tools::CatenaryPostgresConnection;
+use catenary::postgres_tools::CatenaryPostgresPool;
 
 pub async fn shapes_into_postgres(
     gtfs: &gtfs_structures::Gtfs,
     shape_to_color_lookup: &HashMap<std::string::String, RGB<u8>>,
     shape_to_text_color_lookup: &HashMap<std::string::String, RGB<u8>>,
     feed_id: &str,
-    pool: Arc<PgConnection>,
+    arc_conn_pool: Arc<CatenaryPostgresPool<'static>>,
     chateau_id: &str,
     attempt_id: &str,
 ) -> Result<(), Box<dyn Error>> {
+    let conn_pool = arc_conn_pool.as_ref();
+        let conn_pre = conn_pool.get().await;
+        let conn = &mut conn_pre?;
+
     for (shape_id, shape) in gtfs.shapes.iter() {
         let mut route_ids: HashSet<String> = gtfs
             .trips
@@ -83,18 +89,18 @@ pub async fn shapes_into_postgres(
 
         //Lines are only valid in postgres if they contain 2 or more points
         if preshape.len() >= 2 {
-            let linestring = ewkb::LineStringT {
+            let linestring:postgis_diesel::types::LineString<postgis_diesel::types::Point> = postgis_diesel::types::LineString {
                 srid: Some(4326),
                 points: preshape
                     .iter()
-                    .map(|point| ewkb::Point {
+                    .map(|point| postgis_diesel::types::Point {
                         x: point.longitude,
                         y: point.latitude,
                         srid: Some(4326),
                     })
                     .collect(),
             };
-        }
+       
 
         let text_color = match shape_to_text_color_lookup.get(shape_id) {
             Some(color) => format!("{:02x}{:02x}{:02x}", color.r, color.g, color.b),
@@ -127,21 +133,28 @@ pub async fn shapes_into_postgres(
             .replace("Inland Empire", "IE")
             .to_string();
 
-        let sql_shape_insert = sqlx::query!("INSERT INTO gtfs.shapes
-        (onestop_feed_id, attempt_id, shape_id, linestring, color, routes, route_type, route_label, route_label_translations, text_color, chateau) 
-        VALUES ($1, $2, $3, $4::geometry, $5, $6,$7,$8, $9, $10, $11)",
-        feed_id,
-        attempt_id,
-        shape_id,
-        wkb::Encode(linestring) as _,
-        color_to_upload,
-        route_ids,
-        route_type_number,
-        route_label,
-        HashMap::new(),
-        text_color,
-        chateau_id
-        );
+        let shape_value: catenary::models::Shape = catenary::models::Shape {
+            onestop_feed_id: feed_id.to_string(),
+        attempt_id: attempt_id.to_string(),
+        shape_id: shape_id.clone(),
+        chateau: chateau_id.to_string(),
+        linestring:linestring,
+        color: Some(color_to_upload),
+        routes: Some(route_ids.iter().map(|route_id| Some(route_id.to_string())).collect()),
+        route_type: route_type_number,
+        route_label: Some(route_label),
+        route_label_translations: None,
+        text_color: Some(text_color),
+        };
+
+        {
+            use catenary::schema::gtfs::shapes::dsl::*;
+
+        diesel::insert_into(shapes)
+            .values(shape_value)
+            .execute(conn).await?;
+        }
+    }
     }
 
     Ok(())

@@ -14,6 +14,8 @@ use crate::gtfs_handlers::rename_route_labels::*;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::stops_associated_items::*;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
+use catenary::postgres_tools::CatenaryPostgresConnection;
+use catenary::postgres_tools::CatenaryPostgresPool;
 
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
@@ -21,7 +23,7 @@ use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 // take a feed id and throw it into postgres
 pub async fn gtfs_process_feed(
     feed_id: &str,
-    conn: &mut bb8::PooledConnection<'_, diesel_async::pooled_connection::AsyncDieselConnectionManager<diesel_async::pg::AsyncPgConnection>>,
+    arc_conn_pool: Arc<CatenaryPostgresPool<'static>>,
     chateau_id: &str,
     attempt_id: &str,
 ) -> Result<(), Box<dyn Error>> {
@@ -44,7 +46,7 @@ pub async fn gtfs_process_feed(
         &shape_to_color_lookup,
         &shape_to_text_color_lookup,
         &feed_id,
-        &conn,
+        Arc::clone(&arc_conn_pool),
         &chateau_id,
         &attempt_id,
     )

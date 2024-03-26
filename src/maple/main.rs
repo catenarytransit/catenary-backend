@@ -112,7 +112,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
         
         let conn_pool = arc_conn_pool.as_ref();
         let conn_pre = conn_pool.get().await;
-        let conn = &mut conn_pre.unwrap();
+        let conn = &mut conn_pre?;
 
     // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
     // See https://github.com/catenarytransit/dmfr-folder-reader
@@ -270,7 +270,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                         let conn_pool = arc_conn_pool.as_ref();
                         let conn_pre = conn_pool.get().await;
                         let conn = &mut conn_pre.unwrap();
-                        let gtfs_process_result = gtfs_process_feed(&feed_id, conn, "", "").await;
+                        let gtfs_process_result = gtfs_process_feed(&feed_id, Arc::clone(&arc_conn_pool), "", "").await;
 
                         if gtfs_process_result.is_ok() {
                             // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
