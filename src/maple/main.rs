@@ -1,19 +1,19 @@
+use catenary::postgres_tools::CatenaryPostgresConnection;
+use catenary::postgres_tools::CatenaryPostgresPool;
 // Initial version 3 of ingest written by Kyler Chin
 // This was heavily inspired and copied from Emma Alexia, thank you Emma!
 // Removal of the attribution is not allowed, as covered under the AGPL license
-
-use service::quicli::prelude::info;
-use diesel::pg::PgConnection;
 use diesel::prelude::*;
 use dotenvy::dotenv;
+use service::quicli::prelude::info;
+use std::collections::HashSet;
 use std::env;
+use catenary::postgres_tools::get_connection_pool;
 use std::error::Error;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
-mod database;
-use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 use threadpool::ThreadPool;
 use tokio::runtime;
 
@@ -104,13 +104,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
     info!("Initializing database connection");
 
-    let pool = database::connect()
-        .await
-        .expect("Database connection failed");
-    let mut transaction = pool.begin().await.unwrap();
+        // get connection pool from database pool
+        let conn_pool: CatenaryPostgresPool<'_> = get_connection_pool().await;
+        let arc_conn_pool: Arc<CatenaryPostgresPool<'_>> = Arc::new(conn_pool);
 
-    //migrate database
-    let _ = database::check_for_migrations().await;
+        let conn: CatenaryPostgresConnection<'_> = &mut arc_conn_pool.get().await.unwrap();
 
     // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
     // See https://github.com/catenarytransit/dmfr-folder-reader
@@ -120,7 +118,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
     if dmfr_result.feed_hashmap.len() > 100 && dmfr_result.operator_hashmap.len() > 100 {
         let eligible_feeds = transitland_download::download_return_eligible_feeds(
             &dmfr_result,
-            &pool,
+            &arc_conn_pool,
             &feeds_to_discard,
         )
         .await;
@@ -179,7 +177,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
             // (todo) use k/d tree presentation to calculate line optimisation and transfer patterns (not clear how this works, needs further research)
             // (todo) hand off to routing algorithm preprocessing engine Prarie (needs further research and development)
 
-            // 1. update metadata
+            // 2. update metadata
             futures::stream::iter(eligible_feeds.iter()
             .map(|eligible_feed|
                 {
@@ -205,15 +203,16 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                 }
             )).buffer_unordered(100).collect::<Vec<_>>().await;
 
-            let pool = Arc::new(pool);
+            // 3. Assign Attempt IDs to each feed_id that is ready to ingest
 
             let _ = refresh_metadata_tables::refresh_metadata_assignments(
                 &dmfr_result,
                 &chateau_result,
                 &Arc::clone(&pool),
             );
+            
 
-            // 2. Unzip folders
+            // 4. Unzip folders
             let unzip_feeds: Vec<(String, bool)> =
                 futures::stream::iter(to_ingest_feeds.into_iter().map(
                     |to_ingest_feed| async move {
@@ -256,13 +255,14 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                 .unwrap();
 
             rt.spawn({
-                let pool = Arc::clone(&pool);
+                let conn_pool = Arc::clone(&arc_conn_pool);
                 async move {
                     for (feed_id, _) in unzip_feeds
                         .iter()
                         .filter(|unzipped_feed| unzipped_feed.1 == true)
                     {
-                        let gtfs_process_result = gtfs_process_feed(&feed_id, &pool).await;
+                        let conn:&mut bb8::PooledConnection<'_, diesel_async::pooled_connection::AsyncDieselConnectionManager<diesel_async::pg::AsyncPgConnection>> = &mut arc_conn_pool.get().await.unwrap();
+                        let gtfs_process_result = gtfs_process_feed(&feed_id, conn, "", "").await;
 
                         if gtfs_process_result.is_ok() {
                             // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested

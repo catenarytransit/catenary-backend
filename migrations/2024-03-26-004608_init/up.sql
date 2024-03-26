@@ -149,7 +149,7 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
     shape_id text NOT NULL,
-    linestring GEOMETRY(LINESTRING, 4326) NOT NULL,
+    linestring geometry(Linestring,4326) NOT NULL,
     color text,
     routes text[],
     route_type smallint NOT NULL,

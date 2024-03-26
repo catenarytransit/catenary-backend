@@ -1,3 +1,4 @@
+use diesel::PgConnection;
 use postgis::ewkb;
 use rgb::RGB;
 use std::collections::HashMap;
@@ -16,10 +17,10 @@ pub async fn shapes_into_postgres(
     shape_to_color_lookup: &HashMap<std::string::String, RGB<u8>>,
     shape_to_text_color_lookup: &HashMap<std::string::String, RGB<u8>>,
     feed_id: &str,
-    pool: &Arc<sqlx::Pool<sqlx::Postgres>>,
+    pool: Arc<PgConnection>,
     chateau_id: &str,
-    attempt_id: &str
-) -> Result<(), Box<dyn Error>>  {
+    attempt_id: &str,
+) -> Result<(), Box<dyn Error>> {
     for (shape_id, shape) in gtfs.shapes.iter() {
         let mut route_ids: HashSet<String> = gtfs
             .trips
@@ -126,7 +127,6 @@ pub async fn shapes_into_postgres(
             .replace("Inland Empire", "IE")
             .to_string();
 
-             
         let sql_shape_insert = sqlx::query!("INSERT INTO gtfs.shapes
         (onestop_feed_id, attempt_id, shape_id, linestring, color, routes, route_type, route_label, route_label_translations, text_color, chateau) 
         VALUES ($1, $2, $3, $4::geometry, $5, $6,$7,$8, $9, $10, $11)",

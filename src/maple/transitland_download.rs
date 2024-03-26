@@ -1,10 +1,12 @@
-use crate::gtfs_handlers::DownloadAttempt;
+use catenary::models::StaticDownloadAttempt;
+use catenary::schema::gtfs::static_download_attempts;
 use dmfr_folder_reader::ReturnDmfrAnalysis;
 use futures;
-use futures::StreamExt;
+use diesel::prelude::*;
+use diesel_async::{RunQueryDsl, AsyncConnection, AsyncPgConnection};
 use reqwest::Client as ReqwestClient;
-use diesel::PgConnection;
 use reqwest::Request;
+
 use reqwest::RequestBuilder;
 use std::collections::HashSet;
 use std::fs;
@@ -15,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use crate::CatenaryPostgresPool;
 
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 
@@ -63,18 +66,17 @@ pub struct StaticPassword {
 
 pub async fn download_return_eligible_feeds(
     transitland_meta: &ReturnDmfrAnalysis,
-    pool: &Arc<PgConnection>,
+    pool: &Arc<CatenaryPostgresPool<'static>>,
     feeds_to_discard: &HashSet<&'static str>,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
+
+    let conn = &mut pool.get().await.unwrap();
 
     let _ = fs::create_dir("gtfs_static_zips");
 
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
         println!("Downloading zip files now");
-
-        let static_passwords =
-            sqlx::query_as!(StaticPassword, "SELECT * FROM gtfs.static_passwords;");
 
         let feeds_to_download = transitland_meta
             .feed_hashmap
@@ -95,7 +97,7 @@ pub async fn download_return_eligible_feeds(
 
         let download_progress: Arc<std::sync::Mutex<u16>> = Arc::new(std::sync::Mutex::new(0));
         let total_feeds_to_download = feeds_to_download.len();
-
+        use futures::StreamExt;
         let static_fetches =
         //perform the downloads as a future stream, so only the thread count is allowed
             futures::stream::iter(feeds_to_download.into_iter().map(
@@ -170,15 +172,14 @@ pub async fn download_return_eligible_feeds(
             
                                         // stringify the hash
                                         let hash_str = hash.to_string();
+
             
+                                        use catenary::schema::gtfs::static_download_attempts::dsl::*;
+
                                         //query the SQL database for any ingests that have the same zip
-                                        //maybe switch to pgx for this query?
-                                        let download_attempts_postgres_lookup = sqlx::query_as!(
-                                            DownloadAttempt,
-                                            "SELECT * FROM gtfs.static_download_attempts WHERE file_hash = $1;",
-                                            hash_str
-                                        )
-                                        .fetch_all(pool)
+                                        let download_attempts_postgres_lookup = static_download_attempts
+                                        .filter(hash.eq(&hash))
+                                        .load::<StaticDownloadAttempt>(conn)
                                         .await;
             
                                      //if the dataset is brand new, mark as success, save the file
