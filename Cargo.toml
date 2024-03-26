@@ -90,7 +90,6 @@ prost = "0.11.9"
 geozero = "0.12.0"
 diesel = {version = "2.1.5", features = ["postgres", "extras", "url", "numeric"]}
 postgis_diesel = "2.3.0"
-diesel_pg_hstore = "0.2.0"
 
 [[bin]]
 name = "maple"
