@@ -3,10 +3,10 @@
 // Removal of the attribution is not allowed, as covered under the AGPL license
 
 use service::quicli::prelude::info;
-use sqlx::migrate::MigrateDatabase;
-use sqlx::postgres::PgPoolOptions;
-use sqlx::query;
-use sqlx::{Connection, PgConnection, PgPool, Postgres};
+use diesel::pg::PgConnection;
+use diesel::prelude::*;
+use dotenvy::dotenv;
+use std::env;
 use std::error::Error;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -33,7 +33,7 @@ use dmfr_folder_reader::ReturnDmfrAnalysis;
 use futures::StreamExt;
 use git2::Repository;
 
-use crate::gtfs_handlers::maple_ingestion_version;
+use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::transitland_download::DownloadedFeedsInformation;
 
 fn update_transitland_submodule() -> Result<(), Box<dyn Error>> {
@@ -199,7 +199,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                         !eligible_feed.operation_success,
                         eligible_feed.http_response_code,
                         false,
-                        maple_ingestion_version
+                        MAPLE_INGESTION_VERSION
                         );
                     }
                 }

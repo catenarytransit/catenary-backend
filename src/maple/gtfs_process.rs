@@ -4,6 +4,10 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
+use diesel::pg::PgConnection;
+use diesel::prelude::*;
+use dotenvy::dotenv;
+use std::env;
 
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::enum_to_int::route_type_to_int;
@@ -18,7 +22,9 @@ use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 // take a feed id and throw it into postgres
 pub async fn gtfs_process_feed(
     feed_id: &str,
-    pool: &Arc<sqlx::Pool<sqlx::Postgres>>,
+    pool: &Arc<PgConnection>,
+    chateau_id: &str,
+    attempt_id: &str,
 ) -> Result<(), Box<dyn Error>> {
     let path = format!("gtfs_uncompressed/{}", feed_id);
 
@@ -34,7 +40,7 @@ pub async fn gtfs_process_feed(
     let (shape_to_color_lookup, shape_to_text_color_lookup) = shape_to_colour(&feed_id, &gtfs);
 
     //shove raw geometry into postgresql
-    shapes_into_postgres(&gtfs, &shape_to_color_lookup, &shape_to_text_color_lookup, &feed_id, pool).await?;
+    shapes_into_postgres(&gtfs, &shape_to_color_lookup, &shape_to_text_color_lookup, &feed_id, Arc::clone(&pool), &chateau_id, &attempt_id).await?;
 
     Ok(())
 }

@@ -3,6 +3,7 @@ use dmfr_folder_reader::ReturnDmfrAnalysis;
 use futures;
 use futures::StreamExt;
 use reqwest::Client as ReqwestClient;
+use diesel::PgConnection;
 use reqwest::Request;
 use reqwest::RequestBuilder;
 use std::collections::HashSet;
@@ -15,7 +16,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use crate::gtfs_handlers::maple_ingestion_version;
+use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 
 #[derive(Clone)]
 struct StaticFeedToDownload {
@@ -62,7 +63,7 @@ pub struct StaticPassword {
 
 pub async fn download_return_eligible_feeds(
     transitland_meta: &ReturnDmfrAnalysis,
-    pool: &sqlx::Pool<sqlx::Postgres>,
+    pool: &Arc<PgConnection>,
     feeds_to_discard: &HashSet<&'static str>,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
