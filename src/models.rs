@@ -25,12 +25,12 @@ pub struct Shape {
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct StaticDownloadAttempt {
     pub onestop_feed_id: String,
-    pub downloaded_unix_time_ms: i64,
     pub file_hash: Option<String>,
+    pub downloaded_unix_time_ms: i64,
     pub ingested: bool,
-    pub failed: bool,
-    pub mark_for_redo: bool,
     pub url: String,
+    pub failed: bool,
     pub ingestion_version: i32,
+    pub mark_for_redo: bool,
     pub http_response_code: Option<String>,
 }

@@ -1,5 +1,4 @@
 use chateau::Chateau;
-use diesel::PgConnection;
 use dmfr_folder_reader::ReturnDmfrAnalysis;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -11,7 +10,7 @@ use std::sync::Arc;
 pub async fn refresh_metadata_assignments(
     dmfr_result: &ReturnDmfrAnalysis,
     chateau_result: &HashMap<String, Chateau>,
-    pool: &Arc<PgConnection>,
+    pool: Arc<catenary::postgres_tools::CatenaryPostgresPool<'static>>,
 ) {
     //update or create realtime tables and static tables
 

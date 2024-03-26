@@ -71,8 +71,6 @@ pub async fn download_return_eligible_feeds(
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
 
-    let conn = &mut pool.get().await.unwrap();
-
     let _ = fs::create_dir("gtfs_static_zips");
 
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
@@ -103,9 +101,11 @@ pub async fn download_return_eligible_feeds(
             futures::stream::iter(feeds_to_download.into_iter().map(
                 |staticfeed|
                 {
-                    let download_progress = Arc::clone(&download_progress);
 
+                    let download_progress = Arc::clone(&download_progress);
+                    let pool = Arc::clone(pool);
                     async move {
+                            let conn = &mut pool.get().await.unwrap();
                             //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
                             let client = reqwest::ClientBuilder::new()
                                 //timeout queries after 10 minutes
