@@ -28,9 +28,9 @@ pub mod gtfs {
 
         gtfs.chateaus (chateau) {
             chateau -> Text,
-            static_feeds -> Nullable<Array<Nullable<Text>>>,
-            realtime_feeds -> Nullable<Array<Nullable<Text>>>,
-            languages_avaliable -> Nullable<Array<Nullable<Text>>>,
+            static_feeds -> Array<Nullable<Text>>,
+            realtime_feeds -> Array<Nullable<Text>>,
+            languages_avaliable -> Array<Nullable<Text>>,
             hull -> Nullable<Geometry>,
         }
     }

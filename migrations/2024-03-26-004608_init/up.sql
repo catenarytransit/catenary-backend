@@ -49,9 +49,9 @@ CREATE INDEX static_hulls ON gtfs.static_feeds USING GIST (hull);
 
 CREATE TABLE gtfs.chateaus (
     chateau text NOT NULL PRIMARY KEY,
-    static_feeds text[],
-    realtime_feeds text[],
-    languages_avaliable text[],
+    static_feeds text[] NOT NULL,
+    realtime_feeds text[] NOT NULL,
+    languages_avaliable text[] NOT NULL,
     hull GEOMETRY(POLYGON,4326)
 );
 

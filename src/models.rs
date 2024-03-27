@@ -34,3 +34,14 @@ pub struct StaticDownloadAttempt {
     pub mark_for_redo: bool,
     pub http_response_code: Option<String>,
 }
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::chateaus)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct Chateau {
+    pub chateau: String,
+    pub static_feeds: Vec<Option<String>>,
+    pub realtime_feeds: Vec<Option<String>>,
+    pub languages_avaliable: Vec<Option<String>>,
+    pub hull: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>>,
+}
