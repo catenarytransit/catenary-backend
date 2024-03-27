@@ -101,13 +101,15 @@ pub async fn gtfs_process_feed(
 
     //insert routes
 
+    //insert stops
+
     //insert trips
       //inside insert stoptimes
 
-    //insert stops
-
     //calculate hull
     //submit hull
+
+    // insert feed info
 
     Ok(())
 }

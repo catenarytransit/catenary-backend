@@ -1,6 +1,18 @@
 // @generated automatically by Diesel CLI.
 
 pub mod gtfs {
+    pub mod sql_types {
+
+        #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
+        #[diesel(postgres_type(name = "trip_frequency"))]
+        pub struct TripFrequency {
+            pub start_time: i32,
+            pub end_time: i32,
+            pub headway_secs: i32,
+            pub exact_times: bool
+        }
+    }
+
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
@@ -19,6 +31,39 @@ pub mod gtfs {
             agency_fare_url -> Nullable<Text>,
             agency_fare_url_translations -> Nullable<Jsonb>,
             chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+
+        gtfs.calendar (onestop_feed_id, attempt_id, service_id) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            service_id -> Text,
+            monday -> Bool,
+            tuesday -> Bool,
+            wednesday -> Bool,
+            thursday -> Bool,
+            friday -> Bool,
+            saturday -> Bool,
+            sunday -> Bool,
+            gtfs_start_date -> Date,
+            gtfs_end_date -> Date,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+
+        gtfs.calendar_dates (onestop_feed_id, service_id, gtfs_date) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            service_id -> Text,
+            gtfs_date -> Date,
+            exception_type -> Int2,
         }
     }
 
@@ -269,6 +314,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use super::sql_types::TripFrequency;
 
         gtfs.trips (onestop_feed_id, attempt_id, trip_id) {
             trip_id -> Text,
@@ -287,11 +333,14 @@ pub mod gtfs {
             wheelchair_accessible -> Nullable<Int4>,
             bikes_allowed -> Nullable<Int4>,
             chateau -> Text,
+            frequencies -> Nullable<Array<Nullable<TripFrequency>>>,
         }
     }
 
     diesel::allow_tables_to_appear_in_same_query!(
         agencies,
+        calendar,
+        calendar_dates,
         chateaus,
         feed_info,
         gtfs_errors,

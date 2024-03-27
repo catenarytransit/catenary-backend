@@ -166,6 +166,27 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
 CREATE INDEX IF NOT EXISTS shapes_chateau ON gtfs.shapes (chateau);
 CREATE INDEX shapes_linestring_index ON gtfs.shapes USING GIST (linestring);
 
+-- no nulls so just contrain and unwrap ngl
+CREATE TYPE trip_frequency_pre AS (
+    start_time integer,
+    end_time integer,
+    headway_secs integer,
+    -- false is zero [frequency based trips], true is schedule based
+    -- None should return false
+    exact_times boolean
+);
+
+create domain trip_frequency as trip_frequency_pre
+check (
+  (value).start_time is not null and 
+  (value).start_time >=0 and 
+  (value).end_time is not null and
+  (value).end_time >= 0 and
+  (value).headway_secs is not null and
+  (value).headway_secs >= 0 and
+  (value).exact_times is not null
+);
+
 CREATE TABLE gtfs.trips (
     trip_id text NOT NULL,
     onestop_feed_id text NOT NULL,
@@ -183,6 +204,7 @@ CREATE TABLE gtfs.trips (
     wheelchair_accessible int,
     bikes_allowed int,
     chateau text NOT NULL,
+    frequencies trip_frequency[],
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id)
 );
 
@@ -246,7 +268,7 @@ CREATE TABLE gtfs.stoptimes (
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id, stop_sequence)
 );
 
-CREATE TABLE IF NOT EXISTS gtfs.gtfs_errors (
+CREATE TABLE gtfs.gtfs_errors (
 onestop_feed_id text NOT NULL,
 error text NOT NULL,
 attempt_id text,
@@ -255,7 +277,7 @@ chateau text NOT NULL,
 PRIMARY KEY (onestop_feed_id, attempt_id)
 );
 
-CREATE TABLE IF NOT EXISTS gtfs.realtime_passwords (
+CREATE TABLE gtfs.realtime_passwords (
     onestop_feed_id text NOT NULL PRIMARY KEY,
     passwords text[],
     header_auth_key text,
@@ -263,10 +285,37 @@ CREATE TABLE IF NOT EXISTS gtfs.realtime_passwords (
     url_auth_key text
 );
 
-CREATE TABLE IF NOT EXISTS gtfs.static_passwords (
+CREATE TABLE gtfs.static_passwords (
     onestop_feed_id text NOT NULL PRIMARY KEY,
     passwords text[],
     header_auth_key text,
     header_auth_value_prefix text,
     url_auth_key text
 );
+
+CREATE TABLE gtfs.calendar_dates (
+    onestop_feed_id text NOT NULL,
+    attempt_id text NOT NULL,
+    service_id text NOT NULL,
+    gtfs_date date NOT NULL,
+    exception_type smallint NOT NULL,
+    PRIMARY KEY (onestop_feed_id, service_id, gtfs_date)
+);
+
+CREATE TABLE gtfs.calendar (
+    onestop_feed_id text NOT NULL,
+    attempt_id text NOT NULL,
+    service_id text NOT NULL,
+    monday boolean NOT NULL,
+    tuesday boolean NOT NULL,
+    wednesday boolean NOT NULL,
+    thursday boolean NOT NULL,
+    friday boolean NOT NULL,
+    saturday boolean NOT NULL,
+    sunday boolean NOT NULL,
+    gtfs_start_date date NOT NULL,
+    gtfs_end_date date NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, service_id)
+);
+
+-- translations does not need a table, values should be directly inserted into the data structure

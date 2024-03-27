@@ -90,6 +90,7 @@ diesel = {version = "2.1.5", features = ["extras", "url", "numeric", "r2d2"]}
 postgis_diesel = "2.3.0"
 db-pool = {version = "0.1.3", features= ["diesel-async-postgres", "diesel-async-bb8"]}
 diesel-async = "0.4.1"
+diesel-derive-newtype = "2.1.1"
 
 [[bin]]
 name = "maple"
