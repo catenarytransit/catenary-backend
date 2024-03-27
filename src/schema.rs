@@ -93,6 +93,7 @@ pub mod gtfs {
         gtfs.realtime_feeds (onestop_feed_id) {
             onestop_feed_id -> Text,
             name -> Nullable<Text>,
+            previous_chateau_name -> Text,
             chateau -> Text,
             fetch_interval_ms -> Nullable<Int4>,
         }
@@ -108,7 +109,6 @@ pub mod gtfs {
             header_auth_key -> Nullable<Text>,
             header_auth_value_prefix -> Nullable<Text>,
             url_auth_key -> Nullable<Text>,
-            interval_ms -> Nullable<Int4>,
         }
     }
 

@@ -45,3 +45,23 @@ pub struct Chateau {
     pub languages_avaliable: Vec<Option<String>>,
     pub hull: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>>,
 }
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::static_feeds)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct StaticFeed {
+    pub onestop_feed_id: String,
+    pub chateau: String,
+    pub previous_chateau_name: String,
+    pub hull: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>>,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::realtime_feeds)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct RealtimeFeed {
+    pub onestop_feed_id: String,
+    pub chateau: String,
+    pub previous_chateau_name: String,
+    pub fetch_interval_ms: Option<i32>,
+}
