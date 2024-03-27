@@ -7,7 +7,7 @@ pub mod gtfs {
 
         gtfs.agencies (static_onestop_id, attempt_id) {
             static_onestop_id -> Text,
-            agency_id -> Text,
+            agency_id -> Nullable<Text>,
             attempt_id -> Text,
             agency_name -> Text,
             agency_name_translations -> Nullable<Jsonb>,

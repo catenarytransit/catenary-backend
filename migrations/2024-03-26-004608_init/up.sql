@@ -104,8 +104,8 @@ CREATE TABLE gtfs.realtime_feeds (
 
 CREATE TABLE gtfs.agencies (
     static_onestop_id text NOT NULL,
-    -- fill with word "default" if this is empty
-    agency_id text NOT NULL,
+    -- Option<String> where None is a valid key
+    agency_id text,
     attempt_id text NOT NULL,
     agency_name text NOT NULL,
     agency_name_translations jsonb,

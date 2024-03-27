@@ -1,4 +1,6 @@
 use diesel::prelude::*;
+use diesel::pg::sql_types::Jsonb;
+use serde_json::Value;
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
 #[diesel(table_name = crate::schema::gtfs::shapes)]
@@ -80,4 +82,23 @@ pub struct IngestedStatic {
     pub feed_start_date: Option<chrono::NaiveDate>,
     pub languages_avaliable: Vec<Option<String>>,
     pub ingestion_version: i32,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::agencies)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct Agency {
+    pub static_onestop_id: String,
+    pub agency_id: Option<String>,
+    pub attempt_id: String,
+    pub agency_name: String,
+    pub agency_name_translations: Option<Value>,
+    pub agency_url: String,
+    pub agency_url_translations: Option<Value>,
+    pub agency_timezone: String,
+    pub agency_lang: Option<String>,
+    pub agency_phone: Option<String>,
+    pub agency_fare_url: Option<String>,
+    pub agency_fare_url_translations: Option<Value>,
+    pub chateau: String,
 }

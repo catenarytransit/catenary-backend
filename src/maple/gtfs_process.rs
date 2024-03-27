@@ -61,6 +61,32 @@ pub async fn gtfs_process_feed(
     //identify colours of shapes based on trip id's route id
     let (shape_to_color_lookup, shape_to_text_color_lookup) = shape_to_colour(&feed_id, &gtfs);
 
+    //insert agencies
+    for agency in &gtfs.agencies {
+        use catenary::schema::gtfs::agencies::dsl::agencies;
+
+        let agency_row = catenary::models::Agency {
+            static_onestop_id: feed_id.to_string(),
+            agency_id: agency.id.clone(),
+            attempt_id: attempt_id.to_string(),
+            agency_name: agency.name.clone(),
+            agency_name_translations: None,
+            agency_url_translations: None,
+            agency_url: agency.url.clone(),
+            agency_fare_url: agency.fare_url.clone(),
+            agency_fare_url_translations: None,
+            chateau: chateau_id.to_string(),
+            agency_lang: agency.lang.clone(),
+            agency_phone: agency.phone.clone(),
+            agency_timezone: agency.timezone.clone()
+        };
+
+        diesel::insert_into(agencies)
+        .values(agency_row)
+        .execute(conn)
+        .await?;
+    }
+
     //shove raw geometry into postgresql
     shapes_into_postgres(
         &gtfs,
@@ -72,6 +98,16 @@ pub async fn gtfs_process_feed(
         &attempt_id,
     )
     .await?;
+
+    //insert routes
+
+    //insert trips
+      //inside insert stoptimes
+
+    //insert stops
+
+    //calculate hull
+    //submit hull
 
     Ok(())
 }
