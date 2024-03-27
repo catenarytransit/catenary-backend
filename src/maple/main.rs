@@ -295,39 +295,36 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                 attempt_ids
             };
 
-            rt.spawn({
-                let arc_conn_pool = Arc::clone(&arc_conn_pool);
-                let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
-                async move {
-                    for (feed_id, _) in unzip_feeds
-                        .iter()
-                        .filter(|unzipped_feed| unzipped_feed.1 == true)
-                    {}
-                }
-            });
+            let attempt_ids = Arc::new(attempt_ids);
 
             for (feed_id, _) in unzip_feeds
                 .iter()
                 .filter(|unzipped_feed| unzipped_feed.1 == true)
             {
-                rt.spawn({
+                
+            let attempt_ids = Arc::clone(&attempt_ids);
+            let attempt_id = attempt_ids.get(feed_id).unwrap().clone();
+            if let Some(chateau_id) = feed_id_to_chateau_lookup.get(feed_id) {
+                let chateau_id = chateau_id.clone();
+
+                rt.spawn(
+                    {
                         let arc_conn_pool = Arc::clone(&arc_conn_pool);
                         let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
                         async move {
                             let conn_pool = arc_conn_pool.as_ref();
                             let conn_pre = conn_pool.get().await;
                             let conn = &mut conn_pre.unwrap();
-                            let attempt_id = attempt_ids.get(feed_id).unwrap();
     
                             let this_download_data = download_feed_info_hashmap.get(feed_id).unwrap();
     
-                            if let Some(chateau_id) = feed_id_to_chateau_lookup.get(feed_id) {
+                            
                                 // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
                                 let gtfs_process_result = gtfs_process_feed(
                                     &feed_id,
                                     Arc::clone(&arc_conn_pool),
-                                    chateau_id,
-                                    attempt_id,
+                                    &chateau_id,
+                                    &attempt_id,
                                     &this_download_data,
                                 )
                                 .await;
@@ -360,9 +357,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
     
                                     //Delete objects from the attempt
                                 }
-                            }
+                            
                         }
                     });
+            }
             }
         }
     } else {
