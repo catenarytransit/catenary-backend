@@ -14,7 +14,7 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 // take a feed id and throw it into postgres
 pub async fn gtfs_process_feed(
     feed_id: &str,
-    arc_conn_pool: Arc<CatenaryPostgresPool<'static>>,
+    arc_conn_pool: Arc<CatenaryPostgresPool<'_>>,
     chateau_id: &str,
     attempt_id: &str,
     this_download_data: &DownloadedFeedsInformation,

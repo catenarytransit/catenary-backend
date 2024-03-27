@@ -75,7 +75,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
     let _ = update_transitland_submodule()?;
 
     //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
-    let feeds_to_discard: HashSet<&'static str> = HashSet::from_iter(vec![
+    let feeds_to_discard: HashSet<String> = HashSet::from_iter(vec![
         "f-9q8y-sfmta",
         "f-9qc-westcat~ca~us",
         "f-9q9-actransit",
@@ -97,7 +97,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
         "f-sfo~airtrain~shuttles",
         "f-9qbdx-santarosacitybus",
         "f-9q9-acealtamontcorridorexpress",
-    ]);
+    ].into_iter().map(|each_feed_id| String::from(each_feed_id)));
 
     info!("Initializing database connection");
 

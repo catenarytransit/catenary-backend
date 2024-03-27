@@ -61,8 +61,8 @@ pub struct StaticPassword {
 
 pub async fn download_return_eligible_feeds(
     transitland_meta: &ReturnDmfrAnalysis,
-    pool: &Arc<CatenaryPostgresPool<'static>>,
-    feeds_to_discard: &HashSet<&'static str>,
+    pool: &Arc<CatenaryPostgresPool<'_>>,
+    feeds_to_discard: &HashSet<String>,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
 
@@ -75,7 +75,7 @@ pub async fn download_return_eligible_feeds(
             .feed_hashmap
             .iter()
             .filter(|(_, feed)| {
-                !feeds_to_discard.contains(&feed.id.as_str())
+                !feeds_to_discard.contains(&feed.id)
                     && match feed.spec {
                         dmfr::FeedSpec::Gtfs => true,
                         _ => false,
