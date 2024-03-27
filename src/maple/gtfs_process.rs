@@ -1,22 +1,11 @@
-use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
-use dotenvy::dotenv;
-use postgis::ewkb;
-use rgb::RGB;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::env;
 use std::error::Error;
 use std::sync::Arc;
 
-use crate::gtfs_handlers::colour_correction;
-use crate::gtfs_handlers::enum_to_int::route_type_to_int;
-use crate::gtfs_handlers::rename_route_labels::*;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::stops_associated_items::*;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::DownloadedFeedsInformation;
-use catenary::postgres_tools::CatenaryPostgresConnection;
 use catenary::postgres_tools::CatenaryPostgresPool;
 
 // Initial version 3 of ingest written by Kyler Chin

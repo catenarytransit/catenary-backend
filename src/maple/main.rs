@@ -17,8 +17,6 @@ use std::error::Error;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
-use threadpool::ThreadPool;
 use tokio::runtime;
 
 mod gtfs_handlers;
@@ -33,7 +31,6 @@ use gtfs_process::gtfs_process_feed;
 
 use chateau::chateau;
 use dmfr_folder_reader::read_folders;
-use dmfr_folder_reader::ReturnDmfrAnalysis;
 
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::transitland_download::DownloadedFeedsInformation;
