@@ -6,7 +6,6 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::postgres_tools::get_connection_pool;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
-use dotenvy::dotenv;
 use futures::StreamExt;
 use git2::Repository;
 use service::quicli::prelude::info;
@@ -133,7 +132,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
         // count eligible feeds that are marked ingest == true using a filter and .len()
 
-        let mut counter_of_eligible_feeds: Option<usize> = match &eligible_feeds {
+        let counter_of_eligible_feeds: Option<usize> = match &eligible_feeds {
             Ok(eligible_feeds) => Some(
                 eligible_feeds
                     .iter()

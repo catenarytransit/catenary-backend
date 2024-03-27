@@ -1,7 +1,4 @@
 use diesel::prelude::*;
-use postgis_diesel::operators::*;
-use postgis_diesel::sql_types::Geometry;
-use postgis_diesel::types::*;
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
 #[diesel(table_name = crate::schema::gtfs::shapes)]

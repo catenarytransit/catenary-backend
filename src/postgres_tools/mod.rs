@@ -3,20 +3,13 @@
 // Removal of the attribution is not allowed, as covered under the AGPL license
 
 use bb8::Pool;
-use db_pool::r#async::ConnectionPool;
 use db_pool::r#async::DatabasePool;
 use db_pool::r#async::DatabasePoolBuilderTrait;
 use db_pool::r#async::DieselAsyncPostgresBackend;
 use db_pool::r#async::DieselBb8;
-use db_pool::r#async::Reusable;
 use db_pool::PrivilegedPostgresConfig;
-use diesel::prelude::*;
-use diesel::prelude::*;
 use dotenvy::dotenv;
 use std::env;
-use std::error::Error;
-use std::sync::Arc;
-use std::thread;
 use tokio::sync::OnceCell;
 
 /// This type alias is the pool, which can be quried for connections.
@@ -52,7 +45,7 @@ pub async fn get_connection_pool<'pool_lifespan>() -> CatenaryPostgresPool<'pool
                 config,
                 || Pool::builder().max_size(10),
                 || Pool::builder().max_size(2),
-                move |mut conn| {
+                move |conn| {
                     Box::pin(async {
                         //don't create any entities
                         conn

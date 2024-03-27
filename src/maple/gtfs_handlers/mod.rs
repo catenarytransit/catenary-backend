@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 
 pub mod colour_correction;
 pub mod convex_hull;

@@ -1,25 +1,19 @@
 use catenary::models::StaticDownloadAttempt;
-use catenary::schema::gtfs::static_download_attempts;
 use diesel::prelude::*;
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_folder_reader::ReturnDmfrAnalysis;
 use futures;
-use reqwest::Client as ReqwestClient;
-use reqwest::Request;
 
 use crate::CatenaryPostgresPool;
-use reqwest::RequestBuilder;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
-use std::io::copy;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 
 #[derive(Clone)]
 struct StaticFeedToDownload {

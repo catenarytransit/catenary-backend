@@ -1,5 +1,4 @@
 use diesel_async::RunQueryDsl;
-use postgis::ewkb;
 use rgb::RGB;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -9,9 +8,6 @@ use std::sync::Arc;
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::enum_to_int::route_type_to_int;
 use crate::gtfs_handlers::rename_route_labels::*;
-use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
-use crate::gtfs_handlers::stops_associated_items::*;
-use catenary::postgres_tools::CatenaryPostgresConnection;
 use catenary::postgres_tools::CatenaryPostgresPool;
 
 pub async fn shapes_into_postgres(
