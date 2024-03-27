@@ -29,7 +29,7 @@ pub async fn gtfs_process_feed(
     chateau_id: &str,
     attempt_id: &str,
     this_download_data: &DownloadedFeedsInformation,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
