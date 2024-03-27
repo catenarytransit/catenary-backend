@@ -1,3 +1,7 @@
+// Copyright: Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
+// Removal of the attribution is not allowed, as covered under the AGPL license
+
 use bb8::Pool;
 use db_pool::r#async::ConnectionPool;
 use db_pool::r#async::DatabasePool;
@@ -15,12 +19,17 @@ use std::sync::Arc;
 use std::thread;
 use tokio::sync::OnceCell;
 
+/// This type alias is the pool, which can be quried for connections.
+/// It is typically wrapped in Arc to allow thread safe cloning to the same pool
 pub type CatenaryPostgresPool<'a> = db_pool::r#async::Reusable<
     'a,
     db_pool::r#async::ConnectionPool<
         db_pool::r#async::DieselAsyncPostgresBackend<db_pool::r#async::DieselBb8>,
     >,
 >;
+
+/// Type alias to the pooled connection
+/// This must be used in a single thread, since it is mutable
 pub type CatenaryPostgresConnection<'b> = &'b mut bb8::PooledConnection<
     'b,
     diesel_async::pooled_connection::AsyncDieselConnectionManager<
@@ -28,7 +37,8 @@ pub type CatenaryPostgresConnection<'b> = &'b mut bb8::PooledConnection<
     >,
 >;
 
-pub async fn get_connection_pool() -> CatenaryPostgresPool<'static> {
+/// This returns a pool with a specified lifetime
+pub async fn get_connection_pool<'pool_lifespan>() -> CatenaryPostgresPool<'pool_lifespan> {
     static POOL: OnceCell<DatabasePool<DieselAsyncPostgresBackend<DieselBb8>>> =
         OnceCell::const_new();
 
