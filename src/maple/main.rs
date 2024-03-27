@@ -33,7 +33,7 @@ use dmfr_folder_reader::read_folders;
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::transitland_download::DownloadedFeedsInformation;
 
-fn update_transitland_submodule() -> Result<(), Box<dyn Error>> {
+fn update_transitland_submodule() -> Result<(), Box<dyn Error + Send + Sync>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly
     match Repository::open("./") {
         Ok(repo) => {
