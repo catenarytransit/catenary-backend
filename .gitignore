@@ -55,3 +55,5 @@ Session.vim
 **/charts/*.tgz
 
 .history
+
+rustc-ice*.txt
