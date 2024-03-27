@@ -65,3 +65,22 @@ pub struct RealtimeFeed {
     pub previous_chateau_name: String,
     pub fetch_interval_ms: Option<i32>,
 }
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::ingested_static)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct IngestedStatic {
+    pub onestop_feed_id: String,
+    pub ingest_start_unix_time_ms: i64,
+    pub file_hash: String,
+    pub attempt_id: String,
+    pub ingesting_in_progress: bool,
+    pub ingestion_successfully_finished: bool,
+    pub ingestion_errored: bool,
+    pub production: bool,
+    pub deleted: bool,
+    pub feed_expiration_date: Option<chrono::NaiveDate>,
+    pub feed_start_date: Option<chrono::NaiveDate>,
+    pub languages_avaliable: Vec<Option<String>>,
+    pub ingestion_version: i32,
+}

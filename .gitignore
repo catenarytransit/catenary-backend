@@ -57,3 +57,4 @@ Session.vim
 .history
 
 rustc-ice*.txt
+rustc-ice-*

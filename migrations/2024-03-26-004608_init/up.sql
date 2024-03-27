@@ -21,19 +21,21 @@ CREATE TABLE IF NOT EXISTS gtfs.static_download_attempts (
 );
 
 CREATE TABLE gtfs.ingested_static (
-    static_onestop_id text NOT NULL,
+    onestop_feed_id text NOT NULL,
     -- hash of the zip file
-    file_hash bigint NOT NULL,
+    file_hash text NOT NULL,
     attempt_id text NOT NULL,
-    ingest_start_unix_time_ms bigint,
-    ingesting_in_progress boolean,
-    -- is ready
-    production boolean,
-    deleted boolean,
+    ingest_start_unix_time_ms bigint NOT NULL,
+    ingesting_in_progress boolean NOT NULL,
+    ingestion_successfully_finished boolean NOT NULL,
+    ingestion_errored boolean NOT NULL,
+    production boolean NOT NULL,
+    deleted boolean NOT NULL,
     feed_expiration_date date,
     feed_start_date date,
-    languages_avaliable text[],
-    PRIMARY KEY (static_onestop_id, ingest_start_unix_time_ms)
+    languages_avaliable text[] NOT NULL,
+    ingestion_version integer NOT NULL,
+    PRIMARY KEY (onestop_feed_id, ingest_start_unix_time_ms)
 );
 
 CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.static_download_attempts (file_hash);

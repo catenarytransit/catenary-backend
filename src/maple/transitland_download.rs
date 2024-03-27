@@ -31,6 +31,7 @@ struct StaticFeedToDownload {
 //You are required under the APGL license to retain this annotation
 
 //It's giving UC Berkeley lab assignment!!! 🐻💅🐻💅
+#[derive(Clone)]
 pub struct DownloadedFeedsInformation {
     pub feed_id: String,
     pub url: String,

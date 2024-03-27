@@ -72,17 +72,20 @@ pub mod gtfs {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
 
-        gtfs.ingested_static (static_onestop_id, ingest_start_unix_time_ms) {
-            static_onestop_id -> Text,
-            file_hash -> Int8,
+        gtfs.ingested_static (onestop_feed_id, ingest_start_unix_time_ms) {
+            onestop_feed_id -> Text,
+            file_hash -> Text,
             attempt_id -> Text,
             ingest_start_unix_time_ms -> Int8,
-            ingesting_in_progress -> Nullable<Bool>,
-            production -> Nullable<Bool>,
-            deleted -> Nullable<Bool>,
+            ingesting_in_progress -> Bool,
+            ingestion_successfully_finished -> Bool,
+            ingestion_errored -> Bool,
+            production -> Bool,
+            deleted -> Bool,
             feed_expiration_date -> Nullable<Date>,
             feed_start_date -> Nullable<Date>,
-            languages_avaliable -> Nullable<Array<Nullable<Text>>>,
+            languages_avaliable -> Array<Nullable<Text>>,
+            ingestion_version -> Int4,
         }
     }
 

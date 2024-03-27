@@ -4,7 +4,6 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 // This was heavily inspired and copied from Emma Alexia, thank you Emma!
 // Removal of the attribution is not allowed, as covered under the AGPL license
 use catenary::postgres_tools::get_connection_pool;
-use diesel::insert_into;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use dotenvy::dotenv;
@@ -234,6 +233,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                     })
                     .collect::<HashMap<String, DownloadedFeedsInformation>>();
 
+            let download_feed_info_hashmap = Arc::new(download_feed_info_hashmap);
+
             // 3. Assign Attempt IDs to each feed_id that is ready to ingest
 
             let _ = refresh_metadata_tables::refresh_metadata_assignments(
@@ -296,6 +297,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
             rt.spawn({
                 let arc_conn_pool = Arc::clone(&arc_conn_pool);
+                let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
                 async move {
                     for (feed_id, _) in unzip_feeds
                         .iter()
@@ -305,6 +307,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                         let conn_pre = conn_pool.get().await;
                         let conn = &mut conn_pre.unwrap();
                         let attempt_id = attempt_ids.get(feed_id).unwrap();
+
+                        let this_download_data = download_feed_info_hashmap.get(feed_id).unwrap();
+
                         if let Some(chateau_id) = feed_id_to_chateau_lookup.get(feed_id) {
                             // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
                             let gtfs_process_result = gtfs_process_feed(
@@ -312,24 +317,21 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                                 Arc::clone(&arc_conn_pool),
                                 chateau_id,
                                 attempt_id,
+                                &this_download_data,
                             )
                             .await;
 
                             if gtfs_process_result.is_ok() {
                                 // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
 
-                                let this_download_data = download_feed_info_hashmap.get(feed_id).unwrap();
+                                use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
 
-                                use catenary::schema::gtfs::static_download_attempts::dsl::*;
-
-                                diesel::update(download_feed_info_hashmap)
-                                    .filter(onestop_feed_id.eq(feed_id))
-                                    .filter(downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
-                                    .set(ingested.eq(true))
+                                let _ = diesel::update(static_download_attempts)
+                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(feed_id))
+                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
+                                    .set(catenary::schema::gtfs::static_download_attempts::dsl::ingested.eq(true))
                                     .execute(conn)
-                                    .await?;
-
-                                //CREATE entry in gtfs.ingested_static
+                                    .await;
 
                                 //determine if the old one should be deleted, if so, delete it
 
