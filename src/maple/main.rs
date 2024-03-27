@@ -297,14 +297,16 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
             let attempt_ids = Arc::new(attempt_ids);
 
-            for (feed_id, _) in unzip_feeds
-                .iter()
+            let unzip_feeds_clone = unzip_feeds.clone();
+
+            for (feed_id, _) in unzip_feeds_clone
+                .into_iter()
                 .filter(|unzipped_feed| unzipped_feed.1 == true)
             {
                 
             let attempt_ids = Arc::clone(&attempt_ids);
-            let attempt_id = attempt_ids.get(feed_id).unwrap().clone();
-            if let Some(chateau_id) = feed_id_to_chateau_lookup.get(feed_id) {
+            let attempt_id = attempt_ids.get(&feed_id).unwrap().clone();
+            if let Some(chateau_id) = feed_id_to_chateau_lookup.get(&feed_id) {
                 let chateau_id = chateau_id.clone();
 
                 rt.spawn(
@@ -316,7 +318,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                             let conn_pre = conn_pool.get().await;
                             let conn = &mut conn_pre.unwrap();
     
-                            let this_download_data = download_feed_info_hashmap.get(feed_id).unwrap();
+                            let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
     
                             
                                 // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
