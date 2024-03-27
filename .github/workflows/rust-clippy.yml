@@ -2,8 +2,13 @@ on: push
 name: Clippy check
 jobs:
   clippy_check:
+    permissions:
+      checks: write
+      contents: read
     runs-on: ubuntu-latest
     steps:
+      - name: Install Dependencies
+        run: sudo apt install protobuf-compiler redis
       - uses: actions/checkout@v1
       - uses: actions-rs/toolchain@v1
         with:

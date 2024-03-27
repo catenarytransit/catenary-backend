@@ -22,7 +22,7 @@ pub async fn shapes_into_postgres(
     arc_conn_pool: Arc<CatenaryPostgresPool<'static>>,
     chateau_id: &str,
     attempt_id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     //establish a connection to the database
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
