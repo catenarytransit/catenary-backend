@@ -223,6 +223,17 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<Result<(), Box<dyn Error>>>>()
             .await;
 
+            let download_feed_info_hashmap: HashMap<String, DownloadedFeedsInformation> =
+                eligible_feeds
+                    .iter()
+                    .map(|download_feed_info| {
+                        (
+                            download_feed_info.feed_id.clone(),
+                            download_feed_info.clone(),
+                        )
+                    })
+                    .collect::<HashMap<String, DownloadedFeedsInformation>>();
+
             // 3. Assign Attempt IDs to each feed_id that is ready to ingest
 
             let _ = refresh_metadata_tables::refresh_metadata_assignments(
@@ -306,6 +317,17 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
 
                             if gtfs_process_result.is_ok() {
                                 // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
+
+                                let this_download_data = download_feed_info_hashmap.get(feed_id).unwrap();
+
+                                use catenary::schema::gtfs::static_download_attempts::dsl::*;
+
+                                diesel::update(download_feed_info_hashmap)
+                                    .filter(onestop_feed_id.eq(feed_id))
+                                    .filter(downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
+                                    .set(ingested.eq(true))
+                                    .execute(conn)
+                                    .await?;
 
                                 //CREATE entry in gtfs.ingested_static
 
