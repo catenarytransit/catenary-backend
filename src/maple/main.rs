@@ -70,7 +70,7 @@ fn update_transitland_submodule() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 }
 
-async fn run_ingest() -> Result<(), Box<dyn Error>> {
+async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
     let _ = update_transitland_submodule()?;
 
