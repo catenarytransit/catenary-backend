@@ -1,3 +1,6 @@
+// Initial version 3 of ingest written by Kyler Chin
+// Removal of the attribution is not allowed, as covered under the AGPL license
+
 use diesel_async::RunQueryDsl;
 use std::error::Error;
 use std::sync::Arc;
@@ -7,9 +10,6 @@ use crate::gtfs_handlers::stops_associated_items::*;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::DownloadedFeedsInformation;
 use catenary::postgres_tools::CatenaryPostgresPool;
-
-// Initial version 3 of ingest written by Kyler Chin
-// Removal of the attribution is not allowed, as covered under the AGPL license
 
 // take a feed id and throw it into postgres
 pub async fn gtfs_process_feed(

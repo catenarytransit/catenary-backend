@@ -1,8 +1,8 @@
-use catenary::postgres_tools::CatenaryPostgresConnection;
-use catenary::postgres_tools::CatenaryPostgresPool;
 // Initial version 3 of ingest written by Kyler Chin
 // This was heavily inspired and copied from Emma Alexia, thank you Emma!
 // Removal of the attribution is not allowed, as covered under the AGPL license
+
+use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::postgres_tools::get_connection_pool;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
@@ -12,7 +12,6 @@ use git2::Repository;
 use service::quicli::prelude::info;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::env;
 use std::error::Error;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
