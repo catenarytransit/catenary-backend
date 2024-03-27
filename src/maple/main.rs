@@ -301,14 +301,16 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                 async move {
                     for (feed_id, _) in unzip_feeds
                         .iter()
-                        .filter(|unzipped_feed| unzipped_feed.1 == true) {}
-                    
+                        .filter(|unzipped_feed| unzipped_feed.1 == true)
+                    {}
                 }
             });
 
-            for (feed_id, _) in unzip_feeds.iter().filter(
-                |unzipped_feed| unzipped_feed.1 == true) {
-                    rt.spawn({
+            for (feed_id, _) in unzip_feeds
+                .iter()
+                .filter(|unzipped_feed| unzipped_feed.1 == true)
+            {
+                rt.spawn({
                         let arc_conn_pool = Arc::clone(&arc_conn_pool);
                         let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
                         async move {
@@ -361,8 +363,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error>> {
                             }
                         }
                     });
-                }
-
+            }
         }
     } else {
         eprintln!("Not enough data in transitland!");
