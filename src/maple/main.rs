@@ -135,9 +135,9 @@ async fn run_ingest(rt: Arc<tokio::runtime::Runtime>) -> Result<(), Box<dyn Erro
 
         // Performs depth first search to find groups of feed urls associated with each other
         // See https://github.com/catenarytransit/chateau for the source code
-        println!("Calculating Chateau");
+        println!("Calculating Château");
         let chateau_result = chateau(&dmfr_result);
-        println!("Chateau done calculating");
+        println!("Château done calculating");
 
         //pivot table chateau table into HashMap<FeedId, ChateauId>
         let feed_id_to_chateau_lookup =
