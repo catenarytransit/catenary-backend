@@ -58,3 +58,5 @@ Session.vim
 
 rustc-ice*.txt
 rustc-ice-*
+
+.env
