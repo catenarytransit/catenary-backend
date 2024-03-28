@@ -71,7 +71,7 @@ fn update_transitland_submodule() -> Result<(), Box<dyn Error + std::marker::Sen
     }
 }
 
-async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+async fn run_ingest(rt: Arc<tokio::runtime::Runtime>) -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
     let _ = update_transitland_submodule()?;
 
@@ -283,19 +283,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             // create thread pool
             // process GTFS and insert into system
 
-            // This will spawn a work-stealing runtime with 4 worker threads.
-            let rt = runtime::Builder::new_multi_thread()
-                .worker_threads(4)
-                .thread_name_fn(|| {
-                    static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                    let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                    format!("catenary-maple-ingest-{}", id)
-                })
-                .enable_time()
-                .enable_io()
-                .build()
-                .unwrap();
-
             let attempt_ids: HashMap<String, String> = {
                 let mut attempt_ids = HashMap::new();
                 for (feed_id, _) in unzip_feeds.iter() {
@@ -394,7 +381,16 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     Ok(())
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
-    let _ = run_ingest().await;
+fn main() {
+    let rt = Arc::new(runtime::Builder::new_multi_thread()
+    .thread_name_fn(|| {
+        static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+        let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+        format!("catenary-maple-ingest-{}", id)
+    })
+    .enable_all()
+    .build()
+    .unwrap());
+
+    let _ = rt.block_on(run_ingest(Arc::clone(&rt)));
 }
