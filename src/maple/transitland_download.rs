@@ -60,7 +60,7 @@ pub struct StaticPassword {
 
 pub async fn download_return_eligible_feeds(
     transitland_meta: &ReturnDmfrAnalysis,
-    pool: &Arc<CatenaryPostgresPool<'_>>,
+    pool: &Arc<CatenaryPostgresPool>,
     feeds_to_discard: &HashSet<String>,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
@@ -99,7 +99,6 @@ pub async fn download_return_eligible_feeds(
                     let download_progress = Arc::clone(&download_progress);
                     let pool = Arc::clone(pool);
                     async move {
-                            let conn = &mut pool.get().await.unwrap();
                             //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
                             let client = reqwest::ClientBuilder::new()
                                 //timeout queries after 10 minutes
@@ -171,6 +170,8 @@ pub async fn download_return_eligible_feeds(
                                         use catenary::schema::gtfs::static_download_attempts::dsl::*;
 
                                         //query the SQL database for any ingests that have the same zip
+                                        
+                            let conn = &mut pool.get().await.unwrap();
                                         let download_attempts_postgres_lookup = static_download_attempts
                                             .filter(file_hash.eq(hash_str))
                                             .load::<StaticDownloadAttempt>(conn)

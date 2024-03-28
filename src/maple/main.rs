@@ -2,7 +2,7 @@
 // This was heavily inspired and copied from Emma Alexia, thank you Emma!
 // Removal of the attribution is not allowed, as covered under the AGPL license
 
-use catenary::postgres_tools::get_connection_pool;
+use catenary::postgres_tools::make_async_pool;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
@@ -103,11 +103,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
         .map(|each_feed_id| String::from(each_feed_id)),
     );
 
-    info!("Initializing database connection");
+    println!("Initializing database connection");
 
     // get connection pool from database pool
-    let conn_pool: CatenaryPostgresPool<'_> = get_connection_pool().await;
-    let arc_conn_pool: Arc<CatenaryPostgresPool<'_>> = Arc::new(conn_pool);
+    let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
+    let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
 
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
@@ -115,7 +115,13 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
     // See https://github.com/catenarytransit/dmfr-folder-reader
+    println!("Reading transitland directory");
     let dmfr_result = read_folders("./transitland-atlas/")?;
+    println!(
+        "Transitland directory read with {} feeds and {} operators",
+        dmfr_result.feed_hashmap.len(),
+        dmfr_result.operator_hashmap.len()
+    );
 
     // The DMFR result dataset looks genuine, with over 100 pieces of data!
     if dmfr_result.feed_hashmap.len() > 100 && dmfr_result.operator_hashmap.len() > 100 {
@@ -128,7 +134,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
 
         // Performs depth first search to find groups of feed urls associated with each other
         // See https://github.com/catenarytransit/chateau for the source code
+        println!("Calculating Chateau");
         let chateau_result = chateau(&dmfr_result);
+        println!("Chateau done calculating");
 
         //pivot table chateau table into HashMap<FeedId, ChateauId>
         let feed_id_to_chateau_lookup =
@@ -243,6 +251,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
             );
 
             // 4. Unzip folders
+            println!("Unzipping all gtfs folders");
             let unzip_feeds: Vec<(String, bool)> =
                 futures::stream::iter(to_ingest_feeds.into_iter().map(
                     |to_ingest_feed| async move {

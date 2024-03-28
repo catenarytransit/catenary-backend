@@ -15,7 +15,7 @@ pub async fn shapes_into_postgres(
     shape_to_color_lookup: &HashMap<std::string::String, RGB<u8>>,
     shape_to_text_color_lookup: &HashMap<std::string::String, RGB<u8>>,
     feed_id: &str,
-    arc_conn_pool: Arc<CatenaryPostgresPool<'_>>,
+    arc_conn_pool: Arc<CatenaryPostgresPool>,
     chateau_id: &str,
     attempt_id: &str,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {

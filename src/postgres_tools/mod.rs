@@ -1,36 +1,42 @@
 // Copyright: Kyler Chin <kyler@catenarymaps.org>
 // Catenary Transit Initiatives
 // Removal of the attribution is not allowed, as covered under the AGPL license
-
-use bb8::Pool;
 use db_pool::r#async::DatabasePool;
 use db_pool::r#async::DatabasePoolBuilderTrait;
 use db_pool::r#async::DieselAsyncPostgresBackend;
 use db_pool::r#async::DieselBb8;
 use db_pool::PrivilegedPostgresConfig;
+use diesel_async::pooled_connection::bb8::Pool;
+use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+use diesel_async::RunQueryDsl;
 use dotenvy::dotenv;
 use std::env;
 use tokio::sync::OnceCell;
 
+pub type CatenaryPostgresPool =
+    bb8::Pool<AsyncDieselConnectionManager<diesel_async::AsyncPgConnection>>;
+
 /// This type alias is the pool, which can be quried for connections.
 /// It is typically wrapped in Arc to allow thread safe cloning to the same pool
-pub type CatenaryPostgresPool<'a> = db_pool::r#async::Reusable<
+/*pub type CatenaryPostgresPool<'a> = db_pool::r#async::Reusable<
     'a,
     db_pool::r#async::ConnectionPool<
         db_pool::r#async::DieselAsyncPostgresBackend<db_pool::r#async::DieselBb8>,
     >,
->;
+>;*/
 
 /// Type alias to the pooled connection
 /// This must be used in a single thread, since it is mutable
-pub type CatenaryPostgresConnection<'b> = &'b mut bb8::PooledConnection<
+/*pub type CatenaryPostgresConnection<'b> = &'b mut bb8::PooledConnection<
     'b,
     diesel_async::pooled_connection::AsyncDieselConnectionManager<
         diesel_async::pg::AsyncPgConnection,
     >,
 >;
-
-/// This returns a pool with a specified lifetime
+*/
+// This is very broken, i think it's db-pool being a problem
+// This returns a pool with a specified lifetime
+/*
 pub async fn get_connection_pool<'pool_lifespan>() -> CatenaryPostgresPool<'pool_lifespan> {
     static POOL: OnceCell<DatabasePool<DieselAsyncPostgresBackend<DieselBb8>>> =
         OnceCell::const_new();
@@ -39,18 +45,15 @@ pub async fn get_connection_pool<'pool_lifespan>() -> CatenaryPostgresPool<'pool
         .get_or_init(|| async {
             dotenv().ok();
 
-            let config = PrivilegedPostgresConfig::from_env().unwrap();
+            let config = PrivilegedPostgresConfig::new()
+            .password(Some("potgres".to_owned()));
+
 
             let backend = DieselAsyncPostgresBackend::new(
                 config,
                 || Pool::builder().max_size(10),
                 || Pool::builder().max_size(2),
-                move |conn| {
-                    Box::pin(async {
-                        //don't create any entities
-                        conn
-                    })
-                },
+                move |mut conn| Box::pin(async { conn }),
             )
             .await
             .unwrap();
@@ -60,6 +63,18 @@ pub async fn get_connection_pool<'pool_lifespan>() -> CatenaryPostgresPool<'pool
         .await;
 
     db_pool.pull().await
+}*/
+
+pub async fn make_async_pool() -> Result<
+    bb8::Pool<AsyncDieselConnectionManager<diesel_async::AsyncPgConnection>>,
+    Box<dyn std::error::Error + Sync + Send>,
+> {
+    // create a new connection pool with the default config
+    let config: AsyncDieselConnectionManager<diesel_async::AsyncPgConnection> =
+        AsyncDieselConnectionManager::<diesel_async::AsyncPgConnection>::new(database_url_for_env());
+    let pool = Pool::builder().build(config).await?;
+
+    Ok(pool)
 }
 
 fn database_url_for_env() -> String {

@@ -1,4 +1,3 @@
-
 use diesel::sql_types::*;
 
 #[derive(Clone, Debug, SqlType)]

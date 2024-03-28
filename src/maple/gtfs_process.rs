@@ -1,9 +1,9 @@
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
-use std::collections::HashSet;
 use catenary::schema::gtfs::calendar::onestop_feed_id;
 use diesel_async::RunQueryDsl;
 use gtfs_structures::{BikesAllowedType, ExactTimes};
+use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 // take a feed id and throw it into postgres
 pub async fn gtfs_process_feed(
     feed_id: &str,
-    arc_conn_pool: Arc<CatenaryPostgresPool<'_>>,
+    arc_conn_pool: Arc<CatenaryPostgresPool>,
     chateau_id: &str,
     attempt_id: &str,
     this_download_data: &DownloadedFeedsInformation,
@@ -105,8 +105,7 @@ pub async fn gtfs_process_feed(
 
     //insert trip
     for (trip_id, trip) in &gtfs.trips {
-
-        let mut stop_headsigns:HashSet<String> = HashSet::new();
+        let mut stop_headsigns: HashSet<String> = HashSet::new();
 
         for stop_time in &trip.stop_times {
             if let Some(stop_headsign) = stop_time.stop_headsign.as_ref() {
@@ -114,9 +113,10 @@ pub async fn gtfs_process_feed(
             }
         }
 
-        let stop_headsigns = stop_headsigns.into_iter()
-        .map(|stop_headsign| Some(stop_headsign))
-        .collect::<Vec<Option<String>>>();
+        let stop_headsigns = stop_headsigns
+            .into_iter()
+            .map(|stop_headsign| Some(stop_headsign))
+            .collect::<Vec<Option<String>>>();
 
         let has_stop_headsigns = stop_headsigns.len() > 0;
 
@@ -125,21 +125,24 @@ pub async fn gtfs_process_feed(
         let frequencies_vec = match trip.frequencies.len() {
             0 => None,
             _ => Some(
-                trip.frequencies.iter().map(|freq| {
-                    Some(catenary::models::TripFrequencyModel {
-                        start_time: freq.start_time as i32,
-                        end_time: freq.end_time as i32,
-                        headway_secs: freq.headway_secs as i32,
-                        exact_times: match freq.exact_times {
-                           Some(exact_times_num) => match exact_times_num {
-                            ExactTimes::FrequencyBased => false,
-                            ExactTimes::ScheduleBased => true,
-                           },
-                           None => false
-                        },
+                trip.frequencies
+                    .iter()
+                    .map(|freq| {
+                        Some(catenary::models::TripFrequencyModel {
+                            start_time: freq.start_time as i32,
+                            end_time: freq.end_time as i32,
+                            headway_secs: freq.headway_secs as i32,
+                            exact_times: match freq.exact_times {
+                                Some(exact_times_num) => match exact_times_num {
+                                    ExactTimes::FrequencyBased => false,
+                                    ExactTimes::ScheduleBased => true,
+                                },
+                                None => false,
+                            },
+                        })
                     })
-                }).collect()
-            )
+                    .collect(),
+            ),
         };
 
         let trip_pg = catenary::models::Trip {
@@ -153,7 +156,7 @@ pub async fn gtfs_process_feed(
             has_stop_headsigns: has_stop_headsigns,
             stop_headsigns: match stop_headsigns.len() {
                 0 => None,
-                _ => Some(stop_headsigns.clone())
+                _ => Some(stop_headsigns.clone()),
             },
             trip_short_name: trip.trip_short_name.clone(),
             direction_id: match trip.direction_id {
@@ -161,13 +164,13 @@ pub async fn gtfs_process_feed(
                     DirectionType::Outbound => 0,
                     DirectionType::Inbound => 1,
                 }),
-                None => None
+                None => None,
             },
             bikes_allowed: match trip.bikes_allowed {
                 BikesAllowedType::NoBikeInfo => 0,
                 BikesAllowedType::AtLeastOneBike => 1,
                 BikesAllowedType::NoBikesAllowed => 2,
-                BikesAllowedType::Unknown(unknown) => unknown
+                BikesAllowedType::Unknown(unknown) => unknown,
             },
             block_id: trip.block_id.clone(),
             shape_id: trip.shape_id.clone(),
@@ -175,7 +178,7 @@ pub async fn gtfs_process_feed(
                 gtfs_structures::Availability::Available => Some(1),
                 gtfs_structures::Availability::NotAvailable => Some(2),
                 gtfs_structures::Availability::Unknown(unknown) => Some(unknown),
-                gtfs_structures::Availability::InformationNotAvailable => Some(0)
+                gtfs_structures::Availability::InformationNotAvailable => Some(0),
             },
             chateau: chateau_id.to_string(),
             frequencies: frequencies_vec,

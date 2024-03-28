@@ -1,19 +1,19 @@
+use crate::custom_pg_types;
+use crate::custom_pg_types::TripFrequency;
+use diesel::backend::RawValue;
+use diesel::deserialize;
+use diesel::deserialize::FromSql;
 use diesel::pg;
 use diesel::pg::sql_types::Jsonb;
-use diesel::prelude::*;
-use serde_json::Value;
-use diesel::deserialize::FromSql;
-use diesel::sql_types::*;
-use diesel::FromSqlRow;
-use diesel::AsExpression;
-use diesel::SqlType;
-use crate::custom_pg_types;
-use diesel::deserialize;
-use diesel::backend::RawValue;
-use diesel::serialize::ToSql;
-use crate::custom_pg_types::TripFrequency;
-use std::io::Write;
 use diesel::pg::Pg;
+use diesel::prelude::*;
+use diesel::serialize::ToSql;
+use diesel::sql_types::*;
+use diesel::AsExpression;
+use diesel::FromSqlRow;
+use diesel::SqlType;
+use serde_json::Value;
+use std::io::Write;
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
 #[diesel(table_name = crate::schema::gtfs::shapes)]
@@ -122,21 +122,21 @@ pub struct Agency {
 pub struct Trip {
     pub onestop_feed_id: String,
     pub trip_id: String,
-    pub   attempt_id: String,
-    pub   route_id: String,
-    pub   service_id: String,
-    pub   trip_headsign: Option<String>,
-    pub    trip_headsign_translations: Option<Value>,
-    pub    has_stop_headsigns: bool,
-    pub   stop_headsigns: Option<Vec<Option<String>>>,
-    pub   trip_short_name: Option<String>,
-    pub    direction_id: Option<i16>,
-    pub    block_id: Option<String>,
-    pub   shape_id: Option<String>,
-    pub   wheelchair_accessible: Option<i16>,
-    pub   bikes_allowed: i16,
-    pub   chateau: String,
-    pub   frequencies: Option<Vec<Option<TripFrequencyModel>>>
+    pub attempt_id: String,
+    pub route_id: String,
+    pub service_id: String,
+    pub trip_headsign: Option<String>,
+    pub trip_headsign_translations: Option<Value>,
+    pub has_stop_headsigns: bool,
+    pub stop_headsigns: Option<Vec<Option<String>>>,
+    pub trip_short_name: Option<String>,
+    pub direction_id: Option<i16>,
+    pub block_id: Option<String>,
+    pub shape_id: Option<String>,
+    pub wheelchair_accessible: Option<i16>,
+    pub bikes_allowed: i16,
+    pub chateau: String,
+    pub frequencies: Option<Vec<Option<TripFrequencyModel>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, AsExpression)]
@@ -159,7 +159,12 @@ use diesel::serialize::WriteTuple;
 impl ToSql<TripFrequency, Pg> for TripFrequencyModel {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
         WriteTuple::<(Int4, Int4, Int4, Bool)>::write_tuple(
-            &(self.start_time.clone(), self.end_time.clone(), self.headway_secs.clone(), self.exact_times.clone()),
+            &(
+                self.start_time.clone(),
+                self.end_time.clone(),
+                self.headway_secs.clone(),
+                self.exact_times.clone(),
+            ),
             out,
         )
     }
@@ -167,14 +172,14 @@ impl ToSql<TripFrequency, Pg> for TripFrequencyModel {
 
 impl FromSql<TripFrequency, Pg> for TripFrequencyModel {
     fn from_sql(bytes: diesel::pg::PgValue) -> diesel::deserialize::Result<Self> {
-        let (start_time, end_time, headway_secs, exact_times) = 
+        let (start_time, end_time, headway_secs, exact_times) =
             FromSql::<Record<(Int4, Int4, Int4, Bool)>, Pg>::from_sql(bytes)?;
 
         Ok(TripFrequencyModel {
             start_time,
             end_time,
             headway_secs,
-            exact_times
+            exact_times,
         })
     }
 }
