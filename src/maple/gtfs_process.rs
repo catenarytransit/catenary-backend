@@ -78,13 +78,13 @@ pub async fn gtfs_process_feed(
             chateau: chateau_id.to_string(),
             agency_lang: agency.lang.clone(),
             agency_phone: agency.phone.clone(),
-            agency_timezone: agency.timezone.clone()
+            agency_timezone: agency.timezone.clone(),
         };
 
         diesel::insert_into(agencies)
-        .values(agency_row)
-        .execute(conn)
-        .await?;
+            .values(agency_row)
+            .execute(conn)
+            .await?;
     }
 
     //shove raw geometry into postgresql
@@ -104,7 +104,7 @@ pub async fn gtfs_process_feed(
     //insert stops
 
     //insert trips
-      //inside insert stoptimes
+    //inside insert stoptimes
 
     //calculate hull
     //submit hull

@@ -1,4 +1,3 @@
-
 pub mod colour_correction;
 pub mod convex_hull;
 pub mod enum_to_int;

@@ -1,21 +1,10 @@
 // @generated automatically by Diesel CLI.
 
 pub mod gtfs {
-    pub mod sql_types {
-
-        #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
-        #[diesel(postgres_type(name = "trip_frequency"))]
-        pub struct TripFrequency {
-            pub start_time: i32,
-            pub end_time: i32,
-            pub headway_secs: i32,
-            pub exact_times: bool
-        }
-    }
-
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.agencies (static_onestop_id, attempt_id) {
             static_onestop_id -> Text,
@@ -37,6 +26,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.calendar (onestop_feed_id, attempt_id, service_id) {
             onestop_feed_id -> Text,
@@ -57,6 +47,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.calendar_dates (onestop_feed_id, service_id, gtfs_date) {
             onestop_feed_id -> Text,
@@ -70,6 +61,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.chateaus (chateau) {
             chateau -> Text,
@@ -83,6 +75,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.feed_info (onestop_feed_id, attempt_id, feed_publisher_name) {
             onestop_feed_id -> Text,
@@ -103,6 +96,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.gtfs_errors (onestop_feed_id, attempt_id) {
             onestop_feed_id -> Text,
@@ -116,6 +110,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.ingested_static (onestop_feed_id, ingest_start_unix_time_ms) {
             onestop_feed_id -> Text,
@@ -137,6 +132,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.realtime_feeds (onestop_feed_id) {
             onestop_feed_id -> Text,
@@ -150,6 +146,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.realtime_passwords (onestop_feed_id) {
             onestop_feed_id -> Text,
@@ -163,6 +160,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.routes (onestop_feed_id, attempt_id, route_id) {
             onestop_feed_id -> Text,
@@ -190,6 +188,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.shapes (onestop_feed_id, attempt_id, shape_id) {
             onestop_feed_id -> Text,
@@ -209,6 +208,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.static_download_attempts (onestop_feed_id, downloaded_unix_time_ms) {
             onestop_feed_id -> Text,
@@ -226,6 +226,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.static_feeds (onestop_feed_id) {
             onestop_feed_id -> Text,
@@ -238,6 +239,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.static_passwords (onestop_feed_id) {
             onestop_feed_id -> Text,
@@ -251,6 +253,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.stops (onestop_feed_id, attempt_id, gtfs_id) {
             onestop_feed_id -> Text,
@@ -288,6 +291,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
 
         gtfs.stoptimes (onestop_feed_id, attempt_id, trip_id, stop_sequence) {
             onestop_feed_id -> Text,
@@ -314,7 +318,7 @@ pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
         use diesel::sql_types::*;
-        use super::sql_types::TripFrequency;
+        use crate::custom_pg_types::*;
 
         gtfs.trips (onestop_feed_id, attempt_id, trip_id) {
             trip_id -> Text,

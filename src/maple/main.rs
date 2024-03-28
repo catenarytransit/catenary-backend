@@ -2,8 +2,8 @@
 // This was heavily inspired and copied from Emma Alexia, thank you Emma!
 // Removal of the attribution is not allowed, as covered under the AGPL license
 
-use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::postgres_tools::get_connection_pool;
+use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use futures::StreamExt;
@@ -75,29 +75,33 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = update_transitland_submodule()?;
 
     //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
-    let feeds_to_discard: HashSet<String> = HashSet::from_iter(vec![
-        "f-9q8y-sfmta",
-        "f-9qc-westcat~ca~us",
-        "f-9q9-actransit",
-        "f-9q9-vta",
-        "f-9q8yy-missionbaytma~ca~us",
-        "f-9qbb-marintransit",
-        "f-9q8-samtrans",
-        "f-9q9-bart",
-        "f-9q9-caltrain",
-        "f-9qc3-riovistadeltabreeze",
-        "f-9q8z-goldengateferry",
-        "f-9q9j-dumbartonexpress",
-        "f-9qc2-trideltatransit",
-        "f-9q9p-sanfranciscobayferry",
-        "f-9qc-vinenapacounty",
-        "f-9qb-smart",
-        "f-9qc60-vacavillecitycoach",
-        "f-9q9jy-unioncitytransit",
-        "f-sfo~airtrain~shuttles",
-        "f-9qbdx-santarosacitybus",
-        "f-9q9-acealtamontcorridorexpress",
-    ].into_iter().map(|each_feed_id| String::from(each_feed_id)));
+    let feeds_to_discard: HashSet<String> = HashSet::from_iter(
+        vec![
+            "f-9q8y-sfmta",
+            "f-9qc-westcat~ca~us",
+            "f-9q9-actransit",
+            "f-9q9-vta",
+            "f-9q8yy-missionbaytma~ca~us",
+            "f-9qbb-marintransit",
+            "f-9q8-samtrans",
+            "f-9q9-bart",
+            "f-9q9-caltrain",
+            "f-9qc3-riovistadeltabreeze",
+            "f-9q8z-goldengateferry",
+            "f-9q9j-dumbartonexpress",
+            "f-9qc2-trideltatransit",
+            "f-9q9p-sanfranciscobayferry",
+            "f-9qc-vinenapacounty",
+            "f-9qb-smart",
+            "f-9qc60-vacavillecitycoach",
+            "f-9q9jy-unioncitytransit",
+            "f-sfo~airtrain~shuttles",
+            "f-9qbdx-santarosacitybus",
+            "f-9q9-acealtamontcorridorexpress",
+        ]
+        .into_iter()
+        .map(|each_feed_id| String::from(each_feed_id)),
+    );
 
     info!("Initializing database connection");
 
@@ -298,13 +302,12 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .into_iter()
                 .filter(|unzipped_feed| unzipped_feed.1 == true)
             {
-                
-            let attempt_ids = Arc::clone(&attempt_ids);
-            let attempt_id = attempt_ids.get(&feed_id).unwrap().clone();
-            if let Some(chateau_id) = feed_id_to_chateau_lookup.get(&feed_id) {
-                let chateau_id = chateau_id.clone();
+                let attempt_ids = Arc::clone(&attempt_ids);
+                let attempt_id = attempt_ids.get(&feed_id).unwrap().clone();
+                if let Some(chateau_id) = feed_id_to_chateau_lookup.get(&feed_id) {
+                    let chateau_id = chateau_id.clone();
 
-                rt.spawn(
+                    rt.spawn(
                     {
                         let arc_conn_pool = Arc::clone(&arc_conn_pool);
                         let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
@@ -357,7 +360,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
                             
                         }
                     });
-            }
+                }
             }
         }
     } else {

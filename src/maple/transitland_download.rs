@@ -14,7 +14,6 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-
 #[derive(Clone)]
 struct StaticFeedToDownload {
     pub feed_id: String,

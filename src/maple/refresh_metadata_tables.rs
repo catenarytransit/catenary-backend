@@ -1,8 +1,8 @@
 use chateau::Chateau;
 use dmfr_folder_reader::ReturnDmfrAnalysis;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::error::Error;
+use std::sync::Arc;
 
 // Written by Kyler Chin at Catenary Transit Initiatives
 // https://github.com/CatenaryTransit/catenary-backend

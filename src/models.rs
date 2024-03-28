@@ -1,5 +1,5 @@
-use diesel::prelude::*;
 use diesel::pg::sql_types::Jsonb;
+use diesel::prelude::*;
 use serde_json::Value;
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
