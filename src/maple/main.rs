@@ -290,6 +290,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
                     let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
                     format!("catenary-maple-ingest-{}", id)
                 })
+                .enable_time()
+                .enable_io()
                 .build()
                 .unwrap();
 
