@@ -1,7 +1,9 @@
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
-
+use std::collections::HashSet;
+use catenary::schema::gtfs::calendar::onestop_feed_id;
 use diesel_async::RunQueryDsl;
+use gtfs_structures::{BikesAllowedType, ExactTimes};
 use std::error::Error;
 use std::sync::Arc;
 
@@ -101,10 +103,95 @@ pub async fn gtfs_process_feed(
 
     //insert routes
 
-    //insert stops
+    //insert trip
+    for (trip_id, trip) in &gtfs.trips {
 
-    //insert trips
-    //inside insert stoptimes
+        let mut stop_headsigns:HashSet<String> = HashSet::new();
+
+        for stop_time in &trip.stop_times {
+            if let Some(stop_headsign) = stop_time.stop_headsign.as_ref() {
+                stop_headsigns.insert(stop_headsign.clone());
+            }
+        }
+
+        let stop_headsigns = stop_headsigns.into_iter()
+        .map(|stop_headsign| Some(stop_headsign))
+        .collect::<Vec<Option<String>>>();
+
+        let has_stop_headsigns = stop_headsigns.len() > 0;
+
+        use gtfs_structures::DirectionType;
+
+        let frequencies_vec = match trip.frequencies.len() {
+            0 => None,
+            _ => Some(
+                trip.frequencies.iter().map(|freq| {
+                    Some(catenary::models::TripFrequencyModel {
+                        start_time: freq.start_time as i32,
+                        end_time: freq.end_time as i32,
+                        headway_secs: freq.headway_secs as i32,
+                        exact_times: match freq.exact_times {
+                           Some(exact_times_num) => match exact_times_num {
+                            ExactTimes::FrequencyBased => false,
+                            ExactTimes::ScheduleBased => true,
+                           },
+                           None => false
+                        },
+                    })
+                }).collect()
+            )
+        };
+
+        let trip_pg = catenary::models::Trip {
+            onestop_feed_id: feed_id.to_string(),
+            trip_id: trip_id.clone(),
+            attempt_id: attempt_id.to_string(),
+            service_id: trip.service_id.clone(),
+            trip_headsign: trip.trip_headsign.clone(),
+            trip_headsign_translations: None,
+            route_id: trip.route_id.clone(),
+            has_stop_headsigns: has_stop_headsigns,
+            stop_headsigns: match stop_headsigns.len() {
+                0 => None,
+                _ => Some(stop_headsigns.clone())
+            },
+            trip_short_name: trip.trip_short_name.clone(),
+            direction_id: match trip.direction_id {
+                Some(direction) => Some(match direction {
+                    DirectionType::Outbound => 0,
+                    DirectionType::Inbound => 1,
+                }),
+                None => None
+            },
+            bikes_allowed: match trip.bikes_allowed {
+                BikesAllowedType::NoBikeInfo => 0,
+                BikesAllowedType::AtLeastOneBike => 1,
+                BikesAllowedType::NoBikesAllowed => 2,
+                BikesAllowedType::Unknown(unknown) => unknown
+            },
+            block_id: trip.block_id.clone(),
+            shape_id: trip.shape_id.clone(),
+            wheelchair_accessible: match trip.wheelchair_accessible {
+                gtfs_structures::Availability::Available => Some(1),
+                gtfs_structures::Availability::NotAvailable => Some(2),
+                gtfs_structures::Availability::Unknown(unknown) => Some(unknown),
+                gtfs_structures::Availability::InformationNotAvailable => Some(0)
+            },
+            chateau: chateau_id.to_string(),
+            frequencies: frequencies_vec,
+        };
+
+        use catenary::schema::gtfs::trips::dsl::trips;
+
+        diesel::insert_into(trips)
+            .values(trip_pg)
+            .execute(conn)
+            .await?;
+
+        //inside insert stoptimes
+    }
+
+    //insert stops
 
     //calculate hull
     //submit hull

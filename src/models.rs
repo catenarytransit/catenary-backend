@@ -1,6 +1,19 @@
+use diesel::pg;
 use diesel::pg::sql_types::Jsonb;
 use diesel::prelude::*;
 use serde_json::Value;
+use diesel::deserialize::FromSql;
+use diesel::sql_types::*;
+use diesel::FromSqlRow;
+use diesel::AsExpression;
+use diesel::SqlType;
+use crate::custom_pg_types;
+use diesel::deserialize;
+use diesel::backend::RawValue;
+use diesel::serialize::ToSql;
+use crate::custom_pg_types::TripFrequency;
+use std::io::Write;
+use diesel::pg::Pg;
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
 #[diesel(table_name = crate::schema::gtfs::shapes)]
@@ -101,4 +114,67 @@ pub struct Agency {
     pub agency_fare_url: Option<String>,
     pub agency_fare_url_translations: Option<Value>,
     pub chateau: String,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::trips)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct Trip {
+    pub onestop_feed_id: String,
+    pub trip_id: String,
+    pub   attempt_id: String,
+    pub   route_id: String,
+    pub   service_id: String,
+    pub   trip_headsign: Option<String>,
+    pub    trip_headsign_translations: Option<Value>,
+    pub    has_stop_headsigns: bool,
+    pub   stop_headsigns: Option<Vec<Option<String>>>,
+    pub   trip_short_name: Option<String>,
+    pub    direction_id: Option<i16>,
+    pub    block_id: Option<String>,
+    pub   shape_id: Option<String>,
+    pub   wheelchair_accessible: Option<i16>,
+    pub   bikes_allowed: i16,
+    pub   chateau: String,
+    pub   frequencies: Option<Vec<Option<TripFrequencyModel>>>
+}
+
+#[derive(Clone, Debug, PartialEq, AsExpression)]
+#[sql_type = "diesel::sql_types::Uuid"]
+pub struct TripFrequencyModel {
+    pub start_time: i32,
+    pub end_time: i32,
+    pub headway_secs: i32,
+    pub exact_times: bool,
+}
+
+use diesel::serialize::Output;
+use diesel::serialize::WriteTuple;
+
+// Learned from https://inve.rs/postgres-diesel-composite/
+// https://docs.diesel.rs/2.0.x/diesel/deserialize/trait.FromSql.html
+// https://docs.diesel.rs/2.0.x/diesel/serialize/trait.ToSql.html
+
+// Imports https://docs.diesel.rs/master/diesel/pg/struct.PgValue.html as backend raw value
+impl ToSql<TripFrequency, Pg> for TripFrequencyModel {
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
+        WriteTuple::<(Int4, Int4, Int4, Bool)>::write_tuple(
+            &(self.start_time.clone(), self.end_time.clone(), self.headway_secs.clone(), self.exact_times.clone()),
+            out,
+        )
+    }
+}
+
+impl FromSql<TripFrequency, Pg> for TripFrequencyModel {
+    fn from_sql(bytes: diesel::pg::PgValue) -> diesel::deserialize::Result<Self> {
+        let (start_time, end_time, headway_secs, exact_times) = 
+            FromSql::<Record<(Int4, Int4, Int4, Bool)>, Pg>::from_sql(bytes)?;
+
+        Ok(TripFrequencyModel {
+            start_time,
+            end_time,
+            headway_secs,
+            exact_times
+        })
+    }
 }

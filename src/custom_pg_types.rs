@@ -1,8 +1,11 @@
-#[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
+
+use diesel::sql_types::*;
+
+#[derive(Clone, Debug, SqlType)]
 #[diesel(postgres_type(name = "trip_frequency"))]
 pub struct TripFrequency {
-    pub start_time: i32,
-    pub end_time: i32,
-    pub headway_secs: i32,
-    pub exact_times: bool,
+    pub start_time: Int4,
+    pub end_time: Int4,
+    pub headway_secs: Int4,
+    pub exact_times: Bool,
 }

@@ -354,8 +354,17 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
                                     // more or is sufficiently old (over 5 days old) is wiped
                                 } else {
                                     //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
-    
+                                    use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
+                                    
+                                    let _ = diesel::update(static_download_attempts)
+                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(feed_id))
+                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
+                                    .set(catenary::schema::gtfs::static_download_attempts::dsl::failed.eq(true))
+                                    .execute(conn)
+                                    .await;
+
                                     //Delete objects from the attempt
+                                    // todo!
                                 }
                             
                         }
