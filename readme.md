@@ -19,26 +19,6 @@ The code is heavily commented, go to each folder in src for more information.
 sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip wget
 ```
 
-## Loading in Data
-Loading in data into the Postgres database is a multistep process. Ensure your postgres database is working and your password is set correctly.
-
-### Download the Transitland repo
-Transitland acts as an initial source of knowledge for Catenary-Backend, and associates static feeds and realtime feeds together. We run a fork of transitland to add additional datasets that the upstream maintainers may not approve of.
-Download and Update it via:
-```bash
-git submodule init && git submodule update
-```
-
-If you already have it, remember to git pull / merge changes
-To do this, cd into the folder `transitland-atlas` and run `git pull`
-
-### Install Systemd Service
-```bash
-sudo cp transitbackend.service /etc/systemd/system/transitbackend.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now transitbackend.service
-```
-
 ## For Contributors
 
 For unix users, running `git config core.hooksPath .githooks` is recommended.
