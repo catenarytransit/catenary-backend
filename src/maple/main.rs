@@ -353,6 +353,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
                                     //any feed that does not have a date range any
                                     // more or is sufficiently old (over 5 days old) is wiped
                                 } else {
+                                    //print output
+                                    eprintln!("GTFS process failed for feed {},\n {:?}", feed_id, gtfs_process_result.unwrap_err());
+
                                     //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
                                     use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
                                     
