@@ -91,6 +91,7 @@ postgis_diesel = "2.3.0"
 db-pool = {version = "0.1.3", git = "https://github.com/catenarytransit/db-pool", features= ["diesel-async-postgres", "diesel-async-bb8"]}
 diesel-async = "0.4.1"
 diesel-derive-newtype = "2.1.1"
+async-std = "1.12.0"
 
 [[bin]]
 name = "maple"

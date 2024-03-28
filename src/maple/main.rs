@@ -16,6 +16,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::runtime;
+use std::thread;
 
 mod gtfs_handlers;
 mod gtfs_ingestion_sequence;
@@ -33,7 +34,7 @@ use dmfr_folder_reader::read_folders;
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::transitland_download::DownloadedFeedsInformation;
 
-fn update_transitland_submodule() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn update_transitland_submodule() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly
     match Repository::open("./") {
         Ok(repo) => {
@@ -70,7 +71,7 @@ fn update_transitland_submodule() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 }
 
-async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
     let _ = update_transitland_submodule()?;
 
@@ -226,7 +227,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
                 }
             }))
             .buffer_unordered(64)
-            .collect::<Vec<Result<(), Box<dyn Error>>>>()
+            .collect::<Vec<Result<(), Box<dyn Error + Send + Sync>>>>()
             .await;
 
             let download_feed_info_hashmap: HashMap<String, DownloadedFeedsInformation> =
@@ -393,7 +394,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     let _ = run_ingest().await;
 }
