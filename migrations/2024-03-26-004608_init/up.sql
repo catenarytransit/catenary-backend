@@ -54,6 +54,8 @@ CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.stati
 CREATE TABLE gtfs.static_feeds (
     onestop_feed_id text NOT NULL PRIMARY KEY,
     chateau text NOT NULL,
+    default_lang text,
+    languages_avaliable text[] NOT NULL,
     previous_chateau_name text NOT NULL,
     hull GEOMETRY(POLYGON,4326)
 );

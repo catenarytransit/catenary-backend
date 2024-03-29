@@ -260,6 +260,8 @@ pub mod gtfs {
         gtfs.static_feeds (onestop_feed_id) {
             onestop_feed_id -> Text,
             chateau -> Text,
+            default_lang -> Nullable<Text>,
+            languages_avaliable -> Array<Nullable<Text>>,
             previous_chateau_name -> Text,
             hull -> Nullable<Geometry>,
         }
