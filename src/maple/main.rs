@@ -296,9 +296,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             // todo! perform additional checks to ensure feed is not a zip bomb
 
-            // create thread pool
-            // process GTFS and insert into system
-
             let attempt_ids: HashMap<String, String> = {
                 let mut attempt_ids = HashMap::new();
                 for (feed_id, _) in unzip_feeds.iter() {
@@ -313,6 +310,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             let unzip_feeds_clone = unzip_feeds.clone();
 
+            // 5. Process GTFS feeds
+
+            //Stream the feeds into the processing function
             futures::stream::iter(
                 unzip_feeds_clone
                 .into_iter()
@@ -328,9 +328,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .map(|x| x.unwrap())
                 .map(|(feed_id, attempt_id, chateau_id)| {
                         
+                            //clone the smart reference to the connection pool
                             let arc_conn_pool = Arc::clone(&arc_conn_pool);
                             let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
                             async move {
+                                //connect to postgres
                                 let conn_pool = arc_conn_pool.as_ref();
                                 let conn_pre = conn_pool.get().await;
                                 let conn = &mut conn_pre.unwrap();

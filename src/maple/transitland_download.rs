@@ -24,6 +24,8 @@ struct StaticFeedToDownload {
 //You are required under the APGL license to retain this annotation
 
 //It's giving UC Berkeley lab assignment!!! 🐻💅🐻💅
+//context for this joke: https://inst.eecs.berkeley.edu/~cs162/fa22/static/hw/hw-map-reduce-rs/
+// UC Berkeley has exercises from their Rust computing courses that pack massive structs as result
 #[derive(Clone)]
 pub struct DownloadedFeedsInformation {
     pub feed_id: String,
