@@ -15,10 +15,10 @@ The kubernetes configuration is generated using Helm templates. See Helm's docum
 The code is heavily commented, go to each folder in src for more information.
 
 ### Submodules maintained 
-**Dmfr folder reader**: reads data from transitland-atlas into raw structs
-**Château**: Associates feeds with operators and vise versa using depth first search in knowledge graph
-**Amtrak GTFS rt**: Conversion of proprietary realtime data from amtrak's website into gtfs-rt.
-**Zotgtfs**: conversion of Transloc data and hand typed schedules from Anteater Express to GTFS schedule and realtime.
+- **Dmfr folder reader**: reads data from transitland-atlas into raw structs
+- **Château**: Associates feeds with operators and vise versa using depth first search in knowledge graph
+- **Amtrak GTFS rt**: Conversion of proprietary realtime data from amtrak's website into gtfs-rt.
+- **Zotgtfs**: conversion of Transloc data and hand typed schedules from Anteater Express to GTFS schedule and realtime.
 
 ## Install Dependencies
 
