@@ -69,7 +69,7 @@ pub async fn gtfs_process_feed(
 
         let agency_row = catenary::models::Agency {
             static_onestop_id: feed_id.to_string(),
-            agency_id: agency.id.clone(),
+            agency_id: agency.id.clone().unwrap_or_else(|| "".to_string()),
             attempt_id: attempt_id.to_string(),
             agency_name: agency.name.clone(),
             agency_name_translations: None,

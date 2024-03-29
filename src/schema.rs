@@ -6,9 +6,9 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
-        gtfs.agencies (static_onestop_id, attempt_id) {
+        gtfs.agencies (static_onestop_id, attempt_id, agency_id) {
             static_onestop_id -> Text,
-            agency_id -> Nullable<Text>,
+            agency_id -> Text,
             attempt_id -> Text,
             agency_name -> Text,
             agency_name_translations -> Nullable<Jsonb>,

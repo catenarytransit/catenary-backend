@@ -102,7 +102,7 @@ pub struct IngestedStatic {
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct Agency {
     pub static_onestop_id: String,
-    pub agency_id: Option<String>,
+    pub agency_id: String,
     pub attempt_id: String,
     pub agency_name: String,
     pub agency_name_translations: Option<Value>,
