@@ -15,8 +15,8 @@ use std::error::Error;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tokio::runtime;
 use std::thread;
+use tokio::runtime;
 
 mod gtfs_handlers;
 mod gtfs_ingestion_sequence;
@@ -71,7 +71,7 @@ fn update_transitland_submodule() -> Result<(), Box<dyn Error + std::marker::Sen
     }
 }
 
-async fn run_ingest(rt: Arc<tokio::runtime::Runtime>) -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
     let _ = update_transitland_submodule()?;
 
@@ -297,82 +297,90 @@ async fn run_ingest(rt: Arc<tokio::runtime::Runtime>) -> Result<(), Box<dyn Erro
 
             let unzip_feeds_clone = unzip_feeds.clone();
 
-            for (feed_id, _) in unzip_feeds_clone
+            futures::stream::iter(
+                unzip_feeds_clone
                 .into_iter()
                 .filter(|unzipped_feed| unzipped_feed.1 == true)
-            {
-                let attempt_ids = Arc::clone(&attempt_ids);
-                let attempt_id = attempt_ids.get(&feed_id).unwrap().clone();
-                if let Some(chateau_id) = feed_id_to_chateau_lookup.get(&feed_id) {
-                    let chateau_id = chateau_id.clone();
-
-                    rt.spawn(
-                    {
-                        let arc_conn_pool = Arc::clone(&arc_conn_pool);
-                        let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
-                        async move {
-                            let conn_pool = arc_conn_pool.as_ref();
-                            let conn_pre = conn_pool.get().await;
-                            let conn = &mut conn_pre.unwrap();
+                .map(|(feed_id, _)| (feed_id.clone(),attempt_ids.get(&feed_id).unwrap().clone()))
+                .map(|(feed_id, attempt_id)| {
+                    match feed_id_to_chateau_lookup.get(&feed_id) {
+                        Some(chateau_id) => Some((feed_id, attempt_id, chateau_id.clone())),
+                        None => None
+                    }
+                })
+                .filter(|x| x.is_some())
+                .map(|x| x.unwrap())
+                .map(|(feed_id, attempt_id, chateau_id)| {
+                        
+                            let arc_conn_pool = Arc::clone(&arc_conn_pool);
+                            let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
+                            async move {
+                                let conn_pool = arc_conn_pool.as_ref();
+                                let conn_pre = conn_pool.get().await;
+                                let conn = &mut conn_pre.unwrap();
+        
+                                let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
+        
+                                
+                                    // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
+                                    let gtfs_process_result = gtfs_process_feed(
+                                        &feed_id,
+                                        Arc::clone(&arc_conn_pool),
+                                        &chateau_id,
+                                        &attempt_id,
+                                        &this_download_data,
+                                    )
+                                    .await;
+        
+                                    if gtfs_process_result.is_ok() {
+                                        // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
+        
+                                        use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
+        
+                                        let _ = diesel::update(static_download_attempts)
+                                            .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(feed_id))
+                                            .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
+                                            .set(catenary::schema::gtfs::static_download_attempts::dsl::ingested.eq(true))
+                                            .execute(conn)
+                                            .await;
+        
+                                        //determine if the old one should be deleted, if so, delete it
+        
+                                        //algorithm:
+                                        // If the latest file does not contain a feed info, wipe all old feeds and put the latest file into production
+        
+                                        //call function to clean old gtfs feeds, accepting feed_id, sqlx pool as arguments
+                                        //greedy algorithm starts from newest feeds and examines date ranges, and works successively towards older feeds, assigning date ranges to feeds not already taken.
+                                        //data structure can be a Vec of (start_date, end_date, attempt_id or hash)
+                                        // older feeds cannot claim dates that are after a newer feed's experation date
+                                        //any feed that does not have a date range any
+                                        // more or is sufficiently old (over 5 days old) is wiped
+                                    } else {
+                                        //print output
+                                        eprintln!("GTFS process failed for feed {},\n {:?}", feed_id, gtfs_process_result.unwrap_err());
     
-                            let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
-    
-                            
-                                // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
-                                let gtfs_process_result = gtfs_process_feed(
-                                    &feed_id,
-                                    Arc::clone(&arc_conn_pool),
-                                    &chateau_id,
-                                    &attempt_id,
-                                    &this_download_data,
-                                )
-                                .await;
-    
-                                if gtfs_process_result.is_ok() {
-                                    // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
-    
-                                    use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
-    
-                                    let _ = diesel::update(static_download_attempts)
+                                        //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
+                                        use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
+                                        
+                                        let _ = diesel::update(static_download_attempts)
                                         .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(feed_id))
                                         .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
-                                        .set(catenary::schema::gtfs::static_download_attempts::dsl::ingested.eq(true))
+                                        .set(catenary::schema::gtfs::static_download_attempts::dsl::failed.eq(true))
                                         .execute(conn)
                                         .await;
     
-                                    //determine if the old one should be deleted, if so, delete it
-    
-                                    //algorithm:
-                                    // If the latest file does not contain a feed info, wipe all old feeds and put the latest file into production
-    
-                                    //call function to clean old gtfs feeds, accepting feed_id, sqlx pool as arguments
-                                    //greedy algorithm starts from newest feeds and examines date ranges, and works successively towards older feeds, assigning date ranges to feeds not already taken.
-                                    //data structure can be a Vec of (start_date, end_date, attempt_id or hash)
-                                    // older feeds cannot claim dates that are after a newer feed's experation date
-                                    //any feed that does not have a date range any
-                                    // more or is sufficiently old (over 5 days old) is wiped
-                                } else {
-                                    //print output
-                                    eprintln!("GTFS process failed for feed {},\n {:?}", feed_id, gtfs_process_result.unwrap_err());
-
-                                    //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
-                                    use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
-                                    
-                                    let _ = diesel::update(static_download_attempts)
-                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(feed_id))
-                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
-                                    .set(catenary::schema::gtfs::static_download_attempts::dsl::failed.eq(true))
-                                    .execute(conn)
-                                    .await;
-
-                                    //Delete objects from the attempt
-                                    // todo!
-                                }
-                            
-                        }
-                    });
-                }
-            }
+                                        //Delete objects from the attempt
+                                        // todo!
+                                    }
+                                
+                            }
+                        
+                    }
+                
+            ))
+            .buffer_unordered(8)
+            .collect::<Vec<()>>()
+            .await;
         }
     } else {
         eprintln!("Not enough data in transitland!");
@@ -381,16 +389,7 @@ async fn run_ingest(rt: Arc<tokio::runtime::Runtime>) -> Result<(), Box<dyn Erro
     Ok(())
 }
 
-fn main() {
-    let rt = Arc::new(runtime::Builder::new_multi_thread()
-    .thread_name_fn(|| {
-        static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-        let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-        format!("catenary-maple-ingest-{}", id)
-    })
-    .enable_all()
-    .build()
-    .unwrap());
-
-    let _ = rt.block_on(run_ingest(Arc::clone(&rt)));
+#[tokio::main]
+async fn main() {
+    let _ = run_ingest().await;
 }
