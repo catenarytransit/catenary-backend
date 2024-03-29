@@ -12,6 +12,15 @@ use crate::gtfs_handlers::stops_associated_items::*;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::DownloadedFeedsInformation;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use gtfs_structures::ContinuousPickupDropOff;
+
+pub struct GtfsSummary {
+    pub feed_start_date: Option<String>,
+    pub feed_end_date: Option<String>,
+    pub languages_avaliable: Vec<String>,
+    pub default_lang: Option<String>,
+    pub general_timezone: String,
+}
 
 // take a feed id and throw it into postgres
 pub async fn gtfs_process_feed(
@@ -24,30 +33,6 @@ pub async fn gtfs_process_feed(
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
-
-    //CREATE entry in gtfs.ingested_static
-    use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
-
-    let ingestion_static_data = catenary::models::IngestedStatic {
-        onestop_feed_id: feed_id.to_string(),
-        attempt_id: attempt_id.to_string(),
-        file_hash: this_download_data.hash.unwrap().clone().to_string(),
-        ingest_start_unix_time_ms: chrono::Utc::now().timestamp_millis(),
-        ingestion_version: crate::gtfs_handlers::MAPLE_INGESTION_VERSION,
-        ingesting_in_progress: true,
-        ingestion_successfully_finished: false,
-        ingestion_errored: false,
-        production: false,
-        deleted: false,
-        feed_expiration_date: None,
-        feed_start_date: None,
-        languages_avaliable: Vec::new(),
-    };
-
-    diesel::insert_into(ingested_static)
-        .values(&ingestion_static_data)
-        .execute(conn)
-        .await?;
 
     //read the GTFS zip file
     let path = format!("gtfs_uncompressed/{}", feed_id);
@@ -122,28 +107,29 @@ pub async fn gtfs_process_feed(
 
         use gtfs_structures::DirectionType;
 
-        let frequencies_vec = match trip.frequencies.len() {
-            0 => None,
-            _ => Some(
-                trip.frequencies
-                    .iter()
-                    .map(|freq| {
-                        Some(catenary::models::TripFrequencyModel {
-                            start_time: freq.start_time as i32,
-                            end_time: freq.end_time as i32,
-                            headway_secs: freq.headway_secs as i32,
-                            exact_times: match freq.exact_times {
-                                Some(exact_times_num) => match exact_times_num {
-                                    ExactTimes::FrequencyBased => false,
-                                    ExactTimes::ScheduleBased => true,
+        let frequencies_vec: Option<Vec<Option<catenary::models::TripFrequencyModel>>> =
+            match trip.frequencies.len() {
+                0 => None,
+                _ => Some(
+                    trip.frequencies
+                        .iter()
+                        .map(|freq| {
+                            Some(catenary::models::TripFrequencyModel {
+                                start_time: freq.start_time as i32,
+                                end_time: freq.end_time as i32,
+                                headway_secs: freq.headway_secs as i32,
+                                exact_times: match freq.exact_times {
+                                    Some(exact_times_num) => match exact_times_num {
+                                        ExactTimes::FrequencyBased => false,
+                                        ExactTimes::ScheduleBased => true,
+                                    },
+                                    None => false,
                                 },
-                                None => false,
-                            },
+                            })
                         })
-                    })
-                    .collect(),
-            ),
-        };
+                        .collect(),
+                ),
+            };
 
         let trip_pg = catenary::models::Trip {
             onestop_feed_id: feed_id.to_string(),
@@ -181,7 +167,7 @@ pub async fn gtfs_process_feed(
                 gtfs_structures::Availability::InformationNotAvailable => Some(0),
             },
             chateau: chateau_id.to_string(),
-            frequencies: frequencies_vec,
+            frequencies: None,
         };
 
         use catenary::schema::gtfs::trips::dsl::trips;
@@ -191,7 +177,87 @@ pub async fn gtfs_process_feed(
             .execute(conn)
             .await?;
 
+        //insert trip frequencies into seperate table for now until custom types are fixed in diesel or i find a better solution
+        use catenary::models::TripFrequencyTableRow;
+
+        let frequencies_for_table = trip
+            .frequencies
+            .iter()
+            .enumerate()
+            .map(|(i, freq)| catenary::models::TripFrequencyTableRow {
+                trip_id: trip_id.clone(),
+                onestop_feed_id: feed_id.to_string(),
+                attempt_id: attempt_id.to_string(),
+                index: i as i16,
+                start_time: freq.start_time,
+                end_time: freq.end_time,
+                headway_secs: freq.headway_secs,
+                exact_times: match freq.exact_times {
+                    Some(exact_times_num) => match exact_times_num {
+                        ExactTimes::FrequencyBased => false,
+                        ExactTimes::ScheduleBased => true,
+                    },
+                    None => false,
+                },
+            })
+            .collect::<Vec<TripFrequencyTableRow>>();
+
+        use catenary::schema::gtfs::trip_frequencies::dsl::trip_frequencies;
+
+        diesel::insert_into(trip_frequencies)
+            .values(frequencies_for_table)
+            .execute(conn)
+            .await?;
+
         //inside insert stoptimes
+
+        let stop_times_pg = trip
+            .stop_times
+            .iter()
+            .map(|stop_time| catenary::models::StopTime {
+                onestop_feed_id: feed_id.to_string(),
+                route_id: trip.route_id.clone(),
+                stop_headsign_translations: None,
+                trip_id: trip_id.clone(),
+                attempt_id: attempt_id.to_string(),
+                stop_id: stop_time.stop.id.clone(),
+                stop_sequence: stop_time.stop_sequence as i32,
+                arrival_time: stop_time.arrival_time,
+                departure_time: stop_time.departure_time,
+                stop_headsign: stop_time.stop_headsign.clone(),
+                pickup_type: pickup_dropoff_to_i16(&stop_time.pickup_type),
+                drop_off_type: pickup_dropoff_to_i16(&stop_time.drop_off_type),
+                shape_dist_traveled: stop_time.shape_dist_traveled,
+                timepoint: match stop_time.timepoint {
+                    gtfs_structures::TimepointType::Exact => true,
+                    gtfs_structures::TimepointType::Approximate => false,
+                },
+                chateau: chateau_id.to_string(),
+                point: match stop_time.stop.latitude {
+                    Some(latitude) => match stop_time.stop.longitude {
+                        Some(longitude) => Some(postgis_diesel::types::Point {
+                            srid: Some(4326),
+                            x: longitude,
+                            y: latitude,
+                        }),
+                        None => None,
+                    },
+                    None => None,
+                },
+
+                continuous_pickup: continuous_pickup_drop_off_to_i16(&stop_time.continuous_pickup),
+                continuous_drop_off: continuous_pickup_drop_off_to_i16(
+                    &stop_time.continuous_drop_off,
+                ),
+            })
+            .collect::<Vec<catenary::models::StopTime>>();
+
+        use catenary::schema::gtfs::stoptimes::dsl::stoptimes;
+
+        diesel::insert_into(stoptimes)
+            .values(stop_times_pg)
+            .execute(conn)
+            .await?;
     }
 
     //insert stops
@@ -202,4 +268,24 @@ pub async fn gtfs_process_feed(
     // insert feed info
 
     Ok(())
+}
+
+pub fn pickup_dropoff_to_i16(x: &gtfs_structures::PickupDropOffType) -> i16 {
+    match x {
+        gtfs_structures::PickupDropOffType::Regular => 0,
+        gtfs_structures::PickupDropOffType::NotAvailable => 1,
+        gtfs_structures::PickupDropOffType::ArrangeByPhone => 2,
+        gtfs_structures::PickupDropOffType::CoordinateWithDriver => 3,
+        gtfs_structures::PickupDropOffType::Unknown(x) => *x,
+    }
+}
+
+pub fn continuous_pickup_drop_off_to_i16(x: &ContinuousPickupDropOff) -> i16 {
+    match x {
+        ContinuousPickupDropOff::Continuous => 0,
+        ContinuousPickupDropOff::NotAvailable => 1,
+        ContinuousPickupDropOff::ArrangeByPhone => 2,
+        ContinuousPickupDropOff::CoordinateWithDriver => 3,
+        ContinuousPickupDropOff::Unknown(x) => *x,
+    }
 }

@@ -18,6 +18,10 @@ use std::sync::Arc;
 use std::thread;
 use tokio::runtime;
 
+use crate::cleanup::delete_attempt_objects;
+
+mod cleanup;
+
 mod gtfs_handlers;
 mod gtfs_ingestion_sequence;
 
@@ -332,7 +336,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                 let conn = &mut conn_pre.unwrap();
         
                                 let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
-        
+                                
+                                    let start_time = chrono::Utc::now().timestamp_millis();
                                 
                                     // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
                                     let gtfs_process_result = gtfs_process_feed(
@@ -350,9 +355,36 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
         
                                         let _ = diesel::update(static_download_attempts)
-                                            .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(feed_id))
+                                            .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
                                             .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
                                             .set(catenary::schema::gtfs::static_download_attempts::dsl::ingested.eq(true))
+                                            .execute(conn)
+                                            .await;
+
+                                        use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
+
+                                        let ingested_static_pq = catenary::models::IngestedStatic {
+                                            onestop_feed_id: feed_id.clone(),
+                                            attempt_id: attempt_id.clone(),
+                                            languages_avaliable: vec![],
+                                            file_hash: format!("{}",download_feed_info_hashmap.get(&feed_id).unwrap().hash.unwrap()),
+                                            ingest_start_unix_time_ms: start_time,
+                                            ingest_end_unix_time_ms: chrono::Utc::now().timestamp_millis(),
+                                            ingest_duration_ms: (chrono::Utc::now().timestamp_millis() - start_time) as i32,
+                                            ingesting_in_progress: false,
+                                            ingestion_errored: false,
+                                            ingestion_successfully_finished: true,
+                                            deleted: false,
+                                            //in the future, set this to true unless the feed has a start date and the start date + timezone hasn't startd yet
+                                            production: true,
+                                            feed_expiration_date: None,
+                                            feed_start_date: None,
+                                            ingestion_version: MAPLE_INGESTION_VERSION,
+                                        };
+
+                                        let _ = diesel::insert_into(ingested_static)
+                                            .values(&ingested_static_pq)
+                                            .on_conflict_do_nothing()
                                             .execute(conn)
                                             .await;
         
@@ -375,15 +407,23 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
                                         
                                         let _ = diesel::update(static_download_attempts)
-                                        .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(feed_id))
+                                        .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
                                         .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
                                         .set(catenary::schema::gtfs::static_download_attempts::dsl::failed.eq(true))
                                         .execute(conn)
                                         .await;
     
                                         //Delete objects from the attempt
-                                        // todo!
+                                        let _ = delete_attempt_objects(&feed_id, &attempt_id, Arc::clone(&arc_conn_pool)).await;
                                     }
+                                    
+                                    //delete InProgressStaticIngest regardless of result
+
+                                    use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
+
+                                    let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
+                                    .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
+                                .execute(conn).await;
                                 
                             }
                         

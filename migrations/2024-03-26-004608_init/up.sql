@@ -26,6 +26,8 @@ CREATE TABLE gtfs.ingested_static (
     file_hash text NOT NULL,
     attempt_id text NOT NULL,
     ingest_start_unix_time_ms bigint NOT NULL,
+    ingest_end_unix_time_ms bigint NOT NULL,
+    ingest_duration_ms int NOT NULL,
     ingesting_in_progress boolean NOT NULL,
     ingestion_successfully_finished boolean NOT NULL,
     ingestion_errored boolean NOT NULL,
@@ -33,9 +35,18 @@ CREATE TABLE gtfs.ingested_static (
     deleted boolean NOT NULL,
     feed_expiration_date date,
     feed_start_date date,
+    default_lang text,
     languages_avaliable text[] NOT NULL,
     ingestion_version integer NOT NULL,
-    PRIMARY KEY (onestop_feed_id, ingest_start_unix_time_ms)
+    PRIMARY KEY (onestop_feed_id, attempt_id)
+);
+
+CREATE TABLE gtfs.in_progress_static_ingests (
+    onestop_feed_id text NOT NULL,
+    file_hash text NOT NULL,
+    attempt_id text NOT NULL,
+    ingest_start_unix_time_ms bigint NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id)
 );
 
 CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.static_download_attempts (file_hash);
@@ -188,8 +199,8 @@ check (
 );
 
 CREATE TABLE gtfs.trips (
-    trip_id text NOT NULL,
     onestop_feed_id text NOT NULL,
+    trip_id text NOT NULL,
     attempt_id text NOT NULL,
     route_id text NOT NULL,
     service_id text NOT NULL,
@@ -205,7 +216,21 @@ CREATE TABLE gtfs.trips (
     bikes_allowed smallint NOT NULL,
     chateau text NOT NULL,
     frequencies trip_frequency[],
+    has_frequencies boolean NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id)
+);
+
+CREATE TABLE gtfs.trip_frequencies (
+    onestop_feed_id text NOT NULL,
+    trip_id text NOT NULL,
+    attempt_id text NOT NULL,
+    index smallint NOT NULL,
+    start_time OID NOT NULL,
+    end_time OID NOT NULL,
+    headway_secs OID NOT NULL,
+    -- a false means 0 or FrequencyBased, true means ScheduleBased or 1
+    exact_times boolean NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, trip_id, index)
 );
 
 CREATE TABLE gtfs.f_test (
@@ -229,7 +254,7 @@ CREATE TABLE gtfs.stops (
     parent_station text,
     zone_id text,
     url text,
-    point GEOMETRY(POINT, 4326) NOT NULL,
+    point GEOMETRY(POINT, 4326),
     timezone text,
     wheelchair_boarding int,
     primary_route_type text,
@@ -256,22 +281,25 @@ CREATE TABLE gtfs.stoptimes (
     attempt_id text NOT NULL,
     trip_id text NOT NULL,
     stop_sequence int NOT NULL,
-    arrival_time bigint,
-    departure_time bigint,
+    arrival_time OID,
+    departure_time OID,
     stop_id text NOT NULL,
     stop_headsign text,
     stop_headsign_translations jsonb,
-    pickup_type int,
-    drop_off_type int,
-    shape_dist_traveled double precision,
-    timepoint int,
-    continuous_pickup smallint,
-    continuous_drop_off smallint,
-    point GEOMETRY(POINT, 4326) NOT NULL,
-    route_id text,
+    pickup_type smallint NOT NULL,
+    drop_off_type smallint NOT NULL,
+    shape_dist_traveled float4,
+    -- true is 1, false is 0
+    timepoint bool NOT NULL,
+    continuous_pickup smallint NOT NULL,
+    continuous_drop_off smallint NOT NULL,
+    point GEOMETRY(POINT, 4326),
+    route_id text NOT NULL,
     chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id, stop_sequence)
 );
+
+CREATE INDEX stoptimes_chateau_idx ON gtfs.stops (chateau);
 
 CREATE TABLE gtfs.gtfs_errors (
 onestop_feed_id text NOT NULL,
@@ -304,8 +332,11 @@ CREATE TABLE gtfs.calendar_dates (
     service_id text NOT NULL,
     gtfs_date date NOT NULL,
     exception_type smallint NOT NULL,
+    chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, service_id, gtfs_date)
 );
+
+CREATE INDEX calendar_dates_chateau ON gtfs.calendar_dates (chateau); 
 
 CREATE TABLE gtfs.calendar (
     onestop_feed_id text NOT NULL,
@@ -320,7 +351,10 @@ CREATE TABLE gtfs.calendar (
     sunday boolean NOT NULL,
     gtfs_start_date date NOT NULL,
     gtfs_end_date date NOT NULL,
+    chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, service_id)
 );
+
+CREATE INDEX calendar_chateau ON gtfs.calendar (chateau); 
 
 -- translations does not need a table, values should be directly inserted into the data structure

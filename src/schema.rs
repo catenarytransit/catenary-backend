@@ -41,6 +41,7 @@ pub mod gtfs {
             sunday -> Bool,
             gtfs_start_date -> Date,
             gtfs_end_date -> Date,
+            chateau -> Text,
         }
     }
 
@@ -55,6 +56,7 @@ pub mod gtfs {
             service_id -> Text,
             gtfs_date -> Date,
             exception_type -> Int2,
+            chateau -> Text,
         }
     }
 
@@ -123,11 +125,26 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
-        gtfs.ingested_static (onestop_feed_id, ingest_start_unix_time_ms) {
+        gtfs.in_progress_static_ingests (onestop_feed_id, attempt_id) {
             onestop_feed_id -> Text,
             file_hash -> Text,
             attempt_id -> Text,
             ingest_start_unix_time_ms -> Int8,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.ingested_static (onestop_feed_id, attempt_id) {
+            onestop_feed_id -> Text,
+            file_hash -> Text,
+            attempt_id -> Text,
+            ingest_start_unix_time_ms -> Int8,
+            ingest_end_unix_time_ms -> Int8,
+            ingest_duration_ms -> Int4,
             ingesting_in_progress -> Bool,
             ingestion_successfully_finished -> Bool,
             ingestion_errored -> Bool,
@@ -135,6 +152,7 @@ pub mod gtfs {
             deleted -> Bool,
             feed_expiration_date -> Nullable<Date>,
             feed_start_date -> Nullable<Date>,
+            default_lang -> Nullable<Text>,
             languages_avaliable -> Array<Nullable<Text>>,
             ingestion_version -> Int4,
         }
@@ -280,7 +298,7 @@ pub mod gtfs {
             parent_station -> Nullable<Text>,
             zone_id -> Nullable<Text>,
             url -> Nullable<Text>,
-            point -> Geometry,
+            point -> Nullable<Geometry>,
             timezone -> Nullable<Text>,
             wheelchair_boarding -> Nullable<Int4>,
             primary_route_type -> Nullable<Text>,
@@ -309,19 +327,19 @@ pub mod gtfs {
             attempt_id -> Text,
             trip_id -> Text,
             stop_sequence -> Int4,
-            arrival_time -> Nullable<Int8>,
-            departure_time -> Nullable<Int8>,
+            arrival_time -> Nullable<Oid>,
+            departure_time -> Nullable<Oid>,
             stop_id -> Text,
             stop_headsign -> Nullable<Text>,
             stop_headsign_translations -> Nullable<Jsonb>,
-            pickup_type -> Nullable<Int4>,
-            drop_off_type -> Nullable<Int4>,
-            shape_dist_traveled -> Nullable<Float8>,
-            timepoint -> Nullable<Int4>,
-            continuous_pickup -> Nullable<Int2>,
-            continuous_drop_off -> Nullable<Int2>,
-            point -> Geometry,
-            route_id -> Nullable<Text>,
+            pickup_type -> Int2,
+            drop_off_type -> Int2,
+            shape_dist_traveled -> Nullable<Float4>,
+            timepoint -> Bool,
+            continuous_pickup -> Int2,
+            continuous_drop_off -> Int2,
+            point -> Nullable<Geometry>,
+            route_id -> Text,
             chateau -> Text,
         }
     }
@@ -331,9 +349,26 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
-        gtfs.trips (onestop_feed_id, attempt_id, trip_id) {
-            trip_id -> Text,
+        gtfs.trip_frequencies (onestop_feed_id, attempt_id, trip_id, index) {
             onestop_feed_id -> Text,
+            trip_id -> Text,
+            attempt_id -> Text,
+            index -> Int2,
+            start_time -> Oid,
+            end_time -> Oid,
+            headway_secs -> Oid,
+            exact_times -> Bool,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.trips (onestop_feed_id, attempt_id, trip_id) {
+            onestop_feed_id -> Text,
+            trip_id -> Text,
             attempt_id -> Text,
             route_id -> Text,
             service_id -> Text,
@@ -349,6 +384,7 @@ pub mod gtfs {
             bikes_allowed -> Int2,
             chateau -> Text,
             frequencies -> Nullable<Array<Nullable<TripFrequency>>>,
+            has_frequencies -> Bool,
         }
     }
 
@@ -360,6 +396,7 @@ pub mod gtfs {
         f_test,
         feed_info,
         gtfs_errors,
+        in_progress_static_ingests,
         ingested_static,
         realtime_feeds,
         realtime_passwords,
@@ -370,6 +407,7 @@ pub mod gtfs {
         static_passwords,
         stops,
         stoptimes,
+        trip_frequencies,
         trips,
     );
 }
