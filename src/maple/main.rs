@@ -71,6 +71,18 @@ fn update_transitland_submodule() -> Result<(), Box<dyn Error + std::marker::Sen
     }
 }
 
+fn get_threads_gtfs() -> usize {
+    let thread_env = std::env::var("THREADS_GTFS");
+
+    match thread_env {
+        Ok(thread_env) => match thread_env.parse::<usize>() {
+            Ok(thread_count) => thread_count,
+            Err(_) => 4,
+        },
+        Err(_) => 4,
+    }
+}
+
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
     let _ = update_transitland_submodule()?;
@@ -378,7 +390,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                     }
                 
             ))
-            .buffer_unordered(8)
+            .buffer_unordered(get_threads_gtfs())
             .collect::<Vec<()>>()
             .await;
         }
