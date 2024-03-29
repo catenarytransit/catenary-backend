@@ -117,7 +117,7 @@ CREATE TABLE gtfs.agencies (
     agency_fare_url	text,
     agency_fare_url_translations jsonb,
     chateau text NOT NULL,
-    PRIMARY KEY (static_onestop_id, attempt_id)
+    PRIMARY KEY (static_onestop_id, attempt_id, agency_id)
 );
 
 CREATE INDEX IF NOT EXISTS agencies_chateau ON gtfs.agencies (chateau);
