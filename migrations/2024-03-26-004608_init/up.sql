@@ -204,7 +204,7 @@ CREATE TABLE gtfs.trips (
     wheelchair_accessible smallint,
     bikes_allowed smallint NOT NULL,
     chateau text NOT NULL,
-    frequencies gtfs.trip_frequency[] NOT NULL,
+    frequencies gtfs.trip_frequency[],
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id)
 );
 

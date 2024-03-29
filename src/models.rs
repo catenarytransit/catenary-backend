@@ -128,11 +128,11 @@ pub struct Trip {
     pub wheelchair_accessible: Option<i16>,
     pub bikes_allowed: i16,
     pub chateau: String,
-    pub frequencies: Vec<Option<TripFrequencyModel>>,
+    pub frequencies: Option<Vec<Option<TripFrequencyModel>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, AsExpression)]
-#[sql_type = "diesel::sql_types::Uuid"]
+#[sql_type = "crate::custom_pg_types::TripFrequency"]
 pub struct TripFrequencyModel {
     pub start_time: i32,
     pub end_time: i32,

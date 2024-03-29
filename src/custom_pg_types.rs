@@ -1,7 +1,7 @@
 use diesel::sql_types::*;
 
 #[derive(Clone, Debug, SqlType)]
-#[diesel(postgres_type(name = "trip_frequency"))]
+#[diesel(postgres_type(name = "gtfs.trip_frequency"))]
 pub struct TripFrequency {
     pub start_time: Int4,
     pub end_time: Int4,

@@ -348,7 +348,7 @@ pub mod gtfs {
             wheelchair_accessible -> Nullable<Int2>,
             bikes_allowed -> Int2,
             chateau -> Text,
-            frequencies -> Array<Nullable<TripFrequency>>,
+            frequencies -> Nullable<Array<Nullable<TripFrequency>>>,
         }
     }
 
