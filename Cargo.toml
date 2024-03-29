@@ -112,3 +112,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "spruce"
 path = "src/spruce/main.rs"
+
+#Test binaries
+[[bin]]
+name = "pg_tests"
+path = "src/pg_tests?main.rs"
