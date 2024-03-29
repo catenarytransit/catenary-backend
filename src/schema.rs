@@ -77,6 +77,17 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.f_test (trip_id) {
+            trip_id -> Text,
+            f -> Nullable<Array<Nullable<TripFrequency>>>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.feed_info (onestop_feed_id, attempt_id, feed_publisher_name) {
             onestop_feed_id -> Text,
             feed_publisher_name -> Text,
@@ -337,7 +348,7 @@ pub mod gtfs {
             wheelchair_accessible -> Nullable<Int2>,
             bikes_allowed -> Int2,
             chateau -> Text,
-            frequencies -> Nullable<Array<Nullable<TripFrequency>>>,
+            frequencies -> Array<Nullable<TripFrequency>>,
         }
     }
 
@@ -346,6 +357,7 @@ pub mod gtfs {
         calendar,
         calendar_dates,
         chateaus,
+        f_test,
         feed_info,
         gtfs_errors,
         ingested_static,

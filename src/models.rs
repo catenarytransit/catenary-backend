@@ -1,19 +1,11 @@
-use crate::custom_pg_types;
 use crate::custom_pg_types::TripFrequency;
-use diesel::backend::RawValue;
-use diesel::deserialize;
 use diesel::deserialize::FromSql;
-use diesel::pg;
-use diesel::pg::sql_types::Jsonb;
 use diesel::pg::Pg;
 use diesel::prelude::*;
 use diesel::serialize::ToSql;
 use diesel::sql_types::*;
 use diesel::AsExpression;
-use diesel::FromSqlRow;
-use diesel::SqlType;
 use serde_json::Value;
-use std::io::Write;
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
 #[diesel(table_name = crate::schema::gtfs::shapes)]
@@ -136,7 +128,7 @@ pub struct Trip {
     pub wheelchair_accessible: Option<i16>,
     pub bikes_allowed: i16,
     pub chateau: String,
-    pub frequencies: Option<Vec<Option<TripFrequencyModel>>>,
+    pub frequencies: Vec<Option<TripFrequencyModel>>,
 }
 
 #[derive(Clone, Debug, PartialEq, AsExpression)]

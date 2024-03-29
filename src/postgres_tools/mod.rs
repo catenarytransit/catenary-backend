@@ -1,17 +1,9 @@
 // Copyright: Kyler Chin <kyler@catenarymaps.org>
 // Catenary Transit Initiatives
 // Removal of the attribution is not allowed, as covered under the AGPL license
-use db_pool::r#async::DatabasePool;
-use db_pool::r#async::DatabasePoolBuilderTrait;
-use db_pool::r#async::DieselAsyncPostgresBackend;
-use db_pool::r#async::DieselBb8;
-use db_pool::PrivilegedPostgresConfig;
 use diesel_async::pooled_connection::bb8::Pool;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
-use diesel_async::RunQueryDsl;
-use dotenvy::dotenv;
 use std::env;
-use tokio::sync::OnceCell;
 
 pub type CatenaryPostgresPool =
     bb8::Pool<AsyncDieselConnectionManager<diesel_async::AsyncPgConnection>>;

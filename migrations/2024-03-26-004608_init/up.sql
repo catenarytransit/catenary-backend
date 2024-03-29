@@ -167,7 +167,7 @@ CREATE INDEX IF NOT EXISTS shapes_chateau ON gtfs.shapes (chateau);
 CREATE INDEX shapes_linestring_index ON gtfs.shapes USING GIST (linestring);
 
 -- no nulls so just contrain and unwrap ngl
-CREATE TYPE trip_frequency_pre AS (
+CREATE TYPE gtfs.trip_frequency_pre AS (
     start_time integer,
     end_time integer,
     headway_secs integer,
@@ -176,7 +176,7 @@ CREATE TYPE trip_frequency_pre AS (
     exact_times boolean
 );
 
-create domain trip_frequency as trip_frequency_pre
+create domain gtfs.trip_frequency as trip_frequency_pre
 check (
   (value).start_time is not null and 
   (value).start_time >=0 and 
@@ -204,8 +204,13 @@ CREATE TABLE gtfs.trips (
     wheelchair_accessible smallint,
     bikes_allowed smallint NOT NULL,
     chateau text NOT NULL,
-    frequencies trip_frequency[],
+    frequencies gtfs.trip_frequency[] NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id)
+);
+
+CREATE TABLE gtfs.f_test (
+trip_id text NOT NULL PRIMARY KEY,
+f trip_frequency[]
 );
 
 CREATE INDEX IF NOT EXISTS trips_chateau ON gtfs.trips (chateau);
