@@ -20,12 +20,11 @@ use tokio::runtime;
 
 use crate::cleanup::delete_attempt_objects;
 
+mod assign_production_tables;
+mod chateau_postprocess;
 mod cleanup;
-
 mod gtfs_handlers;
 mod gtfs_ingestion_sequence;
-
-mod chateau_postprocess;
 mod gtfs_process;
 mod refresh_metadata_tables;
 mod transitland_download;
@@ -378,8 +377,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                             ingestion_successfully_finished: true,
                                             deleted: false,
                                             default_lang: gtfs_process_result.unwrap().default_lang,
-                                            //in the future, set this to true unless the feed has a start date and the start date + timezone hasn't startd yet
-                                            production: true,
+                                            production: false,
                                             feed_expiration_date: None,
                                             feed_start_date: None,
                                             ingestion_version: MAPLE_INGESTION_VERSION,
@@ -390,18 +388,13 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                             .on_conflict_do_nothing()
                                             .execute(conn)
                                             .await;
-        
-                                        //determine if the old one should be deleted, if so, delete it
-        
-                                        //algorithm:
-                                        // If the latest file does not contain a feed info, wipe all old feeds and put the latest file into production
-        
-                                        //call function to clean old gtfs feeds, accepting feed_id, sqlx pool as arguments
-                                        //greedy algorithm starts from newest feeds and examines date ranges, and works successively towards older feeds, assigning date ranges to feeds not already taken.
-                                        //data structure can be a Vec of (start_date, end_date, attempt_id or hash)
-                                        // older feeds cannot claim dates that are after a newer feed's experation date
-                                        //any feed that does not have a date range any
-                                        // more or is sufficiently old (over 5 days old) is wiped
+
+                                        let _ = assign_production_tables::assign_production_tables(
+                                            &feed_id,
+                                            &attempt_id,
+                                            Arc::clone(&arc_conn_pool),
+                                        ).await;
+
                                     } else {
                                         //print output
                                         eprintln!("GTFS process failed for feed {},\n {:?}", feed_id, gtfs_process_result.unwrap_err());
@@ -444,7 +437,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 &chateau_result,
                 Arc::clone(&arc_conn_pool),
             );
-        
         }
     } else {
         eprintln!("Not enough data in transitland!");

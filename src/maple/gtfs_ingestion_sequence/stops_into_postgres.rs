@@ -1,12 +1,13 @@
-use std::collections::{HashMap, HashSet};
-use titlecase::titlecase;
 use catenary::postgres_tools::CatenaryPostgresPool;
-use std::sync::Arc;
-use diesel_async::RunQueryDsl;
-use diesel_async::AsyncConnection;
 use catenary::schema::gtfs::stops::dsl::stops as stops_table;
+use diesel_async::AsyncConnection;
+use diesel_async::RunQueryDsl;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use titlecase::titlecase;
 
-pub async fn stops_into_postgres(gtfs: &gtfs_structures::Gtfs,
+pub async fn stops_into_postgres(
+    gtfs: &gtfs_structures::Gtfs,
     feed_id: &str,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
     chateau_id: &str,
@@ -14,9 +15,8 @@ pub async fn stops_into_postgres(gtfs: &gtfs_structures::Gtfs,
     stop_ids_to_route_types: &HashMap<String, HashSet<i16>>,
     stop_ids_to_route_ids: &HashMap<String, HashSet<String>>,
     stop_id_to_children_ids: &HashMap<String, HashSet<String>>,
-    stop_id_to_children_route: & HashMap<String, HashSet<i16>>
-) -> Result<(), Box<dyn std::error::Error + Sync + Send>>
-    {
+    stop_id_to_children_route: &HashMap<String, HashSet<i16>>,
+) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     for (stop_id, stop) in &gtfs.stops {
         let name: Option<String> = titlecase_process_new(stop.name.as_ref());
         let display_name: Option<String> = match &name {
@@ -30,7 +30,7 @@ pub async fn stops_into_postgres(gtfs: &gtfs_structures::Gtfs,
             ),
             None => None,
         };
-    
+
         let stop_pg = catenary::models::Stop {
             onestop_feed_id: feed_id.to_string(),
             chateau: chateau_id.to_string(),
@@ -42,12 +42,15 @@ pub async fn stops_into_postgres(gtfs: &gtfs_structures::Gtfs,
             code: stop.code.clone(),
             gtfs_desc: stop.description.clone(),
             gtfs_desc_translations: None,
-            location_type: crate::gtfs_handlers::gtfs_to_int::location_type_conversion(&stop.location_type),
+            location_type: crate::gtfs_handlers::gtfs_to_int::location_type_conversion(
+                &stop.location_type,
+            ),
             children_ids: match stop_id_to_children_ids.get(&stop.id) {
-                Some(children_ids) => {
-                    children_ids.iter().map(|x| Some(x.clone())).collect::<Vec<Option<String>>>()
-                },
-                None => vec![]
+                Some(children_ids) => children_ids
+                    .iter()
+                    .map(|x| Some(x.clone()))
+                    .collect::<Vec<Option<String>>>(),
+                None => vec![],
             },
             location_alias: None,
             hidden: false,
@@ -55,43 +58,51 @@ pub async fn stops_into_postgres(gtfs: &gtfs_structures::Gtfs,
             zone_id: stop.zone_id.clone(),
             url: stop.url.clone(),
             point: match stop.latitude.is_some() && stop.longitude.is_some() {
-                true => {
-                    Some(postgis_diesel::types::Point::new(stop.longitude.unwrap(), stop.latitude.unwrap(), Some(4326)))
-                },
-                false => None
+                true => Some(postgis_diesel::types::Point::new(
+                    stop.longitude.unwrap(),
+                    stop.latitude.unwrap(),
+                    Some(4326),
+                )),
+                false => None,
             },
             timezone: stop.timezone.clone(),
             level_id: stop.level_id.clone(),
             station_feature: false,
-            wheelchair_boarding: crate::gtfs_handlers::gtfs_to_int::availability_to_int(&stop.wheelchair_boarding),
+            wheelchair_boarding: crate::gtfs_handlers::gtfs_to_int::availability_to_int(
+                &stop.wheelchair_boarding,
+            ),
             primary_route_type: match stop_ids_to_route_types.get(&stop.id) {
                 Some(route_types) => {
-                    let mut route_types = route_types.iter().map(|x| x.clone()).collect::<Vec<i16>>();
+                    let mut route_types =
+                        route_types.iter().map(|x| x.clone()).collect::<Vec<i16>>();
                     Some(route_types[0])
-                },
-                None => None
+                }
+                None => None,
             },
             platform_code: stop.platform_code.clone(),
             routes: match stop_ids_to_route_ids.get(&stop.id) {
-                Some(route_ids) => {
-                    route_ids.iter().map(|x| Some(x.clone())).collect::<Vec<Option<String>>>()
-                },
-                None => vec![]
+                Some(route_ids) => route_ids
+                    .iter()
+                    .map(|x| Some(x.clone()))
+                    .collect::<Vec<Option<String>>>(),
+                None => vec![],
             },
             children_route_types: match stop_id_to_children_route.get(&stop.id) {
-                Some(route_types) => {
-                    route_types.iter().map(|x| Some(x.clone())).collect::<Vec<Option<i16>>>()
-                },
-                None => vec![]
+                Some(route_types) => route_types
+                    .iter()
+                    .map(|x| Some(x.clone()))
+                    .collect::<Vec<Option<i16>>>(),
+                None => vec![],
             },
             tts_name: stop.tts_name.clone(),
             tts_name_translations: None,
             platform_code_translations: None,
             route_types: match stop_ids_to_route_types.get(&stop.id) {
-                Some(route_types) => {
-                    route_types.iter().map(|x| Some(x.clone())).collect::<Vec<Option<i16>>>()
-                },
-                None => vec![]
+                Some(route_types) => route_types
+                    .iter()
+                    .map(|x| Some(x.clone()))
+                    .collect::<Vec<Option<i16>>>(),
+                None => vec![],
             },
         };
 
@@ -101,7 +112,8 @@ pub async fn stops_into_postgres(gtfs: &gtfs_structures::Gtfs,
 
         diesel::insert_into(stops_table)
             .values(stop_pg)
-            .execute(conn).await?;
+            .execute(conn)
+            .await?;
     }
 
     Ok(())

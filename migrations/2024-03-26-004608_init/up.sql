@@ -75,18 +75,18 @@ CREATE TABLE gtfs.chateaus (
 -- switch data asap ASAP if the start date is before the current date
 -- time enable of new data when the current feed expires
 CREATE TABLE gtfs.feed_info (
-    onestop_feed_id text,
-    feed_publisher_name text,
-    feed_publisher_url text,
-    feed_lang text,
+    onestop_feed_id text NOT NULL,
+    feed_publisher_name text NOT NULL,
+    feed_publisher_url text NOT NULL,
+    feed_lang text NOT NULL,
     default_lang text,
     feed_start_date DATE,
     feed_end_date DATE,
     feed_version text,
     feed_contact_email text,
     feed_contact_url text,
-    attempt_id text,
-    chateau text,
+    attempt_id text NOT NULL,
+    chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, feed_publisher_name)
 );
 

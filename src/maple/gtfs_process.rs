@@ -3,13 +3,14 @@ use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb;
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
+use crate::gtfs_handlers::gtfs_to_int::availability_to_int;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::stops_associated_items::*;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres;
-use crate::gtfs_handlers::gtfs_to_int::availability_to_int;
 use crate::DownloadedFeedsInformation;
 use catenary::models::Route as RoutePgModel;
+use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::stoptimes::continuous_drop_off;
 use chrono::NaiveDate;
@@ -22,7 +23,6 @@ use gtfs_translations::TranslationResult;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
-use catenary::postgres_tools::CatenaryConn;
 use std::sync::Arc;
 use titlecase::titlecase;
 
@@ -46,7 +46,7 @@ pub async fn gtfs_process_feed(
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
-    
+
     //read the GTFS zip file
     let path = format!("gtfs_uncompressed/{}", feed_id);
 
@@ -76,7 +76,7 @@ pub async fn gtfs_process_feed(
         false => None,
     };
 
-    if let Some(feed_info) = feed_info {
+    if let Some(feed_info) = &feed_info {
         gtfs_summary.feed_start_date = feed_info.start_date.clone();
         gtfs_summary.feed_end_date = feed_info.end_date.clone();
 
@@ -330,7 +330,8 @@ pub async fn gtfs_process_feed(
     }
 
     //insert stops
-    let _ = stops_into_postgres(&gtfs,
+    let _ = stops_into_postgres(
+        &gtfs,
         &feed_id,
         Arc::clone(&arc_conn_pool),
         &chateau_id,
@@ -338,8 +339,9 @@ pub async fn gtfs_process_feed(
         &stop_ids_to_route_types,
         &stop_ids_to_route_ids,
         &stop_id_to_children_ids,
-        &stop_ids_to_children_route_types
-    ).await?;
+        &stop_ids_to_children_route_types,
+    )
+    .await?;
 
     //insert routes
 
@@ -404,6 +406,29 @@ pub async fn gtfs_process_feed(
     //submit hull
 
     // insert feed info
+    if let Some(feed_info) = &feed_info {
+        use catenary::schema::gtfs::feed_info::dsl::feed_info as feed_table;
+
+        let feed_info_pg = catenary::models::FeedInfo {
+            onestop_feed_id: feed_id.to_string(),
+            feed_publisher_name: feed_info.name.clone(),
+            feed_publisher_url: feed_info.url.clone(),
+            feed_lang: feed_info.lang.clone(),
+            feed_start_date: feed_info.start_date,
+            feed_end_date: feed_info.end_date,
+            feed_version: feed_info.version.clone(),
+            feed_contact_email: feed_info.contact_email.clone(),
+            feed_contact_url: feed_info.contact_url.clone(),
+            attempt_id: attempt_id.to_string(),
+            default_lang: feed_info.default_lang.clone(),
+            chateau: chateau_id.to_string(),
+        };
+
+        diesel::insert_into(feed_table)
+            .values(feed_info_pg)
+            .execute(conn)
+            .await?;
+    }
 
     Ok(gtfs_summary)
 }
@@ -427,4 +452,3 @@ pub fn continuous_pickup_drop_off_to_i16(x: &ContinuousPickupDropOff) -> i16 {
         ContinuousPickupDropOff::Unknown(x) => *x,
     }
 }
-

@@ -93,8 +93,8 @@ pub mod gtfs {
         gtfs.feed_info (onestop_feed_id, attempt_id, feed_publisher_name) {
             onestop_feed_id -> Text,
             feed_publisher_name -> Text,
-            feed_publisher_url -> Nullable<Text>,
-            feed_lang -> Nullable<Text>,
+            feed_publisher_url -> Text,
+            feed_lang -> Text,
             default_lang -> Nullable<Text>,
             feed_start_date -> Nullable<Date>,
             feed_end_date -> Nullable<Date>,
@@ -102,7 +102,7 @@ pub mod gtfs {
             feed_contact_email -> Nullable<Text>,
             feed_contact_url -> Nullable<Text>,
             attempt_id -> Text,
-            chateau -> Nullable<Text>,
+            chateau -> Text,
         }
     }
 
