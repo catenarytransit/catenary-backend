@@ -436,6 +436,15 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             .buffer_unordered(get_threads_gtfs())
             .collect::<Vec<()>>()
             .await;
+
+            // Refresh the metadata tables after the ingestion is done
+
+            let _ = refresh_metadata_tables::refresh_metadata_assignments(
+                &dmfr_result,
+                &chateau_result,
+                Arc::clone(&arc_conn_pool),
+            );
+        
         }
     } else {
         eprintln!("Not enough data in transitland!");
