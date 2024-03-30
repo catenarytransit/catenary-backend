@@ -9,6 +9,7 @@ use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::enum_to_int::route_type_to_int;
 use crate::gtfs_handlers::rename_route_labels::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::postgres_tools::CatenaryConn;
 
 pub async fn shapes_into_postgres(
     gtfs: &gtfs_structures::Gtfs,
@@ -176,6 +177,9 @@ pub async fn shapes_into_postgres(
             }
         }
     }
+
+    std::mem::drop(conn);
+    std::mem::drop(conn_pool);
 
     Ok(())
 }

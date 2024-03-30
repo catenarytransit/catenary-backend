@@ -377,6 +377,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                             ingestion_errored: false,
                                             ingestion_successfully_finished: true,
                                             deleted: false,
+                                            default_lang: gtfs_process_result.unwrap().default_lang,
                                             //in the future, set this to true unless the feed has a start date and the start date + timezone hasn't startd yet
                                             production: true,
                                             feed_expiration_date: None,

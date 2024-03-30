@@ -1,23 +1,36 @@
+use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
+use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb;
+use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
-use catenary::schema::gtfs::calendar::onestop_feed_id;
-use diesel_async::RunQueryDsl;
-use gtfs_structures::{BikesAllowedType, ExactTimes};
-use std::collections::HashSet;
-use std::error::Error;
-use std::sync::Arc;
-
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::stops_associated_items::*;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
+use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres;
+use crate::gtfs_handlers::gtfs_to_int::availability_to_int;
 use crate::DownloadedFeedsInformation;
+use catenary::models::Route as RoutePgModel;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::schema::gtfs::stoptimes::continuous_drop_off;
+use chrono::NaiveDate;
+use diesel_async::RunQueryDsl;
 use gtfs_structures::ContinuousPickupDropOff;
+use gtfs_structures::FeedInfo;
+use gtfs_structures::{BikesAllowedType, ExactTimes};
+use gtfs_translations::translation_csv_text_to_translations;
+use gtfs_translations::TranslationResult;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::error::Error;
+use catenary::postgres_tools::CatenaryConn;
+use std::sync::Arc;
+use titlecase::titlecase;
 
+#[derive(Debug)]
 pub struct GtfsSummary {
-    pub feed_start_date: Option<String>,
-    pub feed_end_date: Option<String>,
-    pub languages_avaliable: Vec<String>,
+    pub feed_start_date: Option<NaiveDate>,
+    pub feed_end_date: Option<NaiveDate>,
+    pub languages_avaliable: HashSet<String>,
     pub default_lang: Option<String>,
     pub general_timezone: String,
 }
@@ -29,15 +42,60 @@ pub async fn gtfs_process_feed(
     chateau_id: &str,
     attempt_id: &str,
     this_download_data: &DownloadedFeedsInformation,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<GtfsSummary, Box<dyn Error + Send + Sync>> {
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
-
+    
     //read the GTFS zip file
     let path = format!("gtfs_uncompressed/{}", feed_id);
 
     let gtfs = gtfs_structures::Gtfs::new(path.as_str())?;
+
+    // Read Translations.txt, don't fail if it doesn't exist
+    let translation_path = format!("gtfs_uncompressed/{}/translations.txt", feed_id);
+    let translation_data = std::fs::read_to_string(translation_path);
+
+    let gtfs_translations: Option<TranslationResult> = match translation_data {
+        Ok(data) => match translation_csv_text_to_translations(data.as_str()) {
+            Ok(translations) => Some(translations),
+            Err(_) => None,
+        },
+        Err(_) => None,
+    };
+    let mut gtfs_summary = GtfsSummary {
+        feed_start_date: None,
+        feed_end_date: None,
+        languages_avaliable: HashSet::new(),
+        default_lang: None,
+        general_timezone: gtfs.agencies[0].timezone.clone(),
+    };
+
+    let feed_info: Option<FeedInfo> = match gtfs.feed_info.len() >= 1 {
+        true => Some(gtfs.feed_info[0].clone()),
+        false => None,
+    };
+
+    if let Some(feed_info) = feed_info {
+        gtfs_summary.feed_start_date = feed_info.start_date.clone();
+        gtfs_summary.feed_end_date = feed_info.end_date.clone();
+
+        if let Some(default_lang) = &feed_info.default_lang {
+            gtfs_summary.default_lang = Some(default_lang.clone());
+            gtfs_summary
+                .languages_avaliable
+                .insert(default_lang.clone());
+        }
+    }
+
+    //copy the avaliable languages from the translations.txt file over
+    if let Some(gtfs_translations) = &gtfs_translations {
+        for avaliable_language in &gtfs_translations.avaliable_languages {
+            gtfs_summary
+                .languages_avaliable
+                .insert(avaliable_language.as_str().to_string());
+        }
+    }
 
     let (stop_ids_to_route_types, stop_ids_to_route_ids) =
         make_hashmap_stops_to_route_types_and_ids(&gtfs);
@@ -47,6 +105,24 @@ pub async fn gtfs_process_feed(
 
     //identify colours of shapes based on trip id's route id
     let (shape_to_color_lookup, shape_to_text_color_lookup) = shape_to_colour(&feed_id, &gtfs);
+
+    // make reverse lookup for route ids to shape ids
+    let route_ids_to_shape_ids: HashMap<String, HashSet<String>> = {
+        let mut results: HashMap<String, HashSet<String>> = HashMap::new();
+
+        for (trip_id, trip) in &gtfs.trips {
+            if let Some(shape_id) = &trip.shape_id {
+                results
+                    .entry(trip.route_id.clone())
+                    .and_modify(|current_list| {
+                        current_list.insert(shape_id.clone());
+                    })
+                    .or_insert(HashSet::from_iter(vec![shape_id.clone()]));
+            }
+        }
+
+        results
+    };
 
     //insert agencies
     for agency in &gtfs.agencies {
@@ -85,8 +161,6 @@ pub async fn gtfs_process_feed(
         &attempt_id,
     )
     .await?;
-
-    //insert routes
 
     //insert trip
     for (trip_id, trip) in &gtfs.trips {
@@ -160,12 +234,7 @@ pub async fn gtfs_process_feed(
             },
             block_id: trip.block_id.clone(),
             shape_id: trip.shape_id.clone(),
-            wheelchair_accessible: match trip.wheelchair_accessible {
-                gtfs_structures::Availability::Available => Some(1),
-                gtfs_structures::Availability::NotAvailable => Some(2),
-                gtfs_structures::Availability::Unknown(unknown) => Some(unknown),
-                gtfs_structures::Availability::InformationNotAvailable => Some(0),
-            },
+            wheelchair_accessible: availability_to_int(&trip.wheelchair_accessible),
             chateau: chateau_id.to_string(),
             frequencies: None,
         };
@@ -261,13 +330,82 @@ pub async fn gtfs_process_feed(
     }
 
     //insert stops
+    let _ = stops_into_postgres(&gtfs,
+        &feed_id,
+        Arc::clone(&arc_conn_pool),
+        &chateau_id,
+        &attempt_id,
+        &stop_ids_to_route_types,
+        &stop_ids_to_route_ids,
+        &stop_id_to_children_ids,
+        &stop_ids_to_children_route_types
+    ).await?;
 
-    //calculate hull
+    //insert routes
+
+    let routes_pg: Vec<RoutePgModel> = gtfs
+        .routes
+        .iter()
+        .map(|(route_id, route)| {
+            let colour = fix_background_colour_rgb_feed_route(feed_id, route.color, route);
+            let text_colour =
+                fix_foreground_colour_rgb_feed(feed_id, route.color, route.text_color);
+
+            let colour_pg = format!("#{:02x}{:02x}{:02x}", colour.r, colour.g, colour.b);
+            let text_colour_pg = format!(
+                "#{:02x}{:02x}{:02x}",
+                text_colour.r, text_colour.g, text_colour.b
+            );
+
+            let route_pg = RoutePgModel {
+                onestop_feed_id: feed_id.to_string(),
+                route_id: route_id.clone(),
+                attempt_id: attempt_id.to_string(),
+                agency_id: route.agency_id.clone(),
+                short_name: route.short_name.clone(),
+                long_name: route.long_name.clone(),
+                chateau: chateau_id.to_string(),
+                color: Some(colour_pg),
+                text_color: Some(text_colour_pg),
+                short_name_translations: None,
+                long_name_translations: None,
+                gtfs_desc: route.desc.clone(),
+                gtfs_desc_translations: None,
+                route_type: crate::gtfs_handlers::gtfs_to_int::route_type_to_int(&route.route_type),
+                url: route.url.clone(),
+                url_translations: None,
+                shapes_list: match route_ids_to_shape_ids.get(&route_id.clone()) {
+                    Some(shapes_list) => Some(
+                        shapes_list
+                            .iter()
+                            .map(|x| Some(x.clone()))
+                            .collect::<Vec<Option<String>>>(),
+                    ),
+                    None => None,
+                },
+                gtfs_order: match route.order {
+                    Some(x) => Some(x),
+                    None => None,
+                },
+                continuous_drop_off: continuous_pickup_drop_off_to_i16(&route.continuous_drop_off),
+                continuous_pickup: continuous_pickup_drop_off_to_i16(&route.continuous_pickup),
+            };
+            route_pg
+        })
+        .collect();
+
+    diesel::insert_into(catenary::schema::gtfs::routes::dsl::routes)
+        .values(routes_pg)
+        .execute(conn)
+        .await?;
+
+    //calculate concave hull
+    let hull = crate::gtfs_handlers::hull_from_gtfs::hull_from_gtfs(&gtfs);
     //submit hull
 
     // insert feed info
 
-    Ok(())
+    Ok(gtfs_summary)
 }
 
 pub fn pickup_dropoff_to_i16(x: &gtfs_structures::PickupDropOffType) -> i16 {
@@ -289,3 +427,4 @@ pub fn continuous_pickup_drop_off_to_i16(x: &ContinuousPickupDropOff) -> i16 {
         ContinuousPickupDropOff::Unknown(x) => *x,
     }
 }
+

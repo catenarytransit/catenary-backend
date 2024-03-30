@@ -8,6 +8,8 @@ use std::env;
 pub type CatenaryPostgresPool =
     bb8::Pool<AsyncDieselConnectionManager<diesel_async::AsyncPgConnection>>;
 
+pub type CatenaryConn<'a> = &'a mut bb8::PooledConnection<'a, diesel_async::pooled_connection::AsyncDieselConnectionManager<diesel_async::AsyncPgConnection>>;
+
 /// This type alias is the pool, which can be quried for connections.
 /// It is typically wrapped in Arc to allow thread safe cloning to the same pool
 /*pub type CatenaryPostgresPool<'a> = db_pool::r#async::Reusable<

@@ -1,4 +1,5 @@
 use catenary::models::StaticDownloadAttempt;
+use catenary::postgres_tools::CatenaryConn;
 use diesel::prelude::*;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_folder_reader::ReturnDmfrAnalysis;
@@ -173,7 +174,7 @@ pub async fn download_return_eligible_feeds(
 
                                         //query the SQL database for any ingests that have the same zip
                                         
-                            let conn = &mut pool.get().await.unwrap();
+                            let conn  = &mut pool.get().await.unwrap();
                                         let download_attempts_postgres_lookup = static_download_attempts
                                             .filter(file_hash.eq(hash_str))
                                             .load::<StaticDownloadAttempt>(conn)

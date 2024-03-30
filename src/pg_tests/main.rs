@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 bikes_allowed: 1,
                 block_id: Some("block_id".to_string()),
                 shape_id: Some("shape_id".to_string()),
-                wheelchair_accessible: Some(0),
+                wheelchair_accessible: 0,
                 chateau: "chateau".to_string(),
                 frequencies: None,
             };
