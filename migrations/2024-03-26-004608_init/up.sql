@@ -316,18 +316,12 @@ PRIMARY KEY (onestop_feed_id, attempt_id)
 
 CREATE TABLE gtfs.realtime_passwords (
     onestop_feed_id text NOT NULL PRIMARY KEY,
-    passwords text[],
-    header_auth_key text,
-    header_auth_value_prefix text,
-    url_auth_key text
+    passwords jsonb
 );
 
 CREATE TABLE gtfs.static_passwords (
     onestop_feed_id text NOT NULL PRIMARY KEY,
-    passwords text[],
-    header_auth_key text,
-    header_auth_value_prefix text,
-    url_auth_key text
+    passwords jsonb
 );
 
 CREATE TABLE gtfs.calendar_dates (
