@@ -6,12 +6,19 @@ Catenary Backend is a distributed system comprised of microservices operating in
 - **Prairie**: Routing Preprocessor and execution engine (Research and design in progress)
 - **Kactus**: Distributed system to query for GTFS-rt and other realtime data
 - **Aspen**: Processing of realtime data and dynamic insertion into other engines
-- **Spruce**: Websocket server for frontend to stream data to and from backend
+- **Fleur de Lis**: Map tile geometry server, will serve line ordering optimised graph maps (LOOM) in the future.
+- **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times
 - **Birch**: General API server
 
 The kubernetes configuration is generated using Helm templates. See Helm's documentation for further information on that.
 
 The code is heavily commented, go to each folder in src for more information.
+
+### Submodules maintained 
+- **Dmfr folder reader**: reads data from transitland-atlas into raw structs
+- **Château**: Associates feeds with operators and vise versa using depth first search in knowledge graph
+- **Amtrak GTFS rt**: Conversion of proprietary realtime data from amtrak's website into gtfs-rt.
+- **Zotgtfs**: conversion of Transloc data and hand typed schedules from Anteater Express to GTFS schedule and realtime.
 
 ## Install Dependencies
 
