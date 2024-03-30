@@ -355,4 +355,10 @@ CREATE TABLE gtfs.calendar (
 
 CREATE INDEX calendar_chateau ON gtfs.calendar (chateau); 
 
+CREATE TABLE chateau_metadata_last_updated_time (
+    -- value should only be zero
+    catenary smallint PRIMARY KEY,
+    last_updated_ms bigint NOT NULL
+);
+
 -- translations does not need a table, values should be directly inserted into the data structure
