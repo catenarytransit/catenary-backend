@@ -332,12 +332,12 @@ pub struct FeedInfo {
 #[diesel(table_name = crate::schema::gtfs::static_passwords)]
 pub struct StaticPasswordRow {
     onestop_feed_id: String,
-    passwords: Option<String>
+    passwords: Option<Value>
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
 #[diesel(table_name = crate::schema::gtfs::realtime_passwords)]
 pub struct RealtimePasswordRow {
     onestop_feed_id: String,
-    passwords: Option<String>
+    passwords: Option<Value>
 }
