@@ -179,10 +179,7 @@ pub mod gtfs {
 
         gtfs.realtime_passwords (onestop_feed_id) {
             onestop_feed_id -> Text,
-            passwords -> Nullable<Array<Nullable<Text>>>,
-            header_auth_key -> Nullable<Text>,
-            header_auth_value_prefix -> Nullable<Text>,
-            url_auth_key -> Nullable<Text>,
+            passwords -> Nullable<Jsonb>,
         }
     }
 
@@ -275,10 +272,7 @@ pub mod gtfs {
 
         gtfs.static_passwords (onestop_feed_id) {
             onestop_feed_id -> Text,
-            passwords -> Nullable<Array<Nullable<Text>>>,
-            header_auth_key -> Nullable<Text>,
-            header_auth_value_prefix -> Nullable<Text>,
-            url_auth_key -> Nullable<Text>,
+            passwords -> Nullable<Jsonb>,
         }
     }
 
