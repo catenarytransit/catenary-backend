@@ -327,7 +327,7 @@ CREATE TABLE gtfs.stoptimes (
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id, stop_sequence)
 );
 
-CREATE INDEX stoptimes_chateau_idx ON gtfs.stops (chateau);
+CREATE INDEX stoptimes_chateau_idx ON gtfs.stoptimes (chateau);
 
 CREATE TABLE gtfs.gtfs_errors (
 onestop_feed_id text NOT NULL,
