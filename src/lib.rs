@@ -10,3 +10,5 @@ pub mod gtfs_rt_handlers;
 pub mod models;
 pub mod postgres_tools;
 pub mod schema;
+
+pub const WGS_84_SRID: u32 = 4326;

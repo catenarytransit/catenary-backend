@@ -178,8 +178,30 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
     PRIMARY KEY (onestop_feed_id, attempt_id, shape_id)
 );
 
+
 CREATE INDEX IF NOT EXISTS shapes_chateau ON gtfs.shapes (chateau);
 CREATE INDEX shapes_linestring_index ON gtfs.shapes USING GIST (linestring);
+CREATE INDEX shapes_route_type ON gtfs.shapes (route_type);
+
+CREATE TABLE IF NOT EXISTS gtfs.shapes_not_bus (
+    onestop_feed_id text NOT NULL,
+    attempt_id text NOT NULL,
+    shape_id text NOT NULL,
+    linestring geometry(Linestring,4326) NOT NULL,
+    color text,
+    routes text[],
+    route_type smallint NOT NULL,
+    route_label text,
+    route_label_translations jsonb,
+    text_color text, 
+    chateau text NOT NULL,
+    allowed_spatial_query boolean NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, shape_id)
+);
+
+CREATE INDEX shapes_not_bus_linestring_index ON gtfs.shapes_not_bus USING GIST (linestring);
+CREATE INDEX IF NOT EXISTS shapes_not_bus_chateau ON gtfs.shapes_not_bus (chateau);
+CREATE INDEX shapes_not_bus_route_type ON gtfs.shapes (route_type);
 
 -- no nulls so just contrain and unwrap ngl
 CREATE TYPE trip_frequency_pre AS (

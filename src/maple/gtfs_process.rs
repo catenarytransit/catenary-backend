@@ -12,9 +12,12 @@ use crate::DownloadedFeedsInformation;
 use catenary::models::Route as RoutePgModel;
 use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::schema::gtfs::chateaus::languages_avaliable;
 use catenary::schema::gtfs::stoptimes::continuous_drop_off;
 use chrono::NaiveDate;
+use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
+use geo::polygon;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::FeedInfo;
 use gtfs_structures::{BikesAllowedType, ExactTimes};
@@ -305,7 +308,7 @@ pub async fn gtfs_process_feed(
                 point: match stop_time.stop.latitude {
                     Some(latitude) => match stop_time.stop.longitude {
                         Some(longitude) => Some(postgis_diesel::types::Point {
-                            srid: Some(4326),
+                            srid: Some(catenary::WGS_84_SRID),
                             x: longitude,
                             y: latitude,
                         }),
@@ -403,7 +406,6 @@ pub async fn gtfs_process_feed(
 
     //calculate concave hull
     let hull = crate::gtfs_handlers::hull_from_gtfs::hull_from_gtfs(&gtfs);
-    //submit hull
 
     // insert feed info
     if let Some(feed_info) = &feed_info {
@@ -429,6 +431,54 @@ pub async fn gtfs_process_feed(
             .execute(conn)
             .await?;
     }
+    //submit hull
+
+    let hull_pg:
+     Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>> = match hull {
+        Some(polygon_geo) => Some(postgis_diesel::types::Polygon {
+            rings: vec![polygon_geo
+                .into_inner()
+                .0
+                .into_iter()
+                .map(|coord| {
+                    postgis_diesel::types::Point::new(coord.x, coord.y, Some(catenary::WGS_84_SRID))
+                })
+                .collect()],
+            srid: Some(catenary::WGS_84_SRID),
+        }),
+        None => None,
+    };
+
+    let languages_avaliable_pg = gtfs_summary
+        .languages_avaliable
+        .iter()
+        .map(|x| Some(x.clone()))
+        .collect::<Vec<Option<String>>>();
+
+    let static_feed_pg = catenary::models::StaticFeed {
+        onestop_feed_id: feed_id.to_string(),
+        chateau: chateau_id.to_string(),
+        default_lang: match feed_info {
+            Some(feed_info) => Some(feed_info.lang.clone()),
+            None => None,
+        },
+        previous_chateau_name: chateau_id.to_string(),
+        languages_avaliable: languages_avaliable_pg.clone(),
+        hull: hull_pg.clone(),
+    };
+
+    /*
+    let _ = diesel::insert_into(catenary::schema::gtfs::static_feeds::dsl::static_feeds)
+        .values(&static_feed_pg)
+        .on_conflict(catenary::schema::gtfs::static_feeds::dsl::onestop_feed_id)
+        .do_update()
+        .set(
+            (catenary::schema::gtfs::static_feeds::dsl::languages_avaliable
+                .eq(languages_avaliable_pg),
+                catenary::schema::gtfs::static_feeds::dsl::hull.eq(hull))
+        )
+        .execute(conn)
+        .await?;*/
 
     Ok(gtfs_summary)
 }

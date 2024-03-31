@@ -146,6 +146,39 @@ pub async fn shapes_into_postgres(
                 .replace("Inland Empire", "IE")
                 .to_string();
 
+            //run insertion
+
+            //insert into the smaller "not bus" table first
+
+            if route_type_number != 3 && route_type_number != 11 {
+                use catenary::schema::gtfs::shapes_not_bus::dsl as shapes_not_bus_columns;
+
+                let shape_value: catenary::models::ShapeNotBus = catenary::models::ShapeNotBus {
+                    onestop_feed_id: feed_id.to_string(),
+                    attempt_id: attempt_id.to_string(),
+                    shape_id: shape_id.clone(),
+                    chateau: chateau_id.to_string(),
+                    linestring: linestring.clone(),
+                    color: Some(bg_color_string.clone()),
+                    routes: Some(
+                        route_ids
+                            .iter()
+                            .map(|route_id| Some(route_id.to_string()))
+                            .collect(),
+                    ),
+                    route_type: route_type_number,
+                    route_label: Some(route_label.clone()),
+                    route_label_translations: None,
+                    text_color: Some(text_color.clone()),
+                    allowed_spatial_query: false,
+                };
+
+                diesel::insert_into(shapes_not_bus_columns::shapes_not_bus)
+                    .values(shape_value.clone())
+                    .execute(conn)
+                    .await?;
+            }
+            
             //Create structure to insert
             let shape_value: catenary::models::Shape = catenary::models::Shape {
                 onestop_feed_id: feed_id.to_string(),
@@ -167,7 +200,6 @@ pub async fn shapes_into_postgres(
                 allowed_spatial_query: false,
             };
 
-            //run insertion
             {
                 use catenary::schema::gtfs::shapes::dsl::*;
 
