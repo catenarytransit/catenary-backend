@@ -478,6 +478,8 @@ pub async fn gtfs_process_feed(
         .execute(conn)
         .await?;
 
+    println!("Finished {}", feed_id);
+
     Ok(gtfs_summary)
 }
 
