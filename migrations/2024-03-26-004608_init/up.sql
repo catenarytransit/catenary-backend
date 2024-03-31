@@ -272,7 +272,7 @@ CREATE TABLE gtfs.stops (
     gtfs_id text NOT NULL,
     name text,
     name_translations jsonb,
-    displayname text NOT NULL,
+    displayname text,
     code text,
     gtfs_desc text,
     gtfs_desc_translations jsonb,
