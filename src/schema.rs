@@ -65,6 +65,17 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.chateau_metadata_last_updated_time (catenary) {
+            catenary -> Int2,
+            last_updated_ms -> Int8,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.chateaus (chateau) {
             chateau -> Text,
             static_feeds -> Array<Nullable<Text>>,
@@ -229,6 +240,7 @@ pub mod gtfs {
             route_label_translations -> Nullable<Jsonb>,
             text_color -> Nullable<Text>,
             chateau -> Text,
+            allowed_spatial_query -> Bool,
         }
     }
 
@@ -312,6 +324,7 @@ pub mod gtfs {
             location_alias -> Nullable<Array<Nullable<Text>>>,
             tts_name -> Nullable<Text>,
             tts_name_translations -> Nullable<Jsonb>,
+            allowed_spatial_query -> Bool,
         }
     }
 
@@ -390,6 +403,7 @@ pub mod gtfs {
         agencies,
         calendar,
         calendar_dates,
+        chateau_metadata_last_updated_time,
         chateaus,
         f_test,
         feed_info,

@@ -21,6 +21,8 @@ pub struct Shape {
     pub route_label_translations: Option<serde_json::Value>,
     pub text_color: Option<String>,
     pub chateau: String,
+    //insert with false, then enable after when mark for production
+    pub allowed_spatial_query: bool,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
@@ -281,6 +283,8 @@ pub struct Stop {
     pub location_alias: Option<Vec<Option<String>>>,
     pub tts_name_translations: Option<Value>,
     pub tts_name: Option<String>,
+    //insert with false, then enable after when mark for production
+    pub allowed_spatial_query: bool,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
@@ -332,12 +336,19 @@ pub struct FeedInfo {
 #[diesel(table_name = crate::schema::gtfs::static_passwords)]
 pub struct StaticPasswordRow {
     onestop_feed_id: String,
-    passwords: Option<Value>
+    passwords: Option<Value>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
 #[diesel(table_name = crate::schema::gtfs::realtime_passwords)]
 pub struct RealtimePasswordRow {
     onestop_feed_id: String,
-    passwords: Option<Value>
+    passwords: Option<Value>,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::chateau_metadata_last_updated_time)]
+pub struct MetadataLastUpdatedTime {
+    catenary: i16,
+    last_updated_ms: i64,
 }

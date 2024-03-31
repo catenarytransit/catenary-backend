@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
     route_label_translations jsonb,
     text_color text,
     chateau text NOT NULL,
+    allowed_spatial_query boolean NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, shape_id)
 );
 
@@ -274,6 +275,7 @@ CREATE TABLE gtfs.stops (
     location_alias text[],
     tts_name text,
     tts_name_translations jsonb,
+    allowed_spatial_query boolean NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, gtfs_id)
 );
 
@@ -355,7 +357,7 @@ CREATE TABLE gtfs.calendar (
 
 CREATE INDEX calendar_chateau ON gtfs.calendar (chateau); 
 
-CREATE TABLE chateau_metadata_last_updated_time (
+CREATE TABLE gtfs.chateau_metadata_last_updated_time (
     -- value should only be zero
     catenary smallint PRIMARY KEY,
     last_updated_ms bigint NOT NULL

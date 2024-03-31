@@ -142,10 +142,11 @@ pub async fn refresh_metadata_assignments(
 
     //set each realtime feed to the new chateau id
 
-            //set each static feed to the new chateau id
-            // if static feed has a different chateau id, call on the update function
-            // update_chateau_id_for_gtfs_schedule(feed_id, new_chateau_id, conn).await?;
+    //set each static feed to the new chateau id
+    // if static feed has a different chateau id, call on the update function
+    // update_chateau_id_for_gtfs_schedule(feed_id, new_chateau_id, conn).await?;
 
     // if the new chateau id is different for any of the feeds, run the update function
+
     Ok(())
 }

@@ -104,6 +104,7 @@ pub async fn stops_into_postgres(
                     .collect::<Vec<Option<i16>>>(),
                 None => vec![],
             },
+            allowed_spatial_query: false,
         };
 
         let conn_pool = arc_conn_pool.as_ref();

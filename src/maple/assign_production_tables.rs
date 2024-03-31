@@ -26,6 +26,8 @@ pub async fn assign_production_tables(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
+    let now: NaiveDate = Utc::now().naive_utc().date();
+
     //determine if the old one should be deleted, if so, delete it
 
     //algorithm:
@@ -108,8 +110,6 @@ pub async fn assign_production_tables(
 
                         // if the new expiration date is more than 5 days ago, then drop it
 
-                        let now: NaiveDate = Utc::now().naive_utc().date();
-
                         if new_expiration_date < now.sub(chrono::Days::new(5)) {
                             //drop the feed
                             drop_attempt_list.push(ingested_item.attempt_id.clone());
@@ -137,29 +137,123 @@ pub async fn assign_production_tables(
         .map(|feed_time_range| feed_time_range.attempt_id.clone())
         .collect();
 
+    let now: NaiveDate = Utc::now().naive_utc().date();
+
+    let current_feed_id = match production_list_ids.len() {
+        0 => None,
+        1 => Some(production_list_ids[0].clone()),
+        _ => {
+            let mut valid = production_list_ids[0].clone();
+
+            for (i, feed_time_range) in feed_time_ranges.iter().enumerate() {
+                let within_start_bounds = match feed_time_range.start_date {
+                    None => true,
+                    Some(feed_time_range_start_date) => now >= feed_time_range_start_date,
+                };
+
+                let within_end_bounds = match feed_time_range.expiration_date {
+                    None => true,
+                    Some(feed_time_range_start_date) => now <= feed_time_range_start_date,
+                };
+
+                if within_start_bounds && within_end_bounds {
+                    valid = feed_time_range.attempt_id.clone();
+                }
+            }
+
+            Some(valid)
+        }
+    };
+
     //mark old feeds as not in production anymore and new feeds as in production
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
         {
             async move {
-                use catenary::schema::gtfs::ingested_static::dsl::*;
-                for production_list_id in production_list_ids {
-                    let _ = diesel::update(
-                        ingested_static
-                            .filter(onestop_feed_id.lt(&feed_id))
-                            .filter(attempt_id.lt(&production_list_id)),
-                    )
-                    .set((deleted.eq(false), production.eq(true)))
-                    .execute(conn)
-                    .await?;
+                use catenary::schema::gtfs::ingested_static::dsl as ingested_static_columns;
+                use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
+
+                use catenary::schema::gtfs::shapes::dsl as shapes_columns;
+                use catenary::schema::gtfs::shapes::dsl::shapes;
+
+                use catenary::schema::gtfs::stops::dsl as stops_columns;
+                use catenary::schema::gtfs::stops::dsl::stops;
+
+                //determine which one is active for map queries
+
+                if let Some(current_feed_id) = current_feed_id {
+                    for production_list_id in production_list_ids {
+                        let is_this_feed_spatial_queriable = current_feed_id == production_list_id;
+
+                        //update the shapes to be queriable
+                        let _ = diesel::update(
+                            shapes
+                                .filter(shapes_columns::onestop_feed_id.lt(&feed_id))
+                                .filter(shapes_columns::attempt_id.lt(&production_list_id)),
+                        )
+                        .set(
+                            (shapes_columns::allowed_spatial_query
+                                .eq(is_this_feed_spatial_queriable)),
+                        )
+                        .execute(conn)
+                        .await?;
+
+                        //update the stops to be queriable
+                        let _ = diesel::update(
+                            stops
+                                .filter(stops_columns::onestop_feed_id.lt(&feed_id))
+                                .filter(stops_columns::attempt_id.lt(&production_list_id)),
+                        )
+                        .set(
+                            (stops_columns::allowed_spatial_query
+                                .eq(is_this_feed_spatial_queriable)),
+                        )
+                        .execute(conn)
+                        .await?;
+
+                        let _ = diesel::update(
+                            ingested_static
+                                .filter(ingested_static_columns::onestop_feed_id.lt(&feed_id))
+                                .filter(
+                                    ingested_static_columns::attempt_id.lt(&production_list_id),
+                                ),
+                        )
+                        .set((
+                            ingested_static_columns::deleted.eq(false),
+                            ingested_static_columns::production.eq(true),
+                        ))
+                        .execute(conn)
+                        .await?;
+                    }
                 }
 
                 for drop_id in drop_attempt_list_transaction {
                     let _ = diesel::update(
                         ingested_static
-                            .filter(onestop_feed_id.lt(&feed_id))
-                            .filter(attempt_id.lt(&drop_id)),
+                            .filter(ingested_static_columns::onestop_feed_id.lt(&feed_id))
+                            .filter(ingested_static_columns::attempt_id.lt(&drop_id)),
                     )
-                    .set((deleted.eq(true), production.eq(false)))
+                    .set((
+                        ingested_static_columns::deleted.eq(true),
+                        ingested_static_columns::production.eq(false),
+                    ))
+                    .execute(conn)
+                    .await?;
+
+                    //delete all the shapes
+                    let _ = diesel::delete(
+                        shapes
+                            .filter(shapes_columns::onestop_feed_id.lt(&feed_id))
+                            .filter(shapes_columns::attempt_id.lt(&drop_id)),
+                    )
+                    .execute(conn)
+                    .await?;
+
+                    //delete all the stops
+                    let _ = diesel::delete(
+                        stops
+                            .filter(stops_columns::onestop_feed_id.lt(&feed_id))
+                            .filter(stops_columns::attempt_id.lt(&drop_id)),
+                    )
                     .execute(conn)
                     .await?;
                 }

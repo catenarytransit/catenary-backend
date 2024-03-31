@@ -164,6 +164,7 @@ pub async fn shapes_into_postgres(
                 route_label: Some(route_label),
                 route_label_translations: None,
                 text_color: Some(text_color),
+                allowed_spatial_query: false,
             };
 
             //run insertion
