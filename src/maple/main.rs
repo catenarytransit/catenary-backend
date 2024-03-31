@@ -442,6 +442,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         eprintln!("Not enough data in transitland!");
     }
 
+    println!("Maple ingest completed");
+
     Ok(())
 }
 
