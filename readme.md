@@ -58,3 +58,9 @@ cargo install diesel_cli --no-default-features --features postgres
 ### Common Database debugging
 
 Is Postgis not installing? This page may be helpful: https://trac.osgeo.org/postgis/wiki/UsersWikiPostGIS3UbuntuPGSQLApt
+
+### Updating transitland submodules
+
+```bash
+git submodule update --rebase --remote
+```
