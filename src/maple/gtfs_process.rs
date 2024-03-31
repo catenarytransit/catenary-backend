@@ -172,6 +172,7 @@ pub async fn gtfs_process_feed(
 
     //insert trip
     for (trip_id, trip) in &gtfs.trips {
+        
         let mut stop_headsigns: HashSet<String> = HashSet::new();
 
         for stop_time in &trip.stop_times {
@@ -292,14 +293,15 @@ pub async fn gtfs_process_feed(
         let stop_times_pg = trip
             .stop_times
             .iter()
-            .map(|stop_time| catenary::models::StopTime {
+            .enumerate()
+            .map(|(stop_time_i, stop_time)| catenary::models::StopTime {
                 onestop_feed_id: feed_id.to_string(),
                 route_id: trip.route_id.clone(),
                 stop_headsign_translations: None,
                 trip_id: trip_id.clone(),
                 attempt_id: attempt_id.to_string(),
                 stop_id: stop_time.stop.id.clone(),
-                stop_sequence: stop_time.stop_sequence as i32,
+                stop_sequence: stop_time_i as i32,
                 arrival_time: stop_time.arrival_time,
                 departure_time: stop_time.departure_time,
                 stop_headsign: stop_time.stop_headsign.clone(),
@@ -311,18 +313,6 @@ pub async fn gtfs_process_feed(
                     gtfs_structures::TimepointType::Approximate => false,
                 },
                 chateau: chateau_id.to_string(),
-                point: match stop_time.stop.latitude {
-                    Some(latitude) => match stop_time.stop.longitude {
-                        Some(longitude) => Some(postgis_diesel::types::Point {
-                            srid: Some(catenary::WGS_84_SRID),
-                            x: longitude,
-                            y: latitude,
-                        }),
-                        None => None,
-                    },
-                    None => None,
-                },
-
                 continuous_pickup: continuous_pickup_drop_off_to_i16(&stop_time.continuous_pickup),
                 continuous_drop_off: continuous_pickup_drop_off_to_i16(
                     &stop_time.continuous_drop_off,

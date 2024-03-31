@@ -321,7 +321,7 @@ CREATE TABLE gtfs.stoptimes (
     timepoint bool NOT NULL,
     continuous_pickup smallint NOT NULL,
     continuous_drop_off smallint NOT NULL,
-    point GEOMETRY(POINT, 4326),
+  --  point GEOMETRY(POINT, 4326),
     route_id text NOT NULL,
     chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id, stop_sequence)

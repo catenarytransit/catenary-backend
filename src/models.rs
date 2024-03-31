@@ -264,7 +264,7 @@ pub struct StopTime {
     pub timepoint: bool,
     pub continuous_pickup: i16,
     pub continuous_drop_off: i16,
-    pub point: Option<postgis_diesel::types::Point>,
+ //   pub point: Option<postgis_diesel::types::Point>,
     pub route_id: String,
     pub chateau: String,
 }
