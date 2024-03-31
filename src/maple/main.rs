@@ -264,7 +264,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 &dmfr_result,
                 &chateau_result,
                 Arc::clone(&arc_conn_pool),
-            );
+            ).await;
 
             // 4. Unzip folders
             println!("Unzipping all gtfs folders");
@@ -436,7 +436,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 &dmfr_result,
                 &chateau_result,
                 Arc::clone(&arc_conn_pool),
-            );
+            ).await?;
         }
     } else {
         eprintln!("Not enough data in transitland!");
