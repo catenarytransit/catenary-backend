@@ -200,6 +200,19 @@ pub async fn assign_production_tables(
                         .execute(conn)
                         .await?;
 
+                        // also update shapes_not_bus table
+                        let _ = diesel::update(
+                            shapes_not_bus
+                                .filter(shapes_not_bus_columns::onestop_feed_id.eq(&feed_id))
+                                .filter(shapes_not_bus_columns::attempt_id.eq(&production_list_id)),
+                        )
+                        .set(
+                            (shapes_not_bus_columns::allowed_spatial_query
+                                .eq(is_this_feed_spatial_queriable)),
+                        )
+                        .execute(conn)
+                        .await?;
+
                         //update the stops to be queriable
                         let _ = diesel::update(
                             stops
