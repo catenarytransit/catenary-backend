@@ -106,6 +106,7 @@ pub async fn download_return_eligible_feeds(
                             let client = reqwest::ClientBuilder::new()
                                 //timeout queries after 10 minutes
                                 .timeout(Duration::from_secs(60 * 10))
+                                .connect_timeout(Duration::from_secs(20))
                                 .deflate(true)
                                 .gzip(true)
                                 .brotli(true)
