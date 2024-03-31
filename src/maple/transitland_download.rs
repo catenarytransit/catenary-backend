@@ -104,8 +104,8 @@ pub async fn download_return_eligible_feeds(
                     async move {
                             //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
                             let client = reqwest::ClientBuilder::new()
-                                //timeout queries after 10 minutes
-                                .timeout(Duration::from_secs(60 * 10))
+                                //timeout queries after 5 minutes
+                                .timeout(Duration::from_secs(60 * 5))
                                 .connect_timeout(Duration::from_secs(20))
                                 .deflate(true)
                                 .gzip(true)
