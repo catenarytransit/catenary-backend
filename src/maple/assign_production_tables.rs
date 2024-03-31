@@ -10,7 +10,7 @@ use diesel_async::RunQueryDsl;
 use std::error::Error;
 use std::ops::Sub;
 use std::sync::Arc;
-
+use std::time::{SystemTime, UNIX_EPOCH};
 struct FeedTimeRange {
     attempt_id: String,
     start_date: Option<NaiveDate>,
@@ -25,8 +25,12 @@ pub async fn assign_production_tables(
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
-
+    
     let now: NaiveDate = Utc::now().naive_utc().date();
+    let now_ms = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .unwrap()
+    .as_millis();
 
     //determine if the old one should be deleted, if so, delete it
 
@@ -75,6 +79,17 @@ pub async fn assign_production_tables(
     let mut feed_time_ranges: Vec<FeedTimeRange> = Vec::new();
 
     let mut drop_attempt_list: Vec<String> = Vec::new();
+
+    //drop feeds older than 1 day and are not successfully ingested
+
+    for to_drop_feed in all_feeds
+        .clone()
+        .into_iter()
+        .filter(|ingested| {
+            ingested.ingestion_successfully_finished == false && ingested.ingest_start_unix_time_ms < (now_ms as i64 - (1000 * 86400))
+        }) {
+            drop_attempt_list.push(to_drop_feed.attempt_id);
+        }
 
     let mut last_claimed_start_time: Option<Option<NaiveDate>> = None;
 
