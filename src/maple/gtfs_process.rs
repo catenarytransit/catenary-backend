@@ -46,6 +46,7 @@ pub async fn gtfs_process_feed(
     attempt_id: &str,
     this_download_data: &DownloadedFeedsInformation,
 ) -> Result<GtfsSummary, Box<dyn Error + Send + Sync>> {
+    println!("Begin feed {} processing", feed_id);
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
