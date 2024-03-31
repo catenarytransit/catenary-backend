@@ -175,6 +175,9 @@ pub async fn assign_production_tables(
                 use catenary::schema::gtfs::shapes::dsl as shapes_columns;
                 use catenary::schema::gtfs::shapes::dsl::shapes;
 
+                use catenary::schema::gtfs::shapes_not_bus::dsl as shapes_not_bus_columns;
+                use catenary::schema::gtfs::shapes_not_bus::dsl::shapes_not_bus;
+
                 use catenary::schema::gtfs::stops::dsl as stops_columns;
                 use catenary::schema::gtfs::stops::dsl::stops;
 
@@ -187,8 +190,8 @@ pub async fn assign_production_tables(
                         //update the shapes to be queriable
                         let _ = diesel::update(
                             shapes
-                                .filter(shapes_columns::onestop_feed_id.lt(&feed_id))
-                                .filter(shapes_columns::attempt_id.lt(&production_list_id)),
+                                .filter(shapes_columns::onestop_feed_id.eq(&feed_id))
+                                .filter(shapes_columns::attempt_id.eq(&production_list_id)),
                         )
                         .set(
                             (shapes_columns::allowed_spatial_query
@@ -200,8 +203,8 @@ pub async fn assign_production_tables(
                         //update the stops to be queriable
                         let _ = diesel::update(
                             stops
-                                .filter(stops_columns::onestop_feed_id.lt(&feed_id))
-                                .filter(stops_columns::attempt_id.lt(&production_list_id)),
+                                .filter(stops_columns::onestop_feed_id.eq(&feed_id))
+                                .filter(stops_columns::attempt_id.eq(&production_list_id)),
                         )
                         .set(
                             (stops_columns::allowed_spatial_query
@@ -212,9 +215,9 @@ pub async fn assign_production_tables(
 
                         let _ = diesel::update(
                             ingested_static
-                                .filter(ingested_static_columns::onestop_feed_id.lt(&feed_id))
+                                .filter(ingested_static_columns::onestop_feed_id.eq(&feed_id))
                                 .filter(
-                                    ingested_static_columns::attempt_id.lt(&production_list_id),
+                                    ingested_static_columns::attempt_id.eq(&production_list_id),
                                 ),
                         )
                         .set((
@@ -229,8 +232,8 @@ pub async fn assign_production_tables(
                 for drop_id in drop_attempt_list_transaction {
                     let _ = diesel::update(
                         ingested_static
-                            .filter(ingested_static_columns::onestop_feed_id.lt(&feed_id))
-                            .filter(ingested_static_columns::attempt_id.lt(&drop_id)),
+                            .filter(ingested_static_columns::onestop_feed_id.eq(&feed_id))
+                            .filter(ingested_static_columns::attempt_id.eq(&drop_id)),
                     )
                     .set((
                         ingested_static_columns::deleted.eq(true),
@@ -242,17 +245,25 @@ pub async fn assign_production_tables(
                     //delete all the shapes
                     let _ = diesel::delete(
                         shapes
-                            .filter(shapes_columns::onestop_feed_id.lt(&feed_id))
-                            .filter(shapes_columns::attempt_id.lt(&drop_id)),
+                            .filter(shapes_columns::onestop_feed_id.eq(&feed_id))
+                            .filter(shapes_columns::attempt_id.eq(&drop_id)),
                     )
                     .execute(conn)
                     .await?;
 
+                    let _ = diesel::delete(
+                        shapes_not_bus
+                            .filter(shapes_not_bus_columns::onestop_feed_id.eq(&feed_id))
+                            .filter(shapes_not_bus_columns::attempt_id.eq(&drop_id)),
+                    )
+                    .execute(conn)
+                    .await?;
+                
                     //delete all the stops
                     let _ = diesel::delete(
                         stops
-                            .filter(stops_columns::onestop_feed_id.lt(&feed_id))
-                            .filter(stops_columns::attempt_id.lt(&drop_id)),
+                            .filter(stops_columns::onestop_feed_id.eq(&feed_id))
+                            .filter(stops_columns::attempt_id.eq(&drop_id)),
                     )
                     .execute(conn)
                     .await?;
