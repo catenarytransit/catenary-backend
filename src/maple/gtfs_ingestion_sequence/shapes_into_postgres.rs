@@ -178,7 +178,7 @@ pub async fn shapes_into_postgres(
                     .execute(conn)
                     .await?;
             }
-            
+
             //Create structure to insert
             let shape_value: catenary::models::Shape = catenary::models::Shape {
                 onestop_feed_id: feed_id.to_string(),

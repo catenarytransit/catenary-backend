@@ -1,5 +1,8 @@
+use crate::chateau_postprocess::feed_id_to_chateau_id_pivot_table;
+use catenary::schema::gtfs as gtfs_schema;
 use chateau::Chateau;
 use diesel::query_dsl::methods::SelectDsl;
+use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use dmfr_folder_reader::ReturnDmfrAnalysis;
@@ -20,6 +23,9 @@ pub async fn refresh_metadata_assignments(
     chateau_result: &HashMap<String, Chateau>,
     pool: Arc<catenary::postgres_tools::CatenaryPostgresPool>,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    //create a reverse table
+    let feed_id_to_chateau_id_lookup_table = feed_id_to_chateau_id_pivot_table(&chateau_result);
+
     //update or create realtime tables and static tables
 
     let conn_pool = pool.as_ref();
@@ -140,7 +146,62 @@ pub async fn refresh_metadata_assignments(
         })
         .collect::<Vec<catenary::models::Chateau>>();
 
+    for chateau_pg in chateaus_pg {
+        diesel::insert_into(catenary::schema::gtfs::chateaus::dsl::chateaus)
+            .values(chateau_pg.clone())
+            .on_conflict(catenary::schema::gtfs::chateaus::dsl::chateau)
+            .do_update()
+            .set((
+                catenary::schema::gtfs::chateaus::dsl::static_feeds.eq(chateau_pg.static_feeds),
+                catenary::schema::gtfs::chateaus::dsl::realtime_feeds.eq(chateau_pg.realtime_feeds),
+                catenary::schema::gtfs::chateaus::dsl::hull.eq(chateau_pg.hull),
+                catenary::schema::gtfs::chateaus::dsl::languages_avaliable
+                    .eq(chateau_pg.languages_avaliable),
+            ))
+            .execute(conn)
+            .await?;
+    }
+
     //set each realtime feed to the new chateau id
+
+    let new_realtime_dataset = dmfr_result
+        .feed_hashmap
+        .iter()
+        .filter(|(feed_id, feed)| match feed.spec {
+            dmfr::FeedSpec::GtfsRt => true,
+            _ => false,
+        })
+        .map(
+            |(feed_id, feed)| match feed_id_to_chateau_id_lookup_table.get(&feed_id.clone()) {
+                Some(chateau_id) => Some(catenary::models::RealtimeFeed {
+                    onestop_feed_id: feed_id.clone(),
+                    chateau: chateau_id.clone(),
+                    previous_chateau_name: chateau_id.clone(),
+                    fetch_interval_ms: match existing_realtime_feeds_map.get(&feed_id.clone()) {
+                        Some(existing_realtime_feed) => existing_realtime_feed.fetch_interval_ms,
+                        None => None,
+                    },
+                }),
+                None => None,
+            },
+        )
+        .filter(|x| x.is_some())
+        .map(|x| x.unwrap())
+        .collect::<Vec<catenary::models::RealtimeFeed>>();
+
+    for new_realtime in new_realtime_dataset {
+        let _ = diesel::insert_into(gtfs_schema::realtime_feeds::dsl::realtime_feeds)
+            .values(new_realtime.clone())
+            .on_conflict(gtfs_schema::realtime_feeds::dsl::onestop_feed_id)
+            .do_update()
+            .set((
+                gtfs_schema::realtime_feeds::dsl::fetch_interval_ms
+                    .eq(new_realtime.fetch_interval_ms),
+                gtfs_schema::realtime_feeds::dsl::chateau.eq(new_realtime.chateau),
+            ))
+            .execute(conn)
+            .await?;
+    }
 
     //set each static feed to the new chateau id
     // if static feed has a different chateau id, call on the update function

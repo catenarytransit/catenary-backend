@@ -271,7 +271,7 @@ pub async fn assign_production_tables(
                     )
                     .execute(conn)
                     .await?;
-                
+
                     //delete all the stops
                     let _ = diesel::delete(
                         stops

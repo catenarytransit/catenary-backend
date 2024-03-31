@@ -433,8 +433,7 @@ pub async fn gtfs_process_feed(
     }
     //submit hull
 
-    let hull_pg:
-     Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>> = match hull {
+    let hull_pg: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>> = match hull {
         Some(polygon_geo) => Some(postgis_diesel::types::Polygon {
             rings: vec![polygon_geo
                 .into_inner()
@@ -467,18 +466,21 @@ pub async fn gtfs_process_feed(
         hull: hull_pg.clone(),
     };
 
-    /*
+    //create the static feed entry
     let _ = diesel::insert_into(catenary::schema::gtfs::static_feeds::dsl::static_feeds)
         .values(&static_feed_pg)
         .on_conflict(catenary::schema::gtfs::static_feeds::dsl::onestop_feed_id)
         .do_update()
-        .set(
-            (catenary::schema::gtfs::static_feeds::dsl::languages_avaliable
+        .set((
+            catenary::schema::gtfs::static_feeds::dsl::languages_avaliable
                 .eq(languages_avaliable_pg),
-                catenary::schema::gtfs::static_feeds::dsl::hull.eq(hull))
-        )
+            catenary::schema::gtfs::static_feeds::dsl::hull.eq(match hull_pg {
+                Some(hull_pg) => Some(postgis_diesel::types::GeometryContainer::Polygon(hull_pg)),
+                None => None,
+            }),
+        ))
         .execute(conn)
-        .await?;*/
+        .await?;
 
     Ok(gtfs_summary)
 }
