@@ -75,10 +75,8 @@ pub async fn gtfs_process_feed(
         languages_avaliable: HashSet::new(),
         default_lang: None,
         general_timezone: match gtfs.agencies.len() {
-            0 => {
-                String::from("Etc/UTC")
-            },
-            _ => gtfs.agencies[0].timezone.clone()
+            0 => String::from("Etc/UTC"),
+            _ => gtfs.agencies[0].timezone.clone(),
         },
     };
 
@@ -175,7 +173,6 @@ pub async fn gtfs_process_feed(
 
     //insert trip
     for (trip_id, trip) in &gtfs.trips {
-        
         let mut stop_headsigns: HashSet<String> = HashSet::new();
 
         for stop_time in &trip.stop_times {
@@ -249,7 +246,7 @@ pub async fn gtfs_process_feed(
             wheelchair_accessible: availability_to_int(&trip.wheelchair_accessible),
             chateau: chateau_id.to_string(),
             frequencies: None,
-            has_frequencies: trip.frequencies.len() >= 1
+            has_frequencies: trip.frequencies.len() >= 1,
         };
 
         use catenary::schema::gtfs::trips::dsl::trips;
@@ -481,8 +478,12 @@ pub async fn gtfs_process_feed(
         .execute(conn)
         .await?;
 
-        let ingest_duration = start.elapsed();
-    println!("Finished {}, took {:.3}s", feed_id, ingest_duration.as_secs_f32());
+    let ingest_duration = start.elapsed();
+    println!(
+        "Finished {}, took {:.3}s",
+        feed_id,
+        ingest_duration.as_secs_f32()
+    );
 
     Ok(gtfs_summary)
 }

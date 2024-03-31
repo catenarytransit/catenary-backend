@@ -4,12 +4,13 @@
 #[macro_use]
 extern crate diesel_derive_newtype;
 
+pub mod agency_secret;
 pub mod aspen;
 pub mod custom_pg_types;
 pub mod gtfs_rt_handlers;
 pub mod models;
+pub mod postgis_to_diesel;
 pub mod postgres_tools;
 pub mod schema;
-pub mod agency_secret;
 
 pub const WGS_84_SRID: u32 = 4326;

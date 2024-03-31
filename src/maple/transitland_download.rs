@@ -1,3 +1,4 @@
+use crate::CatenaryPostgresPool;
 use catenary::models::StaticDownloadAttempt;
 use catenary::postgres_tools::CatenaryConn;
 use diesel::prelude::*;
@@ -5,7 +6,6 @@ use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_folder_reader::ReturnDmfrAnalysis;
 use futures;
 use reqwest::RequestBuilder;
-use crate::CatenaryPostgresPool;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;

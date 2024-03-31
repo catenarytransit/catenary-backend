@@ -4,12 +4,12 @@ pub struct PasswordFormat {
     override_schedule_url: Option<String>,
     override_realtime_vehicle_positions: Option<String>,
     override_realtime_trip_updates: Option<String>,
-    override_alerts: Option<String>
+    override_alerts: Option<String>,
 }
 
 pub enum KeyFormat {
     Header(String),
-    UrlQuery(String)
+    UrlQuery(String),
 }
 
 pub struct PasswordInfo {

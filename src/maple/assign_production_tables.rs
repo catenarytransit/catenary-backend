@@ -25,12 +25,12 @@ pub async fn assign_production_tables(
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
-    
+
     let now: NaiveDate = Utc::now().naive_utc().date();
     let now_ms = SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .unwrap()
-    .as_millis();
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
 
     //determine if the old one should be deleted, if so, delete it
 
@@ -50,12 +50,12 @@ pub async fn assign_production_tables(
     // "service in the period from the beginning of the feed_start_date day to the end of the feed_end_date day"
     //https://gtfs.org/schedule/reference/#feed_infotxt
 
-    use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
     use catenary::schema::gtfs::ingested_static::dsl as ingested_static_columns;
+    use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
     use diesel::ExpressionMethods;
 
     let all_feeds: Vec<catenary::models::IngestedStatic> = ingested_static
-    .filter(ingested_static_columns::onestop_feed_id.eq(feed_id))
+        .filter(ingested_static_columns::onestop_feed_id.eq(feed_id))
         .select(catenary::models::IngestedStatic::as_select())
         .load::<catenary::models::IngestedStatic>(conn)
         .await?;
@@ -82,14 +82,12 @@ pub async fn assign_production_tables(
 
     //drop feeds older than 1 day and are not successfully ingested
 
-    for to_drop_feed in all_feeds
-        .clone()
-        .into_iter()
-        .filter(|ingested| {
-            ingested.ingestion_successfully_finished == false && ingested.ingest_start_unix_time_ms < (now_ms as i64 - (1000 * 86400))
-        }) {
-            drop_attempt_list.push(to_drop_feed.attempt_id);
-        }
+    for to_drop_feed in all_feeds.clone().into_iter().filter(|ingested| {
+        ingested.ingestion_successfully_finished == false
+            && ingested.ingest_start_unix_time_ms < (now_ms as i64 - (1000 * 86400))
+    }) {
+        drop_attempt_list.push(to_drop_feed.attempt_id);
+    }
 
     let mut last_claimed_start_time: Option<Option<NaiveDate>> = None;
 

@@ -128,9 +128,17 @@ pub async fn refresh_metadata_assignments(
                 }),
             };
 
+            let hull_pg: Option<postgis_diesel::types::MultiPolygon<postgis_diesel::types::Point>> =
+                match hull {
+                    Some(hull) => Some(catenary::postgis_to_diesel::multi_polygon_geo_to_diesel(
+                        hull,
+                    )),
+                    None => None,
+                };
+
             catenary::models::Chateau {
                 chateau: k.to_string(),
-                hull: None,
+                hull: hull_pg,
                 static_feeds: v.static_feeds.iter().map(|x| Some(x.to_string())).collect(),
                 realtime_feeds: v
                     .realtime_feeds

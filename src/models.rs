@@ -182,7 +182,7 @@ pub struct Trip {
     pub bikes_allowed: i16,
     pub chateau: String,
     pub frequencies: Option<Vec<Option<TripFrequencyModel>>>,
-    pub has_frequencies: bool
+    pub has_frequencies: bool,
 }
 
 //Attempted custom type, still doesn't work for some reason
@@ -264,7 +264,7 @@ pub struct StopTime {
     pub timepoint: bool,
     pub continuous_pickup: i16,
     pub continuous_drop_off: i16,
- //   pub point: Option<postgis_diesel::types::Point>,
+    //   pub point: Option<postgis_diesel::types::Point>,
     pub route_id: String,
     pub chateau: String,
 }
