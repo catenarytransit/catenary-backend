@@ -53,6 +53,7 @@ async fn main() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 wheelchair_accessible: 0,
                 chateau: "chateau".to_string(),
                 frequencies: None,
+                has_frequencies: false
             };
 
             let insert_trip = diesel::insert_into(trips)

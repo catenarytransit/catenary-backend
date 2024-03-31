@@ -4,7 +4,7 @@ use diesel::prelude::*;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_folder_reader::ReturnDmfrAnalysis;
 use futures;
-
+use reqwest::RequestBuilder;
 use crate::CatenaryPostgresPool;
 use std::collections::HashSet;
 use std::fs;
@@ -113,8 +113,12 @@ pub async fn download_return_eligible_feeds(
                                 .cookie_store(true)
                                 .build()
                                 .unwrap();
+
+                            let url = transform_for_bay_area(staticfeed.url.clone());
             
-                            let request = client.get(&staticfeed.url);
+                            let request = client.get(url);
+
+                            let request = add_auth_headers(request, &staticfeed.feed_id);
             
                             //calculate how long the download takes
                             let start = SystemTime::now();
@@ -255,4 +259,47 @@ pub async fn download_return_eligible_feeds(
     } else {
         return Err(());
     }
+}
+
+fn transform_for_bay_area(x: String) -> String {
+    //.replace("https://api.511.org/transit/datafeeds?operator_id=RG", "https://api.511.org/transit/datafeeds?operator_id=RG&api_key=094f6bc5-9d6a-4529-bfb3-6f1bc4d809d9")
+
+    if x.contains("api.511.org") {
+        let mut a = x;
+
+        a.push_str("&api_key=094f6bc5-9d6a-4529-bfb3-6f1bc4d809d9");
+
+        return a;
+    } else {
+        return x;
+    }
+}
+
+fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
+    let mut headers = reqwest::header::HeaderMap::new();
+
+    match feed_id {
+        "f-dp3-metra" => {
+            headers.insert(
+                "username",
+                "bb2c71e54d827a4ab47917c426bdb48c".parse().unwrap(),
+            );
+            headers.insert("Authorization", "Basic YmIyYzcxZTU0ZDgyN2E0YWI0NzkxN2M0MjZiZGI0OGM6ZjhiY2Y4MDBhMjcxNThiZjkwYWVmMTZhZGFhNDRhZDI=".parse().unwrap());
+        }
+        "f-dqc-wmata~rail" => {
+            headers.insert(
+                "api_key",
+                "3be3d48087754c4998e6b33b65ec9700".parse().unwrap(),
+            );
+        }
+        "f-dqc-wmata~bus" => {
+            headers.insert(
+                "api_key",
+                "3be3d48087754c4998e6b33b65ec9700".parse().unwrap(),
+            );
+        }
+        _ => {}
+    };
+
+    request.headers(headers)
 }
