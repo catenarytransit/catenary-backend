@@ -1,6 +1,10 @@
 pub struct PasswordFormat {
     key_formats: Vec<KeyFormat>,
-    passwords: Vec<PasswordInfo>
+    passwords: Vec<PasswordInfo>,
+    override_schedule_url: Option<String>,
+    override_realtime_vehicle_positions: Option<String>,
+    override_realtime_trip_updates: Option<String>,
+    override_alerts: Option<String>
 }
 
 pub enum KeyFormat {
