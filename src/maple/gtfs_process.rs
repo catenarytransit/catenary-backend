@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use titlecase::titlecase;
 
 #[derive(Debug)]
@@ -47,6 +48,7 @@ pub async fn gtfs_process_feed(
     this_download_data: &DownloadedFeedsInformation,
 ) -> Result<GtfsSummary, Box<dyn Error + Send + Sync>> {
     println!("Begin feed {} processing", feed_id);
+    let start = Instant::now();
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
@@ -479,7 +481,8 @@ pub async fn gtfs_process_feed(
         .execute(conn)
         .await?;
 
-    println!("Finished {}", feed_id);
+        let ingest_duration = start.elapsed();
+    println!("Finished {}, took {:.3}s", feed_id, ingest_duration.as_secs_f32());
 
     Ok(gtfs_summary)
 }
