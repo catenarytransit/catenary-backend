@@ -182,6 +182,7 @@ pub struct Trip {
     pub bikes_allowed: i16,
     pub chateau: String,
     pub frequencies: Option<Vec<Option<TripFrequencyModel>>>,
+    pub has_frequencies: bool
 }
 
 //Attempted custom type, still doesn't work for some reason

@@ -240,6 +240,7 @@ pub async fn gtfs_process_feed(
             wheelchair_accessible: availability_to_int(&trip.wheelchair_accessible),
             chateau: chateau_id.to_string(),
             frequencies: None,
+            has_frequencies: trip.frequencies.len() >= 1
         };
 
         use catenary::schema::gtfs::trips::dsl::trips;
