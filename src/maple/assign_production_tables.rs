@@ -47,9 +47,11 @@ pub async fn assign_production_tables(
     //https://gtfs.org/schedule/reference/#feed_infotxt
 
     use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
+    use catenary::schema::gtfs::ingested_static::dsl as ingested_static_columns;
     use diesel::ExpressionMethods;
 
     let all_feeds: Vec<catenary::models::IngestedStatic> = ingested_static
+    .filter(ingested_static_columns::onestop_feed_id.eq(feed_id))
         .select(catenary::models::IngestedStatic::as_select())
         .load::<catenary::models::IngestedStatic>(conn)
         .await?;
