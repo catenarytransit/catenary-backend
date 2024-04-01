@@ -313,24 +313,33 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             // 5. Process GTFS feeds
 
             //Stream the feeds into the processing function
+
+            let ingest_progress: Arc<std::sync::Mutex<u16>> = Arc::new(std::sync::Mutex::new(0));
+
+            let feeds_to_process:Vec<(String, String, String)> = unzip_feeds_clone
+            .into_iter()
+            .filter(|unzipped_feed| unzipped_feed.1 == true)
+            .map(|(feed_id, _)| (feed_id.clone(),attempt_ids.get(&feed_id).unwrap().clone()))
+            .map(|(feed_id, attempt_id)| {
+                match feed_id_to_chateau_lookup.get(&feed_id) {
+                    Some(chateau_id) => Some((feed_id, attempt_id, chateau_id.clone())),
+                    None => None
+                }
+            })
+            .filter(|x| x.is_some())
+            .map(|x: Option<(String, String, String)>| x.unwrap()).collect();
+
+            let total_feeds_to_process = feeds_to_process.len() as u16;
+
             futures::stream::iter(
-                unzip_feeds_clone
+                feeds_to_process
                 .into_iter()
-                .filter(|unzipped_feed| unzipped_feed.1 == true)
-                .map(|(feed_id, _)| (feed_id.clone(),attempt_ids.get(&feed_id).unwrap().clone()))
-                .map(|(feed_id, attempt_id)| {
-                    match feed_id_to_chateau_lookup.get(&feed_id) {
-                        Some(chateau_id) => Some((feed_id, attempt_id, chateau_id.clone())),
-                        None => None
-                    }
-                })
-                .filter(|x| x.is_some())
-                .map(|x| x.unwrap())
                 .map(|(feed_id, attempt_id, chateau_id)| {
                         
                             //clone the smart reference to the connection pool
                             let arc_conn_pool = Arc::clone(&arc_conn_pool);
                             let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
+                            let ingest_progress = Arc::clone(&ingest_progress);
                             async move {
                                 //connect to postgres
                                 let conn_pool = arc_conn_pool.as_ref();
@@ -350,6 +359,18 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         &this_download_data,
                                     )
                                     .await;
+
+                                    let mut ingest_progress  = ingest_progress.lock().unwrap();
+                                    *ingest_progress += 1;
+            
+                                    println!(
+                                        "Completion progress: {}/{} [{:.2}%]",
+                                        ingest_progress,
+                                        total_feeds_to_process,
+                                        (ingest_progress.clone() as f32/total_feeds_to_process as f32) * 100.0
+                                    );
+
+                                    std::mem::drop(ingest_progress);
         
                                     if gtfs_process_result.is_ok() {
                                         // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
