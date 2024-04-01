@@ -160,7 +160,7 @@ FROM (
         (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
 ) q", z = z, x = x, y= y);
 
-    println!("Performing query \n {}", query_str);
+   // println!("Performing query \n {}", query_str);
 
     let mvt_result = sqlx::query(query_str.as_str()).fetch_one(sqlx_pool_ref).await.unwrap();
 
