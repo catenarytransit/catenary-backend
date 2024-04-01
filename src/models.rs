@@ -6,7 +6,8 @@ use diesel::serialize::ToSql;
 use diesel::sql_types::*;
 use diesel::AsExpression;
 use serde_json::Value;
-
+use serde_derive::Serialize;
+use serde_derive::Deserialize;
 #[derive(Queryable, Selectable, Insertable, Clone)]
 #[diesel(table_name = crate::schema::gtfs::shapes)]
 pub struct Shape {
@@ -87,7 +88,7 @@ pub struct RealtimeFeed {
     pub fetch_interval_ms: Option<i32>,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::gtfs::routes)]
 pub struct Route {
     pub onestop_feed_id: String,

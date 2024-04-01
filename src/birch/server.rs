@@ -5,10 +5,12 @@ use bb8::Pool;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use diesel::query_dsl::select_dsl::SelectDsl;
+use diesel::ExpressionMethods;
 use diesel::sql_types::{Float, Integer};
 use diesel::Selectable;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
+use diesel::query_dsl::methods::FilterDsl;
 use geojson::{Feature, GeoJson, Geometry, JsonValue, Value};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use zstd_safe::WriteBuf;
@@ -149,6 +151,31 @@ FROM (
     HttpResponse::Ok()
     .insert_header(("Content-Type","application/x-protobuf"))
         .body(mvt_bytes)
+}
+
+#[actix_web::get("/getroutesofchateau/{chateau}")]
+async fn routesofchateau( pool: web::Data<Arc<CatenaryPostgresPool>>,
+    path: web::Path<(String)>,
+req: HttpRequest) -> impl Responder {
+    let conn_pool = pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre.unwrap();
+
+    let (chateau_id) = path.into_inner();
+
+    use catenary::schema::gtfs::routes as routes_pg_schema;
+
+    let routes = routes_pg_schema::dsl::routes
+    .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
+    .select((catenary::models::Route::as_select()))
+    .load::<catenary::models::Route>(conn)
+    .await.unwrap();
+
+    HttpResponse::Ok()
+    .insert_header(("Content-Type", "application/json"))
+    .body(
+        serde_json::to_string(&routes).unwrap()
+    )
 }
 
 #[actix_web::get("/shapes_bus/{z}/{x}/{y}")]
@@ -521,6 +548,7 @@ async fn main() -> std::io::Result<()> {
             .service(shapes_bus)
             .service(shapes_bus_meta)
             .service(irvinevehproxy)
+            .service(routesofchateau)
     })
     .workers(16);
 
