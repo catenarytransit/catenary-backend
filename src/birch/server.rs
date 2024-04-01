@@ -135,7 +135,7 @@ FROM (
         text_color,
         chateau,
         ST_AsMVTGeom(ST_Transform(linestring, 3857), 
-        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, false) AS geom
+        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
         gtfs.shapes_not_bus
     WHERE
@@ -233,7 +233,7 @@ FROM (
         text_color,
         chateau,
         ST_AsMVTGeom(ST_Transform(linestring, 3857), 
-        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, false) AS geom
+        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
         gtfs.shapes
     WHERE
