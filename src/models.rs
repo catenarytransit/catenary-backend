@@ -189,7 +189,7 @@ pub struct Trip {
 //Attempted custom type, still doesn't work for some reason
 //Error inserting trip: SerializationError(FailedToLookupTypeError(PgMetadataCacheKey { schema: Some("public"), type_name: "trip_frequency" }))
 //Even though the type clearly exists
-#[derive(Clone, Debug, PartialEq, AsExpression)]
+#[derive(Clone, Debug, PartialEq, AsExpression,  Serialize, Deserialize)]
 #[diesel(sql_type = crate::custom_pg_types::TripFrequency)]
 pub struct TripFrequencyModel {
     pub start_time: i32,
