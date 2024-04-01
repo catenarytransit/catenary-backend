@@ -11,9 +11,11 @@ use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, Geometry, JsonValue, Value};
 use sqlx::postgres::{PgPoolOptions, PgRow};
+use zstd_safe::WriteBuf;
 use sqlx::{FromRow, Row};
 use qstring::QString;
 use rstar::RTree;
+use rand::Rng;
 use serde::Deserialize;
 use serde_derive::Serialize;
 use serde_json::to_string;
@@ -304,6 +306,39 @@ pub async fn metrolinktrackproxy(req: HttpRequest) -> impl Responder {
         Err(error) => HttpResponse::InternalServerError()
             .insert_header(("Content-Type", "text/plain"))
             .body("Could not fetch Metrolink data"),
+    }
+}
+
+#[actix_web::get("/irvinevehproxy")]
+pub async fn irvinevehproxy(req:HttpRequest) -> impl Responder {
+    let raw_data =
+        reqwest::get("https://passio3.com/irvine/passioTransit/gtfs/realtime/vehiclePositions").await;
+
+    match raw_data {
+        Ok(raw_data) => {
+            //println!("Raw data successfully downloaded");
+
+            let raw_text = raw_data.bytes().await;
+
+            match raw_text {
+                Ok(raw_bytes) => {
+
+                    let hashofresult = fasthash::metro::hash64(raw_bytes.as_ref());
+
+                    HttpResponse::Ok()
+                    .insert_header(("Content-Type", "application/x-protobuf"))
+                    .insert_header(("hash", hashofresult))
+                    .body(raw_bytes)
+
+                },
+                Err(error) => HttpResponse::InternalServerError()
+                    .insert_header(("Content-Type", "text/plain"))
+                    .body("Could not fetch Irvine data"),
+            }
+        }
+        Err(error) => HttpResponse::InternalServerError()
+            .insert_header(("Content-Type", "text/plain"))
+            .body("Could not fetch Irvine data"),
     }
 }
 
