@@ -4,33 +4,33 @@ use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer
 use bb8::Pool;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
+use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::select_dsl::SelectDsl;
-use diesel::ExpressionMethods;
 use diesel::sql_types::{Float, Integer};
+use diesel::ExpressionMethods;
 use diesel::Selectable;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
-use diesel::query_dsl::methods::FilterDsl;
 use geojson::{Feature, GeoJson, Geometry, JsonValue, Value};
-use sqlx::postgres::{PgPoolOptions, PgRow};
-use zstd_safe::WriteBuf;
-use sqlx::{FromRow, Row};
 use qstring::QString;
-use rstar::RTree;
 use rand::Rng;
+use rstar::RTree;
 use serde::Deserialize;
 use serde_derive::Serialize;
 use serde_json::to_string;
 use serde_json::{json, to_string_pretty};
-use tilejson::TileJSON;
+use sqlx::postgres::{PgPoolOptions, PgRow};
+use sqlx::{FromRow, Row};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
+use tilejson::TileJSON;
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Client;
-use tokio_postgres::{Error as PostgresError};
+use tokio_postgres::Error as PostgresError;
+use zstd_safe::WriteBuf;
 
 struct ChateauCache {
     last_updated_time_ms: u64,
@@ -142,21 +142,29 @@ FROM (
         (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
 ) q", z = z, x = x, y= y);
 
-   // println!("Performing query \n {}", query_str);
+    // println!("Performing query \n {}", query_str);
 
-    let mvt_result = sqlx::query(query_str.as_str()).fetch_one(sqlx_pool_ref).await.unwrap();
+    match sqlx::query(query_str.as_str())
+        .fetch_one(sqlx_pool_ref)
+        .await
+    {
+        Ok(mvt_result) => {
+            let mvt_bytes: Vec<u8> = mvt_result.get(0);
 
-    let mvt_bytes: Vec<u8> = mvt_result.get(0);
-
-    HttpResponse::Ok()
-    .insert_header(("Content-Type","application/x-protobuf"))
-        .body(mvt_bytes)
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/x-protobuf"))
+                .body(mvt_bytes)
+        }
+        Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
+    }
 }
 
 #[actix_web::get("/barebones_trip/{chateau_id}/{trip_id}")]
-async fn barebones_trip( pool: web::Data<Arc<CatenaryPostgresPool>>,
+async fn barebones_trip(
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
     path: web::Path<(String, String)>,
-req: HttpRequest) -> impl Responder {
+    req: HttpRequest,
+) -> impl Responder {
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
@@ -166,23 +174,24 @@ req: HttpRequest) -> impl Responder {
     use catenary::schema::gtfs::trips as trips_pg_schema;
 
     let trips = trips_pg_schema::dsl::trips
-    .filter(trips_pg_schema::dsl::chateau.eq(&chateau_id))
-    .filter(trips_pg_schema::dsl::trip_id.eq(&trip_id))
-    .select((catenary::models::Trip::as_select()))
-    .load::<catenary::models::Trip>(conn)
-    .await.unwrap();
+        .filter(trips_pg_schema::dsl::chateau.eq(&chateau_id))
+        .filter(trips_pg_schema::dsl::trip_id.eq(&trip_id))
+        .select((catenary::models::Trip::as_select()))
+        .load::<catenary::models::Trip>(conn)
+        .await
+        .unwrap();
 
     HttpResponse::Ok()
-    .insert_header(("Content-Type", "application/json"))
-    .body(
-        serde_json::to_string(&trips).unwrap()
-    )
+        .insert_header(("Content-Type", "application/json"))
+        .body(serde_json::to_string(&trips).unwrap())
 }
 
 #[actix_web::get("/getroutesofchateau/{chateau}")]
-async fn routesofchateau( pool: web::Data<Arc<CatenaryPostgresPool>>,
+async fn routesofchateau(
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
     path: web::Path<(String)>,
-req: HttpRequest) -> impl Responder {
+    req: HttpRequest,
+) -> impl Responder {
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
@@ -192,16 +201,15 @@ req: HttpRequest) -> impl Responder {
     use catenary::schema::gtfs::routes as routes_pg_schema;
 
     let routes = routes_pg_schema::dsl::routes
-    .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
-    .select((catenary::models::Route::as_select()))
-    .load::<catenary::models::Route>(conn)
-    .await.unwrap();
+        .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
+        .select((catenary::models::Route::as_select()))
+        .load::<catenary::models::Route>(conn)
+        .await
+        .unwrap();
 
     HttpResponse::Ok()
-    .insert_header(("Content-Type", "application/json"))
-    .body(
-        serde_json::to_string(&routes).unwrap()
-    )
+        .insert_header(("Content-Type", "application/json"))
+        .body(serde_json::to_string(&routes).unwrap())
 }
 
 #[actix_web::get("/shapes_bus/{z}/{x}/{y}")]
@@ -215,7 +223,7 @@ pub async fn shapes_bus(
 
     let grid = tile_grid::Grid::wgs84();
     let bbox = grid.tile_extent(x, y, z);
-    
+
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
     let query_str = format!("
@@ -240,20 +248,23 @@ FROM (
         (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND (route_type = 3 OR route_type = 11 OR route_type = 200)
 ) q", z = z, x = x, y= y);
 
-   // println!("Performing query \n {}", query_str);
+    match sqlx::query(query_str.as_str())
+        .fetch_one(sqlx_pool_ref)
+        .await
+    {
+        Ok(mvt_result) => {
+            let mvt_bytes: Vec<u8> = mvt_result.get(0);
 
-    let mvt_result = sqlx::query(query_str.as_str()).fetch_one(sqlx_pool_ref).await.unwrap();
-
-    let mvt_bytes: Vec<u8> = mvt_result.get(0);
-
-    HttpResponse::Ok()
-    .insert_header(("Content-Type","application/x-protobuf"))
-        .body(mvt_bytes)
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/x-protobuf"))
+                .body(mvt_bytes)
+        }
+        Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
+    }
 }
 
 #[actix_web::get("/shapes_not_bus")]
 pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
-
     let mut fields = std::collections::BTreeMap::new();
     fields.insert(String::from("color"), String::from("text"));
     fields.insert(String::from("text_color"), String::from("text"));
@@ -284,20 +295,19 @@ pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
         template: None,
         version: None,
         other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from("https://birch.catenarymaps.org/shapes_not_bus/{z}/{x}/{y}")],
-        attribution: None
+        tiles: vec![String::from(
+            "https://birch.catenarymaps.org/shapes_not_bus/{z}/{x}/{y}",
+        )],
+        attribution: None,
     };
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
-        .body(
-            serde_json::to_string(&tile_json).unwrap()
-        )
+        .body(serde_json::to_string(&tile_json).unwrap())
 }
 
 #[actix_web::get("/shapes_bus")]
 pub async fn shapes_bus_meta(req: HttpRequest) -> impl Responder {
-
     let mut fields = std::collections::BTreeMap::new();
     fields.insert(String::from("color"), String::from("text"));
     fields.insert(String::from("text_color"), String::from("text"));
@@ -328,15 +338,15 @@ pub async fn shapes_bus_meta(req: HttpRequest) -> impl Responder {
         template: None,
         version: None,
         other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from("https://birch.catenarymaps.org/shapes_bus/{z}/{x}/{y}")],
-        attribution: None
+        tiles: vec![String::from(
+            "https://birch.catenarymaps.org/shapes_bus/{z}/{x}/{y}",
+        )],
+        attribution: None,
     };
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
-        .body(
-            serde_json::to_string(&tile_json).unwrap()
-        )
+        .body(serde_json::to_string(&tile_json).unwrap())
 }
 
 #[actix_web::get("/metrolinktrackproxy")]
@@ -363,9 +373,10 @@ pub async fn metrolinktrackproxy(req: HttpRequest) -> impl Responder {
 }
 
 #[actix_web::get("/irvinevehproxy")]
-pub async fn irvinevehproxy(req:HttpRequest) -> impl Responder {
+pub async fn irvinevehproxy(req: HttpRequest) -> impl Responder {
     let raw_data =
-        reqwest::get("https://passio3.com/irvine/passioTransit/gtfs/realtime/vehiclePositions").await;
+        reqwest::get("https://passio3.com/irvine/passioTransit/gtfs/realtime/vehiclePositions")
+            .await;
 
     match raw_data {
         Ok(raw_data) => {
@@ -375,15 +386,13 @@ pub async fn irvinevehproxy(req:HttpRequest) -> impl Responder {
 
             match raw_text {
                 Ok(raw_bytes) => {
-
                     let hashofresult = fasthash::metro::hash64(raw_bytes.as_ref());
 
                     HttpResponse::Ok()
-                    .insert_header(("Content-Type", "application/x-protobuf"))
-                    .insert_header(("hash", hashofresult))
-                    .body(raw_bytes)
-
-                },
+                        .insert_header(("Content-Type", "application/x-protobuf"))
+                        .insert_header(("hash", hashofresult))
+                        .body(raw_bytes)
+                }
                 Err(error) => HttpResponse::InternalServerError()
                     .insert_header(("Content-Type", "text/plain"))
                     .body("Could not fetch Irvine data"),
@@ -538,10 +547,13 @@ async fn main() -> std::io::Result<()> {
     let conn_pre = arc_pool.as_ref().get().await;
     let conn = &mut conn_pre.unwrap();
 
-    let sqlx_pool: Arc<sqlx::Pool<sqlx::Postgres>> = Arc::new(PgPoolOptions::new()
-    .max_connections(5)
-    .connect(std::env::var("DATABASE_URL").unwrap().as_str())
-    .await.unwrap());
+    let sqlx_pool: Arc<sqlx::Pool<sqlx::Postgres>> = Arc::new(
+        PgPoolOptions::new()
+            .max_connections(5)
+            .connect(std::env::var("DATABASE_URL").unwrap().as_str())
+            .await
+            .unwrap(),
+    );
 
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {

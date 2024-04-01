@@ -5,9 +5,9 @@ use diesel::prelude::*;
 use diesel::serialize::ToSql;
 use diesel::sql_types::*;
 use diesel::AsExpression;
-use serde_json::Value;
-use serde_derive::Serialize;
 use serde_derive::Deserialize;
+use serde_derive::Serialize;
+use serde_json::Value;
 #[derive(Queryable, Selectable, Insertable, Clone)]
 #[diesel(table_name = crate::schema::gtfs::shapes)]
 pub struct Shape {
@@ -189,7 +189,7 @@ pub struct Trip {
 //Attempted custom type, still doesn't work for some reason
 //Error inserting trip: SerializationError(FailedToLookupTypeError(PgMetadataCacheKey { schema: Some("public"), type_name: "trip_frequency" }))
 //Even though the type clearly exists
-#[derive(Clone, Debug, PartialEq, AsExpression,  Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, AsExpression, Serialize, Deserialize)]
 #[diesel(sql_type = crate::custom_pg_types::TripFrequency)]
 pub struct TripFrequencyModel {
     pub start_time: i32,
