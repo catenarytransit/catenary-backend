@@ -162,7 +162,7 @@ pub struct Agency {
     pub chateau: String,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::gtfs::trips)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct Trip {

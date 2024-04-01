@@ -153,6 +153,32 @@ FROM (
         .body(mvt_bytes)
 }
 
+#[actix_web::get("/barebones_trip/{chateau_id}/{trip_id}")]
+async fn barebones_trip( pool: web::Data<Arc<CatenaryPostgresPool>>,
+    path: web::Path<(String, String)>,
+req: HttpRequest) -> impl Responder {
+    let conn_pool = pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre.unwrap();
+
+    let (chateau_id, trip_id) = path.into_inner();
+
+    use catenary::schema::gtfs::trips as trips_pg_schema;
+
+    let trips = trips_pg_schema::dsl::trips
+    .filter(trips_pg_schema::dsl::chateau.eq(&chateau_id))
+    .filter(trips_pg_schema::dsl::trip_id.eq(&trip_id))
+    .select((catenary::models::Trip::as_select()))
+    .load::<catenary::models::Trip>(conn)
+    .await.unwrap();
+
+    HttpResponse::Ok()
+    .insert_header(("Content-Type", "application/json"))
+    .body(
+        serde_json::to_string(&trips).unwrap()
+    )
+}
+
 #[actix_web::get("/getroutesofchateau/{chateau}")]
 async fn routesofchateau( pool: web::Data<Arc<CatenaryPostgresPool>>,
     path: web::Path<(String)>,
