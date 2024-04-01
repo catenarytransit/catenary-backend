@@ -110,33 +110,11 @@ pub async fn shapes_not_bus(
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
 
-    let grid = catenary::grid::Grid::wgs84();
+    let grid = tile_grid::Grid::wgs84();
 
-    let bbox = grid.tile_extent(z, x, y);
+    let bbox = grid.tile_extent(x, y, z);
 
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
-
-    /* 
-    let mvt_result = sqlx::query!("SELECT
-    ST_AsMVT(q, 'data', 4096, 'geom')
-FROM (
-    SELECT
-        onestop_feed_id,
-        shape_id,
-        attempt_id,
-        color,
-        routes,
-        route_type,
-        route_label,
-        text_color,
-        chateau,
-        ST_AsMVTGeom(linestring, ST_Transform(ST_MakeEnvelope($1, $2, $3, $4, $5), 4326), 4096, 256, false) AS geom
-    FROM
-        gtfs.shapes_not_bus
-    WHERE
-        ST_Intersects(linestring, ST_Transform(ST_MakeEnvelope($1, $2, $3, $4, $5), 4326)) AND allowed_spatial_query = true
-) q",bbox.minx,bbox.miny,bbox.maxx,bbox.maxy,grid.srid
-).fetch_one(sqlx_pool_ref).await.unwrap();*/
 
     let query_str = format!("
     SELECT
@@ -180,33 +158,10 @@ pub async fn shapes_bus(
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
 
-    let grid = catenary::grid::Grid::wgs84();
-
-    let bbox = grid.tile_extent(z, x, y);
-
+    let grid = tile_grid::Grid::wgs84();
+    let bbox = grid.tile_extent(x, y, z);
+    
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
-
-    /* 
-    let mvt_result = sqlx::query!("SELECT
-    ST_AsMVT(q, 'data', 4096, 'geom')
-FROM (
-    SELECT
-        onestop_feed_id,
-        shape_id,
-        attempt_id,
-        color,
-        routes,
-        route_type,
-        route_label,
-        text_color,
-        chateau,
-        ST_AsMVTGeom(linestring, ST_Transform(ST_MakeEnvelope($1, $2, $3, $4, $5), 4326), 4096, 256, false) AS geom
-    FROM
-        gtfs.shapes_not_bus
-    WHERE
-        ST_Intersects(linestring, ST_Transform(ST_MakeEnvelope($1, $2, $3, $4, $5), 4326)) AND allowed_spatial_query = true
-) q",bbox.minx,bbox.miny,bbox.maxx,bbox.maxy,grid.srid
-).fetch_one(sqlx_pool_ref).await.unwrap();*/
 
     let query_str = format!("
     SELECT
@@ -222,7 +177,7 @@ FROM (
         route_label,
         text_color,
         chateau,
-        ST_AsMVTGeom(linestring, 
+        ST_AsMVTGeom(ST_Transform(linestring, 4326), 
         ST_Transform(ST_TileEnvelope({z}, {x}, {y}),4326), 4096, 64, false) AS geom
     FROM
         gtfs.shapes
