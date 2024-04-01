@@ -26,3 +26,35 @@ pub fn multi_polygon_geo_to_diesel(
             .collect(),
     }
 }
+
+pub fn diesel_multi_polygon_to_geo(
+    multipolygon_diesel: postgis_diesel::types::MultiPolygon<postgis_diesel::types::Point>,
+) -> geo::MultiPolygon {
+    geo::MultiPolygon::new(
+        multipolygon_diesel
+            .polygons
+            .into_iter()
+            .map(|polygon| diesel_polygon_to_geo(polygon))
+            .collect(),
+    )
+}
+
+pub fn diesel_polygon_to_geo(
+    polygon_diesel: postgis_diesel::types::Polygon<postgis_diesel::types::Point>,
+) -> geo::Polygon {
+    let rings: Vec<geo::LineString> = polygon_diesel
+        .rings
+        .into_iter()
+        .map(|ring| {
+            geo::LineString::from_iter(ring.into_iter().map(|point| geo::Coord {
+                x: point.x,
+                y: point.y,
+            }))
+        })
+        .collect();
+
+    let exterior = (&rings[0]).clone();
+    let interior = rings.into_iter().skip(1).collect();
+
+    geo::Polygon::new(exterior, interior)
+}
