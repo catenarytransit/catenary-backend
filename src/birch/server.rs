@@ -242,7 +242,7 @@ FROM (
 }
 
 #[actix_web::get("/shapes_bus")]
-pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
+pub async fn shapes_bus_meta(req: HttpRequest) -> impl Responder {
 
     let mut fields = std::collections::BTreeMap::new();
     fields.insert(String::from("color"), String::from("text"));
@@ -484,6 +484,8 @@ async fn main() -> std::io::Result<()> {
             .service(metrolinktrackproxy)
             .service(shapes_not_bus)
             .service(shapes_not_bus_meta)
+            .service(shapes_bus)
+            .service(shapes_bus_meta)
     })
     .workers(16);
 
