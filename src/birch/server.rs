@@ -171,7 +171,77 @@ FROM (
         .body(mvt_bytes)
 }
 
-#[actix_web::get("/shapes_not_bus")]
+#[actix_web::get("/shapes_bus/{z}/{x}/{y}")]
+pub async fn shapes_bus(
+    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    path: web::Path<(u8, u32, u32)>,
+    req: HttpRequest,
+) -> impl Responder {
+    let (z, x, y) = path.into_inner();
+
+    let grid = catenary::grid::Grid::wgs84();
+
+    let bbox = grid.tile_extent(z, x, y);
+
+    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+
+    /* 
+    let mvt_result = sqlx::query!("SELECT
+    ST_AsMVT(q, 'data', 4096, 'geom')
+FROM (
+    SELECT
+        onestop_feed_id,
+        shape_id,
+        attempt_id,
+        color,
+        routes,
+        route_type,
+        route_label,
+        text_color,
+        chateau,
+        ST_AsMVTGeom(linestring, ST_Transform(ST_MakeEnvelope($1, $2, $3, $4, $5), 4326), 4096, 256, false) AS geom
+    FROM
+        gtfs.shapes_not_bus
+    WHERE
+        ST_Intersects(linestring, ST_Transform(ST_MakeEnvelope($1, $2, $3, $4, $5), 4326)) AND allowed_spatial_query = true
+) q",bbox.minx,bbox.miny,bbox.maxx,bbox.maxy,grid.srid
+).fetch_one(sqlx_pool_ref).await.unwrap();*/
+
+    let query_str = format!("
+    SELECT
+    ST_AsMVT(q, 'data', 4096, 'geom')
+FROM (
+    SELECT
+        onestop_feed_id,
+        shape_id,
+        attempt_id,
+        color,
+        routes,
+        route_type,
+        route_label,
+        text_color,
+        chateau,
+        ST_AsMVTGeom(linestring, 
+        ST_Transform(ST_TileEnvelope({z}, {x}, {y}),4326), 4096, 64, false) AS geom
+    FROM
+        gtfs.shapes
+    WHERE
+        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND (route_type = 3 OR route_type = 11 OR route_type = 200)
+) q", z = z, x = x, y= y);
+
+   // println!("Performing query \n {}", query_str);
+
+    let mvt_result = sqlx::query(query_str.as_str()).fetch_one(sqlx_pool_ref).await.unwrap();
+
+    let mvt_bytes: Vec<u8> = mvt_result.get(0);
+
+    HttpResponse::Ok()
+    .insert_header(("Content-Type","application/x-protobuf"))
+        .body(mvt_bytes)
+}
+
+#[actix_web::get("/shapes_bus")]
 pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
 
     let mut fields = std::collections::BTreeMap::new();
@@ -199,12 +269,12 @@ pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
         legend: None,
         maxzoom: None,
         minzoom: None,
-        name: Some(String::from("shapes_not_bus")),
+        name: Some(String::from("shapes_bus")),
         scheme: None,
         template: None,
         version: None,
         other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from("https://birch.catenarymaps.org/shapes_not_bus/{z}/{x}/{y}")],
+        tiles: vec![String::from("https://birch.catenarymaps.org/shapes_bus/{z}/{x}/{y}")],
         attribution: None
     };
 
