@@ -520,6 +520,7 @@ async fn main() -> std::io::Result<()> {
             .service(shapes_not_bus_meta)
             .service(shapes_bus)
             .service(shapes_bus_meta)
+            .service(irvinevehproxy)
     })
     .workers(16);
 
