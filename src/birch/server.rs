@@ -575,6 +575,7 @@ async fn main() -> std::io::Result<()> {
             .service(shapes_bus_meta)
             .service(irvinevehproxy)
             .service(routesofchateau)
+            .service(barebonestrip)
     })
     .workers(16);
 
