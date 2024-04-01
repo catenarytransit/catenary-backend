@@ -8,6 +8,7 @@ use bb8::Pool;
 use qstring::QString;
 use serde_json::to_string;
 use serde_json::{json, to_string_pretty};
+use geojson::{Feature, GeoJson, Geometry, JsonValue, Value};
 use std::collections::HashMap;
 use diesel_async::RunQueryDsl;
 use std::time::UNIX_EPOCH;
@@ -138,16 +139,15 @@ pub async fn amtrakproxy(req: HttpRequest) -> impl Responder {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 struct ChateauToSend {
     chateau: String,
-    hull: geo::MultiPolygon
+    hull: geo::MultiPolygon,
+    realtime_feeds: Vec<String>,
+    schedule_feeds: Vec<String>
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ChateauList {
-    chateaus: Vec<ChateauToSend>
-}
+
 
 #[actix_web::get("/getchateaus")]
 async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest) -> impl Responder {
@@ -167,19 +167,47 @@ async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest) 
     .map(|pg_chateau| 
         ChateauToSend {
             chateau: pg_chateau.chateau,
+            realtime_feeds: pg_chateau.realtime_feeds.into_iter().filter(|opt_string| opt_string.is_some()).map(|string| string.unwrap()).collect(),
+            schedule_feeds: pg_chateau.static_feeds.into_iter().filter(|opt_string| opt_string.is_some()).map(|string| string.unwrap()).collect(),
             hull: diesel_multi_polygon_to_geo(pg_chateau.hull.unwrap())
         }
     ).collect::<Vec<ChateauToSend>>();
 
-    let struct_to_send =  ChateauList {
-        chateaus: formatted_chateaus
+    let features = formatted_chateaus.iter().map(|chateau| {
+        let value = geojson::Value::from(&chateau.hull);
+
+        let mut properties:serde_json::map::Map<String, JsonValue> = serde_json::map::Map::new();
+
+        properties.insert(String::from("chateau"),serde_json::Value::String(chateau.chateau.clone()));
+        properties.insert(String::from("realtime_feeds"),serde_json::Value::Array(chateau.realtime_feeds.clone().into_iter().map(|x| serde_json::Value::String(x)).collect()));
+        properties.insert(String::from("schedule_feeds"),serde_json::Value::Array(chateau.schedule_feeds.clone().into_iter().map(|x| serde_json::Value::String(x)).collect()));
+
+        let feature = geojson::Feature {
+            bbox: None,
+            geometry: Some(geojson::Geometry {
+                bbox: None,
+                value: value,
+                foreign_members: None
+            }),
+            id: Some(geojson::feature::Id::String(chateau.chateau.clone())),
+            properties: Some(properties),
+            foreign_members: None
+        };
+
+        feature
+    }).collect::<Vec<Feature>>();
+
+    let feature_collection = geojson::FeatureCollection {
+        bbox: None,
+        features: features,
+        foreign_members: None
     };
 
-    let response = serde_json::to_string(&struct_to_send).unwrap();
+    let serialized = GeoJson::from(feature_collection).to_string();
 
     HttpResponse::Ok()
     .insert_header(("Content-Type", "application/json"))
-    .body(response)
+    .body(serialized)
 }
 
 #[actix_web::main]

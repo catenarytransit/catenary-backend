@@ -70,7 +70,6 @@ actix_block_ai_crawling = "0.2.8"
 actix = "0.13.1"
 actix-web-actors = "4.2.0"
 amtk = "0.1.0"
-geojson = "0.24.1"
 travelling_salesman = "1.1.22"
 ordered-float = "4.2.0"
 dotenvy = "0.15.7"
@@ -93,6 +92,7 @@ diesel-derive-newtype = "2.1.1"
 async-std = {version = "1.5.3"}
 geo-repair-polygon = "0.1.2"
 gtfs-translations = "0.1.0"
+geojson = { version = "0.24.1", features = ["geo-types"] }
 
 [[bin]]
 name = "maple"
