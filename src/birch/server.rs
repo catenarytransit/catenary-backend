@@ -241,6 +241,50 @@ FROM (
         .body(mvt_bytes)
 }
 
+#[actix_web::get("/shapes_not_bus")]
+pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
+
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(String::from("color"), String::from("text"));
+    fields.insert(String::from("text_color"), String::from("text"));
+    fields.insert(String::from("shape_id"), String::from("text"));
+    fields.insert(String::from("attempt_id"), String::from("text"));
+    fields.insert(String::from("onestop_feed_id"), String::from("text"));
+    fields.insert(String::from("routes"), String::from("text[]"));
+    fields.insert(String::from("route_type"), String::from("smallint"));
+    fields.insert(String::from("route_label"), String::from("text"));
+    fields.insert(String::from("chateau"), String::from("text"));
+
+    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
+
+    let tile_json = TileJSON {
+        vector_layers: Some(vec![fields]),
+        tilejson: String::from("3.0.0"),
+        bounds: None,
+        center: None,
+        data: None,
+        description: None,
+        fillzoom: None,
+        grids: None,
+        legend: None,
+        maxzoom: None,
+        minzoom: None,
+        name: Some(String::from("shapes_not_bus")),
+        scheme: None,
+        template: None,
+        version: None,
+        other: std::collections::BTreeMap::new(),
+        tiles: vec![String::from("https://birch.catenarymaps.org/shapes_not_bus/{z}/{x}/{y}")],
+        attribution: None
+    };
+
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "application/json"))
+        .body(
+            serde_json::to_string(&tile_json).unwrap()
+        )
+}
+
 #[actix_web::get("/shapes_bus")]
 pub async fn shapes_bus_meta(req: HttpRequest) -> impl Responder {
 
