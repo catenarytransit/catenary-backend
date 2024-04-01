@@ -155,11 +155,13 @@ async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest) 
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
 
+    // fetch out of table
     let existing_chateaus = catenary::schema::gtfs::chateaus::table
     .select(catenary::models::Chateau::as_select())
     .load::<catenary::models::Chateau>(conn)
     .await.unwrap();
 
+    // convert hulls to standardised `geo` crate
     let formatted_chateaus = existing_chateaus.into_iter()
     .filter(|pg_chateau|
         pg_chateau.hull.is_some()
@@ -173,6 +175,7 @@ async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest) 
         }
     ).collect::<Vec<ChateauToSend>>();
 
+    // conversion to `geojson` structs
     let features = formatted_chateaus.iter().map(|chateau| {
         let value = geojson::Value::from(&chateau.hull);
 
@@ -197,12 +200,14 @@ async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest) 
         feature
     }).collect::<Vec<Feature>>();
 
+    // formation of final object
     let feature_collection = geojson::FeatureCollection {
         bbox: None,
         features: features,
         foreign_members: None
     };
 
+    // turn it into a string and send it!!!
     let serialized = GeoJson::from(feature_collection).to_string();
 
     HttpResponse::Ok()
