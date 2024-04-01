@@ -138,7 +138,7 @@ FROM (
 ) q",bbox.minx,bbox.miny,bbox.maxx,bbox.maxy,grid.srid
 ).fetch_one(sqlx_pool_ref).await.unwrap();*/
 
-    let mvt_result = sqlx::query(format!("
+    let query_str = format!("
     SELECT
     ST_AsMVT(q, 'data', 4096, 'geom')
 FROM (
@@ -157,7 +157,11 @@ FROM (
         gtfs.shapes_not_bus
     WHERE
         ST_Intersects(linestring, ST_Transform(ST_MakeEnvelope({minx}, {miny}, {maxx}, {maxy}, {srid}), 4326)) AND allowed_spatial_query = true
-) q", minx = bbox.minx, miny = bbox.miny, maxx = bbox.maxx, maxy = bbox.maxy, srid = grid.srid).as_str()).fetch_one(sqlx_pool_ref).await.unwrap();
+) q", minx = bbox.minx, miny = bbox.miny, maxx = bbox.maxx, maxy = bbox.maxy, srid = grid.srid);
+
+    println!("Performing query \n {}", query_str);
+
+    let mvt_result = sqlx::query(query_str.as_str()).fetch_one(sqlx_pool_ref).await.unwrap();
 
     let mvt_bytes: Vec<u8> = mvt_result.get(0);
 
