@@ -152,7 +152,7 @@ FROM (
         route_label,
         text_color,
         chateau,
-        ST_AsMVTGeom(linestring, ST_Transform(ST_MakeEnvelope({minx}, {miny}, {maxx}, {maxy}, {srid}), 4326), 4096, 256, false) AS geom
+        ST_AsMVTGeom(linestring, ST_Transform(ST_MakeEnvelope({minx}, {miny}, {maxx}, {maxy}, {srid}), 3857), 4096, 256, false) AS geom
     FROM
         gtfs.shapes_not_bus
     WHERE
