@@ -407,6 +407,8 @@ async fn main() -> std::io::Result<()> {
             .service(nanotime)
             .service(chateaus)
             .service(metrolinktrackproxy)
+            .service(shapes_not_bus)
+            .service(shapes_not_bus_meta)
     })
     .workers(16);
 
