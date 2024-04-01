@@ -139,8 +139,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         dmfr_result.operator_hashmap.len()
     );
 
-    // The DMFR result dataset looks genuine, with over 100 pieces of data!
-    if dmfr_result.feed_hashmap.len() > 100 && dmfr_result.operator_hashmap.len() > 100 {
+    // The DMFR result dataset looks genuine, with over 200 pieces of data!
+    if dmfr_result.feed_hashmap.len() > 200 && dmfr_result.operator_hashmap.len() > 100 {
         let eligible_feeds = transitland_download::download_return_eligible_feeds(
             &dmfr_result,
             &arc_conn_pool,
@@ -260,12 +260,16 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             // 3. Assign Attempt IDs to each feed_id that is ready to ingest
 
+            println!("Refreshing metatables");
+
             let _ = refresh_metadata_tables::refresh_metadata_assignments(
                 &dmfr_result,
                 &chateau_result,
                 Arc::clone(&arc_conn_pool),
             )
             .await;
+
+            println!("Metadata refresh done");
 
             // 4. Unzip folders
             println!("Unzipping all gtfs folders");
