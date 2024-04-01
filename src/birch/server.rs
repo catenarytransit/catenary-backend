@@ -378,7 +378,7 @@ async fn main() -> std::io::Result<()> {
 
     let sqlx_pool: Arc<sqlx::Pool<sqlx::Postgres>> = Arc::new(PgPoolOptions::new()
     .max_connections(5)
-    .connect("postgres://postgres:welcome@localhost/postgres")
+    .connect(std::env::var("DATABASE_URL").unwrap().as_str())
     .await.unwrap());
 
     // Create a new HTTP server.
