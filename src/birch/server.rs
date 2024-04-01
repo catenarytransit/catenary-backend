@@ -152,12 +152,13 @@ FROM (
         route_label,
         text_color,
         chateau,
-        ST_AsMVTGeom(linestring, ST_Transform(ST_MakeEnvelope({minx}, {miny}, {maxx}, {maxy}, {srid}), 3857), 4096, 256, false) AS geom
+        ST_AsMVTGeom(ST_Transform(linestring, 3857), 
+        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, false) AS geom
     FROM
         gtfs.shapes_not_bus
     WHERE
-        ST_Intersects(linestring, ST_Transform(ST_MakeEnvelope({minx}, {miny}, {maxx}, {maxy}, {srid}), 4326)) AND allowed_spatial_query = true
-) q", minx = bbox.minx, miny = bbox.miny, maxx = bbox.maxx, maxy = bbox.maxy, srid = grid.srid);
+        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
+) q", z = z, x = x, y= y);
 
     println!("Performing query \n {}", query_str);
 
