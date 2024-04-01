@@ -130,8 +130,8 @@ FROM (
         route_label,
         text_color,
         chateau,
-        ST_AsMVTGeom(linestring, 
-        ST_Transform(ST_TileEnvelope({z}, {x}, {y}),4326), 4096, 64, false) AS geom
+        ST_AsMVTGeom(ST_Transform(linestring, 3857), 
+        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, false) AS geom
     FROM
         gtfs.shapes_not_bus
     WHERE
@@ -177,8 +177,8 @@ FROM (
         route_label,
         text_color,
         chateau,
-        ST_AsMVTGeom(ST_Transform(linestring, 4326), 
-        ST_Transform(ST_TileEnvelope({z}, {x}, {y}),4326), 4096, 64, false) AS geom
+        ST_AsMVTGeom(ST_Transform(linestring, 3857), 
+        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, false) AS geom
     FROM
         gtfs.shapes
     WHERE
