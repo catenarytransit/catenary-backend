@@ -320,18 +320,19 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             let ingest_progress: Arc<std::sync::Mutex<u16>> = Arc::new(std::sync::Mutex::new(0));
 
-            let feeds_to_process:Vec<(String, String, String)> = unzip_feeds_clone
-            .into_iter()
-            .filter(|unzipped_feed| unzipped_feed.1 == true)
-            .map(|(feed_id, _)| (feed_id.clone(),attempt_ids.get(&feed_id).unwrap().clone()))
-            .map(|(feed_id, attempt_id)| {
-                match feed_id_to_chateau_lookup.get(&feed_id) {
-                    Some(chateau_id) => Some((feed_id, attempt_id, chateau_id.clone())),
-                    None => None
-                }
-            })
-            .filter(|x| x.is_some())
-            .map(|x: Option<(String, String, String)>| x.unwrap()).collect();
+            let feeds_to_process: Vec<(String, String, String)> = unzip_feeds_clone
+                .into_iter()
+                .filter(|unzipped_feed| unzipped_feed.1 == true)
+                .map(|(feed_id, _)| (feed_id.clone(), attempt_ids.get(&feed_id).unwrap().clone()))
+                .map(
+                    |(feed_id, attempt_id)| match feed_id_to_chateau_lookup.get(&feed_id) {
+                        Some(chateau_id) => Some((feed_id, attempt_id, chateau_id.clone())),
+                        None => None,
+                    },
+                )
+                .filter(|x| x.is_some())
+                .map(|x: Option<(String, String, String)>| x.unwrap())
+                .collect();
 
             let total_feeds_to_process = feeds_to_process.len() as u16;
 

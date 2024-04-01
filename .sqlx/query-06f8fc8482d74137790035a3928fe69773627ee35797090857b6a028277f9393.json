@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n    ST_AsMVT(q, 'data', 4096, 'geom')\nFROM (\n    SELECT\n        onestop_feed_id,\n        shape_id,\n        attempt_id,\n        color,\n        routes,\n        route_type,\n        route_label,\n        text_color,\n        chateau,\n        ST_AsMVTGeom(linestring, ST_Transform(ST_MakeEnvelope($1, $2, $3, $4, $5), 4326), 4096, 256, false) AS geom\n    FROM\n        gtfs.shapes_not_bus\n    WHERE\n        ST_Intersects(linestring, ST_Transform(ST_MakeEnvelope($1, $2, $3, $4, $5), 4326)) AND allowed_spatial_query = true\n) q",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "st_asmvt",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "06f8fc8482d74137790035a3928fe69773627ee35797090857b6a028277f9393"
+}

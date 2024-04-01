@@ -93,6 +93,9 @@ async-std = {version = "1.5.3"}
 geo-repair-polygon = "0.1.2"
 gtfs-translations = "0.1.0"
 geojson = { version = "0.24.1", features = ["geo-types"] }
+rstar = "0.12.0"
+sqlx = {version = "0.7.4", features = ["postgres","runtime-tokio", "macros"]}
+tilejson = "0.4.1"
 
 [[bin]]
 name = "maple"

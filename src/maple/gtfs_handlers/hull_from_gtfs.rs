@@ -13,7 +13,8 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
                     points
                         .iter()
                         .filter(|point| {
-                            let is_null_island = f64::abs(0. - point.latitude) < 0.000001 && f64::abs(0. - point.latitude) < 0.000001;
+                            let is_null_island = f64::abs(0. - point.latitude) < 0.000001
+                                && f64::abs(0. - point.latitude) < 0.000001;
                             !is_null_island
                         })
                         .map(|point| Point::new(point.longitude, point.latitude))
@@ -32,7 +33,8 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
                         .iter()
                         .filter(|(_, stop)| stop.longitude.is_some() && stop.latitude.is_some())
                         .filter(|(_, stop)| {
-                            let is_null_island = f64::abs(0. - stop.latitude.unwrap()) < 0.000001 && f64::abs(0. - stop.latitude.unwrap()) < 0.000001;
+                            let is_null_island = f64::abs(0. - stop.latitude.unwrap()) < 0.000001
+                                && f64::abs(0. - stop.latitude.unwrap()) < 0.000001;
                             !is_null_island
                         })
                         .map(|(_, stop)| {

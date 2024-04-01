@@ -5,22 +5,35 @@ use bb8::Pool;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use diesel::query_dsl::select_dsl::SelectDsl;
+use diesel::sql_types::{Float, Integer};
+use diesel::Selectable;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, Geometry, JsonValue, Value};
+use sqlx::postgres::{PgPoolOptions, PgRow};
+use sqlx::{FromRow, Row};
 use qstring::QString;
+use rstar::RTree;
 use serde::Deserialize;
 use serde_derive::Serialize;
 use serde_json::to_string;
 use serde_json::{json, to_string_pretty};
+use tilejson::TileJSON;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Client;
-use tokio_postgres::{Error as PostgresError, Row};
+use tokio_postgres::{Error as PostgresError};
+
+struct ChateauCache {
+    last_updated_time_ms: u64,
+    chateau_geojson: String,
+}
+
+type ChateauCacheActixData = Arc<RwLock<Option<ChateauCache>>>;
 
 #[derive(serde::Serialize)]
 struct StaticFeed {
@@ -86,6 +99,115 @@ pub async fn nanotime(req: HttpRequest) -> impl Responder {
                 .unwrap()
                 .as_nanos()
         ))
+}
+
+#[actix_web::get("/shapes_not_bus/{z}/{x}/{y}")]
+pub async fn shapes_not_bus(
+    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    path: web::Path<(u8, u32, u32)>,
+    req: HttpRequest,
+) -> impl Responder {
+    let (z, x, y) = path.into_inner();
+
+    let grid = catenary::grid::Grid::wgs84();
+
+    let bbox = grid.tile_extent(z, x, y);
+
+    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+
+    /* 
+    let mvt_result = sqlx::query!("SELECT
+    ST_AsMVT(q, 'data', 4096, 'geom')
+FROM (
+    SELECT
+        onestop_feed_id,
+        shape_id,
+        attempt_id,
+        color,
+        routes,
+        route_type,
+        route_label,
+        text_color,
+        chateau,
+        ST_AsMVTGeom(linestring, ST_Transform(ST_MakeEnvelope($1, $2, $3, $4, $5), 4326), 4096, 256, false) AS geom
+    FROM
+        gtfs.shapes_not_bus
+    WHERE
+        ST_Intersects(linestring, ST_Transform(ST_MakeEnvelope($1, $2, $3, $4, $5), 4326)) AND allowed_spatial_query = true
+) q",bbox.minx,bbox.miny,bbox.maxx,bbox.maxy,grid.srid
+).fetch_one(sqlx_pool_ref).await.unwrap();*/
+
+    let mvt_result = sqlx::query(format!("
+    SELECT
+    ST_AsMVT(q, 'data', 4096, 'geom')
+FROM (
+    SELECT
+        onestop_feed_id,
+        shape_id,
+        attempt_id,
+        color,
+        routes,
+        route_type,
+        route_label,
+        text_color,
+        chateau,
+        ST_AsMVTGeom(linestring, ST_Transform(ST_MakeEnvelope({minx}, {miny}, {maxx}, {maxy}, {srid}), 4326), 4096, 256, false) AS geom
+    FROM
+        gtfs.shapes_not_bus
+    WHERE
+        ST_Intersects(linestring, ST_Transform(ST_MakeEnvelope({minx}, {miny}, {maxx}, {maxy}, {srid}), 4326)) AND allowed_spatial_query = true
+) q", minx = bbox.minx, miny = bbox.miny, maxx = bbox.maxx, maxy = bbox.maxy, srid = grid.srid).as_str()).fetch_one(sqlx_pool_ref).await.unwrap();
+
+    let mvt_bytes: Vec<u8> = mvt_result.get(0);
+
+    HttpResponse::Ok()
+    .insert_header(("Content-Type","application/x-protobuf"))
+        .body(mvt_bytes)
+}
+
+#[actix_web::get("/shapes_not_bus")]
+pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
+
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(String::from("color"), String::from("text"));
+    fields.insert(String::from("text_color"), String::from("text"));
+    fields.insert(String::from("shape_id"), String::from("text"));
+    fields.insert(String::from("attempt_id"), String::from("text"));
+    fields.insert(String::from("onestop_feed_id"), String::from("text"));
+    fields.insert(String::from("routes"), String::from("text[]"));
+    fields.insert(String::from("route_type"), String::from("smallint"));
+    fields.insert(String::from("route_label"), String::from("text"));
+    fields.insert(String::from("chateau"), String::from("text"));
+
+    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
+
+    let tile_json = TileJSON {
+        vector_layers: Some(vec![fields]),
+        tilejson: String::from("3.0.0"),
+        bounds: None,
+        center: None,
+        data: None,
+        description: None,
+        fillzoom: None,
+        grids: None,
+        legend: None,
+        maxzoom: None,
+        minzoom: None,
+        name: Some(String::from("shapes_not_bus")),
+        scheme: None,
+        template: None,
+        version: None,
+        other: std::collections::BTreeMap::new(),
+        tiles: vec![String::from("https://birch.catenarymaps.org/shapes_not_bus/{z}/{x}/{y}")],
+        attribution: None
+    };
+
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "application/json"))
+        .body(
+            serde_json::to_string(&tile_json).unwrap()
+        )
 }
 
 #[actix_web::get("/metrolinktrackproxy")]
@@ -251,6 +373,14 @@ async fn main() -> std::io::Result<()> {
     let pool = Arc::new(make_async_pool().await.unwrap());
     let arc_pool = Arc::clone(&pool);
 
+    let conn_pre = arc_pool.as_ref().get().await;
+    let conn = &mut conn_pre.unwrap();
+
+    let sqlx_pool: Arc<sqlx::Pool<sqlx::Postgres>> = Arc::new(PgPoolOptions::new()
+    .max_connections(5)
+    .connect("postgres://postgres:welcome@localhost/postgres")
+    .await.unwrap());
+
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
         App::new()
@@ -265,7 +395,11 @@ async fn main() -> std::io::Result<()> {
             )
             .wrap(actix_block_ai_crawling::BlockAi)
             .wrap(middleware::Compress::default())
+            .app_data(actix_web::web::Data::new(Arc::clone(&sqlx_pool)))
             .app_data(actix_web::web::Data::new(Arc::clone(&pool)))
+            .app_data(actix_web::web::Data::new(Arc::new(RwLock::new(
+                None::<ChateauCache>,
+            ))))
             .route("/", web::get().to(index))
             .route("robots.txt", web::get().to(robots))
             .service(amtrakproxy)
