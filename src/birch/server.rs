@@ -192,9 +192,9 @@ pub async fn bus_stops(
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
 
-    let grid = tile_grid::Grid::wgs84();
+    //let grid = tile_grid::Grid::wgs84();
 
-    let bbox = grid.tile_extent(x, y, z);
+   // let bbox = grid.tile_extent(x, y, z);
 
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
