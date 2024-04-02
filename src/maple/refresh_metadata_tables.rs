@@ -104,7 +104,7 @@ pub async fn refresh_metadata_assignments(
             let hulls_from_static_geo_types: Vec<geo::Polygon<f64>> = hulls_from_static
                 .iter()
                 .filter(|x| x.rings.len() > 0)
-                .filter(|x| x.rings[0].len() > 0)
+                .filter(|x| x.rings[0].len() >= 4)
                 .map(|x| {
                     let mut points = vec![];
                     for point in x.rings[0].iter() {
