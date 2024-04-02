@@ -108,32 +108,9 @@ pub async fn nanotime(req: HttpRequest) -> impl Responder {
 #[actix_web::get("/busstops")]
 pub async fn bus_stops_meta(req: HttpRequest) -> impl Responder {
     let mut fields = std::collections::BTreeMap::new();
-    
-    /*
-    onestop_feed_id,
-        shape_id,
-        attempt_id,
-        gtfs_id,
-        name,
-        displayname,
-        code,
-        gtfs_desc,
-        location_type,
-        parent_station,
-        zone_id,
-        url,
-        timezone,
-        wheelchair_boarding,
-        level_id,
-        platform_code,
-        routes,
-        route_types,
-        children_ids,
-        children_route_types,
-         */
+
 
          fields.insert(String::from("onestop_feed_id"), String::from("text"));
-         fields.insert(String::from("shape_id"), String::from("text"));
          fields.insert(String::from("attempt_id"), String::from("text"));
          fields.insert(String::from("gtfs_id"), String::from("text"));
          fields.insert(String::from("name"), String::from("text"));
@@ -204,7 +181,6 @@ pub async fn bus_stops(
 FROM (
     SELECT
         onestop_feed_id,
-        shape_id,
         attempt_id,
         gtfs_id,
         name,
