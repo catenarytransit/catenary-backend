@@ -7,7 +7,6 @@ extern crate diesel_derive_newtype;
 pub mod agency_secret;
 pub mod aspen;
 pub mod custom_pg_types;
-pub mod grid;
 pub mod gtfs_rt_handlers;
 pub mod models;
 pub mod postgis_to_diesel;
