@@ -16,6 +16,8 @@ pub async fn update_schedules_with_new_chateau_id(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
+    println!("Reassigning feed {} to Château {}", feed_id, new_chateau_id);
+
     use catenary::schema::gtfs::trips;
     use catenary::schema::gtfs::trips::dsl::trips as trips_table;
 
@@ -119,6 +121,8 @@ pub async fn update_schedules_with_new_chateau_id(
         .set(feed_info::dsl::chateau.eq(new_chateau_id))
         .execute(conn)
         .await?;
+
+        println!("Finished reassignment of feed {} to Château {}", feed_id, new_chateau_id);
 
     Ok(())
 }
