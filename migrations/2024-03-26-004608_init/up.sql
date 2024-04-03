@@ -168,6 +168,7 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes (
     shape_id text NOT NULL,
     linestring geometry(Linestring,4326) NOT NULL,
     color text,
+    --remains null in case of no routes
     routes text[],
     route_type smallint NOT NULL,
     route_label text,
@@ -189,6 +190,7 @@ CREATE TABLE IF NOT EXISTS gtfs.shapes_not_bus (
     shape_id text NOT NULL,
     linestring geometry(Linestring,4326) NOT NULL,
     color text,
+    --remain null in case of no shape
     routes text[],
     route_type smallint NOT NULL,
     route_label text,

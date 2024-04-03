@@ -17,6 +17,7 @@ use catenary::schema::gtfs::stoptimes::continuous_drop_off;
 use chrono::NaiveDate;
 use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
+use crate::gtfs_handlers::shape_colour_calculator::ShapeToColourResponse;
 use geo::polygon;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::FeedInfo;
@@ -113,25 +114,13 @@ pub async fn gtfs_process_feed(
         make_hashmaps_of_children_stop_info(&gtfs, &stop_ids_to_route_types);
 
     //identify colours of shapes based on trip id's route id
-    let (shape_to_color_lookup, shape_to_text_color_lookup) = shape_to_colour(&feed_id, &gtfs);
-
-    // make reverse lookup for route ids to shape ids
-    let route_ids_to_shape_ids: HashMap<String, HashSet<String>> = {
-        let mut results: HashMap<String, HashSet<String>> = HashMap::new();
-
-        for (trip_id, trip) in &gtfs.trips {
-            if let Some(shape_id) = &trip.shape_id {
-                results
-                    .entry(trip.route_id.clone())
-                    .and_modify(|current_list| {
-                        current_list.insert(shape_id.clone());
-                    })
-                    .or_insert(HashSet::from_iter(vec![shape_id.clone()]));
-            }
-        }
-
-        results
-    };
+    // also make reverse lookup for route ids to shape ids
+    let ShapeToColourResponse {
+        shape_to_color_lookup,
+        shape_to_text_color_lookup,
+        shape_id_to_route_ids_lookup,
+        route_ids_to_shape_ids
+    } = shape_to_colour(&feed_id, &gtfs);
 
     //insert agencies
     for agency in &gtfs.agencies {
@@ -168,6 +157,7 @@ pub async fn gtfs_process_feed(
         Arc::clone(&arc_conn_pool),
         &chateau_id,
         &attempt_id,
+        &shape_id_to_route_ids_lookup
     )
     .await?;
 

@@ -19,6 +19,7 @@ pub async fn shapes_into_postgres(
     arc_conn_pool: Arc<CatenaryPostgresPool>,
     chateau_id: &str,
     attempt_id: &str,
+    shape_id_to_route_ids_lookup: &HashMap<String, HashSet<String>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     //establish a connection to the database
     let conn_pool = arc_conn_pool.as_ref();
@@ -26,36 +27,11 @@ pub async fn shapes_into_postgres(
     let conn = &mut conn_pre?;
 
     for (shape_id, shape) in gtfs.shapes.iter() {
-        let mut route_ids: HashSet<String> = gtfs
-            .trips
-            .iter()
-            .filter(|(trip_id, trip)| {
-                trip.shape_id.is_some() && trip.shape_id.as_ref().unwrap() == shape_id
-            })
-            .map(|(trip_id, trip)| trip.route_id.to_owned())
-            .collect::<HashSet<String>>();
-
-        if feed_id == "f-9qh-metrolinktrains" {
-            let cleanedline = shape_id.to_owned().replace("in", "").replace("out", "");
-
-            println!("cleanedline: {}", &cleanedline);
-            let value = match cleanedline.as_str() {
-                "91" => "91 Line",
-                "IEOC" => "Inland Emp.-Orange Co. Line",
-                "AV" => "Antelope Valley Line",
-                "OC" => "Orange County Line",
-                "RIVER" => "Riverside Line",
-                "SB" => "San Bernardino Line",
-                "VT" => "Ventura County Line",
-                _ => "",
-            };
-            if value != "" {
-                route_ids.insert(value.to_string());
-            }
-        }
-
         let mut route_type_number = 3;
-        if route_ids.len() > 0 {
+
+        let route_ids = shape_id_to_route_ids_lookup.get(shape_id);
+
+        if let Some(route_ids) = route_ids {
             let route = gtfs.routes.get(route_ids.iter().nth(0).unwrap());
 
             if route.is_some() {
@@ -64,9 +40,14 @@ pub async fn shapes_into_postgres(
         }
 
         //backround colour to use
-        let route = match route_ids.iter().nth(0) {
-            Some(route_id) => gtfs.routes.get(route_id),
-            None => None,
+        let route = match route_ids {
+            Some(route_ids) => {
+                match route_ids.iter().nth(0) {
+                    Some(route_id) => gtfs.routes.get(route_id),
+                    None => None,
+                }
+            },
+            None => None
         };
 
         let bg_color = match shape_to_color_lookup.get(shape_id) {
@@ -122,7 +103,9 @@ pub async fn shapes_into_postgres(
 
             //creates a text label for the shape to be displayed with on the map
             //todo! change this with i18n
-            let route_label: String = route_ids
+            let route_label: String = match route_ids {
+                Some(route_ids) => 
+                    route_ids
                 .iter()
                 .map(|route_id| {
                     let route = gtfs.routes.get(route_id);
@@ -144,8 +127,9 @@ pub async fn shapes_into_postgres(
                 .as_str()
                 .replace("Orange County", "OC")
                 .replace("Inland Empire", "IE")
-                .to_string();
-
+                .to_string(),
+                None => String::from("")
+            };
             //run insertion
 
             //insert into the smaller "not bus" table first
@@ -160,12 +144,15 @@ pub async fn shapes_into_postgres(
                     chateau: chateau_id.to_string(),
                     linestring: linestring.clone(),
                     color: Some(bg_color_string.clone()),
-                    routes: Some(
-                        route_ids
-                            .iter()
-                            .map(|route_id| Some(route_id.to_string()))
-                            .collect(),
-                    ),
+                    routes: match route_ids {
+                        Some(route_ids) => Some(
+                            route_ids
+                                .iter()
+                                .map(|route_id| Some(route_id.to_string()))
+                                .collect(),
+                        ),
+                        None => None
+                    },
                     route_type: route_type_number,
                     route_label: Some(route_label.clone()),
                     route_label_translations: None,
@@ -187,12 +174,15 @@ pub async fn shapes_into_postgres(
                 chateau: chateau_id.to_string(),
                 linestring: linestring,
                 color: Some(bg_color_string),
-                routes: Some(
-                    route_ids
-                        .iter()
-                        .map(|route_id| Some(route_id.to_string()))
-                        .collect(),
-                ),
+                routes: match route_ids {
+                    Some(route_ids) => Some(
+                        route_ids
+                            .iter()
+                            .map(|route_id| Some(route_id.to_string()))
+                            .collect(),
+                    ),
+                    None => None
+                },
                 route_type: route_type_number,
                 route_label: Some(route_label),
                 route_label_translations: None,
