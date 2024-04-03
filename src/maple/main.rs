@@ -365,8 +365,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                         None => None,
                     },
                 )
-                .filter(|x| x.is_some())
-                .map(|x: Option<(String, String, String)>| x.unwrap())
+                .flatten()
                 .collect();
 
             let total_feeds_to_process = feeds_to_process.len() as u16;
