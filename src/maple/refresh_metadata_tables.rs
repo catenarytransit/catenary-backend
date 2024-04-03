@@ -10,6 +10,7 @@ use dmfr_folder_reader::ReturnDmfrAnalysis;
 use geo::BooleanOps;
 use geo::Polygon;
 use geo::{polygon, MultiPolygon};
+use diesel::query_dsl::methods::FilterDsl;
 use geo_repair_polygon::join::Join;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -67,6 +68,7 @@ pub async fn refresh_metadata_assignments(
         .map(|x| (x.onestop_feed_id.clone(), x.clone()))
         .collect::<HashMap<String, catenary::models::StaticFeed>>();
 
+        //calculate new list of chateaus
     let chateaus_pg = chateau_result
         .iter()
         .map(|(k, v)| {
@@ -155,6 +157,19 @@ pub async fn refresh_metadata_assignments(
             }
         })
         .collect::<Vec<catenary::models::Chateau>>();
+
+    for delete_chateau in existing_chateaus {
+        //if the current chateau doesn't exist anymore, delete it
+        if !chateau_result.contains_key(&delete_chateau.chateau) {
+            println!("Deleting chateau {}", delete_chateau.chateau);
+            let _ = diesel::delete(
+                catenary::schema::gtfs::chateaus::dsl::chateaus
+                    .filter(catenary::schema::gtfs::chateaus::dsl::chateau.eq(&delete_chateau.chateau)),
+            )
+            .execute(conn)
+            .await?;
+        }
+    }
 
     for chateau_pg in chateaus_pg {
         diesel::insert_into(catenary::schema::gtfs::chateaus::dsl::chateaus)
