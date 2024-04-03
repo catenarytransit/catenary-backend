@@ -123,30 +123,40 @@ pub async fn gtfs_process_feed(
     } = shape_to_colour(&feed_id, &gtfs);
 
     //insert agencies
+   let mut agency_id_already_done: HashSet<Option<&String>> = HashSet::new();
+
     for agency in &gtfs.agencies {
         use catenary::schema::gtfs::agencies::dsl::agencies;
 
-        let agency_row = catenary::models::Agency {
-            static_onestop_id: feed_id.to_string(),
-            agency_id: agency.id.clone().unwrap_or_else(|| "".to_string()),
-            attempt_id: attempt_id.to_string(),
-            agency_name: agency.name.clone(),
-            agency_name_translations: None,
-            agency_url_translations: None,
-            agency_url: agency.url.clone(),
-            agency_fare_url: agency.fare_url.clone(),
-            agency_fare_url_translations: None,
-            chateau: chateau_id.to_string(),
-            agency_lang: agency.lang.clone(),
-            agency_phone: agency.phone.clone(),
-            agency_timezone: agency.timezone.clone(),
-        };
+        if !agency_id_already_done.contains(&agency.id.as_ref()) {
+            let agency_row = catenary::models::Agency {
+                static_onestop_id: feed_id.to_string(),
+                agency_id: agency.id.clone().unwrap_or_else(|| "".to_string()),
+                attempt_id: attempt_id.to_string(),
+                agency_name: agency.name.clone(),
+                agency_name_translations: None,
+                agency_url_translations: None,
+                agency_url: agency.url.clone(),
+                agency_fare_url: agency.fare_url.clone(),
+                agency_fare_url_translations: None,
+                chateau: chateau_id.to_string(),
+                agency_lang: agency.lang.clone(),
+                agency_phone: agency.phone.clone(),
+                agency_timezone: agency.timezone.clone(),
+            };
+    
+            diesel::insert_into(agencies)
+                .values(agency_row)
+                .execute(conn)
+                .await?;
 
-        diesel::insert_into(agencies)
-            .values(agency_row)
-            .execute(conn)
-            .await?;
+            agency_id_already_done.insert(agency.id.as_ref());
+        } else {
+            eprintln!("Warning! Duplicate agency id found: \n{:?}", agency);
+        }
     }
+
+    std::mem::drop(agency_id_already_done);
 
     //shove raw geometry into postgresql
     shapes_into_postgres(
