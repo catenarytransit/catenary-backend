@@ -605,6 +605,7 @@ async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest, 
         .as_millis() as u64 - 3_600_000 {
             return HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
+        .insert_header(("Cache-Control", "max-age=86400"))
         .body(cloned_chateau_data.chateau_geojson);
         }
     }
@@ -722,6 +723,7 @@ async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest, 
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
+        .insert_header(("Cache-Control", "max-age=86400"))
         .body(serialized)
 }
 
