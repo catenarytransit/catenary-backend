@@ -312,10 +312,13 @@ pub async fn gtfs_process_feed(
 
         use catenary::schema::gtfs::stoptimes::dsl::stoptimes;
 
-        diesel::insert_into(stoptimes)
-            .values(stop_times_pg)
+        for stop_chunk in stop_times_pg.chunks(80) {
+            diesel::insert_into(stoptimes)
+            .values(stop_chunk)
             .execute(conn)
             .await?;
+        }
+        
     }
 
     //insert stops
@@ -385,10 +388,12 @@ pub async fn gtfs_process_feed(
         })
         .collect();
 
-    diesel::insert_into(catenary::schema::gtfs::routes::dsl::routes)
-        .values(routes_pg)
+       for routes_chunk in routes_pg.chunks(100) {
+        diesel::insert_into(catenary::schema::gtfs::routes::dsl::routes)
+        .values(routes_chunk)
         .execute(conn)
         .await?;
+       }
 
     //calculate concave hull
     let hull = crate::gtfs_handlers::hull_from_gtfs::hull_from_gtfs(&gtfs);
