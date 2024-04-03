@@ -100,6 +100,8 @@ tile-grid = "=0.2.2"
 zstd-safe = "7.1.0"
 hitbox = "0.1.1"
 cached = "0.49.2"
+geo-booleanop = "0.3.2"
+geo-clipper = "0.8.0"
 
 [[bin]]
 name = "maple"

@@ -7,12 +7,12 @@ use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use dmfr_folder_reader::ReturnDmfrAnalysis;
-use geo::BooleanOps;
 use geo::Polygon;
 use geo::{polygon, MultiPolygon};
 use diesel::query_dsl::methods::FilterDsl;
 use geo_repair_polygon::join::Join;
 use std::collections::HashMap;
+use geo_clipper::Clipper;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
@@ -126,7 +126,7 @@ pub async fn refresh_metadata_assignments(
                         hulls_from_static_geo_types[0].clone().into();
                     for i in 1..hulls_from_static_geo_types.len() {
                         merged_hull =
-                            merged_hull.union(&hulls_from_static_geo_types[i].clone().into());
+                            merged_hull.union(&hulls_from_static_geo_types[i].clone(), 10000.0);
                     }
                     merged_hull
                 }),
