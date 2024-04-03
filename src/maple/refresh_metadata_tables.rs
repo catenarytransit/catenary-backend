@@ -2,6 +2,7 @@ use crate::chateau_postprocess::feed_id_to_chateau_id_pivot_table;
 use crate::update_schedules_with_new_chateau_id::update_schedules_with_new_chateau_id;
 use catenary::schema::gtfs as gtfs_schema;
 use chateau::Chateau;
+use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
@@ -9,10 +10,9 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use dmfr_folder_reader::ReturnDmfrAnalysis;
 use geo::Polygon;
 use geo::{polygon, MultiPolygon};
-use diesel::query_dsl::methods::FilterDsl;
+use geo_clipper::Clipper;
 use geo_repair_polygon::join::Join;
 use std::collections::HashMap;
-use geo_clipper::Clipper;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ pub async fn refresh_metadata_assignments(
         .map(|x| (x.onestop_feed_id.clone(), x.clone()))
         .collect::<HashMap<String, catenary::models::StaticFeed>>();
 
-        //calculate new list of chateaus
+    //calculate new list of chateaus
     let chateaus_pg = chateau_result
         .iter()
         .map(|(k, v)| {
@@ -162,10 +162,9 @@ pub async fn refresh_metadata_assignments(
         //if the current chateau doesn't exist anymore, delete it
         if !chateau_result.contains_key(&delete_chateau.chateau) {
             println!("Deleting chateau {}", delete_chateau.chateau);
-            let _ = diesel::delete(
-                catenary::schema::gtfs::chateaus::dsl::chateaus
-                    .filter(catenary::schema::gtfs::chateaus::dsl::chateau.eq(&delete_chateau.chateau)),
-            )
+            let _ = diesel::delete(catenary::schema::gtfs::chateaus::dsl::chateaus.filter(
+                catenary::schema::gtfs::chateaus::dsl::chateau.eq(&delete_chateau.chateau),
+            ))
             .execute(conn)
             .await?;
         }

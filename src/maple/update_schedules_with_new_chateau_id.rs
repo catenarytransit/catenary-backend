@@ -1,11 +1,11 @@
-use std::sync::Arc;
+use crate::CatenaryPostgresPool;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::BoolExpressionMethods;
 use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
 use diesel_async::{pooled_connection::bb8::PooledConnection, AsyncPgConnection};
 use std::error::Error;
-use crate::CatenaryPostgresPool;
+use std::sync::Arc;
 
 pub async fn update_schedules_with_new_chateau_id(
     feed_id: &str,
@@ -122,7 +122,10 @@ pub async fn update_schedules_with_new_chateau_id(
         .execute(conn)
         .await?;
 
-        println!("Finished reassignment of feed {} to Château {}", feed_id, new_chateau_id);
+    println!(
+        "Finished reassignment of feed {} to Château {}",
+        feed_id, new_chateau_id
+    );
 
     Ok(())
 }
