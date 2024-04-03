@@ -5,6 +5,7 @@ use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 // Removal of the attribution is not allowed, as covered under the AGPL license
 use crate::gtfs_handlers::gtfs_to_int::availability_to_int;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
+use crate::gtfs_handlers::shape_colour_calculator::ShapeToColourResponse;
 use crate::gtfs_handlers::stops_associated_items::*;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres;
@@ -17,7 +18,6 @@ use catenary::schema::gtfs::stoptimes::continuous_drop_off;
 use chrono::NaiveDate;
 use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
-use crate::gtfs_handlers::shape_colour_calculator::ShapeToColourResponse;
 use geo::polygon;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::FeedInfo;
@@ -119,11 +119,11 @@ pub async fn gtfs_process_feed(
         shape_to_color_lookup,
         shape_to_text_color_lookup,
         shape_id_to_route_ids_lookup,
-        route_ids_to_shape_ids
+        route_ids_to_shape_ids,
     } = shape_to_colour(&feed_id, &gtfs);
 
     //insert agencies
-   let mut agency_id_already_done: HashSet<Option<&String>> = HashSet::new();
+    let mut agency_id_already_done: HashSet<Option<&String>> = HashSet::new();
 
     for agency in &gtfs.agencies {
         use catenary::schema::gtfs::agencies::dsl::agencies;
@@ -144,7 +144,7 @@ pub async fn gtfs_process_feed(
                 agency_phone: agency.phone.clone(),
                 agency_timezone: agency.timezone.clone(),
             };
-    
+
             diesel::insert_into(agencies)
                 .values(agency_row)
                 .execute(conn)
@@ -167,7 +167,7 @@ pub async fn gtfs_process_feed(
         Arc::clone(&arc_conn_pool),
         &chateau_id,
         &attempt_id,
-        &shape_id_to_route_ids_lookup
+        &shape_id_to_route_ids_lookup,
     )
     .await?;
 
@@ -324,11 +324,10 @@ pub async fn gtfs_process_feed(
 
         for stop_chunk in stop_times_pg.chunks(80) {
             diesel::insert_into(stoptimes)
-            .values(stop_chunk)
-            .execute(conn)
-            .await?;
+                .values(stop_chunk)
+                .execute(conn)
+                .await?;
         }
-        
     }
 
     //insert stops
@@ -398,12 +397,12 @@ pub async fn gtfs_process_feed(
         })
         .collect();
 
-       for routes_chunk in routes_pg.chunks(100) {
+    for routes_chunk in routes_pg.chunks(100) {
         diesel::insert_into(catenary::schema::gtfs::routes::dsl::routes)
-        .values(routes_chunk)
-        .execute(conn)
-        .await?;
-       }
+            .values(routes_chunk)
+            .execute(conn)
+            .await?;
+    }
 
     //calculate concave hull
     let hull = crate::gtfs_handlers::hull_from_gtfs::hull_from_gtfs(&gtfs);

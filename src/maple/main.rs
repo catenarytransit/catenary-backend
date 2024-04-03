@@ -298,33 +298,40 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 unzip_feeds.len()
             );
 
-            let check_for_stops_ids = unzip_feeds.into_iter().filter(|x| x.1 == true)
-            .map(|(feed_id, _)| feed_id)
-            .map(|feed_id| {
-                
-            let path_str = format!("gtfs_uncompressed/{}/stops.txt", &feed_id);
+            let check_for_stops_ids = unzip_feeds
+                .into_iter()
+                .filter(|x| x.1 == true)
+                .map(|(feed_id, _)| feed_id)
+                .map(|feed_id| {
+                    let stop_path_str = format!("gtfs_uncompressed/{}/stops.txt", &feed_id);
 
-            let has_stop_table = 
-            std::path::Path::new(&path_str).exists();
+                    let has_stop_table = std::path::Path::new(&stop_path_str).exists();
 
-    (feed_id, has_stop_table)
-            }
-        ).collect::<Vec<(String, bool)>>();
+                    let trip_path_str = format!("gtfs_uncompressed/{}/trips.txt", &feed_id);
+
+                    let has_trip_table = std::path::Path::new(&trip_path_str).exists();
+
+                    (feed_id, has_stop_table && has_trip_table)
+                })
+                .collect::<Vec<(String, bool)>>();
 
             let feeds_with_stop_table_len = check_for_stops_ids
-            .iter()
-            .map(|x| x.1 == true)
-            .collect::<Vec<bool>>()
-            .len();
+                .iter()
+                .map(|x| x.1 == true)
+                .collect::<Vec<bool>>()
+                .len();
 
             let feeds_without_stop_table_len = check_for_stops_ids
-            .iter()
-            .map(|x| x.1 == false)
-            .collect::<Vec<bool>>()
-            .len();
+                .iter()
+                .map(|x| x.1 == false)
+                .collect::<Vec<bool>>()
+                .len();
 
-            println!("{} deleted because does not contain stops.txt {} remaining",feeds_without_stop_table_len, feeds_with_stop_table_len);
-            
+            println!(
+                "{} deleted because does not contain stops.txt {} remaining",
+                feeds_without_stop_table_len, feeds_with_stop_table_len
+            );
+
             // todo! perform additional checks to ensure feed is not a zip bomb
 
             let attempt_ids: HashMap<String, String> = {

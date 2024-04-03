@@ -41,13 +41,11 @@ pub async fn shapes_into_postgres(
 
         //backround colour to use
         let route = match route_ids {
-            Some(route_ids) => {
-                match route_ids.iter().nth(0) {
-                    Some(route_id) => gtfs.routes.get(route_id),
-                    None => None,
-                }
+            Some(route_ids) => match route_ids.iter().nth(0) {
+                Some(route_id) => gtfs.routes.get(route_id),
+                None => None,
             },
-            None => None
+            None => None,
         };
 
         let bg_color = match shape_to_color_lookup.get(shape_id) {
@@ -104,31 +102,32 @@ pub async fn shapes_into_postgres(
             //creates a text label for the shape to be displayed with on the map
             //todo! change this with i18n
             let route_label: String = match route_ids {
-                Some(route_ids) => 
-                    route_ids
-                .iter()
-                .map(|route_id| {
-                    let route = gtfs.routes.get(route_id);
-                    match route {
-                        Some(route) => match route.short_name.is_some() {
-                            true => route.short_name.to_owned(),
-                            false => match route.long_name.is_some() {
-                                true => route.long_name.to_owned(),
-                                false => None,
+                Some(route_ids) => route_ids
+                    .iter()
+                    .map(|route_id| {
+                        let route = gtfs.routes.get(route_id);
+                        match route {
+                            Some(route) => match route.short_name.is_some() {
+                                true => route.short_name.to_owned(),
+                                false => match route.long_name.is_some() {
+                                    true => route.long_name.to_owned(),
+                                    false => None,
+                                },
                             },
-                        },
-                        _ => None,
-                    }
-                })
-                .filter(|route_label| route_label.is_some())
-                .map(|route_label| rename_route_string(route_label.as_ref().unwrap().to_owned()))
-                .collect::<Vec<String>>()
-                .join(",")
-                .as_str()
-                .replace("Orange County", "OC")
-                .replace("Inland Empire", "IE")
-                .to_string(),
-                None => String::from("")
+                            _ => None,
+                        }
+                    })
+                    .filter(|route_label| route_label.is_some())
+                    .map(|route_label| {
+                        rename_route_string(route_label.as_ref().unwrap().to_owned())
+                    })
+                    .collect::<Vec<String>>()
+                    .join(",")
+                    .as_str()
+                    .replace("Orange County", "OC")
+                    .replace("Inland Empire", "IE")
+                    .to_string(),
+                None => String::from(""),
             };
             //run insertion
 
@@ -151,7 +150,7 @@ pub async fn shapes_into_postgres(
                                 .map(|route_id| Some(route_id.to_string()))
                                 .collect(),
                         ),
-                        None => None
+                        None => None,
                     },
                     route_type: route_type_number,
                     route_label: Some(route_label.clone()),
@@ -181,7 +180,7 @@ pub async fn shapes_into_postgres(
                             .map(|route_id| Some(route_id.to_string()))
                             .collect(),
                     ),
-                    None => None
+                    None => None,
                 },
                 route_type: route_type_number,
                 route_label: Some(route_label),

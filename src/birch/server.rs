@@ -2,6 +2,7 @@ use actix_web::dev::Service;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use bb8::Pool;
+use cached::proc_macro::once;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use diesel::query_dsl::methods::FilterDsl;
@@ -19,7 +20,6 @@ use rstar::RTree;
 use serde::Deserialize;
 use serde_derive::Serialize;
 use serde_json::to_string;
-use cached::proc_macro::once;
 use serde_json::{json, to_string_pretty};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{FromRow, Row};
@@ -585,28 +585,34 @@ struct ChateauToSend {
 }
 
 #[actix_web::get("/getchateaus")]
-async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest, chateau_cache: web::Data<ChateauCacheActixData>) -> impl Responder {
-    
+async fn chateaus(
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    req: HttpRequest,
+    chateau_cache: web::Data<ChateauCacheActixData>,
+) -> impl Responder {
     let chateau_lock = chateau_cache.read().unwrap();
     let chateau_as_ref = chateau_lock.as_ref();
 
     let cloned_chateau_data = match chateau_as_ref {
         Some(chateau_as_ref) => Some(chateau_as_ref.clone()),
-        None => None
+        None => None,
     };
 
     std::mem::drop(chateau_as_ref);
     std::mem::drop(chateau_lock);
 
     if let Some(cloned_chateau_data) = cloned_chateau_data {
-        if cloned_chateau_data.last_updated_time_ms > SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64 - 3_600_000 {
+        if cloned_chateau_data.last_updated_time_ms
+            > SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64
+                - 3_600_000
+        {
             return HttpResponse::Ok()
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=86400"))
-        .body(cloned_chateau_data.chateau_geojson);
+                .insert_header(("Content-Type", "application/json"))
+                .insert_header(("Cache-Control", "max-age=86400"))
+                .body(cloned_chateau_data.chateau_geojson);
         }
     }
 
@@ -709,15 +715,13 @@ async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest, 
     let mut chateau_lock = chateau_cache.write().unwrap();
     let mut chateau_mut_ref = chateau_lock.as_mut();
 
-    chateau_mut_ref = Some(
-        &mut ChateauCache {
-            chateau_geojson: serialized.clone(),
-            last_updated_time_ms: SystemTime::now()
+    chateau_mut_ref = Some(&mut ChateauCache {
+        chateau_geojson: serialized.clone(),
+        last_updated_time_ms: SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64
-        }
-    );
+            .as_millis() as u64,
+    });
 
     std::mem::drop(chateau_lock);
 
