@@ -146,6 +146,19 @@ pub async fn delete_attempt_objects(
     .execute(conn)
     .await;
 
+    use catenary::schema::gtfs::feed_info;
+    use catenary::schema::gtfs::feed_info::dsl::feed_info as feed_info_table;
+
+    let _ = diesel::delete(
+        feed_info_table.filter(
+            feed_info::dsl::onestop_feed_id
+                .eq(&feed_id)
+                .and(feed_info::dsl::attempt_id.eq(&attempt_id)),
+        ),
+    )
+    .execute(conn)
+    .await;
+
     //delete ingested static_download_attempts
     /*
 

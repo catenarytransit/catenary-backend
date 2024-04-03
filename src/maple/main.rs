@@ -28,6 +28,7 @@ mod gtfs_ingestion_sequence;
 mod gtfs_process;
 mod refresh_metadata_tables;
 mod transitland_download;
+mod update_schedules_with_new_chateau_id;
 
 use gtfs_process::gtfs_process_feed;
 

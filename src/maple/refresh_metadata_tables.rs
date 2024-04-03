@@ -1,4 +1,5 @@
 use crate::chateau_postprocess::feed_id_to_chateau_id_pivot_table;
+use crate::update_schedules_with_new_chateau_id::update_schedules_with_new_chateau_id;
 use catenary::schema::gtfs as gtfs_schema;
 use chateau::Chateau;
 use diesel::query_dsl::methods::SelectDsl;
@@ -214,9 +215,33 @@ pub async fn refresh_metadata_assignments(
 
     //set each static feed to the new chateau id
     // if static feed has a different chateau id, call on the update function
-    // update_chateau_id_for_gtfs_schedule(feed_id, new_chateau_id, conn).await?;
+    for existing_schedule in &existing_static_feeds {
+        if let Some(new_chateau_id) =
+            feed_id_to_chateau_id_lookup_table.get(&existing_schedule.onestop_feed_id)
+        {
+            if &existing_schedule.chateau != new_chateau_id {
+                let _ = update_schedules_with_new_chateau_id(
+                    &existing_schedule.onestop_feed_id,
+                    new_chateau_id,
+                    Arc::clone(&pool),
+                )
+                .await?;
 
-    // if the new chateau id is different for any of the feeds, run the update function
+                //the table has been updated
+                let _ = diesel::update(gtfs_schema::static_feeds::dsl::static_feeds)
+                    .filter(
+                        gtfs_schema::static_feeds::dsl::onestop_feed_id
+                            .eq(&existing_schedule.onestop_feed_id),
+                    )
+                    .set((
+                        gtfs_schema::static_feeds::dsl::chateau.eq(&new_chateau_id),
+                        gtfs_schema::static_feeds::dsl::previous_chateau_name.eq(&new_chateau_id),
+                    ))
+                    .execute(conn)
+                    .await?;
+            }
+        }
+    }
 
     Ok(())
 }
