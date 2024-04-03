@@ -109,26 +109,31 @@ pub async fn nanotime(req: HttpRequest) -> impl Responder {
 pub async fn bus_stops_meta(req: HttpRequest) -> impl Responder {
     let mut fields = std::collections::BTreeMap::new();
 
-
-         fields.insert(String::from("onestop_feed_id"), String::from("text"));
-         fields.insert(String::from("attempt_id"), String::from("text"));
-         fields.insert(String::from("gtfs_id"), String::from("text"));
-         fields.insert(String::from("name"), String::from("text"));
-         fields.insert(String::from("displayname"), String::from("text"));
-         fields.insert(String::from("code"), String::from("text"));
-         fields.insert(String::from("gtfs_desc"), String::from("text"));
-         fields.insert(String::from("location_type"), String::from("smallint"));
-         fields.insert(String::from("parent_station"), String::from("text"));
-         fields.insert(String::from("zone_id"), String::from("text"));
-         fields.insert(String::from("url"), String::from("text"));
-         fields.insert(String::from("timezone"), String::from("text"));
-         fields.insert(String::from("wheelchair_boarding"), String::from("smallint"));
-         fields.insert(String::from("level_id"), String::from("text"));
-         fields.insert(String::from("platform_code"), String::from("text"));
-         fields.insert(String::from("routes"), String::from("text[]"));
-         fields.insert(String::from("route_types"), String::from("smallint[]"));
-         fields.insert(String::from("children_ids"), String::from("text[]"));
-         fields.insert(String::from("children_route_types"), String::from("smallint[]"));
+    fields.insert(String::from("onestop_feed_id"), String::from("text"));
+    fields.insert(String::from("attempt_id"), String::from("text"));
+    fields.insert(String::from("gtfs_id"), String::from("text"));
+    fields.insert(String::from("name"), String::from("text"));
+    fields.insert(String::from("displayname"), String::from("text"));
+    fields.insert(String::from("code"), String::from("text"));
+    fields.insert(String::from("gtfs_desc"), String::from("text"));
+    fields.insert(String::from("location_type"), String::from("smallint"));
+    fields.insert(String::from("parent_station"), String::from("text"));
+    fields.insert(String::from("zone_id"), String::from("text"));
+    fields.insert(String::from("url"), String::from("text"));
+    fields.insert(String::from("timezone"), String::from("text"));
+    fields.insert(
+        String::from("wheelchair_boarding"),
+        String::from("smallint"),
+    );
+    fields.insert(String::from("level_id"), String::from("text"));
+    fields.insert(String::from("platform_code"), String::from("text"));
+    fields.insert(String::from("routes"), String::from("text[]"));
+    fields.insert(String::from("route_types"), String::from("smallint[]"));
+    fields.insert(String::from("children_ids"), String::from("text[]"));
+    fields.insert(
+        String::from("children_route_types"),
+        String::from("smallint[]"),
+    );
 
     let fields = tilejson::VectorLayer::new(String::from("data"), fields);
 
@@ -171,7 +176,7 @@ pub async fn bus_stops(
 
     //let grid = tile_grid::Grid::wgs84();
 
-   // let bbox = grid.tile_extent(x, y, z);
+    // let bbox = grid.tile_extent(x, y, z);
 
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
@@ -223,7 +228,7 @@ FROM (
         Err(err) => {
             eprintln!("{:?}", err);
             HttpResponse::InternalServerError().body("Failed to fetch from postgres!")
-        },
+        }
     }
 }
 
@@ -236,7 +241,7 @@ pub async fn shapes_not_bus(
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
 
-   // let grid = tile_grid::Grid::wgs84();
+    // let grid = tile_grid::Grid::wgs84();
 
     //let bbox = grid.tile_extent(x, y, z);
 
@@ -343,8 +348,8 @@ pub async fn shapes_bus(
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
 
-   // let grid = tile_grid::Grid::wgs84();
-   // let bbox = grid.tile_extent(x, y, z);
+    // let grid = tile_grid::Grid::wgs84();
+    // let bbox = grid.tile_extent(x, y, z);
 
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
@@ -500,6 +505,8 @@ pub async fn irvinevehproxy(req: HttpRequest) -> impl Responder {
         reqwest::get("https://passio3.com/irvine/passioTransit/gtfs/realtime/vehiclePositions")
             .await;
 
+    let qs = QString::from(req.query_string());
+
     match raw_data {
         Ok(raw_data) => {
             //println!("Raw data successfully downloaded");
@@ -509,6 +516,14 @@ pub async fn irvinevehproxy(req: HttpRequest) -> impl Responder {
             match raw_text {
                 Ok(raw_bytes) => {
                     let hashofresult = fasthash::metro::hash64(raw_bytes.as_ref());
+
+                    if let Some(hashofbodyclient) = qs.get("bodyhash") {
+                        if let Ok(clienthash) = hashofbodyclient.parse::<u64>() {
+                            if clienthash == hashofresult {
+                                return HttpResponse::NoContent().body("");
+                            }
+                        }
+                    }
 
                     HttpResponse::Ok()
                         .insert_header(("Content-Type", "application/x-protobuf"))

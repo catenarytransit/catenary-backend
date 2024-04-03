@@ -298,11 +298,38 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 unzip_feeds.len()
             );
 
+            let check_for_stops_ids = unzip_feeds.into_iter().filter(|x| x.1 == true)
+            .map(|(feed_id, _)| feed_id)
+            .map(|feed_id| {
+                
+            let path_str = format!("gtfs_uncompressed/{}/stops.txt", &feed_id);
+
+            let has_stop_table = 
+            std::path::Path::new(&path_str).exists();
+
+    (feed_id, has_stop_table)
+            }
+        ).collect::<Vec<(String, bool)>>();
+
+            let feeds_with_stop_table_len = check_for_stops_ids
+            .iter()
+            .map(|x| x.1 == true)
+            .collect::<Vec<bool>>()
+            .len();
+
+            let feeds_without_stop_table_len = check_for_stops_ids
+            .iter()
+            .map(|x| x.1 == false)
+            .collect::<Vec<bool>>()
+            .len();
+
+            println!("{} deleted because does not contain stops.txt {} remaining",feeds_without_stop_table_len, feeds_with_stop_table_len);
+            
             // todo! perform additional checks to ensure feed is not a zip bomb
 
             let attempt_ids: HashMap<String, String> = {
                 let mut attempt_ids = HashMap::new();
-                for (feed_id, _) in unzip_feeds.iter() {
+                for (feed_id, _) in check_for_stops_ids.iter() {
                     let attempt_id =
                         format!("{}-{}", feed_id, chrono::Utc::now().timestamp_millis());
                     attempt_ids.insert(feed_id.clone(), attempt_id);
@@ -312,7 +339,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             let attempt_ids = Arc::new(attempt_ids);
 
-            let unzip_feeds_clone = unzip_feeds.clone();
+            let unzip_feeds_clone = check_for_stops_ids.clone();
 
             // 5. Process GTFS feeds
 
@@ -320,7 +347,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             let ingest_progress: Arc<std::sync::Mutex<u16>> = Arc::new(std::sync::Mutex::new(0));
 
-            let feeds_to_process: Vec<(String, String, String)> = unzip_feeds_clone
+            let feeds_to_process: Vec<(String, String, String)> = check_for_stops_ids
                 .into_iter()
                 .filter(|unzipped_feed| unzipped_feed.1 == true)
                 .map(|(feed_id, _)| (feed_id.clone(), attempt_ids.get(&feed_id).unwrap().clone()))
