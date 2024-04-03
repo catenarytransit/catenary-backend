@@ -98,6 +98,8 @@ sqlx = {version = "0.7.4", features = ["postgres","runtime-tokio", "macros"]}
 tilejson = "0.4.1"
 tile-grid = "=0.2.2"
 zstd-safe = "7.1.0"
+hitbox = "0.1.1"
+cached = "0.49.2"
 
 [[bin]]
 name = "maple"

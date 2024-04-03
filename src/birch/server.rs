@@ -10,6 +10,7 @@ use diesel::sql_types::{Float, Integer};
 use diesel::ExpressionMethods;
 use diesel::Selectable;
 use diesel::SelectableHelper;
+use diesel_async::pooled_connection::bb8::PooledConnection;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, Geometry, JsonValue, Value};
 use qstring::QString;
@@ -18,6 +19,7 @@ use rstar::RTree;
 use serde::Deserialize;
 use serde_derive::Serialize;
 use serde_json::to_string;
+use cached::proc_macro::once;
 use serde_json::{json, to_string_pretty};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{FromRow, Row};
@@ -32,6 +34,7 @@ use tokio_postgres::Client;
 use tokio_postgres::Error as PostgresError;
 use zstd_safe::WriteBuf;
 
+#[derive(Clone, Debug)]
 struct ChateauCache {
     last_updated_time_ms: u64,
     chateau_geojson: String,
@@ -574,7 +577,30 @@ struct ChateauToSend {
 }
 
 #[actix_web::get("/getchateaus")]
-async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest) -> impl Responder {
+async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest, chateau_cache: web::Data<ChateauCacheActixData>) -> impl Responder {
+    
+    let chateau_lock = chateau_cache.read().unwrap();
+    let chateau_as_ref = chateau_lock.as_ref();
+
+    let cloned_chateau_data = match chateau_as_ref {
+        Some(chateau_as_ref) => Some(chateau_as_ref.clone()),
+        None => None
+    };
+
+    std::mem::drop(chateau_as_ref);
+    std::mem::drop(chateau_lock);
+
+    if let Some(cloned_chateau_data) = cloned_chateau_data {
+        if cloned_chateau_data.last_updated_time_ms > SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64 - 3_600_000 {
+            return HttpResponse::Ok()
+        .insert_header(("Content-Type", "application/json"))
+        .body(cloned_chateau_data.chateau_geojson);
+        }
+    }
+
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
@@ -669,6 +695,22 @@ async fn chateaus(pool: web::Data<Arc<CatenaryPostgresPool>>, req: HttpRequest) 
 
     // turn it into a string and send it!!!
     let serialized = GeoJson::from(feature_collection).to_string();
+
+    //cache it first
+    let mut chateau_lock = chateau_cache.write().unwrap();
+    let mut chateau_mut_ref = chateau_lock.as_mut();
+
+    chateau_mut_ref = Some(
+        &mut ChateauCache {
+            chateau_geojson: serialized.clone(),
+            last_updated_time_ms: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+        }
+    );
+
+    std::mem::drop(chateau_lock);
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
