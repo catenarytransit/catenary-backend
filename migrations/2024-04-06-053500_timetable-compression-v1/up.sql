@@ -1,6 +1,6 @@
--- Your SQL goes here
 DROP TABLE IF EXISTS gtfs.stoptimes CASCADE;
 DROP TABLE IF EXISTS gtfs.trips CASCADE;
+DROP TABLE IF EXISTS gtfs.frequencies CASCADE;
 
 -- row by row
 CREATE TABLE gtfs.itinerary_pattern (
@@ -44,6 +44,7 @@ CREATE TABLE gtfs.trips_compressed (
     frequencies trip_frequency[],
     has_frequencies boolean NOT NULL,
     itinerary_pattern_id text NOT NULL,
+    compressed_trip_frequencies text,
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id)
 );
 
