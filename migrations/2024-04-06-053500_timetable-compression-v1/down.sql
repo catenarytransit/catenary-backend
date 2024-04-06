@@ -1,5 +1,5 @@
 -- This file should undo anything in `up.sql`
-CREATE TABLE gtfs.stoptimes (
+CREATE TABLE IF NOT EXISTS gtfs.stoptimes (
     onestop_feed_id text NOT NULL,
     attempt_id text NOT NULL,
     trip_id text NOT NULL,
@@ -22,9 +22,9 @@ CREATE TABLE gtfs.stoptimes (
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id, stop_sequence)
 );
 
-CREATE INDEX stoptimes_chateau_idx ON gtfs.stoptimes (chateau);
+CREATE INDEX IF NOT EXISTS stoptimes_chateau_idx ON gtfs.stoptimes (chateau);
 
-CREATE TABLE gtfs.trips (
+CREATE TABLE IF NOT EXISTS gtfs.trips (
     onestop_feed_id text NOT NULL,
     trip_id text NOT NULL,
     attempt_id text NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE gtfs.trips (
     PRIMARY KEY (onestop_feed_id, attempt_id, trip_id)
 );
 
-CREATE TABLE gtfs.trip_frequencies (
+CREATE TABLE IF NOT EXISTS gtfs.trip_frequencies (
     onestop_feed_id text NOT NULL,
     trip_id text NOT NULL,
     attempt_id text NOT NULL,
@@ -64,3 +64,6 @@ CREATE INDEX IF NOT EXISTS trips_chateau ON gtfs.trips (chateau);
 DROP TABLE gtfs.itinerary_pattern CASCADE;
 DROP TABLE gtfs.itinerary_pattern_meta CASCADE;
 DROP TABLE gtfs.trips_compressed CASCADE;
+
+DROP INDEX IF EXISTS itinerary_pattern_chateau_idx;
+DROP INDEX IF EXISTS trips_compressed_chateau_idx;

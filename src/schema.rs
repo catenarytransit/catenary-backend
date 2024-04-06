@@ -201,6 +201,7 @@ pub mod gtfs {
             trip_headsign -> Nullable<Text>,
             trip_headsign_translations -> Nullable<Jsonb>,
             shape_id -> Nullable<Text>,
+            timezone -> Text,
         }
     }
 
@@ -420,6 +421,7 @@ pub mod gtfs {
             frequencies -> Nullable<Array<Nullable<TripFrequency>>>,
             has_frequencies -> Bool,
             itinerary_pattern_id -> Text,
+            compressed_trip_frequencies -> Nullable<Text>,
         }
     }
 

@@ -27,6 +27,7 @@ CREATE TABLE gtfs.itinerary_pattern_meta (
     trip_headsign text,
     trip_headsign_translations jsonb,
     shape_id text,
+    timezone text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, itinerary_pattern_id)
 );
 

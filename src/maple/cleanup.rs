@@ -11,49 +11,10 @@ pub async fn delete_attempt_objects(
     attempt_id: &str,
     pool: Arc<CatenaryPostgresPool>,
 ) -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
-    use catenary::schema::gtfs::trips;
-    use catenary::schema::gtfs::trips::dsl::trips as trips_table;
 
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
-
-    let _ = diesel::delete(
-        trips_table.filter(
-            trips::dsl::onestop_feed_id
-                .eq(&feed_id)
-                .and(trips::dsl::attempt_id.eq(&attempt_id)),
-        ),
-    )
-    .execute(conn)
-    .await;
-
-    use catenary::schema::gtfs::stoptimes;
-    use catenary::schema::gtfs::stoptimes::dsl::stoptimes as stop_times_table;
-
-    let _ = diesel::delete(
-        stop_times_table.filter(
-            stoptimes::dsl::onestop_feed_id
-                .eq(&feed_id)
-                .and(stoptimes::dsl::attempt_id.eq(&attempt_id)),
-        ),
-    )
-    .execute(conn)
-    .await;
-
-    //cleanup trip freq
-
-    use catenary::schema::gtfs::trip_frequencies;
-    use catenary::schema::gtfs::trip_frequencies::dsl::trip_frequencies as frequencies_table;
-    let _ = diesel::delete(
-        frequencies_table.filter(
-            trip_frequencies::dsl::onestop_feed_id
-                .eq(&feed_id)
-                .and(trip_frequencies::dsl::attempt_id.eq(&attempt_id)),
-        ),
-    )
-    .execute(conn)
-    .await;
 
     use catenary::schema::gtfs::agencies;
     use catenary::schema::gtfs::agencies::dsl::agencies as agencies_table;
