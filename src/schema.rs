@@ -174,6 +174,41 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.itinerary_pattern (onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            itinerary_pattern_id -> Text,
+            stop_sequence -> Int4,
+            arrival_time_since_start -> Nullable<Int4>,
+            departure_time_since_start -> Nullable<Int4>,
+            stop_id -> Text,
+            chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.itinerary_pattern_meta (onestop_feed_id, attempt_id, itinerary_pattern_id) {
+            onestop_feed_id -> Text,
+            route_id -> Text,
+            attempt_id -> Text,
+            trip_ids -> Array<Nullable<Text>>,
+            itinerary_pattern_id -> Text,
+            chateau -> Text,
+            trip_headsign -> Nullable<Text>,
+            trip_headsign_translations -> Nullable<Jsonb>,
+            shape_id -> Nullable<Text>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.realtime_feeds (onestop_feed_id) {
             onestop_feed_id -> Text,
             name -> Nullable<Text>,
@@ -354,33 +389,6 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
-        gtfs.stoptimes (onestop_feed_id, attempt_id, trip_id, stop_sequence) {
-            onestop_feed_id -> Text,
-            attempt_id -> Text,
-            trip_id -> Text,
-            stop_sequence -> Int4,
-            arrival_time -> Nullable<Oid>,
-            departure_time -> Nullable<Oid>,
-            stop_id -> Text,
-            stop_headsign -> Nullable<Text>,
-            stop_headsign_translations -> Nullable<Jsonb>,
-            pickup_type -> Int2,
-            drop_off_type -> Int2,
-            shape_dist_traveled -> Nullable<Float4>,
-            timepoint -> Bool,
-            continuous_pickup -> Int2,
-            continuous_drop_off -> Int2,
-            point -> Nullable<Geometry>,
-            route_id -> Text,
-            chateau -> Text,
-        }
-    }
-
-    diesel::table! {
-        use postgis_diesel::sql_types::*;
-        use diesel::sql_types::*;
-        use crate::custom_pg_types::*;
-
         gtfs.trip_frequencies (onestop_feed_id, attempt_id, trip_id, index) {
             onestop_feed_id -> Text,
             trip_id -> Text,
@@ -398,25 +406,20 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
-        gtfs.trips (onestop_feed_id, attempt_id, trip_id) {
+        gtfs.trips_compressed (onestop_feed_id, attempt_id, trip_id) {
             onestop_feed_id -> Text,
             trip_id -> Text,
             attempt_id -> Text,
-            route_id -> Text,
             service_id -> Text,
-            trip_headsign -> Nullable<Text>,
-            trip_headsign_translations -> Nullable<Jsonb>,
-            has_stop_headsigns -> Bool,
-            stop_headsigns -> Nullable<Array<Nullable<Text>>>,
             trip_short_name -> Nullable<Text>,
             direction_id -> Nullable<Int2>,
             block_id -> Nullable<Text>,
-            shape_id -> Nullable<Text>,
             wheelchair_accessible -> Int2,
             bikes_allowed -> Int2,
             chateau -> Text,
             frequencies -> Nullable<Array<Nullable<TripFrequency>>>,
             has_frequencies -> Bool,
+            itinerary_pattern_id -> Text,
         }
     }
 
@@ -431,6 +434,8 @@ pub mod gtfs {
         gtfs_errors,
         in_progress_static_ingests,
         ingested_static,
+        itinerary_pattern,
+        itinerary_pattern_meta,
         realtime_feeds,
         realtime_passwords,
         routes,
@@ -440,8 +445,7 @@ pub mod gtfs {
         static_feeds,
         static_passwords,
         stops,
-        stoptimes,
         trip_frequencies,
-        trips,
+        trips_compressed,
     );
 }
