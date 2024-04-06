@@ -18,7 +18,7 @@ pub fn shape_to_colour(feed_id: &str, gtfs: &gtfs_structures::Gtfs) -> ShapeToCo
     //metrolink colours are all bonked because trips don't have shape ids in them
     if (feed_id == "f-9qh-metrolinktrains") {
         for (shape_id, shape) in &gtfs.shapes {
-            let cleanedline = shape_id.to_owned().replace("in","").replace("out","");
+            let cleanedline = shape_id.to_owned().replace("in", "").replace("out", "");
 
             let value = match cleanedline.as_str() {
                 "91" => "91 Line",
@@ -39,10 +39,14 @@ pub fn shape_to_colour(feed_id: &str, gtfs: &gtfs_structures::Gtfs) -> ShapeToCo
                 })
                 .or_insert(HashSet::from_iter([shape_id.clone()]));
 
-            shape_id_to_route_ids_lookup.insert(shape_id.clone(), HashSet::from_iter([value.to_string()]));
+            shape_id_to_route_ids_lookup
+                .insert(shape_id.clone(), HashSet::from_iter([value.to_string()]));
 
             if let Some(route) = gtfs.routes.get(&value.to_string()) {
-                println!("Route data found for shape {} and route id {}", shape_id, value);
+                println!(
+                    "Route data found for shape {} and route id {}",
+                    shape_id, value
+                );
                 let color = colour_correction::fix_background_colour_rgb_feed_route(
                     feed_id,
                     route.color,
@@ -52,9 +56,12 @@ pub fn shape_to_colour(feed_id: &str, gtfs: &gtfs_structures::Gtfs) -> ShapeToCo
                 shape_to_color_lookup.insert(shape_id.clone(), color);
                 shape_to_text_color_lookup.insert(shape_id.clone(), route.text_color);
             } else {
-                eprintln!("Could not find the route data for shape {} and route id {}", shape_id, value);
+                eprintln!(
+                    "Could not find the route data for shape {} and route id {}",
+                    shape_id, value
+                );
             }
-        }           
+        }
     }
 
     for (trip_id, trip) in &gtfs.trips {

@@ -1,4 +1,4 @@
-use crate::gtfs_handlers::enum_to_int::route_type_to_int;
+use catenary::enum_to_int::route_type_to_int;
 use std::collections::{HashMap, HashSet};
 
 pub fn make_hashmap_stops_to_route_types_and_ids(

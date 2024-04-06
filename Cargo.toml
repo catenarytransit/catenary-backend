@@ -127,3 +127,7 @@ path = "src/spruce/main.rs"
 [[bin]]
 name = "pg_tests"
 path = "src/pg_tests/main.rs"
+
+[[bin]]
+name = "test_maple_syrup"
+path = "src/maple_syrup/test.rs"

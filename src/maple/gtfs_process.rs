@@ -3,13 +3,13 @@ use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb;
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
-use crate::gtfs_handlers::gtfs_to_int::availability_to_int;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::shape_colour_calculator::ShapeToColourResponse;
 use crate::gtfs_handlers::stops_associated_items::*;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres;
 use crate::DownloadedFeedsInformation;
+use catenary::enum_to_int::*;
 use catenary::models::Route as RoutePgModel;
 use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -235,12 +235,7 @@ pub async fn gtfs_process_feed(
                 }),
                 None => None,
             },
-            bikes_allowed: match trip.bikes_allowed {
-                BikesAllowedType::NoBikeInfo => 0,
-                BikesAllowedType::AtLeastOneBike => 1,
-                BikesAllowedType::NoBikesAllowed => 2,
-                BikesAllowedType::Unknown(unknown) => unknown,
-            },
+            bikes_allowed: bikes_allowed_to_int(&trip.bikes_allowed),
             block_id: trip.block_id.clone(),
             shape_id: trip.shape_id.clone(),
             wheelchair_accessible: availability_to_int(&trip.wheelchair_accessible),
@@ -374,7 +369,7 @@ pub async fn gtfs_process_feed(
                 long_name_translations: None,
                 gtfs_desc: route.desc.clone(),
                 gtfs_desc_translations: None,
-                route_type: crate::gtfs_handlers::gtfs_to_int::route_type_to_int(&route.route_type),
+                route_type: route_type_to_int(&route.route_type),
                 url: route.url.clone(),
                 url_translations: None,
                 shapes_list: match route_ids_to_shape_ids.get(&route_id.clone()) {
