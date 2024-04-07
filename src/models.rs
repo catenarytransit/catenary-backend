@@ -8,6 +8,53 @@ use diesel::AsExpression;
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;
+
+#[derive(Queryable, Selectable, Insertable, Clone)]
+#[diesel(table_name = crate::schema::gtfs::itinerary_pattern)]
+pub struct ItineraryPatternRow {
+    onestop_feed_id: String,
+    attempt_id: String,
+    itinerary_pattern_id: String,
+    stop_sequence: i32,
+    arrival_time_since_start: Option<i32>,
+    departure_time_since_start: Option<i32>,
+    stop_id: String,
+    chateau: String
+}
+
+#[derive(Queryable, Selectable, Insertable, Clone)]
+#[diesel(table_name = crate::schema::gtfs::itinerary_pattern_meta)]
+pub struct ItineraryPatternMeta {
+    onestop_feed_id: String,
+    attempt_id: String,
+    trip_ids: Vec<Option<String>>,
+    itinerary_pattern_id: String,
+    chateau: String,
+    trip_headsign: Option<String>,
+    trip_headsign_translations: Option<Value>,
+    shape_id: String,
+    timezone: String
+}
+
+#[derive(Queryable, Selectable, Insertable, Clone)]
+#[diesel(table_name = crate::schema::gtfs::trips_compressed)]
+pub struct CompressedTrip {
+    onestop_feed_id: String,
+    trip_id: String,
+    attempt_id: String,
+    service_id: String,
+    trip_short_name: Option<String>,
+    direction_id: Option<i16>,
+    block_id: String,
+    wheelchair_accessible: i16,
+    bikes_allowed: i16,
+    chateau: String,
+    frequencies: Option<Vec<u8>>,
+    has_frequencies: bool,
+    itinerary_pattern_id: String,
+    compressed_trip_frequencies: String
+}
+
 #[derive(Queryable, Selectable, Insertable, Clone)]
 #[diesel(table_name = crate::schema::gtfs::shapes)]
 pub struct Shape {
@@ -110,6 +157,7 @@ pub struct Route {
     pub continuous_pickup: i16,
     pub continuous_drop_off: i16,
     pub shapes_list: Option<Vec<Option<String>>>,
+    pub stops: Option<Vec<u8>>,
     pub chateau: String,
 }
 

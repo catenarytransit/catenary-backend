@@ -67,3 +67,6 @@ DROP TABLE gtfs.trips_compressed CASCADE;
 
 DROP INDEX IF EXISTS itinerary_pattern_chateau_idx;
 DROP INDEX IF EXISTS trips_compressed_chateau_idx;
+
+ALTER TABLE gtfs.routes
+DROP COLUMN stops;

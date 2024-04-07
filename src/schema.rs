@@ -256,6 +256,7 @@ pub mod gtfs {
             continuous_drop_off -> Int2,
             shapes_list -> Nullable<Array<Nullable<Text>>>,
             chateau -> Text,
+            stops -> Nullable<Bytea>,
         }
     }
 
@@ -356,7 +357,7 @@ pub mod gtfs {
             gtfs_id -> Text,
             name -> Nullable<Text>,
             name_translations -> Nullable<Jsonb>,
-            displayname -> Text,
+            displayname -> Nullable<Text>,
             code -> Nullable<Text>,
             gtfs_desc -> Nullable<Text>,
             gtfs_desc_translations -> Nullable<Jsonb>,
@@ -413,12 +414,12 @@ pub mod gtfs {
             attempt_id -> Text,
             service_id -> Text,
             trip_short_name -> Nullable<Text>,
-            direction_id -> Nullable<Int2>,
+            direction_id -> Nullable<Bool>,
             block_id -> Nullable<Text>,
             wheelchair_accessible -> Int2,
             bikes_allowed -> Int2,
             chateau -> Text,
-            frequencies -> Nullable<Array<Nullable<TripFrequency>>>,
+            frequencies -> Nullable<Bytea>,
             has_frequencies -> Bool,
             itinerary_pattern_id -> Text,
             compressed_trip_frequencies -> Nullable<Text>,

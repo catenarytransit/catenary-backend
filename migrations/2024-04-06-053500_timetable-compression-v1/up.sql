@@ -37,12 +37,12 @@ CREATE TABLE gtfs.trips_compressed (
     attempt_id text NOT NULL,
     service_id text NOT NULL,
     trip_short_name text,
-    direction_id smallint,
+    direction_id boolean,
     block_id text,
     wheelchair_accessible smallint NOT NULL,
     bikes_allowed smallint NOT NULL,
     chateau text NOT NULL,
-    frequencies trip_frequency[],
+    frequencies bytea,
     has_frequencies boolean NOT NULL,
     itinerary_pattern_id text NOT NULL,
     compressed_trip_frequencies text,
@@ -50,3 +50,6 @@ CREATE TABLE gtfs.trips_compressed (
 );
 
 CREATE INDEX trips_compressed_chateau_idx ON gtfs.trips_compressed (chateau);
+
+ALTER TABLE gtfs.routes
+ADD stops bytea;

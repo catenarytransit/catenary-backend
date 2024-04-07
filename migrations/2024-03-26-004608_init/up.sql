@@ -51,7 +51,7 @@ CREATE TABLE gtfs.in_progress_static_ingests (
 
 CREATE INDEX IF NOT EXISTS gtfs_static_download_attempts_file_hash ON gtfs.static_download_attempts (file_hash);
 
-CREATE TABLE gtfs.static_feeds (
+CREATE TABLE IF NOT EXISTS gtfs.static_feeds (
     onestop_feed_id text NOT NULL PRIMARY KEY,
     chateau text NOT NULL,
     default_lang text,
@@ -60,7 +60,7 @@ CREATE TABLE gtfs.static_feeds (
     hull GEOMETRY(POLYGON,4326)
 );
 
-CREATE INDEX static_hulls ON gtfs.static_feeds USING GIST (hull);
+CREATE INDEX IF NOT EXISTS static_hulls ON gtfs.static_feeds USING GIST (hull);
 
 CREATE TABLE gtfs.chateaus (
     chateau text NOT NULL PRIMARY KEY,
@@ -74,7 +74,7 @@ CREATE TABLE gtfs.chateaus (
 -- if the feed start end date or end date is missing, replace the file
 -- switch data asap ASAP if the start date is before the current date
 -- time enable of new data when the current feed expires
-CREATE TABLE gtfs.feed_info (
+CREATE TABLE  gtfs.feed_info (
     onestop_feed_id text NOT NULL,
     feed_publisher_name text NOT NULL,
     feed_publisher_url text NOT NULL,
@@ -90,7 +90,7 @@ CREATE TABLE gtfs.feed_info (
     PRIMARY KEY (onestop_feed_id, attempt_id, feed_publisher_name)
 );
 
-CREATE INDEX IF NOT EXISTS chateau_feed_info ON gtfs.feed_info (chateau);
+CREATE INDEX  chateau_feed_info ON gtfs.feed_info (chateau);
 
 --CREATE TABLE gtfs.operators (
 --    onestop_operator_id text PRIMARY KEY,
