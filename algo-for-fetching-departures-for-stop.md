@@ -29,5 +29,6 @@ struct DepartureArrivalEvent {
     has_realtime: bool,
     trip: gtfs_rt::TripDescriptor,
     is_frequency: bool,
+    platform: Option<String>
 }
 ```
