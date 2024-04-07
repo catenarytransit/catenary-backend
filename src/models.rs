@@ -44,7 +44,7 @@ pub struct CompressedTrip {
     attempt_id: String,
     service_id: String,
     trip_short_name: Option<String>,
-    direction_id: Option<i16>,
+    direction_id: Option<bool>,
     block_id: String,
     wheelchair_accessible: i16,
     bikes_allowed: i16,
