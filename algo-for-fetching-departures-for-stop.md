@@ -26,9 +26,10 @@ struct DepartureArrivalEvent {
     scheduled_arrival_time_s: Option<u64>,
     actual_departure_time_s: Option<u64>,
     actual_arrival_time_s: Option<u64>,
-    has_realtime: bool,
+    has_realtime_trips: bool,
     trip: gtfs_rt::TripDescriptor,
     is_frequency: bool,
+    has_realtime_vehicles: bool,
     platform: Option<String>
 }
 ```
