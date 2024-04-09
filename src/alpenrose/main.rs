@@ -1,4 +1,5 @@
 // Copyright Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
 // Attribution cannot be removed
 
 // AGPL 3.0
@@ -10,6 +11,7 @@ use futures::prelude::*;
 use dmfr_folder_reader::read_folders;
 use std::sync::Arc;
 use std::error::Error;
+use catenary::agency_secret::*;
 
 #[tokio::main]
 async fn main() {
@@ -28,6 +30,15 @@ async fn main() {
         //Get data from postgres
         let feeds = get_feed_metadata();
     }
+}
+
+struct RealtimeFeedFetch {
+    feed_id: String,
+    realtime_vehicle_positions: Option<String>,
+    realtime_trip_updates: Option<String>,
+    realtime_alerts: Option<String>,
+    key_formats: Vec<KeyFormat>,
+    passwords: Vec<PasswordInfo>,
 }
 
 fn get_feed_metadata() -> Result<(), Box<dyn Error + Sync + Send>> {

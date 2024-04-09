@@ -1,3 +1,12 @@
+// Copyright Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
+// Attribution cannot be removed
+
+// AGPL 3.0
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Serialize, Clone, Deserialize, Debug)]
 pub struct PasswordFormat {
     key_formats: Vec<KeyFormat>,
     passwords: Vec<PasswordInfo>,
@@ -7,11 +16,13 @@ pub struct PasswordFormat {
     override_alerts: Option<String>,
 }
 
+#[derive(Serialize, Clone, Deserialize, Debug)]
 pub enum KeyFormat {
     Header(String),
     UrlQuery(String),
 }
 
+#[derive(Serialize, Clone, Deserialize, Debug)]
 pub struct PasswordInfo {
     pub password: Vec<String>,
     pub creator_email: String,
