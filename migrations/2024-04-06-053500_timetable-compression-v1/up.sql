@@ -59,3 +59,9 @@ CREATE TABLE gtfs.stopsforroute (
     chateau text NOT NULL,
     PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
 );
+
+AlTER TABLE gtfs.realtime_passwords 
+ADD last_updated_ms bigint NOT NULL;
+
+AlTER TABLE gtfs.static_passwords 
+ADD last_updated_ms bigint NOT NULL;

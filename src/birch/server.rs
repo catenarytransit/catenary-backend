@@ -34,6 +34,8 @@ use tokio_postgres::Client;
 use tokio_postgres::Error as PostgresError;
 use zstd_safe::WriteBuf;
 
+mod api_key_management;
+
 #[derive(Clone, Debug)]
 struct ChateauCache {
     last_updated_time_ms: u64,
@@ -887,6 +889,7 @@ async fn main() -> std::io::Result<()> {
             .service(bus_stops)
             .service(rail_stops)
             .service(rail_stops_meta)
+            .service(api_key_management::get_realtime_keys)
     })
     .workers(16);
 

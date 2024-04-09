@@ -227,6 +227,7 @@ pub mod gtfs {
         gtfs.realtime_passwords (onestop_feed_id) {
             onestop_feed_id -> Text,
             passwords -> Nullable<Jsonb>,
+            last_updated_ms -> Int8,
         }
     }
 
@@ -342,6 +343,7 @@ pub mod gtfs {
         gtfs.static_passwords (onestop_feed_id) {
             onestop_feed_id -> Text,
             passwords -> Nullable<Jsonb>,
+            last_updated_ms -> Int8,
         }
     }
 

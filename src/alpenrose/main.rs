@@ -12,6 +12,15 @@ use dmfr_folder_reader::read_folders;
 use std::sync::Arc;
 use std::error::Error;
 use catenary::agency_secret::*;
+use serde::Deserialize;
+use serde::Serialize;
+
+// gtfs unix timestamps
+struct LastDataFetched {
+    realtime_vehicle_positions: Option<u64>,
+    realtime_trip_updates: Option<u64>,
+    realtime_alerts: Option<u64>,
+}
 
 #[tokio::main]
 async fn main() {
@@ -32,6 +41,7 @@ async fn main() {
     }
 }
 
+#[derive(Serialize, Clone, Deserialize, Debug)]
 struct RealtimeFeedFetch {
     feed_id: String,
     realtime_vehicle_positions: Option<String>,

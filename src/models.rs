@@ -1,4 +1,4 @@
-use crate::custom_pg_types::TripFrequency;
+ use crate::custom_pg_types::TripFrequency;
 use diesel::deserialize::FromSql;
 use diesel::pg::Pg;
 use diesel::prelude::*;
@@ -306,6 +306,7 @@ pub struct FeedInfo {
 pub struct StaticPasswordRow {
     onestop_feed_id: String,
     passwords: Option<Value>,
+    last_updated_ms: i64,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
@@ -313,6 +314,7 @@ pub struct StaticPasswordRow {
 pub struct RealtimePasswordRow {
     onestop_feed_id: String,
     passwords: Option<Value>,
+    last_updated_ms: i64,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
