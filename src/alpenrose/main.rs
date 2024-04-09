@@ -25,13 +25,6 @@ fn main() {
     .await
     .unwrap();
 
-    //spawn the thread to listen to be a leader
-    thread::spawn(|| {
-        //read passwords and dynamically update passwords from postgres
-
-        let dmfr_result = read_folders("./transitland-atlas/")?;
-    });
-
     //worker thread
     thread::spawn(|| {
         
