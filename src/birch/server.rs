@@ -423,34 +423,6 @@ FROM (
     }
 }
 
-#[actix_web::get("/barebones_trip/{chateau_id}/{trip_id}")]
-async fn barebones_trip(
-    pool: web::Data<Arc<CatenaryPostgresPool>>,
-    path: web::Path<(String, String)>,
-    req: HttpRequest,
-) -> impl Responder {
-    let conn_pool = pool.as_ref();
-    let conn_pre = conn_pool.get().await;
-    let conn = &mut conn_pre.unwrap();
-
-    let (chateau_id, trip_id) = path.into_inner();
-
-    use catenary::schema::gtfs::trips as trips_pg_schema;
-
-    let trips = trips_pg_schema::dsl::trips
-        .filter(trips_pg_schema::dsl::chateau.eq(&chateau_id))
-        .filter(trips_pg_schema::dsl::trip_id.eq(&trip_id))
-        .select((catenary::models::Trip::as_select()))
-        .load::<catenary::models::Trip>(conn)
-        .await
-        .unwrap();
-
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=86400"))
-        .body(serde_json::to_string(&trips).unwrap())
-}
-
 #[actix_web::get("/getroutesofchateau/{chateau}")]
 async fn routesofchateau(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
@@ -911,7 +883,6 @@ async fn main() -> std::io::Result<()> {
             .service(shapes_bus_meta)
             .service(irvinevehproxy)
             .service(routesofchateau)
-            .service(barebones_trip)
             .service(bus_stops_meta)
             .service(bus_stops)
             .service(rail_stops)

@@ -157,6 +157,15 @@ pub struct Route {
     pub continuous_pickup: i16,
     pub continuous_drop_off: i16,
     pub shapes_list: Option<Vec<Option<String>>>,
+    pub chateau: String,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::gtfs::stopsforroute)]
+pub struct StopsForRoute {
+    pub onestop_feed_id: String,
+    pub attempt_id: String,
+    pub route_id: String,
     pub stops: Option<Vec<u8>>,
     pub chateau: String,
 }

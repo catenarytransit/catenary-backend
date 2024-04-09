@@ -18,24 +18,6 @@ pub async fn update_schedules_with_new_chateau_id(
 
     println!("Reassigning feed {} to Château {}", feed_id, new_chateau_id);
 
-    use catenary::schema::gtfs::trips;
-    use catenary::schema::gtfs::trips::dsl::trips as trips_table;
-
-    let _ = diesel::update(trips_table)
-        .filter(trips::dsl::onestop_feed_id.eq(feed_id))
-        .set(trips::dsl::chateau.eq(new_chateau_id))
-        .execute(conn)
-        .await?;
-
-    use catenary::schema::gtfs::stoptimes;
-    use catenary::schema::gtfs::stoptimes::dsl::stoptimes as stop_times_table;
-
-    let _ = diesel::update(stop_times_table)
-        .filter(stoptimes::dsl::onestop_feed_id.eq(feed_id))
-        .set(stoptimes::dsl::chateau.eq(new_chateau_id))
-        .execute(conn)
-        .await?;
-
     use catenary::schema::gtfs::agencies;
     use catenary::schema::gtfs::agencies::dsl::agencies as agencies_table;
 

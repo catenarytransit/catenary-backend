@@ -1,6 +1,13 @@
+// Copyright Kyler Chin <kyler@catenarymaps.org>
+// Attribution cannot be removed
+
+// AGPL 3.0
+
 use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
+use tokio_zookeeper::*;
+use futures::prelude::*;
 
 fn main() {
     let this_worker_id = Arc::new(Uuid::new_v4());
@@ -13,6 +20,10 @@ fn main() {
 
     //hands off data to aspen to do additional cleanup and processing, Aspen will perform association with the GTFS schedule data + update dynamic graphs for routing and map representation,
     //aspen will also forward critical alerts to users
+
+    let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
+    .await
+    .unwrap();
 
     //spawn the thread to listen to be a leader
     thread::spawn(|| {

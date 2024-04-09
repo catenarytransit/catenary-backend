@@ -51,5 +51,11 @@ CREATE TABLE gtfs.trips_compressed (
 
 CREATE INDEX trips_compressed_chateau_idx ON gtfs.trips_compressed (chateau);
 
-ALTER TABLE gtfs.routes
-ADD stops bytea;
+CREATE TABLE gtfs.stopsforroute (
+    onestop_feed_id text NOT NULL,
+    attempt_id text NOT NULL,
+    route_id text NOT NULL,
+    stops bytea,
+    chateau text NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
+);

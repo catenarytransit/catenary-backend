@@ -69,4 +69,6 @@ DROP INDEX IF EXISTS itinerary_pattern_chateau_idx;
 DROP INDEX IF EXISTS trips_compressed_chateau_idx;
 
 ALTER TABLE gtfs.routes
-DROP COLUMN stops;
+DROP COLUMN IF EXISTS stops;
+
+DROP TABLE IF EXISTS gtfs.stopsforroute;

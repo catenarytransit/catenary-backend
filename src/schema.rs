@@ -256,7 +256,6 @@ pub mod gtfs {
             continuous_drop_off -> Int2,
             shapes_list -> Nullable<Array<Nullable<Text>>>,
             chateau -> Text,
-            stops -> Nullable<Bytea>,
         }
     }
 
@@ -391,6 +390,20 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.stopsforroute (onestop_feed_id, attempt_id, route_id) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            route_id -> Text,
+            stops -> Nullable<Bytea>,
+            chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.trip_frequencies (onestop_feed_id, attempt_id, trip_id, index) {
             onestop_feed_id -> Text,
             trip_id -> Text,
@@ -448,6 +461,7 @@ pub mod gtfs {
         static_feeds,
         static_passwords,
         stops,
+        stopsforroute,
         trip_frequencies,
         trips_compressed,
     );
