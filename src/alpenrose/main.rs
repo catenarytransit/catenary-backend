@@ -2,7 +2,6 @@
 // Attribution cannot be removed
 
 // AGPL 3.0
-use rand::prelude::*;
 use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
