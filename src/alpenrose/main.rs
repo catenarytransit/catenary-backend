@@ -2,19 +2,19 @@
 // Attribution cannot be removed
 
 // AGPL 3.0
-
+use rand::prelude::*;
 use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
 use tokio_zookeeper::*;
 use futures::prelude::*;
+use dmfr_folder_reader::read_folders;
+use std::sync::Arc;
+use std::error::Error;
 
-fn main() {
-    let this_worker_id = Arc::new(Uuid::new_v4());
-
-    // infinite runtime with worker threads and a leader-candidate thread that attempts to be the leader
-    // Uses zookeeper to elect the leader and assign feeds to insert
-    // Service discovery via zookeeper
+#[tokio::main]
+async fn main() {
+    let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
     // if a node drops out, ingestion will be automatically reassigned to the other nodes
 
@@ -25,8 +25,15 @@ fn main() {
     .await
     .unwrap();
 
-    //worker thread
-    thread::spawn(|| {
-        
-    });
+    loop {
+        //Get data from postgres
+        let feeds = get_feed_metadata();
+    }
+}
+
+fn get_feed_metadata() -> Result<(), Box<dyn Error + Sync + Send>> {
+    //Get feed metadata from postgres
+    let dmfr_result = read_folders("./transitland-atlas/")?;
+
+    Ok(())
 }

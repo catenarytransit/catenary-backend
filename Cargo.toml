@@ -78,7 +78,7 @@ dmfr = "0.1.0"
 chateau = {git = "https://github.com/catenarytransit/chateau"}
 dmfr-folder-reader = {git = "https://github.com/catenarytransit/dmfr-folder-reader"}
 tokio-zookeeper = "0.2.1"
-uuid = "1.8.0"
+uuid = {version = "1.8.0", features = ["v4", "fast-rng", "macro-diagnostics"]}
 zip = "0.6.6"
 git2 = "0.18.3"
 zip-extract = "0.1.3"
@@ -102,6 +102,7 @@ hitbox = "0.1.1"
 cached = "0.49.2"
 geo-booleanop = "0.3.2"
 geo-clipper = "0.8.0"
+random-string = "1.1.0"
 
 [[bin]]
 name = "maple"
@@ -128,3 +129,7 @@ path = "src/spruce/main.rs"
 [[bin]]
 name = "test_maple_syrup"
 path = "src/maple_syrup/test.rs"
+
+[[bin]]
+name = "alpenrose"
+path = "src/alpenrose/main.rs"
