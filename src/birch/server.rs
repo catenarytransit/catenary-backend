@@ -890,6 +890,7 @@ async fn main() -> std::io::Result<()> {
             .service(rail_stops)
             .service(rail_stops_meta)
             .service(api_key_management::get_realtime_keys)
+            .service(api_key_management::set_realtime_key)
     })
     .workers(16);
 
