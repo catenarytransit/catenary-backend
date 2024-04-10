@@ -8,12 +8,12 @@ use serde::Serialize;
 
 #[derive(Serialize, Clone, Deserialize, Debug)]
 pub struct PasswordFormat {
-    key_formats: Vec<KeyFormat>,
-    passwords: Vec<PasswordInfo>,
-    override_schedule_url: Option<String>,
-    override_realtime_vehicle_positions: Option<String>,
-    override_realtime_trip_updates: Option<String>,
-    override_alerts: Option<String>,
+    pub key_formats: Vec<KeyFormat>,
+    pub passwords: Vec<PasswordInfo>,
+    pub override_schedule_url: Option<String>,
+    pub override_realtime_vehicle_positions: Option<String>,
+    pub override_realtime_trip_updates: Option<String>,
+    pub override_alerts: Option<String>,
 }
 
 #[derive(Serialize, Clone, Deserialize, Debug)]

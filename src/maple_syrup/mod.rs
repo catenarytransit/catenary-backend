@@ -20,27 +20,27 @@ pub struct ItineraryCover {
 
 #[derive(Hash, Debug, Clone, PartialEq, Eq)]
 struct StopDifference {
-    pub   stop_id: String,
-    pub   arrival_time_since_start: Option<i32>,
-    pub   departure_time_since_start: Option<i32>,
-    pub   continuous_pickup: i16,
-    pub   continuous_drop_off: i16,
-    pub   stop_headsign: Option<String>,
-    pub   drop_off_type: i16,
-    pub   pickup_type: i16,
+    pub stop_id: String,
+    pub arrival_time_since_start: Option<i32>,
+    pub departure_time_since_start: Option<i32>,
+    pub continuous_pickup: i16,
+    pub continuous_drop_off: i16,
+    pub stop_headsign: Option<String>,
+    pub drop_off_type: i16,
+    pub pickup_type: i16,
     //true is exact, false is approximate
-    pub   timepoint: bool,
+    pub timepoint: bool,
 }
 
 #[derive(Clone, Debug)]
 struct TripUnderItinerary {
-    pub  trip_id: String,
-    pub  start_time: u32,
-    pub  service_id: String,
-    pub  wheelchair_accessible: i16,
-    pub  block_id: Option<String>,
-    pub  bikes_allowed: i16,
-    pub  frequencies: Vec<gtfs_structures::Frequency>,
+    pub trip_id: String,
+    pub start_time: u32,
+    pub service_id: String,
+    pub wheelchair_accessible: i16,
+    pub block_id: Option<String>,
+    pub bikes_allowed: i16,
+    pub frequencies: Vec<gtfs_structures::Frequency>,
 }
 
 fn hash<T: Hash>(t: &T) -> u64 {
@@ -50,7 +50,7 @@ fn hash<T: Hash>(t: &T) -> u64 {
 }
 
 pub struct ResponseFromReduce {
-   pub  itineraries: HashMap<u64, ItineraryCover>,
+    pub itineraries: HashMap<u64, ItineraryCover>,
     pub trips_to_itineraries: HashMap<String, u64>,
     pub itineraries_to_trips: HashMap<u64, Vec<TripUnderItinerary>>,
 }
@@ -61,7 +61,6 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
     let mut itineraries_to_trips: HashMap<u64, Vec<TripUnderItinerary>> = HashMap::new();
 
     for (trip_id, trip) in &gtfs.trips {
-
         let mut stop_diffs: Vec<StopDifference> = Vec::new();
 
         if trip.stop_times.len() < 2 {
@@ -71,24 +70,27 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
         //according to the gtfs spec
         //Arrival times are "Required for the first and last stop in a trip (defined by stop_times.stop_sequence)"
-        if trip.stop_times[0].arrival_time.is_none() || trip.stop_times[trip.stop_times.len() - 1].departure_time.is_none() {
+        if trip.stop_times[0].arrival_time.is_none()
+            || trip.stop_times[trip.stop_times.len() - 1]
+                .departure_time
+                .is_none()
+        {
             println!("Invalid trip {} with no start or end time", trip_id);
             continue;
         }
-        
+
         let mut start_time: u32 = trip.stop_times[0].arrival_time.unwrap();
 
         //this trip "starts at 09:00" local time or something
         for stop_time in trip.stop_times.iter() {
-
-            let arrival_time_since_start:Option<i32> = match stop_time.arrival_time {
-                    Some(arrival_time) => Some(arrival_time as i32 - start_time as i32),
-                    None => None,
+            let arrival_time_since_start: Option<i32> = match stop_time.arrival_time {
+                Some(arrival_time) => Some(arrival_time as i32 - start_time as i32),
+                None => None,
             };
 
-            let departure_time_since_start:Option<i32> = match stop_time.departure_time {
-                    Some(departure_time) => Some(departure_time as i32 - start_time as i32),
-                    None => None,
+            let departure_time_since_start: Option<i32> = match stop_time.departure_time {
+                Some(departure_time) => Some(departure_time as i32 - start_time as i32),
+                None => None,
             };
 
             let stop_diff = StopDifference {

@@ -65,3 +65,10 @@ ADD last_updated_ms bigint NOT NULL;
 
 AlTER TABLE gtfs.static_passwords 
 ADD last_updated_ms bigint NOT NULL;
+
+CREATE TABLE gtfs.admin_credentials (
+    email text NOT NULL PRIMARY KEY,
+    hash text NOT NULL,
+    salt text NOT NULL,
+    last_updated_ms bigint NOT NULL
+);

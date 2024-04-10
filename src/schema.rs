@@ -6,6 +6,19 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.admin_credentials (email) {
+            email -> Text,
+            hash -> Text,
+            salt -> Text,
+            last_updated_ms -> Int8,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.agencies (static_onestop_id, attempt_id, agency_id) {
             static_onestop_id -> Text,
             agency_id -> Text,
@@ -442,6 +455,7 @@ pub mod gtfs {
     }
 
     diesel::allow_tables_to_appear_in_same_query!(
+        admin_credentials,
         agencies,
         calendar,
         calendar_dates,

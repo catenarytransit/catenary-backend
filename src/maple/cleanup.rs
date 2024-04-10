@@ -11,7 +11,6 @@ pub async fn delete_attempt_objects(
     attempt_id: &str,
     pool: Arc<CatenaryPostgresPool>,
 ) -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
-
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;

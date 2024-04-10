@@ -3,17 +3,17 @@
 // Attribution cannot be removed
 
 // AGPL 3.0
-use std::thread;
-use std::time::Duration;
-use uuid::Uuid;
-use tokio_zookeeper::*;
-use futures::prelude::*;
-use dmfr_folder_reader::read_folders;
-use std::sync::Arc;
-use std::error::Error;
 use catenary::agency_secret::*;
+use dmfr_folder_reader::read_folders;
+use futures::prelude::*;
 use serde::Deserialize;
 use serde::Serialize;
+use std::error::Error;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+use tokio_zookeeper::*;
+use uuid::Uuid;
 
 // gtfs unix timestamps
 struct LastDataFetched {
@@ -32,8 +32,8 @@ async fn main() {
     //aspen will also forward critical alerts to users
 
     let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
-    .await
-    .unwrap();
+        .await
+        .unwrap();
 
     loop {
         //Get data from postgres

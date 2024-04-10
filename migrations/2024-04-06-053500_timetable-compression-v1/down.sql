@@ -75,3 +75,6 @@ DROP TABLE IF EXISTS gtfs.stopsforroute;
 
 ALTER TABLE gtfs.realtime_passwords DROP COLUMN IF EXISTS last_updated_ms;
 ALTER TABLE gtfs.static_passwords DROP COLUMN IF EXISTS last_updated_ms;
+
+DROP TABLE IF EXISTS gtfs.credentials;
+DROP TABLE IF EXISTS gtfs.admin_credentials;

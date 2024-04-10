@@ -1,10 +1,10 @@
+use catenary::enum_to_int::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::stops::dsl::stops as stops_table;
 use diesel_async::AsyncConnection;
 use diesel_async::RunQueryDsl;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use catenary::enum_to_int::*;
 use titlecase::titlecase;
 
 pub async fn stops_into_postgres(
@@ -43,9 +43,7 @@ pub async fn stops_into_postgres(
             code: stop.code.clone(),
             gtfs_desc: stop.description.clone(),
             gtfs_desc_translations: None,
-            location_type: location_type_conversion(
-                &stop.location_type,
-            ),
+            location_type: location_type_conversion(&stop.location_type),
             children_ids: match stop_id_to_children_ids.get(&stop.id) {
                 Some(children_ids) => children_ids
                     .iter()
@@ -69,9 +67,7 @@ pub async fn stops_into_postgres(
             timezone: stop.timezone.clone(),
             level_id: stop.level_id.clone(),
             station_feature: false,
-            wheelchair_boarding: availability_to_int(
-                &stop.wheelchair_boarding,
-            ),
+            wheelchair_boarding: availability_to_int(&stop.wheelchair_boarding),
             primary_route_type: match stop_ids_to_route_types.get(&stop.id) {
                 Some(route_types) => {
                     let mut route_types =

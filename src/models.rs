@@ -1,4 +1,4 @@
- use crate::custom_pg_types::TripFrequency;
+use crate::custom_pg_types::TripFrequency;
 use diesel::deserialize::FromSql;
 use diesel::pg::Pg;
 use diesel::prelude::*;
@@ -19,7 +19,7 @@ pub struct ItineraryPatternRow {
     arrival_time_since_start: Option<i32>,
     departure_time_since_start: Option<i32>,
     stop_id: String,
-    chateau: String
+    chateau: String,
 }
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
@@ -33,7 +33,7 @@ pub struct ItineraryPatternMeta {
     trip_headsign: Option<String>,
     trip_headsign_translations: Option<Value>,
     shape_id: String,
-    timezone: String
+    timezone: String,
 }
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
@@ -52,7 +52,7 @@ pub struct CompressedTrip {
     frequencies: Option<Vec<u8>>,
     has_frequencies: bool,
     itinerary_pattern_id: String,
-    compressed_trip_frequencies: String
+    compressed_trip_frequencies: String,
 }
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
@@ -312,14 +312,23 @@ pub struct StaticPasswordRow {
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
 #[diesel(table_name = crate::schema::gtfs::realtime_passwords)]
 pub struct RealtimePasswordRow {
-    onestop_feed_id: String,
-    passwords: Option<Value>,
-    last_updated_ms: i64,
+    pub onestop_feed_id: String,
+    pub passwords: Option<Value>,
+    pub last_updated_ms: i64,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
 #[diesel(table_name = crate::schema::gtfs::chateau_metadata_last_updated_time)]
 pub struct MetadataLastUpdatedTime {
-    catenary: i16,
-    last_updated_ms: i64,
+    pub catenary: i16,
+    pub last_updated_ms: i64,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::admin_credentials)]
+pub struct AdminCredentials {
+    pub email: String,
+    pub hash: String,
+    pub salt: String,
+    pub last_updated_ms: i64,
 }
