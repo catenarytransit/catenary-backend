@@ -450,7 +450,7 @@ pub mod gtfs {
             frequencies -> Nullable<Bytea>,
             has_frequencies -> Bool,
             itinerary_pattern_id -> Text,
-            compressed_trip_frequencies -> Nullable<Text>,
+            route_id -> Text,
         }
     }
 

@@ -1,0 +1,19 @@
+syntax = "proto2";
+
+package gtfs_schedule_protobuf;
+
+enum ExactTimesProto {
+    FrequencyBased = 0;
+    ScheduleBased = 1;
+}
+
+message GtfsFrequencyProto {
+    required uint32 start_time = 1;
+    required uint32 end_time = 2;
+    required uint32 headway_secs = 3;
+    optional ExactTimesProto exact_times = 4;
+}
+
+message GtfsFrequenciesProto {
+    repeated GtfsFrequencyProto frequencies = 1;
+}

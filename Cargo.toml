@@ -104,6 +104,8 @@ geo-booleanop = "0.3.2"
 geo-clipper = "0.8.0"
 random-string = "1.1.0"
 argon2 = "0.5.3"
+tzf-rs = "0.4.7"
+lazy_static = "1.4.0"
 
 [[bin]]
 name = "maple"
@@ -134,3 +136,6 @@ path = "src/maple_syrup/test.rs"
 [[bin]]
 name = "alpenrose"
 path = "src/alpenrose/main.rs"
+
+[build-dependencies]
+prost-build = "0.11"

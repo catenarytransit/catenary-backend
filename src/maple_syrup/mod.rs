@@ -8,6 +8,13 @@ use gtfs_structures::DirectionType;
 use gtfs_structures::TimepointType;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use tzf_rs::DefaultFinder;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref FINDER: DefaultFinder = DefaultFinder::new();
+}
+
 
 #[derive(Hash, Clone, Debug)]
 pub struct ItineraryCover {
@@ -16,10 +23,12 @@ pub struct ItineraryCover {
     pub direction_id: Option<bool>,
     pub route_id: String,
     pub trip_headsign: Option<String>,
+    pub timezone: String,
+    pub shape_id: Option<String>,
 }
 
 #[derive(Hash, Debug, Clone, PartialEq, Eq)]
-struct StopDifference {
+pub struct StopDifference {
     pub stop_id: String,
     pub arrival_time_since_start: Option<i32>,
     pub departure_time_since_start: Option<i32>,
@@ -33,7 +42,7 @@ struct StopDifference {
 }
 
 #[derive(Clone, Debug)]
-struct TripUnderItinerary {
+pub struct TripUnderItinerary {
     pub trip_id: String,
     pub start_time: u32,
     pub service_id: String,
@@ -41,6 +50,8 @@ struct TripUnderItinerary {
     pub block_id: Option<String>,
     pub bikes_allowed: i16,
     pub frequencies: Vec<gtfs_structures::Frequency>,
+    pub trip_short_name: Option<String>,
+    pub route_id: String,
 }
 
 fn hash<T: Hash>(t: &T) -> u64 {
@@ -110,6 +121,46 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             stop_diffs.push(stop_diff);
         }
 
+        let stated_timezone = match gtfs.agencies.len() {
+            0 => None,
+            1 => Some(gtfs.agencies[0].timezone.clone()),
+            _ => {
+                let route = gtfs.routes.get(&trip.route_id);
+
+                match route {
+                    Some(route) => {
+                        let matching_agency = gtfs
+                            .agencies
+                            .iter()
+                            .find(|agency| agency.id == route.agency_id);
+
+                        match matching_agency {
+                            Some(agency) => Some(agency.timezone.clone()),
+                            None => None,
+                        }
+                    }
+                    None => None,
+                }
+            }
+        };
+
+        let timezone = match stated_timezone {
+            Some(timezone) => timezone,
+            None => {
+                let first_stop = &gtfs.stops[&trip.stop_times[0].stop.id];
+
+                match (first_stop.longitude, first_stop.latitude) {
+                    (Some(long), Some(lat)) => {
+                       String::from(FINDER.get_tz_name(long,lat))
+                    }
+                    _ => {
+                        println!("Couldn't find timezone for trip {}", trip_id);
+                        String::from("Etc/UTC")
+                    }
+                }
+            }
+        };
+
         let itinerary_cover = ItineraryCover {
             stop_sequences: stop_diffs,
             direction_id: match trip.direction_id {
@@ -121,6 +172,8 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             },
             route_id: trip.route_id.clone(),
             trip_headsign: trip.trip_headsign.clone(),
+            timezone: timezone,
+            shape_id: trip.shape_id.clone(),
         };
 
         //itinerary id generated
@@ -131,12 +184,14 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
         let trip_under_itinerary = TripUnderItinerary {
             trip_id: trip_id.clone(),
+            trip_short_name: trip.trip_short_name.clone(),
             start_time: start_time,
             service_id: trip.service_id.clone(),
             wheelchair_accessible: availability_to_int(&trip.wheelchair_accessible),
             block_id: trip.block_id.clone(),
             bikes_allowed: bikes_allowed_to_int(&trip.bikes_allowed),
             frequencies: trip.frequencies.clone(),
+            route_id: trip.route_id.clone(),
         };
 
         itineraries_to_trips

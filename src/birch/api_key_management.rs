@@ -71,9 +71,8 @@ pub async fn set_realtime_key(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     req: HttpRequest,
     feed_id: web::Path<String>,
-    data: web::Json<EachPasswordRow>
+    data: web::Json<EachPasswordRow>,
 ) -> impl Responder {
-
     let feed_id = feed_id.into_inner();
 
     let email = req.headers().get("email").unwrap().to_str().unwrap();
@@ -96,7 +95,7 @@ pub async fn set_realtime_key(
 
     //insert or update the password
 
-    let insert_result = diesel::insert_into(realtime_passwords_table::table)
+    let _insert_result = diesel::insert_into(realtime_passwords_table::table)
         .values((
             realtime_passwords_table::onestop_feed_id.eq(&feed_id),
             realtime_passwords_table::passwords.eq(password_format.clone()),
@@ -111,7 +110,7 @@ pub async fn set_realtime_key(
 
     use catenary::schema::gtfs::realtime_feeds as realtime_feeds_table;
 
-    let update_result = diesel::update(
+    let _update_result = diesel::update(
         realtime_feeds_table::table.filter(realtime_feeds_table::onestop_feed_id.eq(&feed_id)),
     )
     .set(realtime_feeds_table::fetch_interval_ms.eq(data.fetch_interval_ms))
@@ -119,7 +118,6 @@ pub async fn set_realtime_key(
     .await;
 
     HttpResponse::Ok().finish()
-
 }
 
 #[actix_web::get("/getrealtimekeys/")]
@@ -127,7 +125,6 @@ pub async fn get_realtime_keys(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     req: HttpRequest,
 ) -> impl Responder {
-
     //check if the user is authorised
     let email = req.headers().get("email").unwrap().to_str().unwrap();
     let password = req.headers().get("password").unwrap().to_str().unwrap();
