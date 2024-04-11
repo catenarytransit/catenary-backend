@@ -12,14 +12,14 @@ use serde_json::Value;
 #[derive(Queryable, Selectable, Insertable, Clone)]
 #[diesel(table_name = crate::schema::gtfs::itinerary_pattern)]
 pub struct ItineraryPatternRow {
-    pub   onestop_feed_id: String,
-    pub   attempt_id: String,
-    pub   itinerary_pattern_id: String,
-    pub    stop_sequence: i32,
-    pub   arrival_time_since_start: Option<i32>,
-    pub   departure_time_since_start: Option<i32>,
-    pub   stop_id: String,
-    pub   chateau: String,
+    pub onestop_feed_id: String,
+    pub attempt_id: String,
+    pub itinerary_pattern_id: String,
+    pub stop_sequence: i32,
+    pub arrival_time_since_start: Option<i32>,
+    pub departure_time_since_start: Option<i32>,
+    pub stop_id: String,
+    pub chateau: String,
 }
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
@@ -27,31 +27,31 @@ pub struct ItineraryPatternRow {
 pub struct ItineraryPatternMeta {
     pub onestop_feed_id: String,
     pub attempt_id: String,
-    pub   trip_ids: Vec<Option<String>>,
-    pub   itinerary_pattern_id: String,
-    pub   chateau: String,
-    pub   trip_headsign: Option<String>,
-    pub   trip_headsign_translations: Option<Value>,
-    pub  shape_id: Option<String>,
-    pub  timezone: String,
+    pub trip_ids: Vec<Option<String>>,
+    pub itinerary_pattern_id: String,
+    pub chateau: String,
+    pub trip_headsign: Option<String>,
+    pub trip_headsign_translations: Option<Value>,
+    pub shape_id: Option<String>,
+    pub timezone: String,
 }
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
 #[diesel(table_name = crate::schema::gtfs::trips_compressed)]
 pub struct CompressedTrip {
-    pub    onestop_feed_id: String,
-    pub   trip_id: String,
-    pub   attempt_id: String,
-    pub    service_id: String,
-    pub   trip_short_name: Option<String>,
-    pub   direction_id: Option<bool>,
-    pub   block_id: Option<String>,
-    pub    wheelchair_accessible: i16,
-    pub   bikes_allowed: i16,
-    pub   chateau: String,
-    pub  frequencies: Option<Vec<u8>>,
-    pub   has_frequencies: bool,
-    pub   itinerary_pattern_id: String,
+    pub onestop_feed_id: String,
+    pub trip_id: String,
+    pub attempt_id: String,
+    pub service_id: String,
+    pub trip_short_name: Option<String>,
+    pub direction_id: Option<bool>,
+    pub block_id: Option<String>,
+    pub wheelchair_accessible: i16,
+    pub bikes_allowed: i16,
+    pub chateau: String,
+    pub frequencies: Option<Vec<u8>>,
+    pub has_frequencies: bool,
+    pub itinerary_pattern_id: String,
     pub route_id: String,
 }
 

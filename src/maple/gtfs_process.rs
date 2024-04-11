@@ -200,28 +200,41 @@ pub async fn gtfs_process_feed(
             trip_headsign: itinerary.trip_headsign.clone(),
             trip_headsign_translations: None,
             itinerary_pattern_id: itinerary_id.to_string(),
-            trip_ids: reduction.itineraries_to_trips.get(itinerary_id).as_ref().unwrap().iter().map(|trip_under_itin| Some(trip_under_itin.trip_id.to_string())).collect::<Vec<Option<String>>>(),
+            trip_ids: reduction
+                .itineraries_to_trips
+                .get(itinerary_id)
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|trip_under_itin| Some(trip_under_itin.trip_id.to_string()))
+                .collect::<Vec<Option<String>>>(),
             shape_id: itinerary.shape_id.clone(),
         };
 
-        diesel::insert_into(catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta)
-            .values(itinerary_pg_meta)
-            .execute(conn)
-            .await?;
+        diesel::insert_into(
+            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta,
+        )
+        .values(itinerary_pg_meta)
+        .execute(conn)
+        .await?;
 
-        let itinerary_pg = itinerary.stop_sequences
-        .iter().enumerate().map(|(stop_index,stop_sequence)| {
-            catenary::models::ItineraryPatternRow {
-                onestop_feed_id: feed_id.to_string(),
-                chateau: chateau_id.to_string(),
-                attempt_id: attempt_id.to_string(),
-                itinerary_pattern_id: itinerary_id.to_string(),
-                stop_sequence: stop_index as i32,
-                stop_id: stop_sequence.stop_id.clone(),
-                arrival_time_since_start: stop_sequence.arrival_time_since_start.clone(),
-                departure_time_since_start: stop_sequence.departure_time_since_start.clone(),
-            }
-    }).collect::<Vec<_>>();
+        let itinerary_pg = itinerary
+            .stop_sequences
+            .iter()
+            .enumerate()
+            .map(
+                |(stop_index, stop_sequence)| catenary::models::ItineraryPatternRow {
+                    onestop_feed_id: feed_id.to_string(),
+                    chateau: chateau_id.to_string(),
+                    attempt_id: attempt_id.to_string(),
+                    itinerary_pattern_id: itinerary_id.to_string(),
+                    stop_sequence: stop_index as i32,
+                    stop_id: stop_sequence.stop_id.clone(),
+                    arrival_time_since_start: stop_sequence.arrival_time_since_start.clone(),
+                    departure_time_since_start: stop_sequence.departure_time_since_start.clone(),
+                },
+            )
+            .collect::<Vec<_>>();
 
         for itinerary_chunk in itinerary_pg.chunks(100) {
             diesel::insert_into(catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern)
@@ -232,30 +245,36 @@ pub async fn gtfs_process_feed(
     }
 
     for (itinerary_id, compressed_trip_list) in &reduction.itineraries_to_trips {
-        let trip_pg = compressed_trip_list.iter()
-        .map(|compressed_trip_raw| catenary::models::CompressedTrip {
-            onestop_feed_id: feed_id.to_string(),
-            chateau: chateau_id.to_string(),
-            attempt_id: attempt_id.to_string(),
-            itinerary_pattern_id: itinerary_id.to_string(),
-            trip_id: compressed_trip_raw.trip_id.to_string(),
-            service_id: compressed_trip_raw.service_id.clone(),
-            direction_id: reduction.itineraries.get(itinerary_id).unwrap().direction_id.clone(),
-            trip_short_name: compressed_trip_raw.trip_short_name.clone(),
-            block_id: compressed_trip_raw.block_id.clone(),
-            wheelchair_accessible: compressed_trip_raw.wheelchair_accessible.clone(),
-            bikes_allowed: compressed_trip_raw.bikes_allowed.clone(),
-            has_frequencies: compressed_trip_raw.frequencies.len() > 0,
-            route_id: compressed_trip_raw.route_id.clone(),
-            frequencies: None
-        }).collect::<Vec<_>>();
+        let trip_pg = compressed_trip_list
+            .iter()
+            .map(|compressed_trip_raw| catenary::models::CompressedTrip {
+                onestop_feed_id: feed_id.to_string(),
+                chateau: chateau_id.to_string(),
+                attempt_id: attempt_id.to_string(),
+                itinerary_pattern_id: itinerary_id.to_string(),
+                trip_id: compressed_trip_raw.trip_id.to_string(),
+                service_id: compressed_trip_raw.service_id.clone(),
+                direction_id: reduction
+                    .itineraries
+                    .get(itinerary_id)
+                    .unwrap()
+                    .direction_id
+                    .clone(),
+                trip_short_name: compressed_trip_raw.trip_short_name.clone(),
+                block_id: compressed_trip_raw.block_id.clone(),
+                wheelchair_accessible: compressed_trip_raw.wheelchair_accessible.clone(),
+                bikes_allowed: compressed_trip_raw.bikes_allowed.clone(),
+                has_frequencies: compressed_trip_raw.frequencies.len() > 0,
+                route_id: compressed_trip_raw.route_id.clone(),
+                frequencies: None,
+            })
+            .collect::<Vec<_>>();
 
         diesel::insert_into(catenary::schema::gtfs::trips_compressed::dsl::trips_compressed)
             .values(trip_pg)
             .execute(conn)
             .await?;
     }
-
 
     //insert routes
 

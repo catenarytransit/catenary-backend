@@ -32,8 +32,8 @@ pub mod gtfs_schedule_protobuf {
             exact_times: match frequency.exact_times {
                 Some(ExactTimes::FrequencyBased) => Some(ExactTimesProto::FrequencyBased.into()),
                 Some(ExactTimes::ScheduleBased) => Some(ExactTimesProto::ScheduleBased.into()),
-                None => None
-            }
+                None => None,
+            },
         }
     }
 
@@ -46,20 +46,37 @@ pub mod gtfs_schedule_protobuf {
                 Some(0) => Some(ExactTimes::FrequencyBased),
                 Some(1) => Some(ExactTimes::ScheduleBased),
                 _ => None,
-                None => None
-            }
+                None => None,
+            },
         }
     }
 
-    pub fn frequencies_to_protobuf(frequencies: &Vec<gtfs_structures::Frequency>) -> GtfsFrequenciesProto {
-        let frequencies: Vec<GtfsFrequencyProto> = frequencies.iter().map(frequency_to_protobuf).collect();
+    pub fn frequencies_to_protobuf(
+        frequencies: &Vec<gtfs_structures::Frequency>,
+    ) -> GtfsFrequenciesProto {
+        let frequencies: Vec<GtfsFrequencyProto> =
+            frequencies.iter().map(frequency_to_protobuf).collect();
 
         GtfsFrequenciesProto {
-            frequencies: frequencies
+            frequencies: frequencies,
         }
     }
 
-    pub fn protobuf_to_frequencies(frequencies: &GtfsFrequenciesProto) -> Vec<gtfs_structures::Frequency> {
-        frequencies.frequencies.iter().map(protobuf_to_frequency).collect()
+    pub fn protobuf_to_frequencies(
+        frequencies: &GtfsFrequenciesProto,
+    ) -> Vec<gtfs_structures::Frequency> {
+        frequencies
+            .frequencies
+            .iter()
+            .map(protobuf_to_frequency)
+            .collect()
     }
+}
+
+
+
+fn fast_hash<T: Hash>(t: &T) -> u64 {
+    let mut s: MetroHasher = Default::default();
+    t.hash(&mut s);
+    s.finish()
 }

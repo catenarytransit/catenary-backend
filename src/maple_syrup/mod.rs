@@ -6,15 +6,15 @@ use fasthash::MetroHasher;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::DirectionType;
 use gtfs_structures::TimepointType;
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use tzf_rs::DefaultFinder;
-use lazy_static::lazy_static;
+use crate::fast_hash;
 
 lazy_static! {
     static ref FINDER: DefaultFinder = DefaultFinder::new();
 }
-
 
 #[derive(Hash, Clone, Debug)]
 pub struct ItineraryCover {
@@ -52,12 +52,6 @@ pub struct TripUnderItinerary {
     pub frequencies: Vec<gtfs_structures::Frequency>,
     pub trip_short_name: Option<String>,
     pub route_id: String,
-}
-
-fn hash<T: Hash>(t: &T) -> u64 {
-    let mut s: MetroHasher = Default::default();
-    t.hash(&mut s);
-    s.finish()
 }
 
 pub struct ResponseFromReduce {
@@ -150,9 +144,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                 let first_stop = &gtfs.stops[&trip.stop_times[0].stop.id];
 
                 match (first_stop.longitude, first_stop.latitude) {
-                    (Some(long), Some(lat)) => {
-                       String::from(FINDER.get_tz_name(long,lat))
-                    }
+                    (Some(long), Some(lat)) => String::from(FINDER.get_tz_name(long, lat)),
                     _ => {
                         println!("Couldn't find timezone for trip {}", trip_id);
                         String::from("Etc/UTC")
@@ -177,7 +169,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         };
 
         //itinerary id generated
-        let hash_of_itinerary = hash(&itinerary_cover);
+        let hash_of_itinerary = fast_hash(&itinerary_cover);
 
         itineraries.insert(hash_of_itinerary, itinerary_cover);
         trips_to_itineraries.insert(trip_id.clone(), hash_of_itinerary);

@@ -6,7 +6,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Clone, Deserialize, Debug)]
+#[derive(Serialize, Clone, Deserialize, Debug, Hash, PartialEq, Eq)]
 pub struct PasswordFormat {
     pub key_formats: Vec<KeyFormat>,
     pub passwords: Vec<PasswordInfo>,
@@ -16,13 +16,13 @@ pub struct PasswordFormat {
     pub override_alerts: Option<String>,
 }
 
-#[derive(Serialize, Clone, Deserialize, Debug)]
+#[derive(Serialize, Clone, Deserialize, Debug, Hash, PartialEq, Eq)]
 pub enum KeyFormat {
     Header(String),
     UrlQuery(String),
 }
 
-#[derive(Serialize, Clone, Deserialize, Debug)]
+#[derive(Serialize, Clone, Deserialize, Debug, Hash, PartialEq, Eq)]
 pub struct PasswordInfo {
     pub password: Vec<String>,
     pub creator_email: String,
