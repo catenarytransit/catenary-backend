@@ -1,3 +1,21 @@
+#![deny(
+    clippy::mutable_key_type,
+    clippy::map_entry,
+    clippy::boxed_local,
+    clippy::assigning_clones,
+    clippy::redundant_allocation,
+    bool_comparison,
+    bind_instead_of_map,
+    clippy::vec_box,
+    clippy::while_let_loop,
+    useless_asref,
+    clippy::repeat_once,
+    clippy::deref_addrof,
+    clippy::suspicious_map,
+    clippy::arc_with_non_send_sync,
+    clippy::single_char_pattern
+)]
+
 mod lib;
 use clap::Parser;
 use futures::{future, prelude::*};

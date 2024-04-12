@@ -203,7 +203,7 @@ pub async fn download_return_eligible_feeds(
                                                     // a previous succcessful ingest has happened
                                                     let check_for_previous_insert_sucesses = download_attempts_postgres_lookup
                                                         .iter()
-                                                        .find(|&x| x.ingested == true);
+                                                        .find(|&x| x.ingested);
             
                                                         //thus, don't perform the ingest
                                                     if check_for_previous_insert_sucesses.is_some() {
@@ -225,13 +225,13 @@ pub async fn download_return_eligible_feeds(
                                         let mut download_progress  = download_progress.lock().unwrap();
                                         *download_progress += 1;
             
-                                        println!("Finished writing {}/{} [{:.2}%]: {}, took {:.3}s",download_progress, total_feeds_to_download, (download_progress.clone() as f32/total_feeds_to_download as f32) * 100.0,  &staticfeed.clone().feed_id, duration_ms as f32 / 1000.0);
+                                        println!("Finished writing {}/{} [{:.2}%]: {}, took {:.3}s",download_progress, total_feeds_to_download, (*download_progress as f32/total_feeds_to_download as f32) * 100.0,  &staticfeed.clone().feed_id, duration_ms as f32 / 1000.0);
                                     }
                                     } else {
                                         let mut download_progress  = download_progress.lock().unwrap();
                                         *download_progress += 1;
 
-                                        println!("Failed to download {}/{} [{:.2}%]: {} responding with {}, took {:.3}s",download_progress, total_feeds_to_download, (download_progress.clone() as f32/total_feeds_to_download as f32) * 100.0, &staticfeed.clone().feed_id, response.status().as_str(), duration_ms as f32 / 1000.0);
+                                        println!("Failed to download {}/{} [{:.2}%]: {} responding with {}, took {:.3}s",download_progress, total_feeds_to_download, (*download_progress as f32/total_feeds_to_download as f32) * 100.0, &staticfeed.clone().feed_id, response.status().as_str(), duration_ms as f32 / 1000.0);
                                     }
                                 }
                                 Err(error) => {

@@ -52,18 +52,17 @@ pub fn fix_background_colour_rgb_feed_route(
                 _ => fix_background_colour_rgb(background.clone()),
             }
         }
-        "f-9q5-metro~losangeles" => {
-            if background == WHITE_RGB {
-                return RGB::new(225, 103, 16);
-            } else {
-                let metroid = &route.id.split("-").collect::<Vec<&str>>()[0];
+        "f-9q5-metro~losangeles" => match background == WHITE_RGB {
+            true => RGB::new(225, 103, 16),
+            false => {
+                let metroid = &route.id.split('-').collect::<Vec<&str>>()[0];
 
-                if metroid.len() == 3 && metroid.chars().nth(0).unwrap() == '7' {
-                    return RGB::new(209, 18, 66);
+                match metroid.len() == 3 && metroid.chars().nth(0).unwrap() == '7' {
+                    true => RGB::new(209, 18, 66),
+                    false => fix_background_colour_rgb(background.clone()),
                 }
-                return fix_background_colour_rgb(background.clone());
             }
-        }
+        },
         "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => RGB::new(23, 114, 172),
         "f-9mu-mts" => match route.id.as_str() {
             "280" => RGB::new(7, 103, 56),

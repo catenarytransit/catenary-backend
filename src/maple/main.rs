@@ -2,6 +2,24 @@
 // This was heavily inspired and copied from Emma Alexia, thank you Emma!
 // Removal of the attribution is not allowed, as covered under the AGPL license
 
+#![deny(
+    clippy::mutable_key_type,
+    clippy::map_entry,
+    clippy::boxed_local,
+    clippy::assigning_clones,
+    clippy::redundant_allocation,
+    bool_comparison,
+    bind_instead_of_map,
+    clippy::vec_box,
+    clippy::while_let_loop,
+    useless_asref,
+    clippy::repeat_once,
+    clippy::deref_addrof,
+    clippy::suspicious_map,
+    clippy::arc_with_non_send_sync,
+    clippy::single_char_pattern
+)]
+
 use catenary::postgres_tools::make_async_pool;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::prelude::*;
@@ -165,7 +183,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             Ok(eligible_feeds) => Some(
                 eligible_feeds
                     .iter()
-                    .filter(|download_feed_info| download_feed_info.ingest == true)
+                    .filter(|download_feed_info| download_feed_info.ingest)
                     .collect::<Vec<&DownloadedFeedsInformation>>()
                     .len(),
             ),
@@ -192,7 +210,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         if let Ok(eligible_feeds) = eligible_feeds {
             let to_ingest_feeds = eligible_feeds
                 .iter()
-                .filter(|download_feed_info| download_feed_info.ingest == true)
+                .filter(|download_feed_info| download_feed_info.ingest)
                 .collect::<Vec<&DownloadedFeedsInformation>>();
 
             // for now, use a thread pool
@@ -287,11 +305,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .collect::<Vec<(String, bool)>>()
                 .await;
 
-            let successful_unzip_feeds_count = unzip_feeds
-                .iter()
-                .map(|x| x.1 == true)
-                .collect::<Vec<bool>>()
-                .len();
+            let successful_unzip_feeds_count =
+                unzip_feeds.iter().map(|x| x.1).collect::<Vec<bool>>().len();
 
             println!(
                 "{} of {} unzipped",
@@ -301,7 +316,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             let check_for_stops_ids = unzip_feeds
                 .into_iter()
-                .filter(|x| x.1 == true)
+                .filter(|x| x.1)
                 .map(|(feed_id, _)| feed_id)
                 .map(|feed_id| {
                     let stop_path_str = format!("gtfs_uncompressed/{}/stops.txt", &feed_id);
@@ -318,13 +333,13 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             let feeds_with_stop_table_len = check_for_stops_ids
                 .iter()
-                .map(|x| x.1 == true)
+                .map(|x| x.1)
                 .collect::<Vec<bool>>()
                 .len();
 
             let feeds_without_stop_table_len = check_for_stops_ids
                 .iter()
-                .map(|x| x.1 == false)
+                .map(|x| !x.1)
                 .collect::<Vec<bool>>()
                 .len();
 
@@ -357,7 +372,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             let feeds_to_process: Vec<(String, String, String)> = check_for_stops_ids
                 .into_iter()
-                .filter(|unzipped_feed| unzipped_feed.1 == true)
+                .filter(|unzipped_feed| unzipped_feed.1)
                 .map(|(feed_id, _)| (feed_id.clone(), attempt_ids.get(&feed_id).unwrap().clone()))
                 .map(
                     |(feed_id, attempt_id)| match feed_id_to_chateau_lookup.get(&feed_id) {
@@ -406,7 +421,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         "Completion progress: {}/{} [{:.2}%]",
                                         ingest_progress,
                                         total_feeds_to_process,
-                                        (ingest_progress.clone() as f32/total_feeds_to_process as f32) * 100.0
+                                        (*ingest_progress as f32/total_feeds_to_process as f32) * 100.0
                                     );
 
                                     std::mem::drop(ingest_progress);

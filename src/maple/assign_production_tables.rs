@@ -64,9 +64,7 @@ pub async fn assign_production_tables(
     let mut sorted_feeds: Vec<catenary::models::IngestedStatic> = all_feeds
         .clone()
         .into_iter()
-        .filter(|ingested| {
-            ingested.ingestion_successfully_finished == true && ingested.deleted == false
-        })
+        .filter(|ingested| ingested.ingestion_successfully_finished && !ingested.deleted)
         .collect();
 
     //sort all feeds by ingest_start_unix_time_ms
@@ -83,7 +81,7 @@ pub async fn assign_production_tables(
     //drop feeds older than 1 day and are not successfully ingested
 
     for to_drop_feed in all_feeds.clone().into_iter().filter(|ingested| {
-        ingested.ingestion_successfully_finished == false
+        !ingested.ingestion_successfully_finished
             && ingested.ingest_start_unix_time_ms < (now_ms as i64 - (1000 * 86400))
     }) {
         drop_attempt_list.push(to_drop_feed.attempt_id);

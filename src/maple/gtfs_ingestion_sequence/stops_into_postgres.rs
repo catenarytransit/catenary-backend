@@ -70,8 +70,7 @@ pub async fn stops_into_postgres(
             wheelchair_boarding: availability_to_int(&stop.wheelchair_boarding),
             primary_route_type: match stop_ids_to_route_types.get(&stop.id) {
                 Some(route_types) => {
-                    let mut route_types =
-                        route_types.iter().map(|x| x.clone()).collect::<Vec<i16>>();
+                    let mut route_types = route_types.iter().map(|x| *x).collect::<Vec<i16>>();
                     Some(route_types[0])
                 }
                 None => None,
@@ -87,7 +86,7 @@ pub async fn stops_into_postgres(
             children_route_types: match stop_id_to_children_route.get(&stop.id) {
                 Some(route_types) => route_types
                     .iter()
-                    .map(|x| Some(x.clone()))
+                    .map(|x| Some(*x))
                     .collect::<Vec<Option<i16>>>(),
                 None => vec![],
             },
@@ -97,7 +96,7 @@ pub async fn stops_into_postgres(
             route_types: match stop_ids_to_route_types.get(&stop.id) {
                 Some(route_types) => route_types
                     .iter()
-                    .map(|x| Some(x.clone()))
+                    .map(|x| Some(*x))
                     .collect::<Vec<Option<i16>>>(),
                 None => vec![],
             },
@@ -124,7 +123,6 @@ pub fn titlecase_process_new_nooption(input: &String) -> String {
             .as_str()
             .chars()
             .all(|s| s.is_ascii_punctuation() || s.is_ascii())
-            == true
     {
         //i don't want to accidently screw up Greek, Cryllic, Chinese, Japanese, or other writing systems
         string = titlecase(string.as_str());

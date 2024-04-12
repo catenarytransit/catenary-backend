@@ -89,8 +89,8 @@ pub async fn gtfs_process_feed(
     };
 
     if let Some(feed_info) = &feed_info {
-        gtfs_summary.feed_start_date = feed_info.start_date.clone();
-        gtfs_summary.feed_end_date = feed_info.end_date.clone();
+        gtfs_summary.feed_start_date = feed_info.start_date;
+        gtfs_summary.feed_end_date = feed_info.end_date;
 
         if let Some(default_lang) = &feed_info.default_lang {
             gtfs_summary.default_lang = Some(default_lang.clone());
@@ -230,8 +230,8 @@ pub async fn gtfs_process_feed(
                     itinerary_pattern_id: itinerary_id.to_string(),
                     stop_sequence: stop_index as i32,
                     stop_id: stop_sequence.stop_id.clone(),
-                    arrival_time_since_start: stop_sequence.arrival_time_since_start.clone(),
-                    departure_time_since_start: stop_sequence.departure_time_since_start.clone(),
+                    arrival_time_since_start: stop_sequence.arrival_time_since_start,
+                    departure_time_since_start: stop_sequence.departure_time_since_start,
                 },
             )
             .collect::<Vec<_>>();
@@ -258,12 +258,11 @@ pub async fn gtfs_process_feed(
                     .itineraries
                     .get(itinerary_id)
                     .unwrap()
-                    .direction_id
-                    .clone(),
+                    .direction_id,
                 trip_short_name: compressed_trip_raw.trip_short_name.clone(),
                 block_id: compressed_trip_raw.block_id.clone(),
-                wheelchair_accessible: compressed_trip_raw.wheelchair_accessible.clone(),
-                bikes_allowed: compressed_trip_raw.bikes_allowed.clone(),
+                wheelchair_accessible: compressed_trip_raw.wheelchair_accessible,
+                bikes_allowed: compressed_trip_raw.bikes_allowed,
                 has_frequencies: compressed_trip_raw.frequencies.len() > 0,
                 route_id: compressed_trip_raw.route_id.clone(),
                 frequencies: None,

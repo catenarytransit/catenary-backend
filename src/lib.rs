@@ -1,6 +1,25 @@
-/// Copyright: Kyler Chin <kyler@catenarymaps.org>
-/// Catenary Transit Initiatives
-/// Removal of the attribution is not allowed, as covered under the AGPL license
+// Copyright: Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
+// Removal of the attribution is not allowed, as covered under the AGPL license
+
+#![deny(
+    clippy::mutable_key_type,
+    clippy::map_entry,
+    clippy::boxed_local,
+    clippy::assigning_clones,
+    clippy::redundant_allocation,
+    bool_comparison,
+    bind_instead_of_map,
+    clippy::vec_box,
+    clippy::while_let_loop,
+    useless_asref,
+    clippy::repeat_once,
+    clippy::deref_addrof,
+    clippy::suspicious_map,
+    clippy::arc_with_non_send_sync,
+    clippy::single_char_pattern
+)]
+
 #[macro_use]
 extern crate diesel_derive_newtype;
 #[macro_use]
@@ -17,8 +36,8 @@ pub mod postgis_to_diesel;
 pub mod postgres_tools;
 pub mod schema;
 
-use std::hash::Hash;
 use fasthash::MetroHasher;
+use std::hash::Hash;
 use std::hash::Hasher;
 
 pub const WGS_84_SRID: u32 = 4326;
@@ -30,8 +49,8 @@ pub mod gtfs_schedule_protobuf {
 
     fn frequency_to_protobuf(frequency: &gtfs_structures::Frequency) -> GtfsFrequencyProto {
         GtfsFrequencyProto {
-            start_time: frequency.start_time.clone(),
-            end_time: frequency.end_time.clone(),
+            start_time: frequency.start_time,
+            end_time: frequency.end_time,
             headway_secs: frequency.headway_secs,
             exact_times: match frequency.exact_times {
                 Some(ExactTimes::FrequencyBased) => Some(ExactTimesProto::FrequencyBased.into()),
@@ -43,8 +62,8 @@ pub mod gtfs_schedule_protobuf {
 
     fn protobuf_to_frequency(frequency: &GtfsFrequencyProto) -> gtfs_structures::Frequency {
         gtfs_structures::Frequency {
-            start_time: frequency.start_time.clone(),
-            end_time: frequency.end_time.clone(),
+            start_time: frequency.start_time,
+            end_time: frequency.end_time,
             headway_secs: frequency.headway_secs,
             exact_times: match frequency.exact_times {
                 Some(0) => Some(ExactTimes::FrequencyBased),
