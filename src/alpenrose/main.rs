@@ -32,6 +32,8 @@ use catenary::agency_secret::*;
 use catenary::fast_hash;
 use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
+use catenary::schema::gtfs::admin_credentials::last_updated_ms;
+use dashmap::DashMap;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::select_dsl::SelectDsl;
 use diesel::sql_types::{Float, Integer};
@@ -44,20 +46,17 @@ use dmfr_folder_reader::read_folders;
 use futures::prelude::*;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio_zookeeper::*;
 use uuid::Uuid;
-
-// gtfs unix timestamps
-struct LastDataFetched {
-    realtime_vehicle_positions: Option<u64>,
-    realtime_trip_updates: Option<u64>,
-    realtime_alerts: Option<u64>,
-}
+mod single_fetch_time;
 
 #[derive(Serialize, Clone, Deserialize, Debug, Hash, PartialEq, Eq)]
 pub struct RealtimeFeedFetch {
@@ -99,6 +98,26 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
+
+    let assignments_for_this_worker: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+
+    let last_updated_ms_for_this_worker: Option<u64> = None;
+
+    let last_fetch_per_feed: Arc<DashMap<String, Instant>> = Arc::new(DashMap::new());
+
+    //make client for reqwest
+    //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
+    let client = reqwest::ClientBuilder::new()
+        //timeout queries after 20 seconds
+        .timeout(Duration::from_secs(20))
+        .connect_timeout(Duration::from_secs(20))
+        .deflate(true)
+        .gzip(true)
+        .brotli(true)
+        .cookie_store(true)
+        .build()
+        .unwrap();
 
     loop {
         //create parent node for workers
@@ -292,6 +311,64 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         }
 
         //read from zookeeper to get the current assignments for this node
+
+        let last_updated_assignment_time_zk_fetch = zk
+            .get_data(format!("/alpenrose_assignments/{}", this_worker_id).as_str())
+            .await
+            .unwrap();
+
+        if let Some(last_updated_assignment_time) = last_updated_assignment_time_zk_fetch {
+            let last_updated_assignment_time =
+                bincode::deserialize(&last_updated_assignment_time.0)
+                    .unwrap_or_else(|_| None::<u64>);
+
+            //is the time newer than the last time we updated the assignments for this worker node?
+            if last_updated_assignment_time != last_updated_ms_for_this_worker {
+                let feed_ids = zk
+                    .get_children(format!("/alpenrose_assignments/{}", this_worker_id).as_str())
+                    .await
+                    .unwrap();
+
+                if let Some(feed_ids) = feed_ids {
+                    let mut assignments_for_this_worker_lock =
+                        assignments_for_this_worker.write().await;
+
+                    let hashset_of_feed_ids: HashSet<String> =
+                        feed_ids.iter().map(|x| x.to_string()).collect();
+
+                    for feed_id in feed_ids.iter() {
+                        let assignment_data = zk
+                            .get_data(
+                                format!("/alpenrose_assignments/{}/{}", this_worker_id, feed_id)
+                                    .as_str(),
+                            )
+                            .await
+                            .unwrap();
+
+                        if let Some(assignment_data) = assignment_data {
+                            let realtime_feed_fetch: RealtimeFeedFetch =
+                                bincode::deserialize(&assignment_data.0).unwrap();
+
+                            assignments_for_this_worker_lock
+                                .insert(feed_id.to_string(), realtime_feed_fetch);
+                        }
+                    }
+
+                    //cleanup from hashmap this worker is no longer supposed to handle
+                    assignments_for_this_worker_lock
+                        .retain(|key, _value| hashset_of_feed_ids.contains(key));
+                }
+            }
+        }
+
+        //get the feed data from the feeds assigned to this worker
+
+        single_fetch_time::single_fetch_time(
+            client.clone(),
+            Arc::clone(&assignments_for_this_worker),
+            Arc::clone(&last_fetch_per_feed),
+        )
+        .await?;
     }
 }
 
@@ -337,12 +414,9 @@ async fn get_feed_metadata(
         let feed_id = realtime_password.onestop_feed_id.clone();
         let password_raw_json = realtime_password.passwords.clone();
 
-        let password = match password_raw_json {
-            Some(password_format) => {
-                Some(serde_json::from_value::<PasswordFormat>(password_format).unwrap())
-            }
-            None => None,
-        };
+        let password = password_raw_json.map(|password_format| {
+            serde_json::from_value::<PasswordFormat>(password_format).unwrap()
+        });
 
         if let Some(password) = password {
             realtime_passwords_hashmap.insert(feed_id, password);
@@ -363,43 +437,49 @@ async fn get_feed_metadata(
         let vehicles_url = match realtime_passwords_hashmap.get(feed_id) {
             Some(password_format) => match &password_format.override_realtime_vehicle_positions {
                 Some(url) => Some(url.to_string()),
-                None => match &realtime_feed_dmfr.urls.realtime_vehicle_positions {
-                    Some(url) => Some(url.as_str().to_string()),
-                    None => None,
-                },
+                None => realtime_feed_dmfr
+                    .urls
+                    .realtime_vehicle_positions
+                    .as_ref()
+                    .map(|url| url.as_str().to_string()),
             },
-            None => match &realtime_feed_dmfr.urls.realtime_vehicle_positions {
-                Some(url) => Some(url.as_str().to_string()),
-                None => None,
-            },
+            None => realtime_feed_dmfr
+                .urls
+                .realtime_vehicle_positions
+                .as_ref()
+                .map(|url| url.as_str().to_string()),
         };
 
         let trip_updates_url = match realtime_passwords_hashmap.get(feed_id) {
             Some(password_format) => match &password_format.override_realtime_trip_updates {
                 Some(url) => Some(url.to_string()),
-                None => match &realtime_feed_dmfr.urls.realtime_trip_updates {
-                    Some(url) => Some(url.as_str().to_string()),
-                    None => None,
-                },
+                None => realtime_feed_dmfr
+                    .urls
+                    .realtime_trip_updates
+                    .as_ref()
+                    .map(|url| url.as_str().to_string()),
             },
-            None => match &realtime_feed_dmfr.urls.realtime_trip_updates {
-                Some(url) => Some(url.as_str().to_string()),
-                None => None,
-            },
+            None => realtime_feed_dmfr
+                .urls
+                .realtime_trip_updates
+                .as_ref()
+                .map(|url| url.as_str().to_string()),
         };
 
         let alerts_url = match realtime_passwords_hashmap.get(feed_id) {
             Some(password_format) => match &password_format.override_alerts {
                 Some(url) => Some(url.to_string()),
-                None => match &realtime_feed_dmfr.urls.realtime_alerts {
-                    Some(url) => Some(url.as_str().to_string()),
-                    None => None,
-                },
+                None => realtime_feed_dmfr
+                    .urls
+                    .realtime_alerts
+                    .as_ref()
+                    .map(|url| url.as_str().to_string()),
             },
-            None => match &realtime_feed_dmfr.urls.realtime_alerts {
-                Some(url) => Some(url.as_str().to_string()),
-                None => None,
-            },
+            None => realtime_feed_dmfr
+                .urls
+                .realtime_alerts
+                .as_ref()
+                .map(|url| url.as_str().to_string()),
         };
 
         realtime_feed_fetches.push(RealtimeFeedFetch {
@@ -412,10 +492,9 @@ async fn get_feed_metadata(
                 .unwrap()
                 .key_formats
                 .clone(),
-            passwords: match realtime_passwords_hashmap.get(feed_id) {
-                Some(password_format) => Some(password_format.passwords.clone()),
-                None => None,
-            },
+            passwords: realtime_passwords_hashmap
+                .get(feed_id)
+                .map(|password_format| password_format.passwords.clone()),
             fetch_interval_ms: match realtime_feeds_hashmap.get(feed_id) {
                 Some(realtime_feed) => realtime_feed.fetch_interval_ms,
                 None => None,

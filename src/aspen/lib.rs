@@ -15,5 +15,8 @@ pub trait AspenRpc {
         vehicles: Option<Vec<u8>>,
         trips: Option<Vec<u8>>,
         alerts: Option<Vec<u8>>,
+        has_vehicles: bool,
+        has_trips: bool,
+        has_alerts: bool,
     ) -> bool;
 }
