@@ -10,11 +10,11 @@
     clippy::boxed_local,
     clippy::assigning_clones,
     clippy::redundant_allocation,
-    bool_comparison,
-    bind_instead_of_map,
+    clippy::bool_comparison,
+    clippy::bind_instead_of_map,
     clippy::vec_box,
     clippy::while_let_loop,
-    useless_asref,
+    clippy::useless_asref,
     clippy::repeat_once,
     clippy::deref_addrof,
     clippy::suspicious_map,
@@ -68,7 +68,7 @@ pub struct RealtimeFeedFetch {
 
 #[derive(Serialize, Deserialize, Clone, Hash, PartialEq, Eq)]
 struct InstructionsPerWorker {
-    feeds: RealtimeFeedFetch,
+    feeds: Vec<RealtimeFeedFetch>,
 }
 
 #[tokio::main]
@@ -79,6 +79,10 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     //hands off data to aspen to do additional cleanup and processing, Aspen will perform association with the GTFS schedule data + update dynamic graphs for routing and map representation,
     //aspen will also forward critical alerts to users
+
+    //If the worker disconnects from zookeeper, that's okay because tasks will be reassigned.
+    // When it reconnects, the same worker id can be used and feed instructions will be reassigned to it.
+    // ingestion won't run when the worker is disconnected from zookeeper due the instructions be written to the worker's ehpehmeral node
 
     // last check time
     let last_check_time_ms: Option<u64> = None;
@@ -110,12 +114,33 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             .await
             .unwrap();
 
+        // create this worker as an ephemeral node
+        let this_worker_assignment = zk
+            .create(
+                format!("/alpenrose_workers/{}", this_worker_id).as_str(),
+                vec![],
+                Acl::open_unsafe(),
+                CreateMode::Ephemeral,
+            )
+            .await
+            .unwrap().unwrap();
+
         let workers_assignments = zk
             .create(
                 "/alpenrose_assignments",
                 vec![],
                 Acl::open_unsafe(),
                 CreateMode::Persistent,
+            )
+            .await
+            .unwrap();
+
+        let this_worker_assignments = zk
+            .create(
+                format!("/alpenrose_assignments/{}", this_worker_id).as_str(),
+                vec![],
+                Acl::open_unsafe(),
+                CreateMode::Ephemeral,
             )
             .await
             .unwrap();
@@ -199,12 +224,39 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                 {
                                     let node_to_assign = &worker_nodes[index % worker_nodes.len()];
 
-                                    let _ = assignments.entry(node_to_assign.to_string());
                                     //append to list
+                                    assignments.entry(node_to_assign.to_string()).and_modify(
+                                        |instructions| {
+                                            instructions.push(realtime_instructions.clone());
+                                        },
+                                    ).or_insert(vec![realtime_instructions.clone()]);
                                 }
                                 // look at current assignments, delete old assignments
 
                                 // assign feeds to worker nodes
+
+                                for (node, instructions) in assignments.iter() {
+                                    let instructions_per_worker = InstructionsPerWorker {
+                                        feeds: instructions.clone(),
+                                    };
+
+                                    //this is capped at 1MB, I should change the data structure to be smaller
+
+                                    // Option 1: Each worker node has a list of feeds, and then has to lookup the associated instructions in zookeeper
+                                    // downside, what if associated instructions update?
+
+                                    //Option 2: Store each instruction as a sub zookeeper node of the worker node
+                                    // upside is that the instructions disappear when the worker node disappears
+                                    //downside, still has too lookup all the sequential data etc
+
+                                    let _ = zk.set_data(
+                                        format!("/alpenrose_assignments/{}", node).as_str(),
+                                        None,
+                                        bincode::serialize(&instructions_per_worker).unwrap(),
+                                    )
+                                    .await
+                                    .unwrap();
+                                }
                             }
                         }
                     }
