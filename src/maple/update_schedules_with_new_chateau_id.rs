@@ -1,3 +1,8 @@
+// Written by Kyler Chin at Catenary Transit Initiatives
+// Attribution cannot be removed
+// https://github.com/CatenaryTransit/catenary-backend
+// You are required under the APGL license to retain this annotation as is
+
 use crate::CatenaryPostgresPool;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::BoolExpressionMethods;

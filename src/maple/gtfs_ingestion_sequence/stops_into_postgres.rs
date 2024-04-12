@@ -1,3 +1,7 @@
+// Copyright Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
+// Attribution cannot be removed
+
 use catenary::enum_to_int::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::stops::dsl::stops as stops_table;

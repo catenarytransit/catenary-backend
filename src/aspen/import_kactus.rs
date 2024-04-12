@@ -1,3 +1,7 @@
+// Copyright Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
+// Attribution cannot be removed
+
 extern crate catenary;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [

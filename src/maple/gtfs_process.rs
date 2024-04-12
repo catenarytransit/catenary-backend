@@ -1,3 +1,7 @@
+// Copyright Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
+// Attribution cannot be removed
+
 use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb;
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;

@@ -1,3 +1,8 @@
+// Written by Kyler Chin at Catenary Transit Initiatives
+// Attribution cannot be removed
+// https://github.com/CatenaryTransit/catenary-backend
+//You are required under the APGL license to retain this annotation as is
+
 use crate::chateau_postprocess::feed_id_to_chateau_id_pivot_table;
 use crate::update_schedules_with_new_chateau_id::update_schedules_with_new_chateau_id;
 use catenary::schema::gtfs as gtfs_schema;
@@ -16,9 +21,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
-// Written by Kyler Chin at Catenary Transit Initiatives
-// https://github.com/CatenaryTransit/catenary-backend
-//You are required under the APGL license to retain this annotation as is
 
 pub async fn refresh_metadata_assignments(
     dmfr_result: &ReturnDmfrAnalysis,

@@ -1,3 +1,7 @@
+// Copyright Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
+// Attribution cannot be removed
+
 use diesel_async::RunQueryDsl;
 use rgb::RGB;
 use std::collections::HashMap;

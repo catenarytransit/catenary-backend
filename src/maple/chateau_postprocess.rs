@@ -1,3 +1,7 @@
+// Copyright Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
+// Attribution cannot be removed
+
 use chateau::Chateau;
 use std::collections::HashMap;
 

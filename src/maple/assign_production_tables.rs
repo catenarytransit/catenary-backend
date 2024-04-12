@@ -1,3 +1,7 @@
+// Copyright Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
+// Attribution cannot be removed
+
 use catenary::postgres_tools::CatenaryPostgresPool;
 use chrono::naive::NaiveDate;
 use chrono::offset::Utc;

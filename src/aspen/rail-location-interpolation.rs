@@ -1,3 +1,7 @@
+// Copyright Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
+// Attribution cannot be removed
+
 //try to get it to work on MTA and BART using the same algorithms
 
 //adapt for Vancouver Skytrain later, i don't want to worry about that right now.
