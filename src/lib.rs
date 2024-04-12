@@ -40,6 +40,8 @@ pub mod schema;
 use fasthash::MetroHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const WGS_84_SRID: u32 = 4326;
 
@@ -101,4 +103,8 @@ pub fn fast_hash<T: Hash>(t: &T) -> u64 {
     let mut s: MetroHasher = Default::default();
     t.hash(&mut s);
     s.finish()
+}
+
+pub fn duration_since_unix_epoch() -> Duration {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap()
 }
