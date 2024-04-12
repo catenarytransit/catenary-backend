@@ -30,6 +30,7 @@
 // https://en.wikipedia.org/wiki/Rhododendron_ferrugineum
 use catenary::agency_secret::*;
 use catenary::fast_hash;
+use std::time::Instant;
 use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use catenary::schema::gtfs::admin_credentials::last_updated_ms;
