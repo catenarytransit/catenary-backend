@@ -13,7 +13,8 @@
     clippy::deref_addrof,
     clippy::suspicious_map,
     clippy::arc_with_non_send_sync,
-    clippy::single_char_pattern
+    clippy::single_char_pattern,
+    clippy::for_kv_map
 )]
 
 use actix_web::dev::Service;

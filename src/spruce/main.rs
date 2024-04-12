@@ -10,11 +10,11 @@
     clippy::while_let_loop,
     useless_asref,
     clippy::repeat_once,
-    clippy::clone_on_copy,
     clippy::deref_addrof,
     clippy::suspicious_map,
     clippy::arc_with_non_send_sync,
-    clippy::single_char_pattern
+    clippy::single_char_pattern,
+    clippy::for_kv_map
 )]
 
 use actix::ActorContext;
