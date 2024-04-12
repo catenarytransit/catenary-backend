@@ -27,12 +27,29 @@ use std::thread;
 use std::time::Duration;
 use tokio_zookeeper::*;
 use uuid::Uuid;
+use catenary::fast_hash;
 
 // gtfs unix timestamps
 struct LastDataFetched {
     realtime_vehicle_positions: Option<u64>,
     realtime_trip_updates: Option<u64>,
     realtime_alerts: Option<u64>,
+}
+
+#[derive(Serialize, Clone, Deserialize, Debug, Hash, PartialEq, Eq)]
+pub struct RealtimeFeedFetch {
+    pub feed_id: String,
+    pub realtime_vehicle_positions: Option<String>,
+    pub realtime_trip_updates: Option<String>,
+    pub realtime_alerts: Option<String>,
+    pub key_formats: Vec<KeyFormat>,
+    pub passwords: Option<Vec<PasswordInfo>>,
+    pub fetch_interval_ms: Option<i32>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Hash, PartialEq, Eq)]
+struct InstructionsPerWorker {
+    feeds: RealtimeFeedFetch
 }
 
 #[tokio::main]
@@ -134,11 +151,19 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
                         let fast_hash_of_worker_nodes = fast_hash(&worker_nodes);
 
-                        if last_set_of_active_nodes_hash != Some(fast_hash_of_worker_nodes) && last_updated_feeds_hash != Some(fast_hash_of_feeds) {
+                        // either the list of workers 
+                        if last_set_of_active_nodes_hash != Some(fast_hash_of_worker_nodes) || last_updated_feeds_hash != Some(fast_hash_of_feeds) {
                         // divide feeds between worker nodes
 
-                        let mut assignments: BTreeMap<String, RealtimeFeedFetch> = BTreesMap::new();
+                        // feed id -> List of realtime fetch instructions
+                        let mut assignments: BTreeMap<String, Vec<RealtimeFeedFetch>> = BTreeMap::new();
 
+                        for (index, (feed_id, realtime_instructions)) in feeds_map.iter().enumerate() {
+                            let node_to_assign = &worker_nodes[index % worker_nodes.len()];
+
+                            let _ = assignments.entry(node_to_assign.to_string());
+                            //append to list
+                        }
                         // look at current assignments, delete old assignments
 
                         // assign feeds to worker nodes
@@ -158,16 +183,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     }
 }
 
-#[derive(Serialize, Clone, Deserialize, Debug, Hash, PartialEq, Eq)]
-pub struct RealtimeFeedFetch {
-    pub feed_id: String,
-    pub realtime_vehicle_positions: Option<String>,
-    pub realtime_trip_updates: Option<String>,
-    pub realtime_alerts: Option<String>,
-    pub key_formats: Vec<KeyFormat>,
-    pub passwords: Option<Vec<PasswordInfo>>,
-    pub fetch_interval_ms: Option<i32>,
-}
+
 
 async fn get_feed_metadata(
     arc_conn_pool: Arc<CatenaryPostgresPool>,

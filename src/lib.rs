@@ -17,6 +17,10 @@ pub mod postgis_to_diesel;
 pub mod postgres_tools;
 pub mod schema;
 
+use std::hash::Hash;
+use fasthash::MetroHasher;
+use std::hash::Hasher;
+
 pub const WGS_84_SRID: u32 = 4326;
 
 pub mod gtfs_schedule_protobuf {
@@ -73,9 +77,7 @@ pub mod gtfs_schedule_protobuf {
     }
 }
 
-
-
-fn fast_hash<T: Hash>(t: &T) -> u64 {
+pub fn fast_hash<T: Hash>(t: &T) -> u64 {
     let mut s: MetroHasher = Default::default();
     t.hash(&mut s);
     s.finish()
