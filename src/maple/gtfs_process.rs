@@ -178,7 +178,7 @@ pub async fn gtfs_process_feed(
     .await?;
 
     //insert stops
-    let _ = stops_into_postgres(
+    stops_into_postgres(
         &gtfs,
         &feed_id,
         Arc::clone(&arc_conn_pool),

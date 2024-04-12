@@ -30,6 +30,5 @@ pub async fn make_async_pool() -> Result<
 }
 
 fn database_url_for_env() -> String {
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    database_url
+    env::var("DATABASE_URL").expect("DATABASE_URL must be set")
 }

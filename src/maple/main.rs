@@ -6,19 +6,23 @@
     clippy::mutable_key_type,
     clippy::map_entry,
     clippy::boxed_local,
-    clippy::assigning_clones,
+    clippy::let_unit_value,
     clippy::redundant_allocation,
-    bool_comparison,
-    bind_instead_of_map,
+    clippy::bool_comparison,
+    clippy::bind_instead_of_map,
     clippy::vec_box,
     clippy::while_let_loop,
-    useless_asref,
+    clippy::useless_asref,
     clippy::repeat_once,
     clippy::deref_addrof,
     clippy::suspicious_map,
     clippy::arc_with_non_send_sync,
     clippy::single_char_pattern,
-    clippy::for_kv_map
+    clippy::for_kv_map,
+    clippy::let_unit_value,
+    clippy::let_and_return,
+    clippy::iter_nth,
+    clippy::iter_cloned_collect
 )]
 
 use catenary::postgres_tools::make_async_pool;
@@ -108,7 +112,7 @@ fn get_threads_gtfs() -> usize {
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
-    let _ = update_transitland_submodule()?;
+    update_transitland_submodule()?;
 
     //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
     let feeds_to_discard: HashSet<String> = HashSet::from_iter(
@@ -509,7 +513,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             // Refresh the metadata tables after the ingestion is done
 
-            let _ = refresh_metadata_tables::refresh_metadata_assignments(
+            refresh_metadata_tables::refresh_metadata_assignments(
                 &dmfr_result,
                 &chateau_result,
                 Arc::clone(&arc_conn_pool),

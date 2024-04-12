@@ -8,7 +8,7 @@
     clippy::mutable_key_type,
     clippy::map_entry,
     clippy::boxed_local,
-    clippy::assigning_clones,
+    clippy::let_unit_value,
     clippy::redundant_allocation,
     clippy::bool_comparison,
     clippy::bind_instead_of_map,
@@ -20,7 +20,11 @@
     clippy::suspicious_map,
     clippy::arc_with_non_send_sync,
     clippy::single_char_pattern,
-    clippy::for_kv_map
+    clippy::for_kv_map,
+    clippy::let_unit_value,
+    clippy::let_and_return,
+    clippy::iter_nth,
+    clippy::iter_cloned_collect
 )]
 
 // https://en.wikipedia.org/wiki/Rhododendron_ferrugineum

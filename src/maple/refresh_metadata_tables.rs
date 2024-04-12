@@ -236,7 +236,7 @@ pub async fn refresh_metadata_assignments(
             feed_id_to_chateau_id_lookup_table.get(&existing_schedule.onestop_feed_id)
         {
             if &existing_schedule.chateau != new_chateau_id {
-                let _ = update_schedules_with_new_chateau_id(
+                update_schedules_with_new_chateau_id(
                     &existing_schedule.onestop_feed_id,
                     new_chateau_id,
                     Arc::clone(&pool),
