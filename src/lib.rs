@@ -112,3 +112,35 @@ pub fn fast_hash<T: Hash>(t: &T) -> u64 {
 pub fn duration_since_unix_epoch() -> Duration {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap()
 }
+
+pub mod tailscale {
+  //stolen from tailscale-rs
+  //significantly adapted by Kyler Chin to use ipv6 addressing
+extern crate ipnetwork;
+extern crate pnet;
+
+use ipnetwork::IpNetwork;
+use pnet::datalink;
+use std::net::IpAddr;
+
+fn maybe_tailscale(s: &str) -> bool {
+        s.starts_with("tailscale")
+}
+
+/// Retrieve the IP address of the current machine's Tailscale interface, if any.
+/// ```
+/// let iface = tailscale::interface().expect("no tailscale interface found");
+/// ```
+pub fn interface() -> Option<IpAddr> {
+    let ifaces = datalink::interfaces();
+    let netmask: IpNetwork = "100.64.0.0/10".parse().unwrap();
+    ifaces
+        .iter()
+        .filter(|iface| maybe_tailscale(&iface.name))
+        .map(|iface| iface.ips.clone())
+        .flatten()
+        .filter(|ipnet| ipnet.is_ipv6() && netmask.contains(ipnet.network()))
+        .map(|ipnet| ipnet.ip())
+        .next()
+}
+}

@@ -110,6 +110,8 @@ serde_bytes = "0.11.14"
 bincode = "1.3.3"
 evmap = "10.0.2"
 dashmap = "5.5.3"
+ipnetwork = "0.20.0"
+pnet = "0.34.0"
 
 [[bin]]
 name = "maple"

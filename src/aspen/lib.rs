@@ -18,5 +18,8 @@ pub trait AspenRpc {
         has_vehicles: bool,
         has_trips: bool,
         has_alerts: bool,
+        vehicles_response_code: Option<u16>,
+        trips_response_code: Option<u16>,
+        alerts_response_code: Option<u16>,
     ) -> bool;
 }
