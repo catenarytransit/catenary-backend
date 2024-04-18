@@ -152,10 +152,10 @@ pub mod tailscale {
     }
 }
 
-pub mod AspenDataset {
+pub mod aspen_dataset {
     use gtfs_rt::TripUpdate;
     use gtfs_rt::VehicleDescriptor;
-    use std::{collections::HashMap, hash::Hash};
+    use std::{collections::HashMap, hash::Hash, collections::BTreeMap};
 
     pub struct AspenisedData {
         pub vehicle_positions: Vec<AspenisedVehiclePosition>,
@@ -167,11 +167,14 @@ pub mod AspenDataset {
         pub impacted_routes_alerts: Option<HashMap<String, Vec<String>>>,
         pub impacted_stops_alerts: Option<HashMap<String, Vec<String>>>,
         pub impacted_routes_stops_alerts: Option<HashMap<String, Vec<String>>>,
+        pub raw_gtfs_rt: BTreeMap<String, GtfsRtDataStore>,
     }
 
     pub struct AspenisedVehiclePosition {
         pub trip: Option<AspenisedVehicleTripInfo>,
         pub vehicle: Option<VehicleDescriptor>,
+        pub position: Option<gtfs_rt::Position>,
+        pub timestamp: Option<u64>,
     }
 
     pub struct AspenisedVehicleTripInfo {
@@ -188,5 +191,24 @@ pub mod AspenDataset {
         //route_long_name_langs: Option<HashMap<String, String>>,
         route_colour: Option<String>,
         route_text_colour: Option<String>,
+    }
+
+    pub struct GtfsRtDataStore {
+        pub vehicle_positions: Option<gtfs_rt::FeedMessage>,
+        pub trip_updates: Option<gtfs_rt::FeedMessage>,
+        pub alerts: Option<gtfs_rt::FeedMessage>,
+    }
+}
+
+
+pub fn parse_gtfs_rt_message(
+    bytes: &[u8],
+) -> Result<gtfs_rt::FeedMessage, Box<dyn std::error::Error>> {
+    let x = prost::Message::decode(bytes);
+
+    if x.is_ok() {
+        return Ok(x.unwrap());
+    } else {
+        return Err(Box::new(x.unwrap_err()));
     }
 }

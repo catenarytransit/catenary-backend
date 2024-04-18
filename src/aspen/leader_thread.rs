@@ -91,7 +91,7 @@ pub async fn aspen_leader_thread(
         //if the current is the current worker id, do leader tasks
         // Read the DMFR dataset, divide it into chunks, and assign it to workers
 
-        let current_leader = zk.watch().get_data("/aspen_leader").await.unwrap();
+        let current_leader = zk.get_data("/aspen_leader").await.unwrap();
 
         if let Some((leader_str_bytes, leader_stats)) = current_leader {
             let leader_id: String = bincode::deserialize(&leader_str_bytes).unwrap();
@@ -193,10 +193,9 @@ pub async fn aspen_leader_thread(
 
                                 let assigned_chateau_data = ChateauMetadataZookeeper {
                                     worker_id: selected_aspen_worker_to_assign.clone(),
-                                    tailscale_ip: workers_ips
+                                    tailscale_ip: *workers_ips
                                         .get(&selected_aspen_worker_to_assign)
-                                        .unwrap()
-                                        .clone(),
+                                        .unwrap(),
                                 };
 
                                 let _ = zk
@@ -213,10 +212,9 @@ pub async fn aspen_leader_thread(
                                     let assigned_realtime_feed_data =
                                         RealtimeFeedMetadataZookeeper {
                                             worker_id: selected_aspen_worker_to_assign.clone(),
-                                            tailscale_ip: workers_ips
+                                            tailscale_ip: *workers_ips
                                                 .get(&selected_aspen_worker_to_assign)
-                                                .unwrap()
-                                                .clone(),
+                                                .unwrap(),
                                             chateau_id: chateau_id.clone(),
                                         };
 

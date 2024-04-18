@@ -31,7 +31,6 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use futures::StreamExt;
 use git2::Repository;
-use service::quicli::prelude::info;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;

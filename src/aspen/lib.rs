@@ -11,7 +11,8 @@ pub trait AspenRpc {
     async fn hello(name: String) -> String;
 
     //maybesend gtfs rt?
-    async fn new_rt_kactus(
+    async fn from_alpenrose(
+        chateau_id: String,
         realtime_feed_id: String,
         vehicles: Option<Vec<u8>>,
         trips: Option<Vec<u8>>,

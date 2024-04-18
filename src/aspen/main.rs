@@ -42,14 +42,15 @@ use std::{
 use tarpc::{
     context,
     server::{self, incoming::Incoming, Channel},
-    tokio_serde::formats::Json,
+    tokio_serde::formats::Bincode,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time;
 use uuid::Uuid;
 mod leader_thread;
 use leader_thread::aspen_leader_thread;
-mod import_kactus;
+mod import_alpenrose;
+use catenary::aspen_dataset::GtfsRtDataStore;
 use catenary::postgres_tools::CatenaryPostgresPool;
 
 #[derive(Parser)]
@@ -66,7 +67,7 @@ pub struct AspenServer {
     pub addr: SocketAddr,
     pub this_tailscale_ip: IpAddr,
     pub worker_id: Arc<String>, // Worker Id for this instance of Aspen
-    pub authoritative_data_store: Arc<DashMap<String, catenary::AspenDataset::AspenisedData>>,
+    pub authoritative_data_store: Arc<DashMap<String, RwLock<catenary::aspen_dataset::AspenisedData>>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
 }
 
@@ -78,9 +79,10 @@ impl AspenRpc for AspenServer {
         format!("Hello, {name}! You are connected from {}", self.addr)
     }
 
-    async fn new_rt_kactus(
+    async fn from_alpenrose(
         self,
         _: context::Context,
+        chateau_id: String,
         realtime_feed_id: String,
         vehicles: Option<Vec<u8>>,
         trips: Option<Vec<u8>>,
@@ -92,8 +94,21 @@ impl AspenRpc for AspenServer {
         trips_response_code: Option<u16>,
         alerts_response_code: Option<u16>,
     ) -> bool {
-        //import_kactus::new_rt_kactus(realtime_feed_id, vehicles, trips, alerts).await
-        true
+        import_alpenrose::new_rt_data(
+            Arc::clone(&self.authoritative_data_store),
+            chateau_id,
+            realtime_feed_id,
+            vehicles,
+            trips,
+            alerts,
+            has_vehicles,
+            has_trips,
+            has_alerts,
+            vehicles_response_code,
+            trips_response_code,
+            alerts_response_code,
+            Arc::clone(&self.conn_pool)
+        ).await
     }
 }
 
@@ -117,9 +132,8 @@ async fn main() -> anyhow::Result<()> {
 
     let server_addr = (tailscale_ip, flags.port);
 
-    // JSON transport is provided by the json_transport tarpc module. It makes it easy
-    // to start up a serde-powered json serialization strategy over TCP.
-    let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Json::default).await?;
+    let mut listener = tarpc::serde_transport::tcp::listen(&server_addr,
+         Bincode::default).await?;
     //tracing::info!("Listening on port {}", listener.local_addr().port());
     listener.config_mut().max_frame_length(usize::MAX);
 
