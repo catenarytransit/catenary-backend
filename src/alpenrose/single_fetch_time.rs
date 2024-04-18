@@ -1,6 +1,8 @@
 use crate::KeyFormat;
 use crate::RealtimeFeedFetch;
+use catenary::aspen::lib::ChateausLeaderHashMap;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use dashmap::DashMap;
 use futures::StreamExt;
 use rand::seq::SliceRandom;
 use reqwest::Response;
@@ -8,7 +10,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use dashmap::DashMap;
 
 pub async fn single_fetch_time(
     client: reqwest::Client,
@@ -58,6 +59,21 @@ pub async fn single_fetch_time(
 
             //send the data to aspen via tarpc
 
+            let vehicle_positions_http_status = match &vehicle_positions_data {
+                Some(Ok(response)) => Some(response.status().as_u16()),
+                _ => None,
+            };
+
+            let trip_updates_http_status = match &trip_updates_data {
+                Some(Ok(response)) => Some(response.status().as_u16()),
+                _ => None,
+            };
+
+            let alerts_http_status = match &alerts_data {
+                Some(Ok(response)) => Some(response.status().as_u16()),
+                _ => None,
+            };
+
             let duration = start.elapsed();
             let duration = duration.as_secs_f64();
             println!("{}: {:.2?}", feed_id, duration);
@@ -80,7 +96,7 @@ async fn run_optional_req(
     }
 }
 
-enum UrlType {
+pub enum UrlType {
     VehiclePositions,
     TripUpdates,
     Alerts,

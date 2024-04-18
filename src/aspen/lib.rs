@@ -4,6 +4,7 @@
 
 /// This is the service definition. It looks a lot like a trait definition.
 /// It defines one RPC, hello, which takes one arg, name, and returns a String.
+
 #[tarpc::service]
 pub trait AspenRpc {
     /// Returns a greeting for name.
@@ -22,4 +23,27 @@ pub trait AspenRpc {
         trips_response_code: Option<u16>,
         alerts_response_code: Option<u16>,
     ) -> bool;
+}
+
+use crate::ChateauDataNoGeometry;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::net::IpAddr;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChateauMetadataZookeeper {
+    pub worker_id: String,
+    pub tailscale_ip: IpAddr,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RealtimeFeedMetadataZookeeper {
+    pub worker_id: String,
+    pub tailscale_ip: IpAddr,
+    pub chateau_id: String,
+}
+
+#[derive(Debug, Hash, Clone, Eq, PartialEq)]
+pub struct ChateausLeaderHashMap {
+    pub chateaus: BTreeMap<String, ChateauDataNoGeometry>,
 }

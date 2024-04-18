@@ -30,7 +30,6 @@
 // https://en.wikipedia.org/wiki/Rhododendron_ferrugineum
 use catenary::agency_secret::*;
 use catenary::fast_hash;
-use std::time::Instant;
 use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use catenary::schema::gtfs::admin_credentials::last_updated_ms;
@@ -53,6 +52,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio_zookeeper::*;
@@ -123,7 +123,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     loop {
         //create parent node for workers
 
-        let workers = zk
+        let _ = zk
             .create(
                 "/alpenrose_workers",
                 vec![],
@@ -166,14 +166,14 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             .await
             .unwrap();
 
-        let leader_exists = zk.watch().exists("/alpenrose_leader").await.unwrap();
+        let leader_exists = zk.exists("/alpenrose_leader").await.unwrap();
 
         if leader_exists.is_none() {
             //attempt to become leader
             let leader = zk
                 .create(
                     "/alpenrose_leader",
-                    this_worker_id.as_bytes().to_vec(),
+                    bincode::serialize(&this_worker_id).unwrap(),
                     Acl::open_unsafe(),
                     CreateMode::Ephemeral,
                 )
@@ -188,7 +188,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         let leader = zk.watch().get_data("/alpenrose_leader").await.unwrap();
 
         if let Some((leader_str_bytes, leader_stats)) = leader {
-            let leader_id = String::from_utf8(leader_str_bytes).unwrap();
+            let leader_id: String = bincode::deserialize(&leader_str_bytes).unwrap();
 
             if &leader_id == this_worker_id.as_ref() {
                 //I am the leader!
@@ -282,9 +282,50 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                                 .as_str(),
                                                 bincode::serialize(&realtime_instruction).unwrap(),
                                                 Acl::open_unsafe(),
-                                                CreateMode::Ephemeral,
+                                                CreateMode::Persistent,
                                             )
                                             .await?;
+
+                                        match assignment {
+                                            Ok(_) => {
+                                                println!(
+                                                    "Assigned feed {} to worker {}",
+                                                    feed_id_str, worker_id
+                                                );
+                                            }
+                                            Err(error::Create::NodeExists) => {
+                                                let set_assignment = zk
+                                                    .set_data(
+                                                        format!(
+                                                            "/alpenrose_assignments/{}/{}",
+                                                            worker_id, feed_id_str
+                                                        )
+                                                        .as_str(),
+                                                        None,
+                                                        bincode::serialize(&realtime_instruction)
+                                                            .unwrap(),
+                                                    )
+                                                    .await?;
+
+                                                match set_assignment {
+                                                    Ok(_) => {
+                                                        println!(
+                                                            "Reassigned feed {} to worker {}",
+                                                            feed_id_str, worker_id
+                                                        );
+                                                    }
+                                                    Err(err) => {
+                                                        eprintln!("Error reassigning feed {} to worker {}: {:?}", feed_id_str, worker_id, err);
+                                                    }
+                                                }
+                                            }
+                                            Err(err) => {
+                                                eprintln!(
+                                                    "Error assigning feed {} to worker {}: {:?}",
+                                                    feed_id_str, worker_id, err
+                                                );
+                                            }
+                                        }
                                     }
 
                                     //update the worker's last updated time
@@ -297,9 +338,49 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                             ))
                                             .unwrap(),
                                             Acl::open_unsafe(),
-                                            CreateMode::Ephemeral,
+                                            CreateMode::Persistent,
                                         )
                                         .await?;
+
+                                    match worker_assignment_metadata {
+                                        Ok(_) => {
+                                            println!("Updated worker assignment metadata");
+                                        }
+                                        Err(error::Create::NodeExists) => {
+                                            let set_worker_assignment_metadata = zk
+                                                .set_data(
+                                                    format!(
+                                                        "/alpenrose_assignments/{}",
+                                                        this_worker_id
+                                                    )
+                                                    .as_str(),
+                                                    None,
+                                                    bincode::serialize(&Some(
+                                                        catenary::duration_since_unix_epoch()
+                                                            .as_millis(),
+                                                    ))
+                                                    .unwrap(),
+                                                )
+                                                .await?;
+
+                                            match set_worker_assignment_metadata {
+                                                Ok(_) => {
+                                                    println!(
+                                                        "Reassigned worker assignment metadata"
+                                                    );
+                                                }
+                                                Err(err) => {
+                                                    eprintln!("Error reassigning worker assignment metadata: {:?}", err);
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            eprintln!(
+                                                "Error updating worker assignment metadata: {:?}",
+                                                err
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }

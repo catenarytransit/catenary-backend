@@ -406,6 +406,10 @@ pub async fn shapes_not_bus(
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
 
+    if (z < 2) {
+        return HttpResponse::BadRequest().body("Zoom level too low");
+    }
+
     // let grid = tile_grid::Grid::wgs84();
 
     //let bbox = grid.tile_extent(x, y, z);
@@ -487,6 +491,10 @@ pub async fn shapes_bus(
     req: HttpRequest,
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
+
+    if (z < 4) {
+        return HttpResponse::BadRequest().body("Zoom level too low");
+    }
 
     // let grid = tile_grid::Grid::wgs84();
     // let bbox = grid.tile_extent(x, y, z);

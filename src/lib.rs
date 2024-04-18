@@ -42,10 +42,18 @@ pub mod postgres_tools;
 pub mod schema;
 
 use fasthash::MetroHasher;
+use gtfs_rt::VehicleDescriptor;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ChateauDataNoGeometry {
+    pub chateau_id: String,
+    pub static_feeds: Vec<String>,
+    pub realtime_feeds: Vec<String>,
+}
 
 pub const WGS_84_SRID: u32 = 4326;
 
@@ -114,33 +122,71 @@ pub fn duration_since_unix_epoch() -> Duration {
 }
 
 pub mod tailscale {
-  //stolen from tailscale-rs
-  //significantly adapted by Kyler Chin to use ipv6 addressing
-extern crate ipnetwork;
-extern crate pnet;
+    //stolen from tailscale-rs
+    //significantly adapted by Kyler Chin to use ipv6 addressing
+    extern crate ipnetwork;
+    extern crate pnet;
 
-use ipnetwork::IpNetwork;
-use pnet::datalink;
-use std::net::IpAddr;
+    use ipnetwork::IpNetwork;
+    use pnet::datalink;
+    use std::net::IpAddr;
 
-fn maybe_tailscale(s: &str) -> bool {
+    fn maybe_tailscale(s: &str) -> bool {
         s.starts_with("tailscale")
+    }
+
+    /// Retrieve the IP address of the current machine's Tailscale interface, if any.
+    /// ```
+    /// let iface = tailscale::interface().expect( "no tailscale interface found");
+    /// ```
+    pub fn interface() -> Option<IpAddr> {
+        let ifaces = datalink::interfaces();
+        let netmask: IpNetwork = "100.64.0.0/10".parse().unwrap();
+        ifaces
+            .iter()
+            .filter(|iface| maybe_tailscale(&iface.name))
+            .flat_map(|iface| iface.ips.clone())
+            .filter(|ipnet| ipnet.is_ipv6() && netmask.contains(ipnet.network()))
+            .map(|ipnet| ipnet.ip())
+            .next()
+    }
 }
 
-/// Retrieve the IP address of the current machine's Tailscale interface, if any.
-/// ```
-/// let iface = tailscale::interface().expect("no tailscale interface found");
-/// ```
-pub fn interface() -> Option<IpAddr> {
-    let ifaces = datalink::interfaces();
-    let netmask: IpNetwork = "100.64.0.0/10".parse().unwrap();
-    ifaces
-        .iter()
-        .filter(|iface| maybe_tailscale(&iface.name))
-        .map(|iface| iface.ips.clone())
-        .flatten()
-        .filter(|ipnet| ipnet.is_ipv6() && netmask.contains(ipnet.network()))
-        .map(|ipnet| ipnet.ip())
-        .next()
-}
+pub mod AspenDataset {
+    use gtfs_rt::TripUpdate;
+    use gtfs_rt::VehicleDescriptor;
+    use std::{collections::HashMap, hash::Hash};
+
+    pub struct AspenisedData {
+        pub vehicle_positions: Vec<AspenisedVehiclePosition>,
+        pub vehicle_routes_cache: HashMap<String, AspenisedVehicleRouteCache>,
+        //id to trip update
+        pub trip_updates: HashMap<String, TripUpdate>,
+        pub trip_updates_lookup_by_trip_id_to_trip_update_ids: HashMap<String, Vec<String>>,
+        pub raw_alerts: Option<HashMap<String, gtfs_rt::Alert>>,
+        pub impacted_routes_alerts: Option<HashMap<String, Vec<String>>>,
+        pub impacted_stops_alerts: Option<HashMap<String, Vec<String>>>,
+        pub impacted_routes_stops_alerts: Option<HashMap<String, Vec<String>>>,
+    }
+
+    pub struct AspenisedVehiclePosition {
+        pub trip: Option<AspenisedVehicleTripInfo>,
+        pub vehicle: Option<VehicleDescriptor>,
+    }
+
+    pub struct AspenisedVehicleTripInfo {
+        pub trip_id: Option<String>,
+        pub trip_headsign: Option<String>,
+        pub route_id: Option<String>,
+        pub trip_short_name: Option<String>,
+    }
+
+    pub struct AspenisedVehicleRouteCache {
+        route_short_name: Option<String>,
+        route_long_name: Option<String>,
+        //route_short_name_langs: Option<HashMap<String, String>>,
+        //route_long_name_langs: Option<HashMap<String, String>>,
+        route_colour: Option<String>,
+        route_text_colour: Option<String>,
+    }
 }
