@@ -23,6 +23,7 @@ pub trait AspenRpc {
         vehicles_response_code: Option<u16>,
         trips_response_code: Option<u16>,
         alerts_response_code: Option<u16>,
+        time_of_submission_ms: u64,
     ) -> bool;
 }
 

@@ -111,6 +111,8 @@ evmap = "10.0.2"
 dashmap = "5.5.3"
 ipnetwork = "0.20.0"
 pnet = "0.34.0"
+crossbeam = "0.8.4"
+leapfrog = { version = "0.3.0", features = ["stable_alloc"] }
 
 [[bin]]
 name = "maple"

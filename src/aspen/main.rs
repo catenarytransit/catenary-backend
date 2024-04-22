@@ -30,6 +30,7 @@ use catenary::postgres_tools::make_async_pool;
 use clap::Parser;
 use dashmap::DashMap;
 use futures::{future, prelude::*};
+use leapfrog::leapmap::LeapMap;
 use rand::{
     distributions::{Distribution, Uniform},
     thread_rng,
@@ -52,13 +53,7 @@ use leader_thread::aspen_leader_thread;
 mod import_alpenrose;
 use catenary::aspen_dataset::GtfsRtDataStore;
 use catenary::postgres_tools::CatenaryPostgresPool;
-
-#[derive(Parser)]
-struct Flags {
-    /// Sets the port number to listen on.
-    #[clap(long)]
-    port: u16,
-}
+use crossbeam::deque::{Injector, Steal};
 
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
@@ -67,8 +62,26 @@ pub struct AspenServer {
     pub addr: SocketAddr,
     pub this_tailscale_ip: IpAddr,
     pub worker_id: Arc<String>, // Worker Id for this instance of Aspen
-    pub authoritative_data_store: Arc<DashMap<String, RwLock<catenary::aspen_dataset::AspenisedData>>>,
+    pub authoritative_data_store:
+        Arc<LeapMap<String, RwLock<catenary::aspen_dataset::AspenisedData>>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
+    pub alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
+}
+
+#[derive(Clone)]
+struct ProcessAlpenroseData {
+    chateau_id: String,
+    realtime_feed_id: String,
+    vehicles: Option<Vec<u8>>,
+    trips: Option<Vec<u8>>,
+    alerts: Option<Vec<u8>>,
+    has_vehicles: bool,
+    has_trips: bool,
+    has_alerts: bool,
+    vehicles_response_code: Option<u16>,
+    trips_response_code: Option<u16>,
+    alerts_response_code: Option<u16>,
+    time_of_submission_ms: u64,
 }
 
 impl AspenRpc for AspenServer {
@@ -93,22 +106,25 @@ impl AspenRpc for AspenServer {
         vehicles_response_code: Option<u16>,
         trips_response_code: Option<u16>,
         alerts_response_code: Option<u16>,
+        time_of_submission_ms: u64,
     ) -> bool {
-        import_alpenrose::new_rt_data(
-            Arc::clone(&self.authoritative_data_store),
-            chateau_id,
-            realtime_feed_id,
-            vehicles,
-            trips,
-            alerts,
-            has_vehicles,
-            has_trips,
-            has_alerts,
-            vehicles_response_code,
-            trips_response_code,
-            alerts_response_code,
-            Arc::clone(&self.conn_pool)
-        ).await
+        self.alpenrose_to_process_queue.push(
+            ProcessAlpenroseData {
+                chateau_id,
+                realtime_feed_id,
+                vehicles,
+                trips,
+                alerts,
+                has_vehicles,
+                has_trips,
+                has_alerts,
+                vehicles_response_code,
+                trips_response_code,
+                alerts_response_code,
+                time_of_submission_ms
+            }
+        );
+        true
     }
 }
 
@@ -125,20 +141,21 @@ async fn main() -> anyhow::Result<()> {
     let conn_pool: CatenaryPostgresPool = make_async_pool().await.unwrap();
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
 
-    let flags = Flags::parse();
+    // let flags = Flags::parse();
     //init_tracing("Tarpc Example Server")?;
 
     let tailscale_ip = catenary::tailscale::interface().expect("no tailscale interface found");
 
-    let server_addr = (tailscale_ip, flags.port);
+    let server_addr = (tailscale_ip, 40427);
 
-    let mut listener = tarpc::serde_transport::tcp::listen(&server_addr,
-         Bincode::default).await?;
+    let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Bincode::default).await?;
     //tracing::info!("Listening on port {}", listener.local_addr().port());
     listener.config_mut().max_frame_length(usize::MAX);
 
     let workers_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let chateau_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
+
+    let process_from_alpenrose_queue = Arc::new(Injector::<ProcessAlpenroseData>::new());
 
     //run both the leader and the listener simultaniously
     futures::join!(
@@ -146,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
             let workers_nodes = Arc::clone(&workers_nodes);
             let chateau_list = Arc::clone(&chateau_list);
             let this_worker_id = Arc::clone(&this_worker_id);
-            let tailscale_ip = Arc::new(tailscale_ip.clone());
+            let tailscale_ip = Arc::new(tailscale_ip);
             let arc_conn_pool = Arc::clone(&arc_conn_pool);
             async {
                 aspen_leader_thread(
@@ -174,6 +191,7 @@ async fn main() -> anyhow::Result<()> {
                     worker_id: Arc::clone(&this_worker_id),
                     authoritative_data_store: Arc::new(DashMap::new()),
                     conn_pool: Arc::clone(&arc_conn_pool),
+                    process_from_alpenrose_queue: Arc::clone(&process_from_alpenrose_queue)
                 };
                 channel.execute(server.serve()).for_each(spawn)
             })

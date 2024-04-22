@@ -155,7 +155,7 @@ pub mod tailscale {
 pub mod aspen_dataset {
     use gtfs_rt::TripUpdate;
     use gtfs_rt::VehicleDescriptor;
-    use std::{collections::HashMap, hash::Hash, collections::BTreeMap};
+    use std::{collections::BTreeMap, collections::HashMap, hash::Hash};
 
     pub struct AspenisedData {
         pub vehicle_positions: Vec<AspenisedVehiclePosition>,
@@ -199,7 +199,6 @@ pub mod aspen_dataset {
         pub alerts: Option<gtfs_rt::FeedMessage>,
     }
 }
-
 
 pub fn parse_gtfs_rt_message(
     bytes: &[u8],

@@ -1,17 +1,18 @@
 use crate::KeyFormat;
 use crate::RealtimeFeedFetch;
+use catenary::aspen::lib::RealtimeFeedMetadataZookeeper;
+use catenary::duration_since_unix_epoch;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use dashmap::DashMap;
 use futures::StreamExt;
 use rand::seq::SliceRandom;
 use reqwest::Response;
-use tarpc::{client, context, tokio_serde::formats::Bincode};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tarpc::{client, context, tokio_serde::formats::Bincode};
 use tokio::sync::RwLock;
 use tokio_zookeeper::ZooKeeper;
-use catenary::aspen::lib::RealtimeFeedMetadataZookeeper;
 
 pub async fn single_fetch_time(
     client: reqwest::Client,
@@ -21,8 +22,8 @@ pub async fn single_fetch_time(
     let start = Instant::now();
 
     let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
-    .await
-    .unwrap();
+        .await
+        .unwrap();
 
     let zk = Arc::new(zk);
 
@@ -84,52 +85,66 @@ pub async fn single_fetch_time(
             };
 
             //lookup currently assigned realtime dataset in zookeeper
-            let fetch_assigned_node_for_this_realtime_feed= zk.get_data(
-                format!("/aspen_assigned_realtime_feed_ids/{}", feed_id).as_str()
-            ).await.unwrap();
+            let fetch_assigned_node_for_this_realtime_feed = zk
+                .get_data(format!("/aspen_assigned_realtime_feed_ids/{}", feed_id).as_str())
+                .await
+                .unwrap();
 
             match fetch_assigned_node_for_this_realtime_feed {
                 Some((bytes_realtime_id, stat)) => {
-                    let data = bincode::deserialize::<RealtimeFeedMetadataZookeeper>(
-                        &bytes_realtime_id
-                    ).unwrap();
+                    let data =
+                        bincode::deserialize::<RealtimeFeedMetadataZookeeper>(&bytes_realtime_id)
+                            .unwrap();
 
                     let worker_id = data.worker_id;
 
                     //send the data to the worker
                     let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
 
-                    let mut transport = tarpc::serde_transport::tcp::connect(
-                        socket_addr,
-                        Bincode::default,
-                    ).await.unwrap();
+                    let mut transport =
+                        tarpc::serde_transport::tcp::connect(socket_addr, Bincode::default)
+                            .await
+                            .unwrap();
 
-                    let aspen_client = catenary::aspen::lib::AspenRpcClient::new(client::Config::default(), transport).spawn();
+                    let aspen_client = catenary::aspen::lib::AspenRpcClient::new(
+                        client::Config::default(),
+                        transport,
+                    )
+                    .spawn();
 
-                    let tarpc_send_to_aspen = aspen_client.from_alpenrose(
-                        tarpc::context::current(),
-                        data.chateau_id,
-                        feed_id.clone(),
-                        match vehicle_positions_data {
-                            Some(Ok(response)) => Some(response.bytes().await.unwrap().as_ref().to_vec()),
-                            _ => None,
-                        },
-                        match trip_updates_data {
-                            Some(Ok(response)) => Some(response.bytes().await.unwrap().as_ref().to_vec()),
-                            _ => None,
-                        },
-                        match alerts_data {
-                            Some(Ok(response)) => Some(response.bytes().await.unwrap().as_ref().to_vec()),
-                            _ => None,
-                        },
-                        assignment.realtime_vehicle_positions.is_some(),
-                        assignment.realtime_trip_updates.is_some(),
-                        assignment.realtime_alerts.is_some(),
-                        vehicle_positions_http_status,
-                        trip_updates_http_status,
-                        alerts_http_status,
-                    ).await;
-                },
+                    let tarpc_send_to_aspen = aspen_client
+                        .from_alpenrose(
+                            tarpc::context::current(),
+                            data.chateau_id,
+                            feed_id.clone(),
+                            match vehicle_positions_data {
+                                Some(Ok(response)) => {
+                                    Some(response.bytes().await.unwrap().as_ref().to_vec())
+                                }
+                                _ => None,
+                            },
+                            match trip_updates_data {
+                                Some(Ok(response)) => {
+                                    Some(response.bytes().await.unwrap().as_ref().to_vec())
+                                }
+                                _ => None,
+                            },
+                            match alerts_data {
+                                Some(Ok(response)) => {
+                                    Some(response.bytes().await.unwrap().as_ref().to_vec())
+                                }
+                                _ => None,
+                            },
+                            assignment.realtime_vehicle_positions.is_some(),
+                            assignment.realtime_trip_updates.is_some(),
+                            assignment.realtime_alerts.is_some(),
+                            vehicle_positions_http_status,
+                            trip_updates_http_status,
+                            alerts_http_status,
+                            duration_since_unix_epoch().as_millis() as u64,
+                        )
+                        .await;
+                }
                 None => {
                     eprintln!("{} was not assigned to a worker", feed_id);
                 }

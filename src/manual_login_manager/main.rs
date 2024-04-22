@@ -8,22 +8,18 @@ struct Flags {
     password: String,
 }
 
-use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
+use diesel::prelude::*;
+use diesel_async::RunQueryDsl;
 use std::error::Error;
-use argon2::{
-    password_hash::{
-        rand_core::OsRng,
-        PasswordHash, PasswordHasher, PasswordVerifier, SaltString
-    },
-    Argon2
-};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
-
     let flags: Flags = Flags::parse();
 
     let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
@@ -52,8 +48,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     );
     */
 
-    use catenary::schema::gtfs::admin_credentials as ac_table;
     use catenary::models::AdminCredentials;
+    use catenary::schema::gtfs::admin_credentials as ac_table;
 
     let unix_time = catenary::duration_since_unix_epoch().as_millis() as i64;
 
