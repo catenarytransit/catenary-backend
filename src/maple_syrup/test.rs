@@ -18,8 +18,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let stop_times_count = gtfs
         .trips
-        .iter()
-        .map(|(_, trip)| trip.stop_times.len())
+        .values()
+        .map(|trip| trip.stop_times.len())
         .sum::<usize>();
 
     let iten_count = response.itineraries.len();

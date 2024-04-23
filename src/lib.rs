@@ -232,3 +232,11 @@ pub fn parse_gtfs_rt_message(
         return Err(Box::new(x.unwrap_err()));
     }
 }
+
+pub fn route_id_transform(feed_id: &str, route_id: String) -> String {
+    match feed_id {
+        "f-mta~nyc~rt~lirr" => format!("lirr{}", route_id),
+        "f-mta~nyc~rt~mnr" => format!("mnr{}", route_id),
+        _ => route_id,
+    }
+}

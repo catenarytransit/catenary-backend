@@ -38,6 +38,7 @@ pub struct ItineraryPatternMeta {
     pub trip_headsign_translations: Option<Value>,
     pub shape_id: Option<String>,
     pub timezone: String,
+    pub route_id: String,
 }
 
 #[derive(Queryable, Selectable, Insertable, Clone)]

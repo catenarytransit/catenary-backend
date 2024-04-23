@@ -19,6 +19,7 @@ use catenary::models::ItineraryPatternMeta;
 use catenary::models::Route as RoutePgModel;
 use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::route_id_transform;
 use catenary::schema::gtfs::calendar::onestop_feed_id;
 use catenary::schema::gtfs::chateaus::languages_avaliable;
 use chrono::NaiveDate;
@@ -213,6 +214,7 @@ pub async fn gtfs_process_feed(
                 .map(|trip_under_itin| Some(trip_under_itin.trip_id.to_string()))
                 .collect::<Vec<Option<String>>>(),
             shape_id: itinerary.shape_id.clone(),
+            route_id: itinerary.route_id.clone()
         };
 
         diesel::insert_into(
@@ -268,7 +270,7 @@ pub async fn gtfs_process_feed(
                 wheelchair_accessible: compressed_trip_raw.wheelchair_accessible,
                 bikes_allowed: compressed_trip_raw.bikes_allowed,
                 has_frequencies: compressed_trip_raw.frequencies.len() > 0,
-                route_id: compressed_trip_raw.route_id.clone(),
+                route_id: route_id_transform(feed_id, compressed_trip_raw.route_id.clone()),
                 frequencies: None,
             })
             .collect::<Vec<_>>();
@@ -297,7 +299,7 @@ pub async fn gtfs_process_feed(
 
             let route_pg = RoutePgModel {
                 onestop_feed_id: feed_id.to_string(),
-                route_id: route_id.clone(),
+                route_id: route_id_transform(feed_id, route_id.to_string()),
                 attempt_id: attempt_id.to_string(),
                 agency_id: route.agency_id.clone(),
                 short_name: route.short_name.clone(),
@@ -312,15 +314,14 @@ pub async fn gtfs_process_feed(
                 route_type: route_type_to_int(&route.route_type),
                 url: route.url.clone(),
                 url_translations: None,
-                shapes_list: match route_ids_to_shape_ids.get(&route_id.clone()) {
-                    Some(shapes_list) => Some(
+                shapes_list: route_ids_to_shape_ids
+                    .get(&route_id.clone())
+                    .map(|shapes_list| {
                         shapes_list
                             .iter()
                             .map(|x| Some(x.clone()))
-                            .collect::<Vec<Option<String>>>(),
-                    ),
-                    None => None,
-                },
+                            .collect::<Vec<Option<String>>>()
+                    }),
                 gtfs_order: match route.order {
                     Some(x) => Some(x),
                     None => None,

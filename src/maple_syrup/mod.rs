@@ -84,19 +84,13 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             continue;
         }
 
-        let mut start_time: u32 = trip.stop_times[0].arrival_time.unwrap();
+        let start_time: u32 = trip.stop_times[0].arrival_time.unwrap();
 
         //this trip "starts at 09:00" local time or something
         for stop_time in trip.stop_times.iter() {
-            let arrival_time_since_start: Option<i32> = match stop_time.arrival_time {
-                Some(arrival_time) => Some(arrival_time as i32 - start_time as i32),
-                None => None,
-            };
+            let arrival_time_since_start: Option<i32> = stop_time.arrival_time.map(|arrival_time| arrival_time as i32 - start_time as i32);
 
-            let departure_time_since_start: Option<i32> = match stop_time.departure_time {
-                Some(departure_time) => Some(departure_time as i32 - start_time as i32),
-                None => None,
-            };
+            let departure_time_since_start: Option<i32> = stop_time.departure_time.map(|departure_time| departure_time as i32 - start_time as i32);
 
             let stop_diff = StopDifference {
                 stop_id: stop_time.stop.id.clone(),
@@ -128,10 +122,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                             .iter()
                             .find(|agency| agency.id == route.agency_id);
 
-                        match matching_agency {
-                            Some(agency) => Some(agency.timezone.clone()),
-                            None => None,
-                        }
+                            matching_agency.map(|agency| agency.timezone.clone())
                     }
                     None => None,
                 }
