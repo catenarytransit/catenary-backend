@@ -184,12 +184,12 @@ pub mod aspen_dataset {
     }
 
     pub struct AspenisedVehicleRouteCache {
-        route_short_name: Option<String>,
-        route_long_name: Option<String>,
-        //route_short_name_langs: Option<HashMap<String, String>>,
-        //route_long_name_langs: Option<HashMap<String, String>>,
-        route_colour: Option<String>,
-        route_text_colour: Option<String>,
+        pub route_short_name: Option<String>,
+        pub route_long_name: Option<String>,
+        pub route_short_name_langs: Option<HashMap<String, String>>,
+        pub route_long_name_langs: Option<HashMap<String, String>>,
+        pub route_colour: Option<String>,
+        pub route_text_colour: Option<String>,
     }
 
     #[derive(Copy, Eq, Hash, PartialEq, Clone)]

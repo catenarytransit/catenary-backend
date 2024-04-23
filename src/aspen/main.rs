@@ -52,9 +52,9 @@ mod import_alpenrose;
 use catenary::aspen_dataset::GtfsRtType;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
+use futures::join;
 use gtfs_rt::FeedMessage;
 use scc::HashMap as SccHashMap;
-use futures::join;
 
 mod async_threads_alpenrose;
 
@@ -210,7 +210,10 @@ async fn main() -> anyhow::Result<()> {
         .for_each(|_| async {})
         .await;
 
-    join!(async_from_alpenrose_processor_handler.join().unwrap(), leader_thread_handler.join().unwrap());
+    join!(
+        async_from_alpenrose_processor_handler.join().unwrap(),
+        leader_thread_handler.join().unwrap()
+    );
 
     Ok(())
 }
