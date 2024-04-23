@@ -154,23 +154,17 @@ async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
     tokio::spawn(fut);
 }
 
-#[derive(Parser, Debug)]
-struct Args {
-    alpenrosethreadcount: usize,
-    channels: usize,
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Worker Id for this instance of Aspen
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
+    let channel_count = std::env::var("CHANNELS").expect("channels not set").parse::<usize>().expect("channels not a number");
+    let alpenrosethreadcount = std::env::var("ALPENROSETHREADCOUNT").expect("alpenrosethreadcount not set").parse::<usize>().expect("alpenrosethreadcount not a number");
+
     //connect to postgres
     let conn_pool: CatenaryPostgresPool = make_async_pool().await.unwrap();
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
-
-    let args = Args::parse();
-    //init_tracing("Tarpc Example Server")?;
 
     let tailscale_ip = catenary::tailscale::interface().expect("no tailscale interface found");
 
@@ -212,7 +206,7 @@ async fn main() -> anyhow::Result<()> {
         let authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
         let authoritative_data_store = Arc::clone(&authoritative_data_store);
         let conn_pool = Arc::clone(&arc_conn_pool);
-        let thread_count = args.alpenrosethreadcount.clone();
+        let thread_count = alpenrosethreadcount.clone();
         move || async move {
             async_threads_alpenrose::alpenrose_process_threads(
                 alpenrose_to_process_queue,
@@ -242,7 +236,7 @@ async fn main() -> anyhow::Result<()> {
             channel.execute(server.serve()).for_each(spawn)
         })
         // Max n channels.
-        .buffer_unordered(args.channels)
+        .buffer_unordered(channel_count)
         .for_each(|_| async {})
         .await;
 
