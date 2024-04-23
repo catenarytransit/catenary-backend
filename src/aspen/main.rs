@@ -159,12 +159,20 @@ async fn main() -> anyhow::Result<()> {
     // Worker Id for this instance of Aspen
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
-    let channel_count = std::env::var("CHANNELS").expect("channels not set").parse::<usize>().expect("channels not a number");
-    let alpenrosethreadcount = std::env::var("ALPENROSETHREADCOUNT").expect("alpenrosethreadcount not set").parse::<usize>().expect("alpenrosethreadcount not a number");
+    let channel_count = std::env::var("CHANNELS")
+        .expect("channels not set")
+        .parse::<usize>()
+        .expect("channels not a number");
+    let alpenrosethreadcount = std::env::var("ALPENROSETHREADCOUNT")
+        .expect("alpenrosethreadcount not set")
+        .parse::<usize>()
+        .expect("alpenrosethreadcount not a number");
 
     //connect to postgres
+    println!("Connecting to postgres");
     let conn_pool: CatenaryPostgresPool = make_async_pool().await.unwrap();
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
+    println!("Connected to postgres");
 
     let tailscale_ip = catenary::tailscale::interface().expect("no tailscale interface found");
 
@@ -218,6 +226,8 @@ async fn main() -> anyhow::Result<()> {
             .await;
         }
     });
+
+    println!("Listening on port {}", listener.local_addr().port());
 
     listener
         // Ignore accept errors.

@@ -214,7 +214,7 @@ pub async fn gtfs_process_feed(
                 .map(|trip_under_itin| Some(trip_under_itin.trip_id.to_string()))
                 .collect::<Vec<Option<String>>>(),
             shape_id: itinerary.shape_id.clone(),
-            route_id: itinerary.route_id.clone()
+            route_id: itinerary.route_id.clone(),
         };
 
         diesel::insert_into(
