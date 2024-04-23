@@ -141,12 +141,12 @@ pub mod tailscale {
     /// ```
     pub fn interface() -> Option<IpAddr> {
         let ifaces = datalink::interfaces();
-        let netmask: IpNetwork = "100.64.0.0/10".parse().unwrap();
+        //let netmask: IpNetwork = "100.64.0.0/10".parse().unwrap();
         ifaces
             .iter()
             .filter(|iface| maybe_tailscale(&iface.name))
             .flat_map(|iface| iface.ips.clone())
-            .filter(|ipnet| ipnet.is_ipv6() && netmask.contains(ipnet.network()))
+            .filter(|ipnet| ipnet.is_ipv6())
             .map(|ipnet| ipnet.ip())
             .next()
     }
