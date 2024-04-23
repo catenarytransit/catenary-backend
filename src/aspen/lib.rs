@@ -4,6 +4,12 @@
 
 /// This is the service definition. It looks a lot like a trait definition.
 /// It defines one RPC, hello, which takes one arg, name, and returns a String.
+use crate::aspen_dataset::*;
+use crate::ChateauDataNoGeometry;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::net::IpAddr;
 
 #[tarpc::service]
 pub trait AspenRpc {
@@ -25,12 +31,20 @@ pub trait AspenRpc {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool;
+
+    async fn get_vehicle_locations(
+        chateau_id: String,
+        existing_fasthash_of_routes: Option<u64>,
+    ) -> (Option<GetVehicleLocationsResponse>);
 }
 
-use crate::ChateauDataNoGeometry;
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::net::IpAddr;
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GetVehicleLocationsResponse {
+    pub vehicle_route_cache: Option<HashMap<String, AspenisedVehicleRouteCache>>,
+    pub vehicle_positions: HashMap<String, AspenisedVehiclePosition>,
+    pub hash_of_routes: u64,
+    pub last_updated_time_ms: u64,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChateauMetadataZookeeper {

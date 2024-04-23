@@ -158,7 +158,7 @@ pub mod aspen_dataset {
     use std::{collections::BTreeMap, collections::HashMap, hash::Hash};
 
     pub struct AspenisedData {
-        pub vehicle_positions: Vec<AspenisedVehiclePosition>,
+        pub vehicle_positions: HashMap<String, AspenisedVehiclePosition>,
         pub vehicle_routes_cache: HashMap<String, AspenisedVehicleRouteCache>,
         //id to trip update
         pub trip_updates: HashMap<String, TripUpdate>,
@@ -167,15 +167,35 @@ pub mod aspen_dataset {
         pub impacted_routes_alerts: Option<HashMap<String, Vec<String>>>,
         pub impacted_stops_alerts: Option<HashMap<String, Vec<String>>>,
         pub impacted_routes_stops_alerts: Option<HashMap<String, Vec<String>>>,
+        pub last_updated_time_ms: u64,
     }
 
+    #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenisedVehiclePosition {
         pub trip: Option<AspenisedVehicleTripInfo>,
-        pub vehicle: Option<VehicleDescriptor>,
-        pub position: Option<gtfs_rt::Position>,
+        pub vehicle: Option<AspenisedVehicleDescriptor>,
+        pub position: Option<CatenaryRtVehiclePosition>,
         pub timestamp: Option<u64>,
     }
 
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct CatenaryRtVehiclePosition {
+        pub latitude: f32,
+        pub longitude: f32,
+        pub bearing: Option<f32>,
+        pub odometer: Option<f64>,
+        pub speed: Option<f32>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenisedVehicleDescriptor {
+        pub id: Option<String>,
+        pub label: Option<String>,
+        pub license_plate: Option<String>,
+        pub wheelchair_accessible: Option<i32>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenisedVehicleTripInfo {
         pub trip_id: Option<String>,
         pub trip_headsign: Option<String>,
@@ -183,11 +203,12 @@ pub mod aspen_dataset {
         pub trip_short_name: Option<String>,
     }
 
+    #[derive(Clone, Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
     pub struct AspenisedVehicleRouteCache {
         pub route_short_name: Option<String>,
         pub route_long_name: Option<String>,
-        pub route_short_name_langs: Option<HashMap<String, String>>,
-        pub route_long_name_langs: Option<HashMap<String, String>>,
+        // pub route_short_name_langs: Option<HashMap<String, String>>,
+        // pub route_long_name_langs: Option<HashMap<String, String>>,
         pub route_colour: Option<String>,
         pub route_text_colour: Option<String>,
     }

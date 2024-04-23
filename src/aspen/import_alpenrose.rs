@@ -114,7 +114,7 @@ pub async fn new_rt_data(
     //if this item is empty, create it
     if this_chateau_dashmap.is_none() {
         let mut new_aspenised_data = catenary::aspen_dataset::AspenisedData {
-            vehicle_positions: Vec::new(),
+            vehicle_positions: HashMap::new(),
             vehicle_routes_cache: HashMap::new(),
             trip_updates: HashMap::new(),
             trip_updates_lookup_by_trip_id_to_trip_update_ids: HashMap::new(),
@@ -122,6 +122,7 @@ pub async fn new_rt_data(
             impacted_routes_alerts: None,
             impacted_stops_alerts: None,
             impacted_routes_stops_alerts: None,
+            last_updated_time_ms: 0,
         };
         let _ = authoritative_data_store.insert(realtime_feed_id.clone(), new_aspenised_data);
     }
@@ -131,7 +132,7 @@ pub async fn new_rt_data(
 
     // take all the gtfs rt data and merge it together
 
-    let mut vehicle_positions: Vec<AspenisedVehiclePosition> = Vec::new();
+    let mut vehicle_positions: HashMap<String, AspenisedVehiclePosition> = HashMap::new();
     let mut vehicle_routes_cache: HashMap<String, AspenisedVehicleRouteCache> = HashMap::new();
     let mut trip_updates: HashMap<String, TripUpdate> = HashMap::new();
     let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: HashMap<String, Vec<String>> =
@@ -266,9 +267,6 @@ pub async fn new_rt_data(
                 let itinerary_pattern_id_to_itinerary_pattern_meta =
                     itinerary_pattern_id_to_itinerary_pattern_meta;
 
-                let vehicle_routes_cache: HashMap<String, AspenisedVehicleRouteCache> =
-                    HashMap::new();
-
                 for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
                     if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
                         .get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
@@ -326,16 +324,87 @@ pub async fn new_rt_data(
                                         }
                                     }
                                 }),
-                                position: vehicle_pos.position.clone(),
+                                position: match &vehicle_pos.position {
+                                    Some(position) => Some(CatenaryRtVehiclePosition {
+                                        latitude: position.latitude,
+                                        longitude: position.longitude,
+                                        bearing: position.bearing,
+                                        odometer: position.odometer,
+                                        speed: position.speed,
+                                    }),
+                                    None => None
+                                },
                                 timestamp: vehicle_pos.timestamp.clone(),
-                                vehicle: vehicle_pos.vehicle.clone(),
+                                vehicle: match &vehicle_pos.vehicle {
+                                    Some(vehicle) => Some(AspenisedVehicleDescriptor {
+                                        id: vehicle.id.clone(),
+                                        label: vehicle.label.clone(),
+                                        license_plate: vehicle.license_plate.clone(),
+                                        wheelchair_accessible: vehicle.wheelchair_accessible,
+                                    }),
+                                    None => None
+                                }
                             });
 
                                 //insert the route cache
+
+                                if let Some(trip) = &vehicle_pos.trip {
+                                    if let Some(route_id) = &trip.route_id {
+                                        if !vehicle_routes_cache.contains_key(route_id) {
+                                            let route = route_id_to_route.get(route_id);
+                                            if let Some(route) = route {
+                                                vehicle_routes_cache.insert(
+                                                    route_id.clone(),
+                                                    AspenisedVehicleRouteCache {
+                                                        route_short_name: route.short_name.clone(),
+                                                        route_long_name: route.long_name.clone(),
+                                                        // route_short_name_langs: route.short_name_translations.clone(),
+                                                        //route_long_name_langs: route.short_name_translations.clone(),
+                                                        route_colour: route.color.clone(),
+                                                        route_text_colour: route.text_color.clone(),
+                                                    },
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
+
+                //Insert data back into process-wide authoritative_data_store
+
+                authoritative_data_store
+                    .entry(chateau_id.clone())
+                    .and_modify(|data| {
+                        *data = AspenisedData {
+                            vehicle_positions: aspenised_vehicle_positions.clone(),
+                            vehicle_routes_cache: vehicle_routes_cache.clone(),
+                            trip_updates: trip_updates.clone(),
+                            trip_updates_lookup_by_trip_id_to_trip_update_ids:
+                                trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
+                            raw_alerts: None,
+                            impacted_routes_alerts: None,
+                            impacted_stops_alerts: None,
+                            impacted_routes_stops_alerts: None,
+                            last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis()
+                                as u64,
+                        }
+                    })
+                    .or_insert(AspenisedData {
+                        vehicle_positions: aspenised_vehicle_positions.clone(),
+                        vehicle_routes_cache: vehicle_routes_cache.clone(),
+                        trip_updates: trip_updates.clone(),
+                        trip_updates_lookup_by_trip_id_to_trip_update_ids:
+                            trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
+                        raw_alerts: None,
+                        impacted_routes_alerts: None,
+                        impacted_stops_alerts: None,
+                        impacted_routes_stops_alerts: None,
+                        last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis()
+                            as u64,
+                    });
             }
             true
         }

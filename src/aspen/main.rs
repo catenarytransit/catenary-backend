@@ -50,12 +50,12 @@ mod leader_thread;
 use leader_thread::aspen_leader_thread;
 mod import_alpenrose;
 use catenary::aspen_dataset::GtfsRtType;
+use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 use futures::join;
 use gtfs_rt::FeedMessage;
 use scc::HashMap as SccHashMap;
-
 mod async_threads_alpenrose;
 
 // This is the type that implements the generated World trait. It is the business logic
@@ -111,6 +111,42 @@ impl AspenRpc for AspenServer {
             time_of_submission_ms,
         });
         true
+    }
+
+    async fn get_vehicle_locations(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        existing_fasthash_of_routes: Option<u64>,
+    ) -> Option<GetVehicleLocationsResponse> {
+        match self.authoritative_data_store.get(&chateau_id) {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let fast_hash_of_routes = catenary::fast_hash(
+                    &aspenised_data
+                        .vehicle_routes_cache
+                        .values()
+                        .collect::<Vec<&AspenisedVehicleRouteCache>>(),
+                );
+
+                Some(GetVehicleLocationsResponse {
+                    vehicle_route_cache: match existing_fasthash_of_routes {
+                        Some(existing_fasthash_of_routes) => {
+                            match existing_fasthash_of_routes == fast_hash_of_routes {
+                                true => None,
+                                false => Some(aspenised_data.vehicle_routes_cache.clone()),
+                            }
+                        }
+                        None => Some(aspenised_data.vehicle_routes_cache.clone()),
+                    },
+                    vehicle_positions: aspenised_data.vehicle_positions.clone(),
+                    hash_of_routes: fast_hash_of_routes,
+                    last_updated_time_ms: aspenised_data.last_updated_time_ms,
+                })
+            }
+            None => None,
+        }
     }
 }
 
