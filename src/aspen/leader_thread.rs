@@ -188,6 +188,11 @@ pub async fn aspen_leader_thread(
                             for (index, (chateau_id, chateau)) in
                                 chateau_list_lock.chateaus.iter().enumerate()
                             {
+                                // in the future, this should be rewritten to prevent full reshuffling of the entire assignment list
+                                // For example, taking only the orphened nodes and redistributing them
+                                // if a new node is added, carefully reassign the data
+
+                                //for now this simply round robins the chateaus around
                                 let selected_aspen_worker_to_assign =
                                     workers_nodes_lock[index % workers_nodes_lock.len()].clone();
 

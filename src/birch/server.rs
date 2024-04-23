@@ -825,7 +825,7 @@ async fn chateaus(
                 ),
             );
 
-            let feature = geojson::Feature {
+            geojson::Feature {
                 bbox: None,
                 geometry: Some(geojson::Geometry {
                     bbox: None,
@@ -835,9 +835,7 @@ async fn chateaus(
                 id: Some(geojson::feature::Id::String(chateau.chateau.clone())),
                 properties: Some(properties),
                 foreign_members: None,
-            };
-
-            feature
+            }
         })
         .collect::<Vec<Feature>>();
 

@@ -98,7 +98,7 @@ tilejson = "0.4.1"
 tile-grid = "=0.2.2"
 zstd-safe = "7.1.0"
 hitbox = "0.1.1"
-cached = "0.49.2"
+cached = { version = "0.49.2", features = ["async_tokio_rt_multi_thread", "disk_store"] }
 geo-booleanop = "0.3.2"
 geo-clipper = "0.8.0"
 random-string = "1.1.0"
@@ -113,6 +113,7 @@ ipnetwork = "0.20.0"
 pnet = "0.34.0"
 crossbeam = "0.8.4"
 leapfrog = { version = "0.3.0", features = ["stable_alloc"] }
+scc = "2.1.0"
 
 [[bin]]
 name = "maple"

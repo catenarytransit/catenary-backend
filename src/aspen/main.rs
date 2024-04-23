@@ -24,18 +24,16 @@
     clippy::iter_nth,
     clippy::iter_cloned_collect
 )]
-
 use catenary::aspen::lib::*;
 use catenary::postgres_tools::make_async_pool;
 use clap::Parser;
-use dashmap::DashMap;
 use futures::{future, prelude::*};
-use leapfrog::leapmap::LeapMap;
 use rand::{
     distributions::{Distribution, Uniform},
     thread_rng,
 };
 use std::sync::Arc;
+use std::thread;
 use std::{
     net::{IpAddr, Ipv6Addr, SocketAddr},
     time::Duration,
@@ -51,9 +49,14 @@ use uuid::Uuid;
 mod leader_thread;
 use leader_thread::aspen_leader_thread;
 mod import_alpenrose;
-use catenary::aspen_dataset::GtfsRtDataStore;
+use catenary::aspen_dataset::GtfsRtType;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
+use gtfs_rt::FeedMessage;
+use scc::HashMap as SccHashMap;
+use futures::join;
+
+mod async_threads_alpenrose;
 
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
@@ -62,26 +65,11 @@ pub struct AspenServer {
     pub addr: SocketAddr,
     pub this_tailscale_ip: IpAddr,
     pub worker_id: Arc<String>, // Worker Id for this instance of Aspen
-    pub authoritative_data_store:
-        Arc<LeapMap<String, RwLock<catenary::aspen_dataset::AspenisedData>>>,
+    pub authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    // Backed up in redis as well, program can be shut down and restarted without data loss
+    pub authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
     pub alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
-}
-
-#[derive(Clone)]
-struct ProcessAlpenroseData {
-    chateau_id: String,
-    realtime_feed_id: String,
-    vehicles: Option<Vec<u8>>,
-    trips: Option<Vec<u8>>,
-    alerts: Option<Vec<u8>>,
-    has_vehicles: bool,
-    has_trips: bool,
-    has_alerts: bool,
-    vehicles_response_code: Option<u16>,
-    trips_response_code: Option<u16>,
-    alerts_response_code: Option<u16>,
-    time_of_submission_ms: u64,
 }
 
 impl AspenRpc for AspenServer {
@@ -108,28 +96,32 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-        self.alpenrose_to_process_queue.push(
-            ProcessAlpenroseData {
-                chateau_id,
-                realtime_feed_id,
-                vehicles,
-                trips,
-                alerts,
-                has_vehicles,
-                has_trips,
-                has_alerts,
-                vehicles_response_code,
-                trips_response_code,
-                alerts_response_code,
-                time_of_submission_ms
-            }
-        );
+        self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
+            chateau_id,
+            realtime_feed_id,
+            vehicles,
+            trips,
+            alerts,
+            has_vehicles,
+            has_trips,
+            has_alerts,
+            vehicles_response_code,
+            trips_response_code,
+            alerts_response_code,
+            time_of_submission_ms,
+        });
         true
     }
 }
 
 async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
     tokio::spawn(fut);
+}
+
+#[derive(Parser, Debug)]
+struct Args {
+    alpenrosethreadcount: usize,
+    channels: usize,
 }
 
 #[tokio::main]
@@ -141,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
     let conn_pool: CatenaryPostgresPool = make_async_pool().await.unwrap();
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
 
-    // let flags = Flags::parse();
+    let args = Args::parse();
     //init_tracing("Tarpc Example Server")?;
 
     let tailscale_ip = catenary::tailscale::interface().expect("no tailscale interface found");
@@ -156,49 +148,69 @@ async fn main() -> anyhow::Result<()> {
     let chateau_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
 
     let process_from_alpenrose_queue = Arc::new(Injector::<ProcessAlpenroseData>::new());
+    let raw_gtfs = Arc::new(SccHashMap::new());
+    let authoritative_data_store = Arc::new(SccHashMap::new());
 
     //run both the leader and the listener simultaniously
-    futures::join!(
-        {
-            let workers_nodes = Arc::clone(&workers_nodes);
-            let chateau_list = Arc::clone(&chateau_list);
-            let this_worker_id = Arc::clone(&this_worker_id);
-            let tailscale_ip = Arc::new(tailscale_ip);
-            let arc_conn_pool = Arc::clone(&arc_conn_pool);
-            async {
-                aspen_leader_thread(
-                    workers_nodes,
-                    chateau_list,
-                    this_worker_id,
-                    tailscale_ip,
-                    arc_conn_pool,
-                )
-                .await;
-            }
-        },
-        listener
-            // Ignore accept errors.
-            .filter_map(|r| future::ready(r.ok()))
-            .map(server::BaseChannel::with_defaults)
-            // Limit channels to 1 per IP.
-            .max_channels_per_key(1, |t| t.transport().peer_addr().unwrap().ip())
-            // serve is generated by the service attribute. It takes as input any type implementing
-            // the generated World trait.
-            .map(|channel| {
-                let server = AspenServer {
-                    addr: channel.transport().peer_addr().unwrap(),
-                    this_tailscale_ip: tailscale_ip,
-                    worker_id: Arc::clone(&this_worker_id),
-                    authoritative_data_store: Arc::new(DashMap::new()),
-                    conn_pool: Arc::clone(&arc_conn_pool),
-                    process_from_alpenrose_queue: Arc::clone(&process_from_alpenrose_queue)
-                };
-                channel.execute(server.serve()).for_each(spawn)
-            })
-            // Max n channels.
-            .buffer_unordered(32)
-            .for_each(|_| async {})
-    );
+
+    let leader_thread_handler = thread::spawn({
+        let workers_nodes = Arc::clone(&workers_nodes);
+        let chateau_list = Arc::clone(&chateau_list);
+        let this_worker_id = Arc::clone(&this_worker_id);
+        let tailscale_ip = Arc::new(tailscale_ip);
+        let arc_conn_pool = Arc::clone(&arc_conn_pool);
+        move || async {
+            aspen_leader_thread(
+                workers_nodes,
+                chateau_list,
+                this_worker_id,
+                tailscale_ip,
+                arc_conn_pool,
+            )
+            .await;
+        }
+    });
+
+    let async_from_alpenrose_processor_handler = thread::spawn({
+        let alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
+        let authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
+        let authoritative_data_store = Arc::clone(&authoritative_data_store);
+        let conn_pool = Arc::clone(&arc_conn_pool);
+        let thread_count = args.alpenrosethreadcount.clone();
+        move || async move {
+            async_threads_alpenrose::alpenrose_process_threads(
+                alpenrose_to_process_queue,
+                authoritative_gtfs_rt_store,
+                authoritative_data_store,
+                conn_pool,
+                thread_count,
+            )
+            .await;
+        }
+    });
+
+    listener
+        // Ignore accept errors.
+        .filter_map(|r| future::ready(r.ok()))
+        .map(server::BaseChannel::with_defaults)
+        .map(|channel| {
+            let server = AspenServer {
+                addr: channel.transport().peer_addr().unwrap(),
+                this_tailscale_ip: tailscale_ip,
+                worker_id: Arc::clone(&this_worker_id),
+                authoritative_data_store: Arc::clone(&authoritative_data_store),
+                conn_pool: Arc::clone(&arc_conn_pool),
+                alpenrose_to_process_queue: Arc::clone(&process_from_alpenrose_queue),
+                authoritative_gtfs_rt_store: Arc::clone(&raw_gtfs),
+            };
+            channel.execute(server.serve()).for_each(spawn)
+        })
+        // Max n channels.
+        .buffer_unordered(args.channels)
+        .for_each(|_| async {})
+        .await;
+
+    join!(async_from_alpenrose_processor_handler.join().unwrap(), leader_thread_handler.join().unwrap());
 
     Ok(())
 }

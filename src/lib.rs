@@ -167,7 +167,6 @@ pub mod aspen_dataset {
         pub impacted_routes_alerts: Option<HashMap<String, Vec<String>>>,
         pub impacted_stops_alerts: Option<HashMap<String, Vec<String>>>,
         pub impacted_routes_stops_alerts: Option<HashMap<String, Vec<String>>>,
-        pub raw_gtfs_rt: BTreeMap<String, GtfsRtDataStore>,
     }
 
     pub struct AspenisedVehiclePosition {
@@ -193,10 +192,11 @@ pub mod aspen_dataset {
         route_text_colour: Option<String>,
     }
 
-    pub struct GtfsRtDataStore {
-        pub vehicle_positions: Option<gtfs_rt::FeedMessage>,
-        pub trip_updates: Option<gtfs_rt::FeedMessage>,
-        pub alerts: Option<gtfs_rt::FeedMessage>,
+    #[derive(Copy, Eq, Hash, PartialEq, Clone)]
+    pub enum GtfsRtType {
+        VehiclePositions,
+        TripUpdates,
+        Alerts,
     }
 }
 

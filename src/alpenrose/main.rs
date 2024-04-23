@@ -401,8 +401,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
         if let Some(last_updated_assignment_time) = last_updated_assignment_time_zk_fetch {
             let last_updated_assignment_time =
-                bincode::deserialize(&last_updated_assignment_time.0)
-                    .unwrap_or_else(|_| None::<u64>);
+                bincode::deserialize(&last_updated_assignment_time.0).unwrap_or(None::<u64>);
 
             //is the time newer than the last time we updated the assignments for this worker node?
             if last_updated_assignment_time != last_updated_ms_for_this_worker {

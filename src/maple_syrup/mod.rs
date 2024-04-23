@@ -155,13 +155,10 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
         let itinerary_cover = ItineraryCover {
             stop_sequences: stop_diffs,
-            direction_id: match trip.direction_id {
-                Some(direction) => Some(match direction {
-                    DirectionType::Outbound => false,
-                    DirectionType::Inbound => true,
-                }),
-                None => None,
-            },
+            direction_id: trip.direction_id.map(|direction| match direction {
+                DirectionType::Outbound => false,
+                DirectionType::Inbound => true,
+            }),
             route_id: trip.route_id.clone(),
             trip_headsign: trip.trip_headsign.clone(),
             timezone: timezone,

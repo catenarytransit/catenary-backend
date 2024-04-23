@@ -13,10 +13,12 @@ use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use gtfs_rt::TripUpdate;
 use prost::Message;
+use scc::HashMap as SccHashMap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use gtfs_rt::FeedMessage;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-mta~nyc~rt~subway~1~2~3~4~5~6~7",
@@ -31,7 +33,8 @@ const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
 ];
 
 pub async fn new_rt_data(
-    authoritative_data_store: Arc<DashMap<String, RwLock<catenary::aspen_dataset::AspenisedData>>>,
+    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_gtfs_rt:Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     chateau_id: String,
     realtime_feed_id: String,
     vehicles: Option<Vec<u8>>,
@@ -49,7 +52,7 @@ pub async fn new_rt_data(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
 
-    let vehicle = match vehicles {
+    let vehicles_gtfs_rt = match vehicles {
         Some(v) => match parse_gtfs_rt_message(&v.as_slice()) {
             Ok(v) => Some(v),
             Err(e) => {
@@ -60,7 +63,7 @@ pub async fn new_rt_data(
         None => None,
     };
 
-    let trip = match trips {
+    let trips_gtfs_rt = match trips {
         Some(t) => match parse_gtfs_rt_message(&t.as_slice()) {
             Ok(t) => Some(t),
             Err(e) => {
@@ -71,7 +74,7 @@ pub async fn new_rt_data(
         None => None,
     };
 
-    let alert = match alerts {
+    let alerts_gtfs_rt = match alerts {
         Some(a) => match parse_gtfs_rt_message(&a.as_slice()) {
             Ok(a) => Some(a),
             Err(e) => {
@@ -83,6 +86,23 @@ pub async fn new_rt_data(
     };
 
     //get and update raw gtfs_rt data
+
+    if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
+        authoritative_gtfs_rt.entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions)).and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
+        .or_insert(vehicles_gtfs_rt.clone());
+    }
+
+    if let Some(trip_gtfs_rt) = &trips_gtfs_rt {
+        authoritative_gtfs_rt.entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+        .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
+        .or_insert(trip_gtfs_rt.clone());
+    }
+
+    if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
+        authoritative_gtfs_rt.entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
+        .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
+        .or_insert(alerts_gtfs_rt.clone());
+    }
 
     let this_chateau_dashmap = authoritative_data_store.get(&realtime_feed_id);
 
@@ -97,45 +117,12 @@ pub async fn new_rt_data(
             impacted_routes_alerts: None,
             impacted_stops_alerts: None,
             impacted_routes_stops_alerts: None,
-            raw_gtfs_rt: BTreeMap::new(),
         };
-        authoritative_data_store.insert(realtime_feed_id.clone(), RwLock::new(new_aspenised_data));
+        let _ = authoritative_data_store.insert(realtime_feed_id.clone(), new_aspenised_data);
     }
 
     //now it exists!
     let this_chateau_dashmap = authoritative_data_store.get(&realtime_feed_id).unwrap();
-
-    let mut this_chateau_lock = this_chateau_dashmap.write().await;
-
-    let mutable_raw_gtfs_rt = this_chateau_lock
-        .raw_gtfs_rt
-        .get_mut(&realtime_feed_id.clone());
-
-    match mutable_raw_gtfs_rt {
-        Some(m) => {
-            if m.vehicle_positions.is_none() && vehicle.is_some() {
-                m.vehicle_positions = vehicle;
-            }
-
-            if m.trip_updates.is_none() && trip.is_some() {
-                m.trip_updates = trip;
-            }
-
-            if m.alerts.is_none() && alert.is_some() {
-                m.alerts = alert;
-            }
-        }
-        None => {
-            let mut new_gtfs_rt_data = catenary::aspen_dataset::GtfsRtDataStore {
-                vehicle_positions: vehicle,
-                trip_updates: trip,
-                alerts: alert,
-            };
-            this_chateau_lock
-                .raw_gtfs_rt
-                .insert(realtime_feed_id.clone(), new_gtfs_rt_data);
-        }
-    }
 
     // take all the gtfs rt data and merge it together
 
@@ -145,6 +132,8 @@ pub async fn new_rt_data(
     let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: HashMap<String, Vec<String>> =
         HashMap::new();
 
+    use catenary::schema::gtfs::static_download_attempts as static_download_attempts_pg_schema;
+    use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
 
     //get all routes inside chateau from postgres db
@@ -155,19 +144,19 @@ pub async fn new_rt_data(
         .await
         .unwrap();
 
-    for (realtime_feed_id, gtfs_dataset) in this_chateau_lock.raw_gtfs_rt.iter() {
-        if gtfs_dataset.vehicle_positions.is_some() {
+    //for (realtime_feed_id, gtfs_dataset) in this_chateau_lock.raw_gtfs_rt.iter() {
+    //   if gtfs_dataset.vehicle_positions.is_some() {
 
-            //for trips, batch lookups by groups of 100
-            //collect all common itinerary patterns and look those up
+    //for trips, batch lookups by groups of 100
+    //collect all common itinerary patterns and look those up
 
-            //combine them together and insert them with the vehicles positions
-        }
+    //combine them together and insert them with the vehicles positions
+    //   }
 
-        // trips can be left fairly raw for now, with a lot of data references
+    // trips can be left fairly raw for now, with a lot of data references
 
-        // ignore alerts for now, as well as trip modifications
-    }
+    // ignore alerts for now, as well as trip modifications
+    // }
 
     true
 }

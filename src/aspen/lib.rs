@@ -49,3 +49,19 @@ pub struct RealtimeFeedMetadataZookeeper {
 pub struct ChateausLeaderHashMap {
     pub chateaus: BTreeMap<String, ChateauDataNoGeometry>,
 }
+
+#[derive(Clone)]
+pub struct ProcessAlpenroseData {
+    pub chateau_id: String,
+    pub realtime_feed_id: String,
+    pub vehicles: Option<Vec<u8>>,
+    pub trips: Option<Vec<u8>>,
+    pub alerts: Option<Vec<u8>>,
+    pub has_vehicles: bool,
+    pub has_trips: bool,
+    pub has_alerts: bool,
+    pub vehicles_response_code: Option<u16>,
+    pub trips_response_code: Option<u16>,
+    pub alerts_response_code: Option<u16>,
+    pub time_of_submission_ms: u64,
+}

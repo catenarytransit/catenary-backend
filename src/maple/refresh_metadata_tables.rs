@@ -126,9 +126,8 @@ pub async fn refresh_metadata_assignments(
                 false => Some({
                     let mut merged_hull: geo::MultiPolygon =
                         hulls_from_static_geo_types[0].clone().into();
-                    for i in 1..hulls_from_static_geo_types.len() {
-                        merged_hull =
-                            merged_hull.union(&hulls_from_static_geo_types[i].clone(), 10000.0);
+                    for hull_subset in hulls_from_static_geo_types.iter().skip(1) {
+                        merged_hull = merged_hull.union(&hull_subset.clone(), 10000.0);
                     }
                     merged_hull
                 }),
