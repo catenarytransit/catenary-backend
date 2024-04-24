@@ -15,9 +15,11 @@ async fn main() {
         8080,
     );
 
-    let mut transport = tarpc::serde_transport::tcp::connect(socket_addr, Bincode::default)
+    println!("Will connect to {:?}", socket_addr);
+
+    let transport = tarpc::serde_transport::tcp::connect(socket_addr, Bincode::default)
         .await
-        .unwrap();
+        .expect("Failed to connect to Aspen");
 
     let aspen_client =
         catenary::aspen::lib::AspenRpcClient::new(tarpc::client::Config::default(), transport)
@@ -27,4 +29,13 @@ async fn main() {
     let tarpc_send_to_aspen = aspen_client
         .hello(tarpc::context::current(), "Kyler".to_string())
         .await;
+
+    match tarpc_send_to_aspen {
+        Ok(response) => {
+            println!("Response from Aspen: {}", response);
+        }
+        Err(e) => {
+            println!("Error from Aspen: {}", e);
+        }
+    }
 }
