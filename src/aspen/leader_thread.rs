@@ -29,6 +29,7 @@ pub async fn aspen_leader_thread(
     println!("starting leader thread");
 
     let conn_pool = arc_conn_pool.as_ref();
+    println!("Leader is attempting to form a connection to postgres");
     let conn_pre = conn_pool.get().await;
 
     if let Err(conn_pre) = &conn_pre {
