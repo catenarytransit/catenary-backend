@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use ahash::{AHashSet,AHashMap};
 use tokio::sync::RwLock;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
@@ -129,11 +130,11 @@ pub async fn new_rt_data(
 
     // take all the gtfs rt data and merge it together
 
-    let mut aspenised_vehicle_positions: HashMap<String, AspenisedVehiclePosition> = HashMap::new();
-    let mut vehicle_routes_cache: HashMap<String, AspenisedVehicleRouteCache> = HashMap::new();
-    let mut trip_updates: HashMap<String, TripUpdate> = HashMap::new();
-    let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: HashMap<String, Vec<String>> =
-        HashMap::new();
+    let mut aspenised_vehicle_positions: AHashMap<String, AspenisedVehiclePosition> = AHashMap::new();
+    let mut vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache> = AHashMap::new();
+    let mut trip_updates: AHashMap<String, TripUpdate> = AHashMap::new();
+    let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> =
+        AHashMap::new();
 
     use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
@@ -170,7 +171,7 @@ pub async fn new_rt_data(
     //collect all trip ids that must be looked up
     //collect all common itinerary patterns and look those up
 
-    let mut trip_ids_to_lookup: HashSet<String> = HashSet::new();
+    let mut trip_ids_to_lookup: AHashSet<String> = AHashSet::new();
 
     for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
         if let Some(vehicle_gtfs_rt_for_feed_id) =
@@ -218,7 +219,7 @@ pub async fn new_rt_data(
             .load::<catenary::models::CompressedTrip>(conn)
             .await?;
 
-        let mut trip_id_to_trip: HashMap<String, catenary::models::CompressedTrip> = HashMap::new();
+        let mut trip_id_to_trip: AHashMap<String, catenary::models::CompressedTrip> = AHashMap::new();
 
         for trip in trips {
             trip_id_to_trip.insert(trip.trip_id.clone(), trip);
@@ -244,10 +245,10 @@ pub async fn new_rt_data(
                 .load::<catenary::models::ItineraryPatternMeta>(conn)
                 .await?;
 
-        let mut itinerary_pattern_id_to_itinerary_pattern_meta: HashMap<
+        let mut itinerary_pattern_id_to_itinerary_pattern_meta: AHashMap<
             String,
             catenary::models::ItineraryPatternMeta,
-        > = HashMap::new();
+        > = AHashMap::new();
 
         for itinerary_pattern in itinerary_patterns {
             itinerary_pattern_id_to_itinerary_pattern_meta.insert(

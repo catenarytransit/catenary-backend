@@ -163,17 +163,18 @@ pub mod aspen_dataset {
     use gtfs_rt::TripUpdate;
     use gtfs_rt::VehicleDescriptor;
     use std::{collections::BTreeMap, collections::HashMap, hash::Hash};
+    use ahash::AHashMap;
 
     pub struct AspenisedData {
-        pub vehicle_positions: HashMap<String, AspenisedVehiclePosition>,
-        pub vehicle_routes_cache: HashMap<String, AspenisedVehicleRouteCache>,
+        pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
+        pub vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache>,
         //id to trip update
-        pub trip_updates: HashMap<String, TripUpdate>,
-        pub trip_updates_lookup_by_trip_id_to_trip_update_ids: HashMap<String, Vec<String>>,
-        pub raw_alerts: Option<HashMap<String, gtfs_rt::Alert>>,
-        pub impacted_routes_alerts: Option<HashMap<String, Vec<String>>>,
-        pub impacted_stops_alerts: Option<HashMap<String, Vec<String>>>,
-        pub impacted_routes_stops_alerts: Option<HashMap<String, Vec<String>>>,
+        pub trip_updates: AHashMap<String, TripUpdate>,
+        pub trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
+        pub raw_alerts: Option<AHashMap<String, gtfs_rt::Alert>>,
+        pub impacted_routes_alerts: Option<AHashMap<String, Vec<String>>>,
+        pub impacted_stops_alerts: Option<AHashMap<String, Vec<String>>>,
+        pub impacted_routes_stops_alerts: Option<AHashMap<String, Vec<String>>>,
         pub last_updated_time_ms: u64,
     }
 

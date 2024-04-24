@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use ahash::AHashMap;
 
 #[tarpc::service]
 pub trait AspenRpc {
@@ -40,8 +41,8 @@ pub trait AspenRpc {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GetVehicleLocationsResponse {
-    pub vehicle_route_cache: Option<HashMap<String, AspenisedVehicleRouteCache>>,
-    pub vehicle_positions: HashMap<String, AspenisedVehiclePosition>,
+    pub vehicle_route_cache: Option<AHashMap<String, AspenisedVehicleRouteCache>>,
+    pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
     pub hash_of_routes: u64,
     pub last_updated_time_ms: u64,
 }
