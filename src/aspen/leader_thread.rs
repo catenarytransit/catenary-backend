@@ -26,9 +26,14 @@ pub async fn aspen_leader_thread(
     tailscale_ip: Arc<IpAddr>,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
 ) {
+    println!("starting leader thread");
+
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
+
+    println!("Leader connected to postgres");
+
     loop {
         let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
             .await
