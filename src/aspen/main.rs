@@ -191,7 +191,7 @@ async fn main() -> anyhow::Result<()> {
 
     //run both the leader and the listener simultaniously
 
-    let leader_thread_handler = thread::spawn({
+    let leader_thread_handler = tokio::task::spawn({
         let workers_nodes = Arc::clone(&workers_nodes);
         let chateau_list = Arc::clone(&chateau_list);
         let this_worker_id = Arc::clone(&this_worker_id);
@@ -208,9 +208,9 @@ async fn main() -> anyhow::Result<()> {
             )
             .await;
         }
-    });
+    }());
 
-    let async_from_alpenrose_processor_handler = thread::spawn({
+    let async_from_alpenrose_processor_handler = tokio::task::spawn({
         let alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
         let authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
         let authoritative_data_store = Arc::clone(&authoritative_data_store);
@@ -226,7 +226,7 @@ async fn main() -> anyhow::Result<()> {
             )
             .await;
         }
-    });
+    }());
 
     println!("Listening on port {}", listener.local_addr().port());
 

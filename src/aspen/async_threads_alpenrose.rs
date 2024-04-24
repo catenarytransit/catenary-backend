@@ -17,10 +17,11 @@ pub async fn alpenrose_process_threads(
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
 ) {
-    let mut handler_vec: Vec<thread::JoinHandle<_>> = vec![];
+   // let mut handler_vec: Vec<thread::JoinHandle<_>> = vec![];
 
     for i in 0..alpenrosethreadcount {
-        handler_vec.push(thread::spawn({
+        //handler_vec.push();
+        tokio::task::spawn({
             let alpenrose_to_process_queue = Arc::clone(&alpenrose_to_process_queue);
             let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
             let authoritative_data_store = Arc::clone(&authoritative_data_store);
@@ -35,7 +36,7 @@ pub async fn alpenrose_process_threads(
                 )
                 .await
             }
-        }));
+        }());
     }
 
     //for handle in handler_vec.into_iter() {
