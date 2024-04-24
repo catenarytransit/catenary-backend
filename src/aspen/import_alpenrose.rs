@@ -141,6 +141,7 @@ pub async fn new_rt_data(
 
         //now look up all the trips
 
+        let trip_start = std::time::Instant::now();
         let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
             .filter(
                 catenary::schema::gtfs::trips_compressed::dsl::trip_id
@@ -148,6 +149,7 @@ pub async fn new_rt_data(
             )
             .load::<catenary::models::CompressedTrip>(conn)
             .await?;
+        let trip_duration = trip_start.elapsed(); 
 
         let mut trip_id_to_trip: AHashMap<String, catenary::models::CompressedTrip> =
             AHashMap::new();
@@ -166,6 +168,8 @@ pub async fn new_rt_data(
             list_of_itinerary_patterns_to_lookup.insert(trip.itinerary_pattern_id.clone());
         }
 
+        let itin_lookup_start = std::time::Instant::now();
+
         let itinerary_patterns =
             catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
                 .filter(
@@ -175,6 +179,8 @@ pub async fn new_rt_data(
                 .select(catenary::models::ItineraryPatternMeta::as_select())
                 .load::<catenary::models::ItineraryPatternMeta>(conn)
                 .await?;
+
+        let itin_lookup_duration = itin_lookup_start.elapsed();
 
         let mut itinerary_pattern_id_to_itinerary_pattern_meta: AHashMap<
             String,
@@ -329,10 +335,12 @@ pub async fn new_rt_data(
             });
 
         println!(
-            "Updated Chateau {} with realtime data from {}, took {} ms",
+            "Updated Chateau {} with realtime data from {}, took {} ms, with {} ms trips and {} ms itin lookup",
             chateau_id,
             realtime_feed_id,
-            start.elapsed().as_millis()
+            start.elapsed().as_millis(),
+            trip_duration.as_millis(),
+            itin_lookup_duration.as_millis()
         );
     }
     Ok(true)

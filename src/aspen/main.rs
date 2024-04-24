@@ -144,7 +144,7 @@ impl AspenRpc for AspenServer {
 
         //get and update raw gtfs_rt data
 
-        println!("Parsed FeedMessages for {}", realtime_feed_id);
+        //  println!("Parsed FeedMessages for {}", realtime_feed_id);
 
         if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
             self.authoritative_gtfs_rt_store
@@ -167,7 +167,7 @@ impl AspenRpc for AspenServer {
                 .or_insert(alerts_gtfs_rt.clone());
         }
 
-        println!("Saved FeedMessages for {}", realtime_feed_id);
+        //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
         self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
             chateau_id,
