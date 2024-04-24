@@ -64,6 +64,7 @@ pub async fn single_fetch_time(
             let trip_updates_future = run_optional_req(trip_updates_request, client.clone());
             let alerts_future = run_optional_req(alerts_request, client.clone());
 
+            println!("{}: Fetching data", feed_id);
             let (vehicle_positions_data, trip_updates_data, alerts_data) =
                 futures::join!(vehicle_positions_future, trip_updates_future, alerts_future,);
 
