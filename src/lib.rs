@@ -184,6 +184,7 @@ pub mod aspen_dataset {
         pub vehicle: Option<AspenisedVehicleDescriptor>,
         pub position: Option<CatenaryRtVehiclePosition>,
         pub timestamp: Option<u64>,
+        pub route_type: i16,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]

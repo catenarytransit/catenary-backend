@@ -277,6 +277,19 @@ pub async fn new_rt_data(
                                         wheelchair_accessible: vehicle.wheelchair_accessible,
                                     }),
                                     None => None
+                                },
+                                route_type: match &vehicle_pos.trip {
+                                    Some(trip) => match &trip.route_id {
+                                        Some(route_id) => {
+                                            let route = route_id_to_route.get(route_id);
+                                            match route {
+                                                Some(route) => route.route_type,
+                                                None => 3
+                                            }
+                                        },
+                                        None => 3
+                                    },
+                                    None => 3
                                 }
                             });
 
