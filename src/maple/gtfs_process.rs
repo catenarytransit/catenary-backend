@@ -197,7 +197,7 @@ pub async fn gtfs_process_feed(
     let start_reduction_timer = Instant::now();
     let reduction = maple_syrup::reduce(&gtfs);
     println!("Reduced schedule for {} in {:?}", feed_id, start_reduction_timer.elapsed());
-    println!("{} itineraries, {} trips, {:.2} ratio", reduction.itineraries.len(), reduction.itineraries_to_trips.len(), gtfs.trips.len() as f64 / reduction.itineraries.len() as f64);
+    println!("{} itineraries, {} trips, {:.2} ratio", reduction.itineraries.len(), reduction.trips_to_itineraries.len(), reduction.trips_to_itineraries.len() as f64 / reduction.itineraries.len() as f64);
 
     for (itinerary_id, itinerary) in &reduction.itineraries {
         let itinerary_pg_meta = ItineraryPatternMeta {
