@@ -56,7 +56,7 @@ pub async fn alpenrose_loop_process_thread(
                 "Task stolen from queue, processing {}",
                 new_ingest_task.realtime_feed_id
             );
-            new_rt_data(
+            let rt_processed_status = new_rt_data(
                 Arc::clone(&authoritative_data_store),
                 Arc::clone(&authoritative_gtfs_rt_store),
                 new_ingest_task.chateau_id,
@@ -73,6 +73,15 @@ pub async fn alpenrose_loop_process_thread(
                 Arc::clone(&conn_pool),
             )
             .await;
+
+            match rt_processed_status {
+                Ok(_) => {
+                    println!("Processed RT data for {}", new_ingest_task.realtime_feed_id);
+                }
+                Err(e) => {
+                    println!("Error processing RT data for {}: {}", new_ingest_task.realtime_feed_id, e);
+                }
+            }
         } else {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
