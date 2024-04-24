@@ -58,6 +58,8 @@ use gtfs_rt::FeedMessage;
 use scc::HashMap as SccHashMap;
 use std::error::Error;
 mod async_threads_alpenrose;
+use tokio_zookeeper::ZooKeeper;
+use tokio_zookeeper::{Acl, CreateMode};
 
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
@@ -182,6 +184,33 @@ async fn main() -> anyhow::Result<()> {
     let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Bincode::default).await?;
     //tracing::info!("Listening on port {}", listener.local_addr().port());
     listener.config_mut().max_frame_length(usize::MAX);
+
+    //register the worker with the leader
+
+    let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
+    .await
+    .unwrap();
+
+    let _ = zk
+    .create(
+        "/aspen_workers",
+        vec![],
+        Acl::open_unsafe(),
+        CreateMode::Persistent,
+    )
+    .await
+    .unwrap();
+
+    //register that the worker exists
+    let _ = zk
+    .create(
+        format!("aspen_workers/{}", this_worker_id).as_str(),
+        bincode::serialize(&tailscale_ip).unwrap(),
+        Acl::open_unsafe(),
+        CreateMode::Ephemeral,
+    )
+    .await
+    .unwrap();
 
     let workers_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let chateau_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
