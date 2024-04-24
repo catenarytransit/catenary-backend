@@ -183,6 +183,7 @@ pub async fn aspen_leader_thread(
                     }
 
                     if chateau_data_changed || aspen_workers_list_changed {
+                        println!("Assigning tasks to workers....");
                         // divide it into chunks
                         if let Some(chateau_list_lock) = chateau_list_lock.as_ref() {
                             for (index, (chateau_id, chateau)) in
@@ -239,6 +240,7 @@ pub async fn aspen_leader_thread(
                                         .unwrap();
                                 }
                             }
+                            println!("Assigned {} chateaus across {} workers", chateau_list_lock.chateaus.len(), workers_nodes_lock.len());
                         }
                     }
 
