@@ -163,7 +163,7 @@ pub async fn gtfs_process_feed(
         }
     }
 
-    std::mem::drop(agency_id_already_done);
+    drop(agency_id_already_done);
 
     //shove raw geometry into postgresql
     shapes_into_postgres(
