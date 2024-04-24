@@ -100,6 +100,8 @@ pub async fn new_rt_data(
 
     //get and update raw gtfs_rt data
 
+    println!("Parsed FeedMessages for {}", realtime_feed_id);
+
     if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
         authoritative_gtfs_rt
             .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
@@ -121,11 +123,13 @@ pub async fn new_rt_data(
             .or_insert(alerts_gtfs_rt.clone());
     }
 
+    println!("Saved FeedMessages for {}", realtime_feed_id);
+
     let this_chateau_dashmap = authoritative_data_store.get(&realtime_feed_id);
 
     // take all the gtfs rt data and merge it together
 
-    let mut vehicle_positions: HashMap<String, AspenisedVehiclePosition> = HashMap::new();
+    let mut aspenised_vehicle_positions: HashMap<String, AspenisedVehiclePosition> = HashMap::new();
     let mut vehicle_routes_cache: HashMap<String, AspenisedVehicleRouteCache> = HashMap::new();
     let mut trip_updates: HashMap<String, TripUpdate> = HashMap::new();
     let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: HashMap<String, Vec<String>> =
@@ -144,7 +148,7 @@ pub async fn new_rt_data(
     //get all routes inside chateau from postgres db
     let routes = routes_pg_schema::dsl::routes
         .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
-        .select((catenary::models::Route::as_select()))
+        .select(catenary::models::Route::as_select())
         .load::<catenary::models::Route>(conn)
         .await?;
 
@@ -162,7 +166,6 @@ pub async fn new_rt_data(
 
     // ignore alerts for now, as well as trip modifications
 
-    let mut aspenised_vehicle_positions: HashMap<String, AspenisedVehiclePosition> = HashMap::new();
 
     //collect all trip ids that must be looked up
     //collect all common itinerary patterns and look those up
