@@ -69,9 +69,6 @@ pub struct ChateausLeaderHashMap {
 pub struct ProcessAlpenroseData {
     pub chateau_id: String,
     pub realtime_feed_id: String,
-    pub vehicles: Option<Vec<u8>>,
-    pub trips: Option<Vec<u8>>,
-    pub alerts: Option<Vec<u8>>,
     pub has_vehicles: bool,
     pub has_trips: bool,
     pub has_alerts: bool,

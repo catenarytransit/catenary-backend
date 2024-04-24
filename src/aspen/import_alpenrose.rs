@@ -61,7 +61,7 @@ pub async fn new_rt_data(
 
     let vehicles_gtfs_rt = match vehicles_response_code {
         Some(200) => match vehicles {
-            Some(v) => match parse_gtfs_rt_message(&v.as_slice()) {
+            Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
                 Ok(v) => Some(v),
                 Err(e) => {
                     println!("Error decoding vehicles: {}", e);
@@ -75,7 +75,7 @@ pub async fn new_rt_data(
 
     let trips_gtfs_rt = match trips_response_code {
         Some(200) => match trips {
-            Some(t) => match parse_gtfs_rt_message(&t.as_slice()) {
+            Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
                 Ok(t) => Some(t),
                 Err(e) => {
                     println!("Error decoding trips: {}", e);
@@ -89,7 +89,7 @@ pub async fn new_rt_data(
 
     let alerts_gtfs_rt = match alerts_response_code {
         Some(200) => match alerts {
-            Some(a) => match parse_gtfs_rt_message(&a.as_slice()) {
+            Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
                 Ok(a) => Some(a),
                 Err(e) => {
                     println!("Error decoding alerts: {}", e);
