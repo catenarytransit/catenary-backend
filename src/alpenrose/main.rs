@@ -159,7 +159,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 format!("/alpenrose_assignments/{}", this_worker_id).as_str(),
                 bincode::serialize(&None::<u64>).unwrap(),
                 Acl::open_unsafe(),
-                CreateMode::Ephemeral,
+                CreateMode::Persistent,
             )
             .await
             .unwrap();
