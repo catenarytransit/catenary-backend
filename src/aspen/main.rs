@@ -249,7 +249,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }());
 
-    let result_series = tokio::try_join!(
+    let result_series = futures::future::join!(
         leader_thread_handler,
         async_from_alpenrose_processor_handler,
         tarpc_server
