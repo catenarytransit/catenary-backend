@@ -100,6 +100,7 @@ pub async fn single_fetch_time(
                     let worker_id = data.worker_id;
 
                     //send the data to the worker
+                    println!("Attempting to send {} data to {} via tarpc", feed_id, data.tailscale_ip);
                     let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
 
                     let mut transport =
