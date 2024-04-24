@@ -204,7 +204,7 @@ async fn main() -> anyhow::Result<()> {
     //register that the worker exists
     let _ = zk
     .create(
-        format!("aspen_workers/{}", this_worker_id).as_str(),
+        format!("/aspen_workers/{}", this_worker_id).as_str(),
         bincode::serialize(&tailscale_ip).unwrap(),
         Acl::open_unsafe(),
         CreateMode::Ephemeral,

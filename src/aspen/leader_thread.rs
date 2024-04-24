@@ -36,22 +36,12 @@ pub async fn aspen_leader_thread(
             .await
             .unwrap();
 
-        println!("Connected to zookeeper!");
-
-        let _ = zk
-            .create(
-                "/aspen_workers",
-                vec![],
-                Acl::open_unsafe(),
-                CreateMode::Persistent,
-            )
-            .await
-            .unwrap();
+        println!("Connected to zookeeper!");      
 
         //register that the worker exists
         let _ = zk
             .create(
-                format!("aspen_workers/{}", this_worker_id).as_str(),
+                format!("/aspen_workers/{}", this_worker_id).as_str(),
                 bincode::serialize(&tailscale_ip).unwrap(),
                 Acl::open_unsafe(),
                 CreateMode::Ephemeral,
