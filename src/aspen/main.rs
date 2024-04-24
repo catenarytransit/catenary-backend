@@ -196,7 +196,7 @@ async fn main() -> anyhow::Result<()> {
     let this_worker_id_for_leader_thread = Arc::clone(&this_worker_id);
     let tailscale_ip_for_leader_thread = Arc::new(tailscale_ip);
     let arc_conn_pool_for_leader_thread = Arc::clone(&arc_conn_pool);
-    let leader_thread_handler_for_leader_thread = tokio::task::spawn(aspen_leader_thread(
+    let leader_thread_handler = tokio::task::spawn(aspen_leader_thread(
         workers_nodes_for_leader_thread,
         chateau_list_for_leader_thread,
         this_worker_id_for_leader_thread,
@@ -249,7 +249,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }());
 
-    let result_series = futures::future::join!(
+    let result_series = futures::join!(
         leader_thread_handler,
         async_from_alpenrose_processor_handler,
         tarpc_server
