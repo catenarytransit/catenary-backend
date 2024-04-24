@@ -228,6 +228,11 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    join!(
+        async_from_alpenrose_processor_handler.join().unwrap(),
+        leader_thread_handler.join().unwrap()
+    );
+
     println!("Listening on port {}", listener.local_addr().port());
 
     listener
@@ -250,11 +255,6 @@ async fn main() -> anyhow::Result<()> {
         .buffer_unordered(channel_count)
         .for_each(|_| async {})
         .await;
-
-    join!(
-        async_from_alpenrose_processor_handler.join().unwrap(),
-        leader_thread_handler.join().unwrap()
-    );
 
     Ok(())
 }
