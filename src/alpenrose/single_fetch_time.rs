@@ -108,7 +108,7 @@ pub async fn single_fetch_time(
                     );
                     let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
 
-                    let mut transport =
+                    let transport =
                         tarpc::serde_transport::tcp::connect(socket_addr, Bincode::default)
                             .await
                             .unwrap();

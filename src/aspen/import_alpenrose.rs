@@ -52,7 +52,9 @@ pub async fn new_rt_data(
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
 
+    println!("Forming pg connection");
     let conn = &mut conn_pre?;
+    println!("Connected to postges");
 
     let vehicles_gtfs_rt = match vehicles_response_code {
         Some(200) => match vehicles {
@@ -123,7 +125,7 @@ pub async fn new_rt_data(
 
     //if this item is empty, create it
     if this_chateau_dashmap.is_none() {
-        let mut new_aspenised_data = catenary::aspen_dataset::AspenisedData {
+        let new_aspenised_data = catenary::aspen_dataset::AspenisedData {
             vehicle_positions: HashMap::new(),
             vehicle_routes_cache: HashMap::new(),
             trip_updates: HashMap::new(),
