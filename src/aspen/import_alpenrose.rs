@@ -50,6 +50,8 @@ pub async fn new_rt_data(
     alerts_response_code: Option<u16>,
     pool: Arc<CatenaryPostgresPool>,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    let start = std::time::Instant::now();
+
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
 
@@ -398,8 +400,8 @@ pub async fn new_rt_data(
             });
 
         println!(
-            "Updated Chateau {} with realtime data from {}",
-            chateau_id, realtime_feed_id
+            "Updated Chateau {} with realtime data from {}, took {} ms",
+            chateau_id, realtime_feed_id, start.elapsed().as_millis()
         );
     }
     Ok(true)
