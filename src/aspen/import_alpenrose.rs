@@ -3,6 +3,7 @@
 // Attribution cannot be removed
 
 extern crate catenary;
+use ahash::{AHashMap, AHashSet};
 use catenary::aspen_dataset::*;
 use catenary::parse_gtfs_rt_message;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -19,7 +20,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
-use ahash::{AHashSet,AHashMap};
 use tokio::sync::RwLock;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
@@ -60,7 +60,8 @@ pub async fn new_rt_data(
 
     // take all the gtfs rt data and merge it together
 
-    let mut aspenised_vehicle_positions: AHashMap<String, AspenisedVehiclePosition> = AHashMap::new();
+    let mut aspenised_vehicle_positions: AHashMap<String, AspenisedVehiclePosition> =
+        AHashMap::new();
     let mut vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache> = AHashMap::new();
     let mut trip_updates: AHashMap<String, TripUpdate> = AHashMap::new();
     let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> =
@@ -96,7 +97,6 @@ pub async fn new_rt_data(
     // trips can be left fairly raw for now, with a lot of data references
 
     // ignore alerts for now, as well as trip modifications
-
 
     //collect all trip ids that must be looked up
     //collect all common itinerary patterns and look those up
@@ -149,7 +149,8 @@ pub async fn new_rt_data(
             .load::<catenary::models::CompressedTrip>(conn)
             .await?;
 
-        let mut trip_id_to_trip: AHashMap<String, catenary::models::CompressedTrip> = AHashMap::new();
+        let mut trip_id_to_trip: AHashMap<String, catenary::models::CompressedTrip> =
+            AHashMap::new();
 
         for trip in trips {
             trip_id_to_trip.insert(trip.trip_id.clone(), trip);
@@ -329,7 +330,9 @@ pub async fn new_rt_data(
 
         println!(
             "Updated Chateau {} with realtime data from {}, took {} ms",
-            chateau_id, realtime_feed_id, start.elapsed().as_millis()
+            chateau_id,
+            realtime_feed_id,
+            start.elapsed().as_millis()
         );
     }
     Ok(true)

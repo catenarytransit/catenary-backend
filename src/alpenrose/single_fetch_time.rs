@@ -119,126 +119,141 @@ pub async fn single_fetch_time(
                     )
                     .spawn();
 
-                    if (vehicle_positions_http_status == Some(200) || trip_updates_http_status == Some(200) || alerts_http_status == Some(200)) {
+                    if (vehicle_positions_http_status == Some(200)
+                        || trip_updates_http_status == Some(200)
+                        || alerts_http_status == Some(200))
+                    {
                         let tarpc_send_to_aspen = aspen_client
-                        .from_alpenrose(
-                            tarpc::context::current(),
-                            data.chateau_id,
-                            feed_id.clone(),
-                            match vehicle_positions_data {
-                                Some(Ok(response)) => {
-                                    let bytes = response.bytes().await.unwrap().as_ref().to_vec();
+                            .from_alpenrose(
+                                tarpc::context::current(),
+                                data.chateau_id,
+                                feed_id.clone(),
+                                match vehicle_positions_data {
+                                    Some(Ok(response)) => {
+                                        let bytes =
+                                            response.bytes().await.unwrap().as_ref().to_vec();
 
-                                    let hash = ahash_fast_hash(&bytes);
+                                        let hash = ahash_fast_hash(&bytes);
 
-                                    match hashes_of_data
-                                        .get(&(feed_id.clone(), UrlType::VehiclePositions))
-                                    {
-                                        Some(old_hash) => {
-                                            let old_hash = old_hash.get();
+                                        match hashes_of_data
+                                            .get(&(feed_id.clone(), UrlType::VehiclePositions))
+                                        {
+                                            Some(old_hash) => {
+                                                let old_hash = old_hash.get();
 
-                                            //if the data has not changed, don't send it
-                                            match hash == *old_hash {
-                                                true => None,
-                                                false => {
-                                                    hashes_of_data
-                                                        .entry((
-                                                            feed_id.clone(),
-                                                            UrlType::VehiclePositions,
-                                                        ))
-                                                        .and_modify(|value| *value = hash)
-                                                        .or_insert(hash);
-                                                    Some(bytes)
+                                                //if the data has not changed, don't send it
+                                                match hash == *old_hash {
+                                                    true => None,
+                                                    false => {
+                                                        hashes_of_data
+                                                            .entry((
+                                                                feed_id.clone(),
+                                                                UrlType::VehiclePositions,
+                                                            ))
+                                                            .and_modify(|value| *value = hash)
+                                                            .or_insert(hash);
+                                                        Some(bytes)
+                                                    }
                                                 }
                                             }
+                                            None => Some(bytes),
                                         }
-                                        None => Some(bytes),
                                     }
-                                }
-                                _ => None,
-                            },
-                            match trip_updates_data {
-                                Some(Ok(response)) => {
-                                    let bytes = response.bytes().await.unwrap().as_ref().to_vec();
+                                    _ => None,
+                                },
+                                match trip_updates_data {
+                                    Some(Ok(response)) => {
+                                        let bytes =
+                                            response.bytes().await.unwrap().as_ref().to_vec();
 
-                                    let hash = ahash_fast_hash(&bytes);
+                                        let hash = ahash_fast_hash(&bytes);
 
-                                    match hashes_of_data
-                                        .get(&(feed_id.clone(), UrlType::TripUpdates))
-                                    {
-                                        Some(old_hash) => {
-                                            let old_hash = old_hash.get();
+                                        match hashes_of_data
+                                            .get(&(feed_id.clone(), UrlType::TripUpdates))
+                                        {
+                                            Some(old_hash) => {
+                                                let old_hash = old_hash.get();
 
-                                            //if the data has not changed, don't send it
-                                            match hash == *old_hash {
-                                                true => None,
-                                                false => {
-                                                    hashes_of_data
-                                                        .entry((
-                                                            feed_id.clone(),
-                                                            UrlType::TripUpdates,
-                                                        ))
-                                                        .and_modify(|value| *value = hash)
-                                                        .or_insert(hash);
-                                                    Some(bytes)
+                                                //if the data has not changed, don't send it
+                                                match hash == *old_hash {
+                                                    true => None,
+                                                    false => {
+                                                        hashes_of_data
+                                                            .entry((
+                                                                feed_id.clone(),
+                                                                UrlType::TripUpdates,
+                                                            ))
+                                                            .and_modify(|value| *value = hash)
+                                                            .or_insert(hash);
+                                                        Some(bytes)
+                                                    }
                                                 }
                                             }
+                                            None => Some(bytes),
                                         }
-                                        None => Some(bytes),
                                     }
-                                }
-                                _ => None,
-                            },
-                            match alerts_data {
-                                Some(Ok(response)) => {
-                                    let bytes = response.bytes().await.unwrap().as_ref().to_vec();
+                                    _ => None,
+                                },
+                                match alerts_data {
+                                    Some(Ok(response)) => {
+                                        let bytes =
+                                            response.bytes().await.unwrap().as_ref().to_vec();
 
-                                    let hash = ahash_fast_hash(&bytes);
+                                        let hash = ahash_fast_hash(&bytes);
 
-                                    match hashes_of_data.get(&(feed_id.clone(), UrlType::Alerts)) {
-                                        Some(old_hash) => {
-                                            let old_hash = old_hash.get();
+                                        match hashes_of_data
+                                            .get(&(feed_id.clone(), UrlType::Alerts))
+                                        {
+                                            Some(old_hash) => {
+                                                let old_hash = old_hash.get();
 
-                                            //if the data has not changed, don't send it
-                                            match hash == *old_hash {
-                                                true => None,
-                                                false => {
-                                                    hashes_of_data
-                                                        .entry((feed_id.clone(), UrlType::Alerts))
-                                                        .and_modify(|value| *value = hash)
-                                                        .or_insert(hash);
-                                                    Some(bytes)
+                                                //if the data has not changed, don't send it
+                                                match hash == *old_hash {
+                                                    true => None,
+                                                    false => {
+                                                        hashes_of_data
+                                                            .entry((
+                                                                feed_id.clone(),
+                                                                UrlType::Alerts,
+                                                            ))
+                                                            .and_modify(|value| *value = hash)
+                                                            .or_insert(hash);
+                                                        Some(bytes)
+                                                    }
                                                 }
                                             }
+                                            None => Some(bytes),
                                         }
-                                        None => Some(bytes),
                                     }
-                                }
-                                _ => None,
-                            },
-                            assignment.realtime_vehicle_positions.is_some(),
-                            assignment.realtime_trip_updates.is_some(),
-                            assignment.realtime_alerts.is_some(),
-                            vehicle_positions_http_status,
-                            trip_updates_http_status,
-                            alerts_http_status,
-                            duration_since_unix_epoch().as_millis() as u64,
-                        )
-                        .await;
+                                    _ => None,
+                                },
+                                assignment.realtime_vehicle_positions.is_some(),
+                                assignment.realtime_trip_updates.is_some(),
+                                assignment.realtime_alerts.is_some(),
+                                vehicle_positions_http_status,
+                                trip_updates_http_status,
+                                alerts_http_status,
+                                duration_since_unix_epoch().as_millis() as u64,
+                            )
+                            .await;
 
-                    match tarpc_send_to_aspen {
-                        Ok(_) => {
-                            println!("{}: Successfully sent data sent to {}", feed_id, worker_id);
+                        match tarpc_send_to_aspen {
+                            Ok(_) => {
+                                println!(
+                                    "{}: Successfully sent data sent to {}",
+                                    feed_id, worker_id
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "{}: Error sending data to {}: {}",
+                                    feed_id, worker_id, e
+                                );
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("{}: Error sending data to {}: {}", feed_id, worker_id, e);
-                        }
-                    }
                     } else {
                         println!("{}: No data to send", feed_id);
                     }
-
-                   
                 }
                 None => {
                     eprintln!("{} was not assigned to a worker", feed_id);

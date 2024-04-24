@@ -6,11 +6,11 @@
 /// It defines one RPC, hello, which takes one arg, name, and returns a String.
 use crate::aspen_dataset::*;
 use crate::ChateauDataNoGeometry;
+use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use ahash::AHashMap;
 
 #[tarpc::service]
 pub trait AspenRpc {

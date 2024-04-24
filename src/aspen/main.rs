@@ -58,9 +58,9 @@ use gtfs_rt::FeedMessage;
 use scc::HashMap as SccHashMap;
 use std::error::Error;
 mod async_threads_alpenrose;
+use catenary::parse_gtfs_rt_message;
 use tokio_zookeeper::ZooKeeper;
 use tokio_zookeeper::{Acl, CreateMode};
-use catenary::parse_gtfs_rt_message;
 
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
@@ -100,7 +100,6 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-
         let vehicles_gtfs_rt = match vehicles_response_code {
             Some(200) => match vehicles {
                 Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
@@ -114,7 +113,7 @@ impl AspenRpc for AspenServer {
             },
             _ => None,
         };
-    
+
         let trips_gtfs_rt = match trips_response_code {
             Some(200) => match trips {
                 Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
@@ -128,7 +127,7 @@ impl AspenRpc for AspenServer {
             },
             _ => None,
         };
-    
+
         let alerts_gtfs_rt = match alerts_response_code {
             Some(200) => match alerts {
                 Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
@@ -142,32 +141,32 @@ impl AspenRpc for AspenServer {
             },
             _ => None,
         };
-    
+
         //get and update raw gtfs_rt data
-    
+
         println!("Parsed FeedMessages for {}", realtime_feed_id);
-    
+
         if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
             self.authoritative_gtfs_rt_store
                 .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
                 .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
                 .or_insert(vehicles_gtfs_rt.clone());
         }
-    
+
         if let Some(trip_gtfs_rt) = &trips_gtfs_rt {
             self.authoritative_gtfs_rt_store
                 .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
                 .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
                 .or_insert(trip_gtfs_rt.clone());
         }
-    
+
         if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
             self.authoritative_gtfs_rt_store
                 .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
                 .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
                 .or_insert(alerts_gtfs_rt.clone());
         }
-    
+
         println!("Saved FeedMessages for {}", realtime_feed_id);
 
         self.alpenrose_to_process_queue.push(ProcessAlpenroseData {

@@ -160,10 +160,10 @@ pub mod tailscale {
 }
 
 pub mod aspen_dataset {
+    use ahash::AHashMap;
     use gtfs_rt::TripUpdate;
     use gtfs_rt::VehicleDescriptor;
     use std::{collections::BTreeMap, collections::HashMap, hash::Hash};
-    use ahash::AHashMap;
 
     pub struct AspenisedData {
         pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
