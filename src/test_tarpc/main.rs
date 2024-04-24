@@ -12,7 +12,7 @@ async fn main() {
 
     let socket_addr = SocketAddr::new(
         IpAddr::V6(Ipv6Addr::from_str("fd7a:115c:a1e0::4").unwrap()),
-        8080,
+        40427,
     );
 
     println!("Will connect to {:?}", socket_addr);
