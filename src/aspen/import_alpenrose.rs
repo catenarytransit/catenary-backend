@@ -123,25 +123,6 @@ pub async fn new_rt_data(
 
     let this_chateau_dashmap = authoritative_data_store.get(&realtime_feed_id);
 
-    //if this item is empty, create it
-    if this_chateau_dashmap.is_none() {
-        let new_aspenised_data = catenary::aspen_dataset::AspenisedData {
-            vehicle_positions: HashMap::new(),
-            vehicle_routes_cache: HashMap::new(),
-            trip_updates: HashMap::new(),
-            trip_updates_lookup_by_trip_id_to_trip_update_ids: HashMap::new(),
-            raw_alerts: None,
-            impacted_routes_alerts: None,
-            impacted_stops_alerts: None,
-            impacted_routes_stops_alerts: None,
-            last_updated_time_ms: 0,
-        };
-        let _ = authoritative_data_store.insert(realtime_feed_id.clone(), new_aspenised_data);
-    }
-
-    //now it exists!
-    let this_chateau_dashmap = authoritative_data_store.get(&realtime_feed_id).unwrap();
-
     // take all the gtfs rt data and merge it together
 
     let mut vehicle_positions: HashMap<String, AspenisedVehiclePosition> = HashMap::new();

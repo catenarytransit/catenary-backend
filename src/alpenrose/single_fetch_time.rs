@@ -119,7 +119,8 @@ pub async fn single_fetch_time(
                     )
                     .spawn();
 
-                    let tarpc_send_to_aspen = aspen_client
+                    if (vehicle_positions_http_status == Some(200) || trip_updates_http_status == Some(200) || alerts_http_status == Some(200)) {
+                        let tarpc_send_to_aspen = aspen_client
                         .from_alpenrose(
                             tarpc::context::current(),
                             data.chateau_id,
@@ -233,6 +234,11 @@ pub async fn single_fetch_time(
                             eprintln!("{}: Error sending data to {}: {}", feed_id, worker_id, e);
                         }
                     }
+                    } else {
+                        println!("{}: No data to send", feed_id);
+                    }
+
+                   
                 }
                 None => {
                     eprintln!("{} was not assigned to a worker", feed_id);
