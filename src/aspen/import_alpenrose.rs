@@ -158,128 +158,130 @@ pub async fn new_rt_data(
         .first::<catenary::models::Chateau>(conn)
         .await?;
 
-            //get all routes inside chateau from postgres db
-            let routes = routes_pg_schema::dsl::routes
-                .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
-                .select((catenary::models::Route::as_select()))
-                .load::<catenary::models::Route>(conn)
-                .await?;
+    //get all routes inside chateau from postgres db
+    let routes = routes_pg_schema::dsl::routes
+        .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
+        .select((catenary::models::Route::as_select()))
+        .load::<catenary::models::Route>(conn)
+        .await?;
 
-            let mut route_id_to_route: HashMap<String, catenary::models::Route> = HashMap::new();
+    let mut route_id_to_route: HashMap<String, catenary::models::Route> = HashMap::new();
 
-            for route in routes {
-                route_id_to_route.insert(route.route_id.clone(), route);
+    for route in routes {
+        route_id_to_route.insert(route.route_id.clone(), route);
+    }
+
+    let route_id_to_route = route_id_to_route;
+
+    //combine them together and insert them with the vehicles positions
+
+    // trips can be left fairly raw for now, with a lot of data references
+
+    // ignore alerts for now, as well as trip modifications
+
+    let mut aspenised_vehicle_positions: HashMap<String, AspenisedVehiclePosition> = HashMap::new();
+
+    //collect all trip ids that must be looked up
+    //collect all common itinerary patterns and look those up
+
+    let mut trip_ids_to_lookup: HashSet<String> = HashSet::new();
+
+    for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
+        if let Some(vehicle_gtfs_rt_for_feed_id) =
+            authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+        {
+            let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
+
+            for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
+                if let Some(vehicle_pos) = &vehicle_entity.vehicle {
+                    if let Some(trip) = &vehicle_pos.trip {
+                        if let Some(trip_id) = &trip.trip_id {
+                            trip_ids_to_lookup.insert(trip_id.clone());
+                        }
+                    }
+                }
             }
+        }
 
-            let route_id_to_route = route_id_to_route;
+        //now do the same for alerts updates
+        if let Some(alert_gtfs_rt_for_feed_id) =
+            authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
+        {
+            let alert_gtfs_rt_for_feed_id = alert_gtfs_rt_for_feed_id.get();
 
-            //combine them together and insert them with the vehicles positions
-
-            // trips can be left fairly raw for now, with a lot of data references
-
-            // ignore alerts for now, as well as trip modifications
-
-            let mut aspenised_vehicle_positions: HashMap<String, AspenisedVehiclePosition> =
-                HashMap::new();
-
-            //collect all trip ids that must be looked up
-            //collect all common itinerary patterns and look those up
-
-            let mut trip_ids_to_lookup: HashSet<String> = HashSet::new();
-
-            for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
-                if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
-                    .get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
-                {
-                    let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
-
-                    for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
-                        if let Some(vehicle_pos) = &vehicle_entity.vehicle {
-                            if let Some(trip) = &vehicle_pos.trip {
-                                if let Some(trip_id) = &trip.trip_id {
-                                    trip_ids_to_lookup.insert(trip_id.clone());
-                                }
+            for alert_entity in alert_gtfs_rt_for_feed_id.entity.iter() {
+                if let Some(alert) = &alert_entity.alert {
+                    for entity in alert.informed_entity.iter() {
+                        if let Some(trip) = &entity.trip {
+                            if let Some(trip_id) = &trip.trip_id {
+                                trip_ids_to_lookup.insert(trip_id.clone());
                             }
                         }
                     }
                 }
+            }
+        }
 
-                //now do the same for alerts updates
-                if let Some(alert_gtfs_rt_for_feed_id) =
-                    authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
-                {
-                    let alert_gtfs_rt_for_feed_id = alert_gtfs_rt_for_feed_id.get();
+        //now look up all the trips
 
-                    for alert_entity in alert_gtfs_rt_for_feed_id.entity.iter() {
-                        if let Some(alert) = &alert_entity.alert {
-                            for entity in alert.informed_entity.iter() {
-                                if let Some(trip) = &entity.trip {
-                                    if let Some(trip_id) = &trip.trip_id {
-                                        trip_ids_to_lookup.insert(trip_id.clone());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+            .filter(
+                catenary::schema::gtfs::trips_compressed::dsl::trip_id
+                    .eq_any(trip_ids_to_lookup.iter()),
+            )
+            .load::<catenary::models::CompressedTrip>(conn)
+            .await?;
 
-                //now look up all the trips
+        let mut trip_id_to_trip: HashMap<String, catenary::models::CompressedTrip> = HashMap::new();
 
-                let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                    .filter(
-                        catenary::schema::gtfs::trips_compressed::dsl::trip_id
-                            .eq_any(trip_ids_to_lookup.iter()),
-                    )
-                    .load::<catenary::models::CompressedTrip>(conn)
-                    .await?;
+        for trip in trips {
+            trip_id_to_trip.insert(trip.trip_id.clone(), trip);
+        }
 
-                let mut trip_id_to_trip: HashMap<String, catenary::models::CompressedTrip> =
-                    HashMap::new();
+        let trip_id_to_trip = trip_id_to_trip;
 
-                for trip in trips {
-                    trip_id_to_trip.insert(trip.trip_id.clone(), trip);
-                }
+        //also lookup all the headsigns from the trips via itinerary patterns
 
-                let trip_id_to_trip = trip_id_to_trip;
+        let mut list_of_itinerary_patterns_to_lookup: HashSet<String> = HashSet::new();
 
-                //also lookup all the headsigns from the trips via itinerary patterns
+        for trip in trip_id_to_trip.values() {
+            list_of_itinerary_patterns_to_lookup.insert(trip.itinerary_pattern_id.clone());
+        }
 
-                let mut list_of_itinerary_patterns_to_lookup: HashSet<String> = HashSet::new();
-
-                for trip in trip_id_to_trip.values() {
-                    list_of_itinerary_patterns_to_lookup.insert(trip.itinerary_pattern_id.clone());
-                }
-
-                let itinerary_patterns = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_id.eq_any(list_of_itinerary_patterns_to_lookup.iter()))
+        let itinerary_patterns =
+            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_id
+                        .eq_any(list_of_itinerary_patterns_to_lookup.iter()),
+                )
                 .select(catenary::models::ItineraryPatternMeta::as_select())
                 .load::<catenary::models::ItineraryPatternMeta>(conn)
                 .await?;
 
-                let mut itinerary_pattern_id_to_itinerary_pattern_meta: HashMap<
-                    String,
-                    catenary::models::ItineraryPatternMeta,
-                > = HashMap::new();
+        let mut itinerary_pattern_id_to_itinerary_pattern_meta: HashMap<
+            String,
+            catenary::models::ItineraryPatternMeta,
+        > = HashMap::new();
 
-                for itinerary_pattern in itinerary_patterns {
-                    itinerary_pattern_id_to_itinerary_pattern_meta.insert(
-                        itinerary_pattern.itinerary_pattern_id.clone(),
-                        itinerary_pattern,
-                    );
-                }
+        for itinerary_pattern in itinerary_patterns {
+            itinerary_pattern_id_to_itinerary_pattern_meta.insert(
+                itinerary_pattern.itinerary_pattern_id.clone(),
+                itinerary_pattern,
+            );
+        }
 
-                let itinerary_pattern_id_to_itinerary_pattern_meta =
-                    itinerary_pattern_id_to_itinerary_pattern_meta;
+        let itinerary_pattern_id_to_itinerary_pattern_meta =
+            itinerary_pattern_id_to_itinerary_pattern_meta;
 
-                for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
-                    if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
-                        .get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
-                    {
-                        let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
+        for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
+            if let Some(vehicle_gtfs_rt_for_feed_id) =
+                authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+            {
+                let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
 
-                        for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
-                            if let Some(vehicle_pos) = &vehicle_entity.vehicle {
-                                aspenised_vehicle_positions.insert(vehicle_entity.id.clone(), AspenisedVehiclePosition {
+                for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
+                    if let Some(vehicle_pos) = &vehicle_entity.vehicle {
+                        aspenised_vehicle_positions.insert(vehicle_entity.id.clone(), AspenisedVehiclePosition {
                                 trip: vehicle_pos.trip.as_ref().map(|trip| {
                                     AspenisedVehicleTripInfo {
                                         trip_id: trip.trip_id.clone(),
@@ -350,68 +352,68 @@ pub async fn new_rt_data(
                                 }
                             });
 
-                                //insert the route cache
+                        //insert the route cache
 
-                                if let Some(trip) = &vehicle_pos.trip {
-                                    if let Some(route_id) = &trip.route_id {
-                                        if !vehicle_routes_cache.contains_key(route_id) {
-                                            let route = route_id_to_route.get(route_id);
-                                            if let Some(route) = route {
-                                                vehicle_routes_cache.insert(
-                                                    route_id.clone(),
-                                                    AspenisedVehicleRouteCache {
-                                                        route_short_name: route.short_name.clone(),
-                                                        route_long_name: route.long_name.clone(),
-                                                        // route_short_name_langs: route.short_name_translations.clone(),
-                                                        //route_long_name_langs: route.short_name_translations.clone(),
-                                                        route_colour: route.color.clone(),
-                                                        route_text_colour: route.text_color.clone(),
-                                                    },
-                                                );
-                                            }
-                                        }
+                        if let Some(trip) = &vehicle_pos.trip {
+                            if let Some(route_id) = &trip.route_id {
+                                if !vehicle_routes_cache.contains_key(route_id) {
+                                    let route = route_id_to_route.get(route_id);
+                                    if let Some(route) = route {
+                                        vehicle_routes_cache.insert(
+                                            route_id.clone(),
+                                            AspenisedVehicleRouteCache {
+                                                route_short_name: route.short_name.clone(),
+                                                route_long_name: route.long_name.clone(),
+                                                // route_short_name_langs: route.short_name_translations.clone(),
+                                                //route_long_name_langs: route.short_name_translations.clone(),
+                                                route_colour: route.color.clone(),
+                                                route_text_colour: route.text_color.clone(),
+                                            },
+                                        );
                                     }
                                 }
                             }
                         }
                     }
                 }
-
-                //Insert data back into process-wide authoritative_data_store
-
-                authoritative_data_store
-                    .entry(chateau_id.clone())
-                    .and_modify(|data| {
-                        *data = AspenisedData {
-                            vehicle_positions: aspenised_vehicle_positions.clone(),
-                            vehicle_routes_cache: vehicle_routes_cache.clone(),
-                            trip_updates: trip_updates.clone(),
-                            trip_updates_lookup_by_trip_id_to_trip_update_ids:
-                                trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
-                            raw_alerts: None,
-                            impacted_routes_alerts: None,
-                            impacted_stops_alerts: None,
-                            impacted_routes_stops_alerts: None,
-                            last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis()
-                                as u64,
-                        }
-                    })
-                    .or_insert(AspenisedData {
-                        vehicle_positions: aspenised_vehicle_positions.clone(),
-                        vehicle_routes_cache: vehicle_routes_cache.clone(),
-                        trip_updates: trip_updates.clone(),
-                        trip_updates_lookup_by_trip_id_to_trip_update_ids:
-                            trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
-                        raw_alerts: None,
-                        impacted_routes_alerts: None,
-                        impacted_stops_alerts: None,
-                        impacted_routes_stops_alerts: None,
-                        last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis()
-                            as u64,
-                    });
-
-                    println!("Updated Chateau {} with realtime data from {}", chateau_id, realtime_feed_id);
             }
-            Ok(true)
-        
+        }
+
+        //Insert data back into process-wide authoritative_data_store
+
+        authoritative_data_store
+            .entry(chateau_id.clone())
+            .and_modify(|data| {
+                *data = AspenisedData {
+                    vehicle_positions: aspenised_vehicle_positions.clone(),
+                    vehicle_routes_cache: vehicle_routes_cache.clone(),
+                    trip_updates: trip_updates.clone(),
+                    trip_updates_lookup_by_trip_id_to_trip_update_ids:
+                        trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
+                    raw_alerts: None,
+                    impacted_routes_alerts: None,
+                    impacted_stops_alerts: None,
+                    impacted_routes_stops_alerts: None,
+                    last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
+                }
+            })
+            .or_insert(AspenisedData {
+                vehicle_positions: aspenised_vehicle_positions.clone(),
+                vehicle_routes_cache: vehicle_routes_cache.clone(),
+                trip_updates: trip_updates.clone(),
+                trip_updates_lookup_by_trip_id_to_trip_update_ids:
+                    trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
+                raw_alerts: None,
+                impacted_routes_alerts: None,
+                impacted_stops_alerts: None,
+                impacted_routes_stops_alerts: None,
+                last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
+            });
+
+        println!(
+            "Updated Chateau {} with realtime data from {}",
+            chateau_id, realtime_feed_id
+        );
+    }
+    Ok(true)
 }
