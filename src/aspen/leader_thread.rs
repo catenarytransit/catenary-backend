@@ -220,6 +220,11 @@ pub async fn aspen_leader_thread(
                                 // if a new node is added, carefully reassign the data
 
                                 //for now this simply round robins the chateaus around
+
+                                if (workers_nodes_lock.len() == 0) {
+                                    println!("No workers available to assign chateaus to");
+                                    break;
+                                }
                                 let selected_aspen_worker_to_assign =
                                     workers_nodes_lock[index % workers_nodes_lock.len()].clone();
 
@@ -280,7 +285,7 @@ pub async fn aspen_leader_thread(
                 }
             }
 
-            std::thread::sleep(std::time::Duration::from_secs(10));
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         } else {
             println!("Leader entry contains no data");
         }
