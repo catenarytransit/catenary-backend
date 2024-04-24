@@ -38,9 +38,9 @@ pub async fn alpenrose_process_threads(
         }));
     }
 
-    for handle in handler_vec.into_iter() {
-        handle.join().unwrap().await;
-    }
+    //for handle in handler_vec.into_iter() {
+        //handle.join().unwrap().await;
+  //  }
 }
 
 pub async fn alpenrose_loop_process_thread(
