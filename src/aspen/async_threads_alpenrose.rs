@@ -49,7 +49,7 @@ pub async fn alpenrose_loop_process_thread(
     authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) {
     loop {
         // println!("From-Alpenrose process thread");
         if let Steal::Success(new_ingest_task) = alpenrose_to_process_queue.steal() {
@@ -71,9 +71,7 @@ pub async fn alpenrose_loop_process_thread(
             )
             .await;
         } else {
-            thread::sleep(Duration::from_millis(1))
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
-
-    Ok(())
 }
