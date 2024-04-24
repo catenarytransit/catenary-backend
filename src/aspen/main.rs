@@ -198,6 +198,7 @@ async fn main() -> anyhow::Result<()> {
         let tailscale_ip = Arc::new(tailscale_ip);
         let arc_conn_pool = Arc::clone(&arc_conn_pool);
         move || async {
+            println!("starting leader thread");
             aspen_leader_thread(
                 workers_nodes,
                 chateau_list,

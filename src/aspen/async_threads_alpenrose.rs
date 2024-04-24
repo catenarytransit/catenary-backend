@@ -26,7 +26,7 @@ pub async fn alpenrose_process_threads(
             let authoritative_data_store = Arc::clone(&authoritative_data_store);
             let conn_pool = Arc::clone(&conn_pool);
             move || async move {
-                println!("Starting alpenrose reader thread {}", i);
+                println!("Starting alpenrose task queue thread {}", i);
                 alpenrose_loop_process_thread(
                     alpenrose_to_process_queue,
                     authoritative_gtfs_rt_store,
