@@ -39,6 +39,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 use tokio::runtime;
+use ahash::AHashMap;
 
 use crate::cleanup::delete_attempt_objects;
 
@@ -139,7 +140,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             "f-9q9-acealtamontcorridorexpress",
         ]
         .into_iter()
-        .map(|each_feed_id| String::from(each_feed_id)),
+        .map(String::from),
     );
 
     println!("Initializing database connection");
@@ -268,7 +269,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             .collect::<Vec<Result<(), Box<dyn Error + Send + Sync>>>>()
             .await;
 
-            let download_feed_info_hashmap: HashMap<String, DownloadedFeedsInformation> =
+            let download_feed_info_hashmap: AHashMap<String, DownloadedFeedsInformation> =
                 eligible_feeds
                     .iter()
                     .map(|download_feed_info| {
@@ -277,7 +278,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                             download_feed_info.clone(),
                         )
                     })
-                    .collect::<HashMap<String, DownloadedFeedsInformation>>();
+                    .collect::<AHashMap<String, DownloadedFeedsInformation>>();
 
             let download_feed_info_hashmap = Arc::new(download_feed_info_hashmap);
 
@@ -354,8 +355,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             // todo! perform additional checks to ensure feed is not a zip bomb
 
-            let attempt_ids: HashMap<String, String> = {
-                let mut attempt_ids = HashMap::new();
+            let attempt_ids: AHashMap<String, String> = {
+                let mut attempt_ids = AHashMap::new();
                 for (feed_id, _) in check_for_stops_ids.iter() {
                     let attempt_id =
                         format!("{}-{}", feed_id, chrono::Utc::now().timestamp_millis());

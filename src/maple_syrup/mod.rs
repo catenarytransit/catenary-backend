@@ -1,16 +1,13 @@
-use core::hash;
 // GTFS stop time compression algorithm
 // Probably not compatible with transfer patterns yet, this is just for schedule lookup for now
 use crate::enum_to_int::*;
 use crate::fast_hash;
-use fasthash::MetroHasher;
-use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::DirectionType;
-use gtfs_structures::TimepointType;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use tzf_rs::DefaultFinder;
+use ahash::AHashMap;
 
 lazy_static! {
     static ref FINDER: DefaultFinder = DefaultFinder::new();
@@ -55,15 +52,15 @@ pub struct TripUnderItinerary {
 }
 
 pub struct ResponseFromReduce {
-    pub itineraries: HashMap<u64, ItineraryCover>,
-    pub trips_to_itineraries: HashMap<String, u64>,
-    pub itineraries_to_trips: HashMap<u64, Vec<TripUnderItinerary>>,
+    pub itineraries: AHashMap<u64, ItineraryCover>,
+    pub trips_to_itineraries: AHashMap<String, u64>,
+    pub itineraries_to_trips: AHashMap<u64, Vec<TripUnderItinerary>>,
 }
 
 pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
-    let mut itineraries: HashMap<u64, ItineraryCover> = HashMap::new();
-    let mut trips_to_itineraries: HashMap<String, u64> = HashMap::new();
-    let mut itineraries_to_trips: HashMap<u64, Vec<TripUnderItinerary>> = HashMap::new();
+    let mut itineraries: AHashMap<u64, ItineraryCover> = AHashMap::new();
+    let mut trips_to_itineraries: AHashMap<String, u64> = AHashMap::new();
+    let mut itineraries_to_trips: AHashMap<u64, Vec<TripUnderItinerary>> = AHashMap::new();
 
     for (trip_id, trip) in &gtfs.trips {
         let mut stop_diffs: Vec<StopDifference> = Vec::new();
@@ -98,8 +95,8 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
             let stop_diff = StopDifference {
                 stop_id: stop_time.stop.id.clone(),
-                arrival_time_since_start: arrival_time_since_start,
-                departure_time_since_start: departure_time_since_start,
+                arrival_time_since_start,
+                departure_time_since_start,
                 continuous_pickup: continuous_pickup_drop_off_to_i16(&stop_time.continuous_pickup),
                 continuous_drop_off: continuous_pickup_drop_off_to_i16(
                     &stop_time.continuous_drop_off,
@@ -156,7 +153,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             }),
             route_id: trip.route_id.clone(),
             trip_headsign: trip.trip_headsign.clone(),
-            timezone: timezone,
+            timezone,
             shape_id: trip.shape_id.clone(),
         };
 
@@ -169,7 +166,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         let trip_under_itinerary = TripUnderItinerary {
             trip_id: trip_id.clone(),
             trip_short_name: trip.trip_short_name.clone(),
-            start_time: start_time,
+            start_time,
             service_id: trip.service_id.clone(),
             wheelchair_accessible: availability_to_int(&trip.wheelchair_accessible),
             block_id: trip.block_id.clone(),
