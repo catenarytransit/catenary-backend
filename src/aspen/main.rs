@@ -171,9 +171,10 @@ impl AspenRpc for AspenServer {
 
         //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
-        let lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
+        let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
 
         if !lock_chateau_queue.contains(&chateau_id) {
+            lock_chateau_queue.insert(chateau_id.clone());
             self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
                 chateau_id,
                 realtime_feed_id,
