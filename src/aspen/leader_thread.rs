@@ -246,6 +246,8 @@ pub async fn aspen_leader_thread(
 
                     std::mem::drop(workers_nodes_lock);
                     std::mem::drop(chateau_list_lock);
+                } else {
+                    println!("Error reading chateaus from postgres");
                 }
             }
 

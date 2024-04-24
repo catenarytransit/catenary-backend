@@ -276,6 +276,10 @@ pub async fn rail_stops(
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
 
+    if (z < 4) {
+        return HttpResponse::BadRequest().body("Zoom level too low");
+    }
+
     //let grid = tile_grid::Grid::wgs84();
 
     // let bbox = grid.tile_extent(x, y, z);
