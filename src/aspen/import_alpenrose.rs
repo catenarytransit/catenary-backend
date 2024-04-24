@@ -53,37 +53,46 @@ pub async fn new_rt_data(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
 
-    let vehicles_gtfs_rt = match vehicles {
-        Some(v) => match parse_gtfs_rt_message(&v.as_slice()) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                println!("Error decoding vehicles: {}", e);
-                None
-            }
+    let vehicles_gtfs_rt = match vehicles_response_code {
+        Some(200) => match vehicles {
+            Some(v) => match parse_gtfs_rt_message(&v.as_slice()) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    println!("Error decoding vehicles: {}", e);
+                    None
+                }
+            },
+            None => None,
         },
-        None => None,
+        _ => None,
     };
 
-    let trips_gtfs_rt = match trips {
-        Some(t) => match parse_gtfs_rt_message(&t.as_slice()) {
-            Ok(t) => Some(t),
-            Err(e) => {
-                println!("Error decoding trips: {}", e);
-                None
-            }
+    let trips_gtfs_rt = match trips_response_code {
+        Some(200) => match trips {
+            Some(t) => match parse_gtfs_rt_message(&t.as_slice()) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    println!("Error decoding trips: {}", e);
+                    None
+                }
+            },
+            None => None,
         },
-        None => None,
+        _ => None,
     };
 
-    let alerts_gtfs_rt = match alerts {
-        Some(a) => match parse_gtfs_rt_message(&a.as_slice()) {
-            Ok(a) => Some(a),
-            Err(e) => {
-                println!("Error decoding alerts: {}", e);
-                None
-            }
+    let alerts_gtfs_rt = match alerts_response_code {
+        Some(200) => match alerts {
+            Some(a) => match parse_gtfs_rt_message(&a.as_slice()) {
+                Ok(a) => Some(a),
+                Err(e) => {
+                    println!("Error decoding alerts: {}", e);
+                    None
+                }
+            },
+            None => None,
         },
-        None => None,
+        _ => None,
     };
 
     //get and update raw gtfs_rt data
