@@ -30,11 +30,13 @@ pub async fn aspen_leader_thread(
 
     loop {
 
-        println!("loop");
+       // println!("loop");
 
         let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
             .await
             .unwrap();
+
+        println!("Connected to zookeeper!");
 
         let _ = zk
             .create(
