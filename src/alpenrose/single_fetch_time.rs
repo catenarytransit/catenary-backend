@@ -206,6 +206,15 @@ pub async fn single_fetch_time(
                             duration_since_unix_epoch().as_millis() as u64,
                         )
                         .await;
+
+                    match tarpc_send_to_aspen {
+                        Ok(_) => {
+                            println!("{}: Successfully sent data sent to {}", feed_id, worker_id);
+                        }
+                        Err(e) => {
+                            eprintln!("{}: Error sending data to {}: {}", feed_id, worker_id, e);
+                        }
+                    }
                 }
                 None => {
                     eprintln!("{} was not assigned to a worker", feed_id);
