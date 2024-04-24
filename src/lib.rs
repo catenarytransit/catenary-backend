@@ -41,9 +41,9 @@ pub mod postgis_to_diesel;
 pub mod postgres_tools;
 pub mod schema;
 
+use ahash::AHasher;
 use fasthash::MetroHasher;
 use gtfs_rt::VehicleDescriptor;
-use ahash::AHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::Duration;

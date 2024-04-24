@@ -52,7 +52,10 @@ pub async fn alpenrose_loop_process_thread(
     loop {
         // println!("From-Alpenrose process thread");
         if let Steal::Success(new_ingest_task) = alpenrose_to_process_queue.steal() {
-            println!("Task stolen from queue, processing {}", new_ingest_task.realtime_feed_id);
+            println!(
+                "Task stolen from queue, processing {}",
+                new_ingest_task.realtime_feed_id
+            );
             new_rt_data(
                 Arc::clone(&authoritative_data_store),
                 Arc::clone(&authoritative_gtfs_rt_store),

@@ -165,8 +165,14 @@ pub async fn new_rt_data(
                 .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
                 .select((catenary::models::Route::as_select()))
                 .load::<catenary::models::Route>(conn)
-                .await
-                .unwrap();
+                .await;
+
+            if let Err(routes) = &routes {
+                eprintln!("{}", routes);
+                return false;
+            }
+
+            let routes = routes.unwrap();
 
             let mut route_id_to_route: HashMap<String, catenary::models::Route> = HashMap::new();
 
@@ -234,8 +240,14 @@ pub async fn new_rt_data(
                             .eq_any(trip_ids_to_lookup.iter()),
                     )
                     .load::<catenary::models::CompressedTrip>(conn)
-                    .await
-                    .unwrap();
+                    .await;
+
+                if let Err(err) = trips {
+                    eprintln!("{}", err);
+                    return false;
+                }
+
+                let trips = trips.unwrap();
 
                 let mut trip_id_to_trip: HashMap<String, catenary::models::CompressedTrip> =
                     HashMap::new();
@@ -258,8 +270,14 @@ pub async fn new_rt_data(
                 .filter(catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_id.eq_any(list_of_itinerary_patterns_to_lookup.iter()))
                 .select(catenary::models::ItineraryPatternMeta::as_select())
                 .load::<catenary::models::ItineraryPatternMeta>(conn)
-                .await
-                .unwrap();
+                .await;
+
+                if let Err(itinerary_patterns_err) = &itinerary_patterns {
+                    eprintln!("{}", itinerary_patterns_err);
+                    return false;
+                }
+
+                let itinerary_patterns = itinerary_patterns.unwrap();
 
                 let mut itinerary_pattern_id_to_itinerary_pattern_meta: HashMap<
                     String,
