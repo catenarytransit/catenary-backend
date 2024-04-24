@@ -191,23 +191,18 @@ async fn main() -> anyhow::Result<()> {
 
     //run both the leader and the listener simultaniously
 
-    let leader_thread_handler = tokio::task::spawn({
-        let workers_nodes = Arc::clone(&workers_nodes);
-        let chateau_list = Arc::clone(&chateau_list);
-        let this_worker_id = Arc::clone(&this_worker_id);
-        let tailscale_ip = Arc::new(tailscale_ip);
-        let arc_conn_pool = Arc::clone(&arc_conn_pool);
-        move || async {
-            aspen_leader_thread(
-                workers_nodes,
-                chateau_list,
-                this_worker_id,
-                tailscale_ip,
-                arc_conn_pool,
-            )
-            .await;
-        }
-    }());
+    let workers_nodes_for_leader_thread = Arc::clone(&workers_nodes);
+    let chateau_list_for_leader_thread = Arc::clone(&chateau_list);
+    let this_worker_id_for_leader_thread = Arc::clone(&this_worker_id);
+    let tailscale_ip_for_leader_thread = Arc::new(tailscale_ip);
+    let arc_conn_pool_for_leader_thread = Arc::clone(&arc_conn_pool);
+    let leader_thread_handler_for_leader_thread = tokio::task::spawn(aspen_leader_thread(
+        workers_nodes_for_leader_thread,
+        chateau_list_for_leader_thread,
+        this_worker_id_for_leader_thread,
+        tailscale_ip_for_leader_thread,
+        arc_conn_pool_for_leader_thread,
+    ));
 
     let async_from_alpenrose_processor_handler = tokio::task::spawn({
         let alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);

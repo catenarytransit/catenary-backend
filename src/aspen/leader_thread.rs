@@ -18,6 +18,7 @@ use tokio::sync::Mutex;
 use tokio_threadpool::Worker;
 use tokio_zookeeper::ZooKeeper;
 use tokio_zookeeper::{Acl, CreateMode};
+use std::error::Error;
 
 pub async fn aspen_leader_thread(
     workers_nodes: Arc<Mutex<Vec<String>>>,
@@ -25,7 +26,7 @@ pub async fn aspen_leader_thread(
     this_worker_id: Arc<String>,
     tailscale_ip: Arc<IpAddr>,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
-) {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("starting leader thread");
 
     loop {
@@ -120,7 +121,7 @@ pub async fn aspen_leader_thread(
                     eprintln!("{}", conn_pre);
                 }
 
-                let conn = &mut conn_pre.unwrap();
+                let conn = &mut conn_pre?;
 
                 println!("Leader connected to postgres");
                 //leader tasks
@@ -134,8 +135,7 @@ pub async fn aspen_leader_thread(
                     for worker_node in workers_nodes {
                         let worker_ip_data = zk
                             .get_data(format!("/aspen_workers/{}", worker_node).as_str())
-                            .await
-                            .unwrap();
+                            .await?;
 
                         if let Some((worker_ip_bytes, _)) = worker_ip_data {
                             let worker_ip: IpAddr = bincode::deserialize(&worker_ip_bytes).unwrap();
@@ -262,8 +262,7 @@ pub async fn aspen_leader_thread(
                                             Acl::open_unsafe(),
                                             CreateMode::Persistent,
                                         )
-                                        .await
-                                        .unwrap();
+                                        .await?;
                                 }
                             }
                             println!(
