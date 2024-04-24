@@ -51,6 +51,7 @@ pub async fn alpenrose_loop_process_thread(
     conn_pool: Arc<CatenaryPostgresPool>,
 ) {
     loop {
+        println!("From-Alpenrose process thread");
         if let Steal::Success(new_ingest_task) = alpenrose_to_process_queue.steal() {
             new_rt_data(
                 Arc::clone(&authoritative_data_store),
