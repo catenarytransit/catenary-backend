@@ -208,7 +208,9 @@ pub async fn aspen_leader_thread(
                         }
                     }
 
-                    if chateau_data_changed || aspen_workers_list_changed {
+                    if (workers_nodes_lock.len() == 0) {
+                        println!("No workers available to assign chateaus to");
+                    } else if chateau_data_changed || aspen_workers_list_changed {
                         println!("Assigning tasks to workers....");
                         // divide it into chunks
                         if let Some(chateau_list_lock) = chateau_list_lock.as_ref() {
@@ -221,10 +223,6 @@ pub async fn aspen_leader_thread(
 
                                 //for now this simply round robins the chateaus around
 
-                                if (workers_nodes_lock.len() == 0) {
-                                    println!("No workers available to assign chateaus to");
-                                    break;
-                                }
                                 let selected_aspen_worker_to_assign =
                                     workers_nodes_lock[index % workers_nodes_lock.len()].clone();
 

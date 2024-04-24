@@ -20,8 +20,7 @@ pub async fn alpenrose_process_threads(
     let mut handler_vec: Vec<tokio::task::JoinHandle<_>> = vec![];
 
     for i in 0..alpenrosethreadcount {
-        handler_vec.push(
-        tokio::task::spawn({
+        handler_vec.push(tokio::task::spawn({
             let alpenrose_to_process_queue = Arc::clone(&alpenrose_to_process_queue);
             let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
             let authoritative_data_store = Arc::clone(&authoritative_data_store);

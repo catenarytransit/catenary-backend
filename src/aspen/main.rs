@@ -222,42 +222,42 @@ async fn main() -> anyhow::Result<()> {
         b_thread_count,
     ));
 
-    let tarpc_server: tokio::task::JoinHandle<
-    Result<(), Box<dyn Error + Sync + Send>>,
-> = tokio::task::spawn({
-        println!("Listening on port {}", listener.local_addr().port());
+    let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
+        tokio::task::spawn({
+            println!("Listening on port {}", listener.local_addr().port());
 
-        move || async move {
-            listener
-                // Ignore accept errors.
-                .filter_map(|r| future::ready(r.ok()))
-                .map(server::BaseChannel::with_defaults)
-                .map(|channel| {
-                    let server = AspenServer {
-                        addr: channel.transport().peer_addr().unwrap(),
-                        this_tailscale_ip: tailscale_ip,
-                        worker_id: Arc::clone(&this_worker_id),
-                        authoritative_data_store: Arc::clone(&authoritative_data_store),
-                        conn_pool: Arc::clone(&arc_conn_pool),
-                        alpenrose_to_process_queue: Arc::clone(&process_from_alpenrose_queue),
-                        authoritative_gtfs_rt_store: Arc::clone(&raw_gtfs),
-                    };
-                    channel.execute(server.serve()).for_each(spawn)
-                })
-                // Max n channels.
-                .buffer_unordered(channel_count)
-                .for_each(|_| async {})
-                .await;
+            move || async move {
+                listener
+                    // Ignore accept errors.
+                    .filter_map(|r| future::ready(r.ok()))
+                    .map(server::BaseChannel::with_defaults)
+                    .map(|channel| {
+                        let server = AspenServer {
+                            addr: channel.transport().peer_addr().unwrap(),
+                            this_tailscale_ip: tailscale_ip,
+                            worker_id: Arc::clone(&this_worker_id),
+                            authoritative_data_store: Arc::clone(&authoritative_data_store),
+                            conn_pool: Arc::clone(&arc_conn_pool),
+                            alpenrose_to_process_queue: Arc::clone(&process_from_alpenrose_queue),
+                            authoritative_gtfs_rt_store: Arc::clone(&raw_gtfs),
+                        };
+                        channel.execute(server.serve()).for_each(spawn)
+                    })
+                    // Max n channels.
+                    .buffer_unordered(channel_count)
+                    .for_each(|_| async {})
+                    .await;
 
-            Ok(())
-        }
-    }());
+                Ok(())
+            }
+        }());
 
     let result_series = futures::future::join_all(vec![
         leader_thread_handler,
         async_from_alpenrose_processor_handler,
         tarpc_server,
-    ]).await;
+    ])
+    .await;
 
     Ok(())
 }
