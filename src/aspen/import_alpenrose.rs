@@ -144,17 +144,16 @@ pub async fn new_rt_data(
         let trip_start = std::time::Instant::now();
         let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
             .filter(
-                (catenary::schema::gtfs::trips_compressed::dsl::chateau
-                    .eq(&chateau_id),
-                    catenary::schema::gtfs::trips_compressed::dsl::trip_id
-                    .eq_any(trip_ids_to_lookup.iter())),
-            )
+                catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(&chateau_id),
+               )
+               .filter( catenary::schema::gtfs::trips_compressed::dsl::trip_id
+                .eq_any(trip_ids_to_lookup.iter()),
+        )
             .load::<catenary::models::CompressedTrip>(conn)
             .await?;
-        let trip_duration = trip_start.elapsed(); 
+        let trip_duration = trip_start.elapsed();
 
-        let mut trip_id_to_trip: AHashMap<String, catenary::models::CompressedTrip> =git pull
-
+        let mut trip_id_to_trip: AHashMap<String, catenary::models::CompressedTrip> =
             AHashMap::new();
 
         for trip in trips {
@@ -175,11 +174,10 @@ pub async fn new_rt_data(
 
         let itinerary_patterns =
             catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(&chateau_id))
                 .filter(
-                    (catenary::schema::gtfs::trips_compressed::dsl::chateau
-                        .eq(&chateau_id),
-                        catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_id
-                        .eq_any(list_of_itinerary_patterns_to_lookup.iter()))
+                    catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_id
+                        .eq_any(list_of_itinerary_patterns_to_lookup.iter()),
                 )
                 .select(catenary::models::ItineraryPatternMeta::as_select())
                 .load::<catenary::models::ItineraryPatternMeta>(conn)
