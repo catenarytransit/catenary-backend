@@ -39,9 +39,6 @@ pub async fn new_rt_data(
     authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     chateau_id: String,
     realtime_feed_id: String,
-    vehicles: Option<Vec<u8>>,
-    trips: Option<Vec<u8>>,
-    alerts: Option<Vec<u8>>,
     has_vehicles: bool,
     has_trips: bool,
     has_alerts: bool,
@@ -58,75 +55,6 @@ pub async fn new_rt_data(
     println!("Forming pg connection");
     let conn = &mut conn_pre?;
     println!("Connected to postges");
-
-    let vehicles_gtfs_rt = match vehicles_response_code {
-        Some(200) => match vehicles {
-            Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    println!("Error decoding vehicles: {}", e);
-                    None
-                }
-            },
-            None => None,
-        },
-        _ => None,
-    };
-
-    let trips_gtfs_rt = match trips_response_code {
-        Some(200) => match trips {
-            Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
-                Ok(t) => Some(t),
-                Err(e) => {
-                    println!("Error decoding trips: {}", e);
-                    None
-                }
-            },
-            None => None,
-        },
-        _ => None,
-    };
-
-    let alerts_gtfs_rt = match alerts_response_code {
-        Some(200) => match alerts {
-            Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
-                Ok(a) => Some(a),
-                Err(e) => {
-                    println!("Error decoding alerts: {}", e);
-                    None
-                }
-            },
-            None => None,
-        },
-        _ => None,
-    };
-
-    //get and update raw gtfs_rt data
-
-    println!("Parsed FeedMessages for {}", realtime_feed_id);
-
-    if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
-        authoritative_gtfs_rt
-            .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
-            .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
-            .or_insert(vehicles_gtfs_rt.clone());
-    }
-
-    if let Some(trip_gtfs_rt) = &trips_gtfs_rt {
-        authoritative_gtfs_rt
-            .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
-            .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
-            .or_insert(trip_gtfs_rt.clone());
-    }
-
-    if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
-        authoritative_gtfs_rt
-            .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
-            .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
-            .or_insert(alerts_gtfs_rt.clone());
-    }
-
-    println!("Saved FeedMessages for {}", realtime_feed_id);
 
     let this_chateau_dashmap = authoritative_data_store.get(&realtime_feed_id);
 
