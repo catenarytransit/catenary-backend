@@ -254,7 +254,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }());
 
-    let _ = join!(
+    let (leader_thread_result, processer_thread_result, tarpc_server_result) = tokio::join!(
         leader_thread_handler,
         async_from_alpenrose_processor_handler,
         tarpc_server
