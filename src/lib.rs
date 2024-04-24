@@ -43,6 +43,7 @@ pub mod schema;
 
 use fasthash::MetroHasher;
 use gtfs_rt::VehicleDescriptor;
+use ahash::AHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::Duration;
@@ -115,6 +116,12 @@ pub fn fast_hash<T: Hash>(t: &T) -> u64 {
     let mut s: MetroHasher = Default::default();
     t.hash(&mut s);
     s.finish()
+}
+
+pub fn ahash_fast_hash<T: Hash>(t: &T) -> u64 {
+    let mut hasher = AHasher::default();
+    t.hash(&mut hasher);
+    hasher.finish()
 }
 
 pub fn duration_since_unix_epoch() -> Duration {
