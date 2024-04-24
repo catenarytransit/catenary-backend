@@ -73,6 +73,8 @@ pub struct RealtimeFeedFetch {
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
+    println!("Worker id {}", this_worker_id);
+
     // if a node drops out, ingestion will be automatically reassigned to the other nodes
 
     //hands off data to aspen to do additional cleanup and processing, Aspen will perform association with the GTFS schedule data + update dynamic graphs for routing and map representation,
@@ -94,6 +96,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
         .await
         .unwrap();
+
+    println!("Connected to zookeeper!");
 
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
