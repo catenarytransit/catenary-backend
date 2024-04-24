@@ -12,13 +12,13 @@ use diesel::SelectableHelper;
 use diesel_async::pooled_connection::bb8::PooledConnection;
 use diesel_async::RunQueryDsl;
 use std::collections::BTreeMap;
+use std::error::Error;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_threadpool::Worker;
 use tokio_zookeeper::ZooKeeper;
 use tokio_zookeeper::{Acl, CreateMode};
-use std::error::Error;
 
 pub async fn aspen_leader_thread(
     workers_nodes: Arc<Mutex<Vec<String>>>,

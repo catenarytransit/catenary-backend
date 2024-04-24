@@ -16,7 +16,7 @@ pub async fn alpenrose_process_threads(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
-) {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // let mut handler_vec: Vec<thread::JoinHandle<_>> = vec![];
 
     for i in 0..alpenrosethreadcount {
@@ -28,13 +28,13 @@ pub async fn alpenrose_process_threads(
             let conn_pool = Arc::clone(&conn_pool);
             move || async move {
                 println!("Starting alpenrose task queue thread {}", i);
-                alpenrose_loop_process_thread(
+                let _ = alpenrose_loop_process_thread(
                     alpenrose_to_process_queue,
                     authoritative_gtfs_rt_store,
                     authoritative_data_store,
                     conn_pool,
                 )
-                .await
+                .await;
             }
         }());
     }
@@ -42,6 +42,8 @@ pub async fn alpenrose_process_threads(
     //for handle in handler_vec.into_iter() {
     //handle.join().unwrap().await;
     //  }
+
+    Ok(())
 }
 
 pub async fn alpenrose_loop_process_thread(
@@ -49,7 +51,7 @@ pub async fn alpenrose_loop_process_thread(
     authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
-) {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     loop {
         // println!("From-Alpenrose process thread");
         if let Steal::Success(new_ingest_task) = alpenrose_to_process_queue.steal() {
@@ -74,4 +76,6 @@ pub async fn alpenrose_loop_process_thread(
             thread::sleep(Duration::from_millis(1))
         }
     }
+
+    Ok(())
 }

@@ -56,6 +56,7 @@ use crossbeam::deque::{Injector, Steal};
 use futures::join;
 use gtfs_rt::FeedMessage;
 use scc::HashMap as SccHashMap;
+use std::error::Error;
 mod async_threads_alpenrose;
 
 // This is the type that implements the generated World trait. It is the business logic
@@ -196,33 +197,34 @@ async fn main() -> anyhow::Result<()> {
     let this_worker_id_for_leader_thread = Arc::clone(&this_worker_id);
     let tailscale_ip_for_leader_thread = Arc::new(tailscale_ip);
     let arc_conn_pool_for_leader_thread = Arc::clone(&arc_conn_pool);
-    let leader_thread_handler = tokio::task::spawn(aspen_leader_thread(
-        workers_nodes_for_leader_thread,
-        chateau_list_for_leader_thread,
-        this_worker_id_for_leader_thread,
-        tailscale_ip_for_leader_thread,
-        arc_conn_pool_for_leader_thread,
+    let leader_thread_handler: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
+        tokio::task::spawn(aspen_leader_thread(
+            workers_nodes_for_leader_thread,
+            chateau_list_for_leader_thread,
+            this_worker_id_for_leader_thread,
+            tailscale_ip_for_leader_thread,
+            arc_conn_pool_for_leader_thread,
+        ));
+
+    let b_alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
+    let b_authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
+    let b_authoritative_data_store = Arc::clone(&authoritative_data_store);
+    let b_conn_pool = Arc::clone(&arc_conn_pool);
+    let b_thread_count = alpenrosethreadcount.clone();
+
+    let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
+        Result<(), Box<dyn Error + Sync + Send>>,
+    > = tokio::task::spawn(async_threads_alpenrose::alpenrose_process_threads(
+        b_alpenrose_to_process_queue,
+        b_authoritative_gtfs_rt_store,
+        b_authoritative_data_store,
+        b_conn_pool,
+        b_thread_count,
     ));
 
-    let async_from_alpenrose_processor_handler = tokio::task::spawn({
-        let alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
-        let authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
-        let authoritative_data_store = Arc::clone(&authoritative_data_store);
-        let conn_pool = Arc::clone(&arc_conn_pool);
-        let thread_count = alpenrosethreadcount.clone();
-        move || async move {
-            async_threads_alpenrose::alpenrose_process_threads(
-                alpenrose_to_process_queue,
-                authoritative_gtfs_rt_store,
-                authoritative_data_store,
-                conn_pool,
-                thread_count,
-            )
-            .await;
-        }
-    }());
-
-    let tarpc_server = tokio::task::spawn({
+    let tarpc_server: tokio::task::JoinHandle<
+    Result<(), Box<dyn Error + Sync + Send>>,
+> = tokio::task::spawn({
         println!("Listening on port {}", listener.local_addr().port());
 
         move || async move {
@@ -246,14 +248,16 @@ async fn main() -> anyhow::Result<()> {
                 .buffer_unordered(channel_count)
                 .for_each(|_| async {})
                 .await;
+
+            Ok(())
         }
     }());
 
-    let result_series = futures::join!(
+    let result_series = futures::future::join_all(vec![
         leader_thread_handler,
         async_from_alpenrose_processor_handler,
-        tarpc_server
-    );
+        tarpc_server,
+    ]);
 
     Ok(())
 }
