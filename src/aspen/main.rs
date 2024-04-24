@@ -257,7 +257,7 @@ async fn main() -> anyhow::Result<()> {
         leader_thread_handler,
         async_from_alpenrose_processor_handler,
         tarpc_server,
-    ]);
+    ]).await;
 
     Ok(())
 }
