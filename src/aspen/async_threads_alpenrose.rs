@@ -17,7 +17,7 @@ pub async fn alpenrose_process_threads(
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
 ) {
-   // let mut handler_vec: Vec<thread::JoinHandle<_>> = vec![];
+    // let mut handler_vec: Vec<thread::JoinHandle<_>> = vec![];
 
     for i in 0..alpenrosethreadcount {
         //handler_vec.push();
@@ -40,8 +40,8 @@ pub async fn alpenrose_process_threads(
     }
 
     //for handle in handler_vec.into_iter() {
-        //handle.join().unwrap().await;
-  //  }
+    //handle.join().unwrap().await;
+    //  }
 }
 
 pub async fn alpenrose_loop_process_thread(
@@ -51,7 +51,7 @@ pub async fn alpenrose_loop_process_thread(
     conn_pool: Arc<CatenaryPostgresPool>,
 ) {
     loop {
-       // println!("From-Alpenrose process thread");
+        // println!("From-Alpenrose process thread");
         if let Steal::Success(new_ingest_task) = alpenrose_to_process_queue.steal() {
             new_rt_data(
                 Arc::clone(&authoritative_data_store),

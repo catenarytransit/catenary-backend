@@ -25,6 +25,7 @@
     clippy::iter_cloned_collect
 )]
 
+use ahash::AHashMap;
 use catenary::postgres_tools::make_async_pool;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::prelude::*;
@@ -39,7 +40,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 use tokio::runtime;
-use ahash::AHashMap;
 
 use crate::cleanup::delete_attempt_objects;
 

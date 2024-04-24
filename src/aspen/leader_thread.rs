@@ -29,14 +29,14 @@ pub async fn aspen_leader_thread(
     println!("starting leader thread");
 
     loop {
+        // println!("loop");
 
-       // println!("loop");
+        println!("wait 1 sec as an async task");
 
-       println!("wait 1 sec as an async task");
-
-       async {
-              tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-         }.await;
+        async {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        .await;
 
         println!("done waiting");
 
@@ -114,14 +114,14 @@ pub async fn aspen_leader_thread(
                 let conn_pool = arc_conn_pool.as_ref();
                 println!("Leader is attempting to form a connection to postgres");
                 let conn_pre = conn_pool.get().await;
-            
+
                 if let Err(conn_pre) = &conn_pre {
                     println!("Error with leader connecting to postgres");
                     eprintln!("{}", conn_pre);
                 }
-            
+
                 let conn = &mut conn_pre.unwrap();
-            
+
                 println!("Leader connected to postgres");
                 //leader tasks
                 let mut workers_nodes_lock = workers_nodes.lock().await;
@@ -266,7 +266,11 @@ pub async fn aspen_leader_thread(
                                         .unwrap();
                                 }
                             }
-                            println!("Assigned {} chateaus across {} workers", chateau_list_lock.chateaus.len(), workers_nodes_lock.len());
+                            println!(
+                                "Assigned {} chateaus across {} workers",
+                                chateau_list_lock.chateaus.len(),
+                                workers_nodes_lock.len()
+                            );
                         }
                     }
 
