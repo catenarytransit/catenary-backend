@@ -151,3 +151,7 @@ prost-build = "0.11"
 [[bin]]
 name = "manual_login_manager"
 path = "src/manual_login_manager/main.rs"
+
+[[bin]]
+name = "test_tarpc"
+path = "src/test_tarpc/main.rs"

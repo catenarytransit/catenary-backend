@@ -36,7 +36,7 @@ pub async fn aspen_leader_thread(
             .await
             .unwrap();
 
-        println!("Connected to zookeeper!");      
+        println!("Connected to zookeeper!");
 
         //register that the worker exists
         let _ = zk

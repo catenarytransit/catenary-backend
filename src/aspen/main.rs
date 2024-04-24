@@ -188,29 +188,29 @@ async fn main() -> anyhow::Result<()> {
     //register the worker with the leader
 
     let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
-    .await
-    .unwrap();
+        .await
+        .unwrap();
 
     let _ = zk
-    .create(
-        "/aspen_workers",
-        vec![],
-        Acl::open_unsafe(),
-        CreateMode::Persistent,
-    )
-    .await
-    .unwrap();
+        .create(
+            "/aspen_workers",
+            vec![],
+            Acl::open_unsafe(),
+            CreateMode::Persistent,
+        )
+        .await
+        .unwrap();
 
     //register that the worker exists
     let _ = zk
-    .create(
-        format!("/aspen_workers/{}", this_worker_id).as_str(),
-        bincode::serialize(&tailscale_ip).unwrap(),
-        Acl::open_unsafe(),
-        CreateMode::Ephemeral,
-    )
-    .await
-    .unwrap();
+        .create(
+            format!("/aspen_workers/{}", this_worker_id).as_str(),
+            bincode::serialize(&tailscale_ip).unwrap(),
+            Acl::open_unsafe(),
+            CreateMode::Ephemeral,
+        )
+        .await
+        .unwrap();
 
     let workers_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let chateau_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
