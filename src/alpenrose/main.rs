@@ -141,7 +141,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 CreateMode::Ephemeral,
             )
             .await
-            .unwrap()
             .unwrap();
 
         let workers_assignments = zk
