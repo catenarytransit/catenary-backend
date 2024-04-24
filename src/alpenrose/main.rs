@@ -566,11 +566,11 @@ async fn get_feed_metadata(
             realtime_vehicle_positions: vehicles_url,
             realtime_trip_updates: trip_updates_url,
             realtime_alerts: alerts_url,
-            key_formats: realtime_passwords_hashmap
-                .get(feed_id)
-                .unwrap()
-                .key_formats
-                .clone(),
+            key_formats: match realtime_passwords_hashmap
+            .get(feed_id) {
+                Some(password_format) => password_format.key_formats.clone(),
+                None => vec![],
+            },
             passwords: realtime_passwords_hashmap
                 .get(feed_id)
                 .map(|password_format| password_format.passwords.clone()),
