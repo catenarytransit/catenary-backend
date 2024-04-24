@@ -59,6 +59,7 @@ use scc::HashMap as SccHashMap;
 use std::error::Error;
 mod async_threads_alpenrose;
 use catenary::parse_gtfs_rt_message;
+use std::collections::HashSet;
 use tokio_zookeeper::ZooKeeper;
 use tokio_zookeeper::{Acl, CreateMode};
 
@@ -74,6 +75,7 @@ pub struct AspenServer {
     pub authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
     pub alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
+    pub alpenrose_to_process_queue_chateaus: Arc<Mutex<HashSet<String>>>,
 }
 
 impl AspenRpc for AspenServer {
@@ -169,17 +171,22 @@ impl AspenRpc for AspenServer {
 
         //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
-        self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
-            chateau_id,
-            realtime_feed_id,
-            has_vehicles,
-            has_trips,
-            has_alerts,
-            vehicles_response_code,
-            trips_response_code,
-            alerts_response_code,
-            time_of_submission_ms,
-        });
+        let lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
+
+        if !lock_chateau_queue.contains(&chateau_id) {
+            self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
+                chateau_id,
+                realtime_feed_id,
+                has_vehicles,
+                has_trips,
+                has_alerts,
+                vehicles_response_code,
+                trips_response_code,
+                alerts_response_code,
+                time_of_submission_ms,
+            });
+        }
+
         true
     }
 
@@ -285,7 +292,7 @@ async fn main() -> anyhow::Result<()> {
     let process_from_alpenrose_queue = Arc::new(Injector::<ProcessAlpenroseData>::new());
     let raw_gtfs = Arc::new(SccHashMap::new());
     let authoritative_data_store = Arc::new(SccHashMap::new());
-
+    let alpenrose_to_process_queue_chateaus = Arc::new(Mutex::new(HashSet::new()));
     //run both the leader and the listener simultaniously
 
     let workers_nodes_for_leader_thread = Arc::clone(&workers_nodes);
@@ -316,6 +323,7 @@ async fn main() -> anyhow::Result<()> {
         b_authoritative_data_store,
         b_conn_pool,
         b_thread_count,
+        Arc::clone(&alpenrose_to_process_queue_chateaus),
     ));
 
     let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
@@ -336,6 +344,9 @@ async fn main() -> anyhow::Result<()> {
                             conn_pool: Arc::clone(&arc_conn_pool),
                             alpenrose_to_process_queue: Arc::clone(&process_from_alpenrose_queue),
                             authoritative_gtfs_rt_store: Arc::clone(&raw_gtfs),
+                            alpenrose_to_process_queue_chateaus: Arc::clone(
+                                &alpenrose_to_process_queue_chateaus,
+                            ),
                         };
                         channel.execute(server.serve()).for_each(spawn)
                     })

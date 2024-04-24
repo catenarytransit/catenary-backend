@@ -4,9 +4,11 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 use gtfs_rt::FeedMessage;
 use scc::HashMap as SccHashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 use crate::import_alpenrose::new_rt_data;
 
@@ -16,6 +18,7 @@ pub async fn alpenrose_process_threads(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
+    chateau_queue_list: Arc<Mutex<HashSet<String>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut handler_vec: Vec<tokio::task::JoinHandle<_>> = vec![];
 
@@ -25,6 +28,7 @@ pub async fn alpenrose_process_threads(
             let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
             let authoritative_data_store = Arc::clone(&authoritative_data_store);
             let conn_pool = Arc::clone(&conn_pool);
+            let chateau_queue_list = Arc::clone(&chateau_queue_list);
             move || async move {
                 println!("Starting alpenrose task queue thread {}", i);
                 let _ = alpenrose_loop_process_thread(
@@ -32,6 +36,7 @@ pub async fn alpenrose_process_threads(
                     authoritative_gtfs_rt_store,
                     authoritative_data_store,
                     conn_pool,
+                    chateau_queue_list,
                 )
                 .await;
             }
@@ -48,6 +53,7 @@ pub async fn alpenrose_loop_process_thread(
     authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
+    chateau_queue_list: Arc<Mutex<HashSet<String>>>,
 ) {
     loop {
         // println!("From-Alpenrose process thread");
@@ -58,6 +64,12 @@ pub async fn alpenrose_loop_process_thread(
             );
 
             let feed_id = new_ingest_task.realtime_feed_id.clone();
+
+            let mut chateau_queue_list = chateau_queue_list.lock().await;
+
+            chateau_queue_list.remove(&new_ingest_task.chateau_id.clone());
+
+            drop(chateau_queue_list);
 
             let rt_processed_status = new_rt_data(
                 Arc::clone(&authoritative_data_store),
