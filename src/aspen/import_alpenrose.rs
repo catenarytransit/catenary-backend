@@ -174,7 +174,7 @@ pub async fn new_rt_data(
 
         let itinerary_patterns =
             catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(&chateau_id))
+                .filter(catenary::schema::gtfs::itinerary_pattern_meta::dsl::chateau.eq(&chateau_id))
                 .filter(
                     catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_id
                         .eq_any(list_of_itinerary_patterns_to_lookup.iter()),
