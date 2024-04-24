@@ -405,6 +405,8 @@ pub async fn new_rt_data(
                         last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis()
                             as u64,
                     });
+
+                    println!("Updated Chateau {} with realtime data from {}", chateau_id, realtime_feed_id);
             }
             true
         }
