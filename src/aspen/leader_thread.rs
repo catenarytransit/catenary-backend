@@ -284,10 +284,9 @@ pub async fn aspen_leader_thread(
                     println!("Error reading chateaus from postgres");
                 }
             }
-
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         } else {
             println!("Leader entry contains no data");
         }
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     }
 }
