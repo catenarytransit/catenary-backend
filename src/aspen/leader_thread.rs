@@ -97,6 +97,7 @@ pub async fn aspen_leader_thread(
             let leader_id: String = bincode::deserialize(&leader_str_bytes).unwrap();
 
             if leader_id == *this_worker_id {
+                println!("This is the leader thread!");
                 //leader tasks
                 let mut workers_nodes_lock = workers_nodes.lock().await;
                 let mut chateau_list_lock = feeds_list.lock().await;
@@ -252,6 +253,8 @@ pub async fn aspen_leader_thread(
             }
 
             std::thread::sleep(std::time::Duration::from_secs(10));
+        } else {
+            println!("Leader entry contains no data");
         }
     }
 }
