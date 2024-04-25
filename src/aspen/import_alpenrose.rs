@@ -309,6 +309,8 @@ pub async fn new_rt_data(
                                                 //route_long_name_langs: route.short_name_translations.clone(),
                                                 route_colour: route.color.clone(),
                                                 route_text_colour: route.text_color.clone(),
+                                                route_type: route.route_type,
+                                                route_desc: route.gtfs_desc.clone(),
                                             },
                                         );
                                     }

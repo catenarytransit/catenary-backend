@@ -744,8 +744,7 @@ async fn chateaus(
         None => None,
     };
 
-    std::mem::drop(chateau_as_ref);
-    std::mem::drop(chateau_lock);
+    drop(chateau_lock);
 
     if let Some(cloned_chateau_data) = cloned_chateau_data {
         if cloned_chateau_data.last_updated_time_ms
@@ -867,7 +866,7 @@ async fn chateaus(
             .as_millis() as u64,
     });
 
-    std::mem::drop(chateau_lock);
+    drop(chateau_lock);
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))

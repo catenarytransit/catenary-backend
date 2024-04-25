@@ -335,6 +335,8 @@ pub mod aspen_dataset {
         // pub route_long_name_langs: Option<HashMap<String, String>>,
         pub route_colour: Option<String>,
         pub route_text_colour: Option<String>,
+        pub route_type: i16,
+        pub route_desc: Option<String>,
     }
 
     #[derive(Copy, Eq, Hash, PartialEq, Clone)]
