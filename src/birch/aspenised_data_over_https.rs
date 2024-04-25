@@ -6,6 +6,7 @@ use tarpc::{client, context, tokio_serde::formats::Bincode};
 use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::aspen_dataset::AspenisedVehicleRouteCache;
 use catenary::aspen::lib::GetVehicleLocationsResponse;
+use std::sync::Arc;
 
 #[derive(Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum CategoryOfRealtimeVehicleData {
@@ -27,7 +28,7 @@ fn category_to_allowed_route_ids(category: &CategoryOfRealtimeVehicleData) -> Ve
 #[actix_web::get("/get_realtime_locations/{chateau_id}/{category}/{last_updated_time_ms}/{existing_fasthash_of_routes}")]
 pub async fn get_realtime_locations(
     req: HttpRequest,
-    zk: web::Data<tokio_zookeeper::ZooKeeper>,
+    zk: web::Data<Arc<tokio_zookeeper::ZooKeeper>>,
     path: web::Path<(String, String, u64, u64)>,
 ) -> impl Responder {
     let (chateau_id, category, client_last_updated_time_ms, existing_fasthash_of_routes) =
