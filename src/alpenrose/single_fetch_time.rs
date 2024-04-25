@@ -119,9 +119,9 @@ pub async fn single_fetch_time(
                     )
                     .spawn();
 
-                    if (vehicle_positions_http_status == Some(200)
+                    if vehicle_positions_http_status == Some(200)
                         || trip_updates_http_status == Some(200)
-                        || alerts_http_status == Some(200))
+                        || alerts_http_status == Some(200)
                     {
                         let tarpc_send_to_aspen = aspen_client
                             .from_alpenrose(

@@ -63,7 +63,7 @@ pub async fn new_rt_data(
     let mut aspenised_vehicle_positions: AHashMap<String, AspenisedVehiclePosition> =
         AHashMap::new();
     let mut vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache> = AHashMap::new();
-    let mut trip_updates: AHashMap<String, TripUpdate> = AHashMap::new();
+    let mut trip_updates: AHashMap<String, AspenisedTripUpdate> = AHashMap::new();
     let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> =
         AHashMap::new();
 
@@ -315,6 +315,64 @@ pub async fn new_rt_data(
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            //process trip updates
+            if let Some(trip_updates_gtfs_rt_for_feed_id) =
+                authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+            {
+                let trip_updates_gtfs_rt_for_feed_id = trip_updates_gtfs_rt_for_feed_id.get();
+
+                for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
+                    if let Some(trip_update) = &trip_update_entity.trip_update {
+                        let trip_id = trip_update.trip.trip_id.clone();
+
+                        let mut trip_update = AspenisedTripUpdate {
+                            trip: trip_update.trip.clone().into(),
+                            vehicle: trip_update.vehicle.clone().map(|x| x.into()),
+                            stop_time_update: trip_update
+                                .stop_time_update
+                                .iter()
+                                .map(|stu| AspenisedStopTimeUpdate {
+                                    stop_sequence: stu.stop_sequence,
+                                    stop_id: stu.stop_id.clone(),
+                                    arrival: stu.arrival.clone().map(|arrival| {
+                                        AspenStopTimeEvent {
+                                            delay: arrival.delay,
+                                            time: arrival.time,
+                                            uncertainty: arrival.uncertainty,
+                                        }
+                                    }),
+                                    departure: stu.departure.clone().map(|departure| {
+                                        AspenStopTimeEvent {
+                                            delay: departure.delay,
+                                            time: departure.time,
+                                            uncertainty: departure.uncertainty,
+                                        }
+                                    }),
+                                    platform: None,
+                                    schedule_relationship: stu.schedule_relationship,
+                                    departure_occupancy_status: stu.departure_occupancy_status,
+                                    stop_time_properties: stu
+                                        .stop_time_properties
+                                        .clone()
+                                        .map(|x| x.into()),
+                                })
+                                .collect(),
+                            timestamp: trip_update.timestamp,
+                            delay: trip_update.delay,
+                            trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),
+                        };
+
+                        if trip_id.is_some() {
+                            trip_updates_lookup_by_trip_id_to_trip_update_ids
+                                .entry(trip_id.as_ref().unwrap().clone())
+                                .or_insert(vec![trip_update_entity.id.clone()]);
+                        }
+
+                        trip_updates.insert(trip_update_entity.id.clone(), trip_update);
                     }
                 }
             }

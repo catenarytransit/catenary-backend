@@ -59,9 +59,11 @@ use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Client;
 use tokio_postgres::Error as PostgresError;
+use tokio_zookeeper::ZooKeeper;
 use zstd_safe::WriteBuf;
 
 mod api_key_management;
+mod aspenised_data_over_https;
 
 #[derive(Clone, Debug)]
 struct ChateauCache {
@@ -890,6 +892,12 @@ async fn main() -> std::io::Result<()> {
             .unwrap(),
     );
 
+    let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
+        .await
+        .unwrap();
+
+    let zk = Arc::new(zk);
+
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
         App::new()
@@ -909,6 +917,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(actix_web::web::Data::new(Arc::new(RwLock::new(
                 None::<ChateauCache>,
             ))))
+            .app_data(actix_web::web::Data::new(Arc::clone(&zk)))
             .route("/", web::get().to(index))
             .route("robots.txt", web::get().to(robots))
             .service(amtrakproxy)
@@ -928,6 +937,7 @@ async fn main() -> std::io::Result<()> {
             .service(rail_stops_meta)
             .service(api_key_management::get_realtime_keys)
             .service(api_key_management::set_realtime_key)
+            .service(aspenised_data_over_https::get_realtime_locations)
     })
     .workers(16);
 
