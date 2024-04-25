@@ -114,6 +114,7 @@ pnet = "0.34.0"
 crossbeam = "0.8.4"
 leapfrog = { version = "0.3.0", features = ["stable_alloc"] }
 scc = "2.1.0"
+env_logger = "0.11.3"
 
 [[bin]]
 name = "maple"
