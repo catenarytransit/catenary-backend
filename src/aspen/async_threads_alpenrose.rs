@@ -4,9 +4,11 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 use gtfs_rt::FeedMessage;
 use scc::HashMap as SccHashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 use crate::import_alpenrose::new_rt_data;
 
@@ -16,31 +18,34 @@ pub async fn alpenrose_process_threads(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
-) {
-    let mut handler_vec: Vec<thread::JoinHandle<_>> = vec![];
+    chateau_queue_list: Arc<Mutex<HashSet<String>>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut handler_vec: Vec<tokio::task::JoinHandle<_>> = vec![];
 
     for i in 0..alpenrosethreadcount {
-        handler_vec.push(thread::spawn({
+        handler_vec.push(tokio::task::spawn({
             let alpenrose_to_process_queue = Arc::clone(&alpenrose_to_process_queue);
             let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
             let authoritative_data_store = Arc::clone(&authoritative_data_store);
             let conn_pool = Arc::clone(&conn_pool);
+            let chateau_queue_list = Arc::clone(&chateau_queue_list);
             move || async move {
-                println!("Starting alpenrose reader thread {}", i);
-                alpenrose_loop_process_thread(
+                println!("Starting alpenrose task queue thread {}", i);
+                let _ = alpenrose_loop_process_thread(
                     alpenrose_to_process_queue,
                     authoritative_gtfs_rt_store,
                     authoritative_data_store,
                     conn_pool,
+                    chateau_queue_list,
                 )
-                .await
+                .await;
             }
-        }));
+        }()));
     }
 
-    for handle in handler_vec.into_iter() {
-        handle.join().unwrap().await;
-    }
+    futures::future::join_all(handler_vec).await;
+
+    Ok(())
 }
 
 pub async fn alpenrose_loop_process_thread(
@@ -48,17 +53,29 @@ pub async fn alpenrose_loop_process_thread(
     authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
+    chateau_queue_list: Arc<Mutex<HashSet<String>>>,
 ) {
     loop {
+        // println!("From-Alpenrose process thread");
         if let Steal::Success(new_ingest_task) = alpenrose_to_process_queue.steal() {
-            new_rt_data(
+            println!(
+                "Task stolen from queue, processing {}",
+                new_ingest_task.realtime_feed_id
+            );
+
+            let feed_id = new_ingest_task.realtime_feed_id.clone();
+
+            let mut chateau_queue_list = chateau_queue_list.lock().await;
+
+            chateau_queue_list.remove(&new_ingest_task.chateau_id.clone());
+
+            drop(chateau_queue_list);
+
+            let rt_processed_status = new_rt_data(
                 Arc::clone(&authoritative_data_store),
                 Arc::clone(&authoritative_gtfs_rt_store),
                 new_ingest_task.chateau_id,
                 new_ingest_task.realtime_feed_id,
-                new_ingest_task.vehicles,
-                new_ingest_task.trips,
-                new_ingest_task.alerts,
                 new_ingest_task.has_vehicles,
                 new_ingest_task.has_trips,
                 new_ingest_task.has_alerts,
@@ -68,8 +85,17 @@ pub async fn alpenrose_loop_process_thread(
                 Arc::clone(&conn_pool),
             )
             .await;
+
+            match rt_processed_status {
+                Ok(_) => {
+                    println!("Processed RT data for {}", feed_id);
+                }
+                Err(e) => {
+                    println!("Error processing RT data for {}: {}", feed_id, e);
+                }
+            }
         } else {
-            thread::sleep(Duration::from_millis(1))
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
 }

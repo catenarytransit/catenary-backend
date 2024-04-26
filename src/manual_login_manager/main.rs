@@ -25,6 +25,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
     let mut conn = &mut conn_pool.get().await?;
 
+    println!("Connected to postgres");
+
     let email = flags.email;
     let password = flags.password;
 

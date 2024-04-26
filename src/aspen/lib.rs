@@ -6,6 +6,7 @@
 /// It defines one RPC, hello, which takes one arg, name, and returns a String.
 use crate::aspen_dataset::*;
 use crate::ChateauDataNoGeometry;
+use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -40,8 +41,8 @@ pub trait AspenRpc {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GetVehicleLocationsResponse {
-    pub vehicle_route_cache: Option<HashMap<String, AspenisedVehicleRouteCache>>,
-    pub vehicle_positions: HashMap<String, AspenisedVehiclePosition>,
+    pub vehicle_route_cache: Option<AHashMap<String, AspenisedVehicleRouteCache>>,
+    pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
     pub hash_of_routes: u64,
     pub last_updated_time_ms: u64,
 }
@@ -68,9 +69,6 @@ pub struct ChateausLeaderHashMap {
 pub struct ProcessAlpenroseData {
     pub chateau_id: String,
     pub realtime_feed_id: String,
-    pub vehicles: Option<Vec<u8>>,
-    pub trips: Option<Vec<u8>>,
-    pub alerts: Option<Vec<u8>>,
     pub has_vehicles: bool,
     pub has_trips: bool,
     pub has_alerts: bool,

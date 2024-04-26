@@ -12,7 +12,7 @@ use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -24,7 +24,7 @@ pub struct EachPasswordRow {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct KeyResponse {
-    passwords: BTreeMap<String, EachPasswordRow>,
+    passwords: HashMap<String, EachPasswordRow>,
 }
 
 // Admin Credential login
@@ -163,10 +163,10 @@ pub async fn get_realtime_keys(
             match realtime_feeds {
                 Ok(realtime_feeds) => {
                     //sort the passwords into a BTreeMap
-                    let mut raw_password_data: BTreeMap<
+                    let mut raw_password_data: HashMap<
                         String,
                         Option<catenary::agency_secret::PasswordFormat>,
-                    > = BTreeMap::new();
+                    > = HashMap::new();
                     for password in passwords {
                         let password_formatted = match &password.passwords {
                             Some(value) => Some(
@@ -184,7 +184,7 @@ pub async fn get_realtime_keys(
 
                     //sort the feeds into a BTreeMap
 
-                    let mut passwords: BTreeMap<String, EachPasswordRow> = BTreeMap::new();
+                    let mut passwords: HashMap<String, EachPasswordRow> = HashMap::new();
 
                     for feed in realtime_feeds {
                         let password = raw_password_data.get(&feed.onestop_feed_id);

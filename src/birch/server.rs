@@ -59,9 +59,11 @@ use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Client;
 use tokio_postgres::Error as PostgresError;
+use tokio_zookeeper::ZooKeeper;
 use zstd_safe::WriteBuf;
 
 mod api_key_management;
+mod aspenised_data_over_https;
 
 #[derive(Clone, Debug)]
 struct ChateauCache {
@@ -275,6 +277,10 @@ pub async fn rail_stops(
     req: HttpRequest,
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
+
+    if (z < 4) {
+        return HttpResponse::BadRequest().body("Zoom level too low");
+    }
 
     //let grid = tile_grid::Grid::wgs84();
 
@@ -738,8 +744,7 @@ async fn chateaus(
         None => None,
     };
 
-    std::mem::drop(chateau_as_ref);
-    std::mem::drop(chateau_lock);
+    drop(chateau_lock);
 
     if let Some(cloned_chateau_data) = cloned_chateau_data {
         if cloned_chateau_data.last_updated_time_ms
@@ -861,7 +866,7 @@ async fn chateaus(
             .as_millis() as u64,
     });
 
-    std::mem::drop(chateau_lock);
+    drop(chateau_lock);
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
@@ -871,6 +876,9 @@ async fn chateaus(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+   // std::env::set_var("RUST_LOG", "debug");
+   // env_logger::init();
+
     // Connect to the database.
     let pool = Arc::new(make_async_pool().await.unwrap());
     let arc_pool = Arc::clone(&pool);
@@ -885,6 +893,12 @@ async fn main() -> std::io::Result<()> {
             .await
             .unwrap(),
     );
+
+    let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
+        .await
+        .unwrap();
+
+    let zk = Arc::new(zk);
 
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
@@ -905,6 +919,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(actix_web::web::Data::new(Arc::new(RwLock::new(
                 None::<ChateauCache>,
             ))))
+            .app_data(actix_web::web::Data::new(Arc::clone(&zk)))
             .route("/", web::get().to(index))
             .route("robots.txt", web::get().to(robots))
             .service(amtrakproxy)
@@ -924,6 +939,7 @@ async fn main() -> std::io::Result<()> {
             .service(rail_stops_meta)
             .service(api_key_management::get_realtime_keys)
             .service(api_key_management::set_realtime_key)
+            .service(aspenised_data_over_https::get_realtime_locations)
     })
     .workers(16);
 

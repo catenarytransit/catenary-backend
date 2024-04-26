@@ -163,7 +163,7 @@ pub async fn gtfs_process_feed(
         }
     }
 
-    std::mem::drop(agency_id_already_done);
+    drop(agency_id_already_done);
 
     //shove raw geometry into postgresql
     shapes_into_postgres(
@@ -194,7 +194,19 @@ pub async fn gtfs_process_feed(
 
     // insert trip and itineraries
 
+    let start_reduction_timer = Instant::now();
     let reduction = maple_syrup::reduce(&gtfs);
+    println!(
+        "Reduced schedule for {} in {:?}",
+        feed_id,
+        start_reduction_timer.elapsed()
+    );
+    println!(
+        "{} itineraries, {} trips, {:.2} ratio",
+        reduction.itineraries.len(),
+        reduction.trips_to_itineraries.len(),
+        reduction.trips_to_itineraries.len() as f64 / reduction.itineraries.len() as f64
+    );
 
     for (itinerary_id, itinerary) in &reduction.itineraries {
         let itinerary_pg_meta = ItineraryPatternMeta {
@@ -214,7 +226,7 @@ pub async fn gtfs_process_feed(
                 .map(|trip_under_itin| Some(trip_under_itin.trip_id.to_string()))
                 .collect::<Vec<Option<String>>>(),
             shape_id: itinerary.shape_id.clone(),
-            route_id: itinerary.route_id.clone()
+            route_id: itinerary.route_id.clone(),
         };
 
         diesel::insert_into(

@@ -41,6 +41,7 @@ pub mod postgis_to_diesel;
 pub mod postgres_tools;
 pub mod schema;
 
+use ahash::AHasher;
 use fasthash::MetroHasher;
 use gtfs_rt::VehicleDescriptor;
 use std::hash::Hash;
@@ -117,6 +118,12 @@ pub fn fast_hash<T: Hash>(t: &T) -> u64 {
     s.finish()
 }
 
+pub fn ahash_fast_hash<T: Hash>(t: &T) -> u64 {
+    let mut hasher = AHasher::default();
+    t.hash(&mut hasher);
+    hasher.finish()
+}
+
 pub fn duration_since_unix_epoch() -> Duration {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap()
 }
@@ -141,33 +148,136 @@ pub mod tailscale {
     /// ```
     pub fn interface() -> Option<IpAddr> {
         let ifaces = datalink::interfaces();
-        let netmask: IpNetwork = "100.64.0.0/10".parse().unwrap();
+        //let netmask: IpNetwork = "100.64.0.0/10".parse().unwrap();
         ifaces
             .iter()
             .filter(|iface| maybe_tailscale(&iface.name))
             .flat_map(|iface| iface.ips.clone())
-            .filter(|ipnet| ipnet.is_ipv6() && netmask.contains(ipnet.network()))
+            .filter(|ipnet| ipnet.is_ipv6())
             .map(|ipnet| ipnet.ip())
             .next()
     }
 }
 
 pub mod aspen_dataset {
+    use ahash::AHashMap;
     use gtfs_rt::TripUpdate;
-    use gtfs_rt::VehicleDescriptor;
     use std::{collections::BTreeMap, collections::HashMap, hash::Hash};
 
     pub struct AspenisedData {
-        pub vehicle_positions: HashMap<String, AspenisedVehiclePosition>,
-        pub vehicle_routes_cache: HashMap<String, AspenisedVehicleRouteCache>,
+        pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
+        pub vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache>,
         //id to trip update
-        pub trip_updates: HashMap<String, TripUpdate>,
-        pub trip_updates_lookup_by_trip_id_to_trip_update_ids: HashMap<String, Vec<String>>,
-        pub raw_alerts: Option<HashMap<String, gtfs_rt::Alert>>,
-        pub impacted_routes_alerts: Option<HashMap<String, Vec<String>>>,
-        pub impacted_stops_alerts: Option<HashMap<String, Vec<String>>>,
-        pub impacted_routes_stops_alerts: Option<HashMap<String, Vec<String>>>,
+        pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
+        pub trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
+        pub raw_alerts: Option<AHashMap<String, gtfs_rt::Alert>>,
+        pub impacted_routes_alerts: Option<AHashMap<String, Vec<String>>>,
+        pub impacted_stops_alerts: Option<AHashMap<String, Vec<String>>>,
+        pub impacted_routes_stops_alerts: Option<AHashMap<String, Vec<String>>>,
         pub last_updated_time_ms: u64,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenisedTripUpdate {
+        pub trip: AspenRawTripInfo,
+        pub vehicle: Option<AspenisedVehicleDescriptor>,
+        pub timestamp: Option<u64>,
+        pub delay: Option<i32>,
+        pub stop_time_update: Vec<AspenisedStopTimeUpdate>,
+        pub trip_properties: Option<AspenTripProperties>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenTripProperties {
+        pub trip_id: Option<String>,
+        pub start_date: Option<String>,
+        pub start_time: Option<String>,
+        pub shape_id: Option<String>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenRawTripInfo {
+        pub trip_id: Option<String>,
+        pub route_id: Option<String>,
+        pub direction_id: Option<u32>,
+        pub start_time: Option<String>,
+        pub start_date: Option<String>,
+        pub schedule_relationship: Option<i32>,
+        pub modified_trip: Option<ModifiedTripSelector>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct ModifiedTripSelector {
+        pub modifications_id: Option<String>,
+        pub affected_trip_id: Option<String>,
+    }
+
+    impl From<gtfs_rt::trip_descriptor::ModifiedTripSelector> for ModifiedTripSelector {
+        fn from(modified_trip_selector: gtfs_rt::trip_descriptor::ModifiedTripSelector) -> Self {
+            ModifiedTripSelector {
+                modifications_id: modified_trip_selector.modifications_id,
+                affected_trip_id: modified_trip_selector.affected_trip_id,
+            }
+        }
+    }
+
+    impl From<gtfs_rt::TripDescriptor> for AspenRawTripInfo {
+        fn from(trip_descriptor: gtfs_rt::TripDescriptor) -> Self {
+            AspenRawTripInfo {
+                trip_id: trip_descriptor.trip_id,
+                route_id: trip_descriptor.route_id,
+                direction_id: trip_descriptor.direction_id,
+                start_time: trip_descriptor.start_time,
+                start_date: trip_descriptor.start_date,
+                schedule_relationship: trip_descriptor.schedule_relationship,
+                modified_trip: trip_descriptor.modified_trip.map(|x| x.into()),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenisedStopTimeUpdate {
+        pub stop_sequence: Option<u32>,
+        pub stop_id: Option<String>,
+        pub arrival: Option<AspenStopTimeEvent>,
+        pub departure: Option<AspenStopTimeEvent>,
+        pub departure_occupancy_status: Option<i32>,
+        pub schedule_relationship: Option<i32>,
+        pub stop_time_properties: Option<AspenisedStopTimeProperties>,
+        pub platform: Option<String>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenisedStopTimeProperties {
+        pub assigned_stop_id: Option<String>,
+    }
+
+    use gtfs_rt::trip_update::stop_time_update::StopTimeProperties;
+    use gtfs_rt::trip_update::StopTimeEvent;
+
+    impl From<StopTimeProperties> for AspenisedStopTimeProperties {
+        fn from(stop_time_properties: StopTimeProperties) -> Self {
+            AspenisedStopTimeProperties {
+                assigned_stop_id: stop_time_properties.assigned_stop_id,
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenStopTimeEvent {
+        pub delay: Option<i32>,
+        pub time: Option<i64>,
+        pub uncertainty: Option<i32>,
+    }
+
+    impl From<StopTimeEvent> for AspenStopTimeEvent {
+        fn from(stop_time_event: StopTimeEvent) -> Self {
+            AspenStopTimeEvent {
+                delay: stop_time_event.delay,
+                time: stop_time_event.time,
+                uncertainty: stop_time_event.uncertainty,
+            }
+        }
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -176,6 +286,7 @@ pub mod aspen_dataset {
         pub vehicle: Option<AspenisedVehicleDescriptor>,
         pub position: Option<CatenaryRtVehiclePosition>,
         pub timestamp: Option<u64>,
+        pub route_type: i16,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -195,6 +306,19 @@ pub mod aspen_dataset {
         pub wheelchair_accessible: Option<i32>,
     }
 
+    use gtfs_rt::VehicleDescriptor;
+
+    impl From<VehicleDescriptor> for AspenisedVehicleDescriptor {
+        fn from(vehicle_descriptor: VehicleDescriptor) -> Self {
+            AspenisedVehicleDescriptor {
+                id: vehicle_descriptor.id,
+                label: vehicle_descriptor.label,
+                license_plate: vehicle_descriptor.license_plate,
+                wheelchair_accessible: vehicle_descriptor.wheelchair_accessible,
+            }
+        }
+    }
+
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenisedVehicleTripInfo {
         pub trip_id: Option<String>,
@@ -211,6 +335,8 @@ pub mod aspen_dataset {
         // pub route_long_name_langs: Option<HashMap<String, String>>,
         pub route_colour: Option<String>,
         pub route_text_colour: Option<String>,
+        pub route_type: i16,
+        pub route_desc: Option<String>,
     }
 
     #[derive(Copy, Eq, Hash, PartialEq, Clone)]
@@ -219,6 +345,19 @@ pub mod aspen_dataset {
         TripUpdates,
         Alerts,
     }
+
+    use gtfs_rt::trip_update::TripProperties;
+
+    impl From<TripProperties> for AspenTripProperties {
+        fn from(trip_properties: TripProperties) -> Self {
+            AspenTripProperties {
+                trip_id: trip_properties.trip_id,
+                start_date: trip_properties.start_date,
+                start_time: trip_properties.start_time,
+                shape_id: trip_properties.shape_id,
+            }
+        }
+    }
 }
 
 pub fn parse_gtfs_rt_message(
@@ -226,10 +365,9 @@ pub fn parse_gtfs_rt_message(
 ) -> Result<gtfs_rt::FeedMessage, Box<dyn std::error::Error>> {
     let x = prost::Message::decode(bytes);
 
-    if x.is_ok() {
-        return Ok(x.unwrap());
-    } else {
-        return Err(Box::new(x.unwrap_err()));
+    match x {
+        Ok(x) => Ok(x),
+        Err(e) => Err(Box::new(e)),
     }
 }
 

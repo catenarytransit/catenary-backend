@@ -16,7 +16,7 @@ non_ascii_idents = "deny"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ahash = "0.8.6"
+ahash = { version = "0.8.6", features = ["serde"] }
 crossbeam-utils = "0.8.16"
 memoffset = "0.9.0"
 time = "0.3.30"
@@ -114,6 +114,7 @@ pnet = "0.34.0"
 crossbeam = "0.8.4"
 leapfrog = { version = "0.3.0", features = ["stable_alloc"] }
 scc = "2.1.0"
+env_logger = "0.11.3"
 
 [[bin]]
 name = "maple"
@@ -151,3 +152,7 @@ prost-build = "0.11"
 [[bin]]
 name = "manual_login_manager"
 path = "src/manual_login_manager/main.rs"
+
+[[bin]]
+name = "test_tarpc"
+path = "src/test_tarpc/main.rs"

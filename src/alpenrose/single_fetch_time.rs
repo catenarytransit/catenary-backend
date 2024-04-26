@@ -1,5 +1,6 @@
 use crate::KeyFormat;
 use crate::RealtimeFeedFetch;
+use catenary::ahash_fast_hash;
 use catenary::aspen::lib::RealtimeFeedMetadataZookeeper;
 use catenary::duration_since_unix_epoch;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -7,6 +8,7 @@ use dashmap::DashMap;
 use futures::StreamExt;
 use rand::seq::SliceRandom;
 use reqwest::Response;
+use scc::HashMap as SccHashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,17 +31,17 @@ pub async fn single_fetch_time(
 
     let assignments_lock = assignments.read().await;
 
+    let hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>> = Arc::new(SccHashMap::new());
+
     futures::stream::iter(assignments_lock.iter().map(|(feed_id, assignment)| {
         let client = client.clone();
         let zk = zk.clone();
+        let hashes_of_data = Arc::clone(&hashes_of_data);
         let last_fetch_per_feed = last_fetch_per_feed.clone();
         async move {
             let start = Instant::now();
 
-            let fetch_interval_ms = match assignment.fetch_interval_ms {
-                Some(fetch_interval) => fetch_interval,
-                None => 10_000,
-            };
+            let fetch_interval_ms = assignment.fetch_interval_ms.unwrap_or(10_000);
 
             if let Some(last_fetch) = last_fetch_per_feed.get(&feed_id.clone()) {
                 let duration_since_last_fetch = last_fetch.elapsed().as_millis();
@@ -64,6 +66,7 @@ pub async fn single_fetch_time(
             let trip_updates_future = run_optional_req(trip_updates_request, client.clone());
             let alerts_future = run_optional_req(alerts_request, client.clone());
 
+            println!("{}: Fetching data", feed_id);
             let (vehicle_positions_data, trip_updates_data, alerts_data) =
                 futures::join!(vehicle_positions_future, trip_updates_future, alerts_future,);
 
@@ -99,9 +102,13 @@ pub async fn single_fetch_time(
                     let worker_id = data.worker_id;
 
                     //send the data to the worker
+                    println!(
+                        "Attempting to send {} data to {} via tarpc",
+                        feed_id, data.tailscale_ip
+                    );
                     let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
 
-                    let mut transport =
+                    let transport =
                         tarpc::serde_transport::tcp::connect(socket_addr, Bincode::default)
                             .await
                             .unwrap();
@@ -112,38 +119,141 @@ pub async fn single_fetch_time(
                     )
                     .spawn();
 
-                    let tarpc_send_to_aspen = aspen_client
-                        .from_alpenrose(
-                            tarpc::context::current(),
-                            data.chateau_id,
-                            feed_id.clone(),
-                            match vehicle_positions_data {
-                                Some(Ok(response)) => {
-                                    Some(response.bytes().await.unwrap().as_ref().to_vec())
-                                }
-                                _ => None,
-                            },
-                            match trip_updates_data {
-                                Some(Ok(response)) => {
-                                    Some(response.bytes().await.unwrap().as_ref().to_vec())
-                                }
-                                _ => None,
-                            },
-                            match alerts_data {
-                                Some(Ok(response)) => {
-                                    Some(response.bytes().await.unwrap().as_ref().to_vec())
-                                }
-                                _ => None,
-                            },
-                            assignment.realtime_vehicle_positions.is_some(),
-                            assignment.realtime_trip_updates.is_some(),
-                            assignment.realtime_alerts.is_some(),
-                            vehicle_positions_http_status,
-                            trip_updates_http_status,
-                            alerts_http_status,
-                            duration_since_unix_epoch().as_millis() as u64,
-                        )
-                        .await;
+                    if vehicle_positions_http_status == Some(200)
+                        || trip_updates_http_status == Some(200)
+                        || alerts_http_status == Some(200)
+                    {
+                        let tarpc_send_to_aspen = aspen_client
+                            .from_alpenrose(
+                                tarpc::context::current(),
+                                data.chateau_id,
+                                feed_id.clone(),
+                                match vehicle_positions_data {
+                                    Some(Ok(response)) => {
+                                        let bytes =
+                                            response.bytes().await.unwrap().as_ref().to_vec();
+
+                                        let hash = ahash_fast_hash(&bytes);
+
+                                        match hashes_of_data
+                                            .get(&(feed_id.clone(), UrlType::VehiclePositions))
+                                        {
+                                            Some(old_hash) => {
+                                                let old_hash = old_hash.get();
+
+                                                //if the data has not changed, don't send it
+                                                match hash == *old_hash {
+                                                    true => None,
+                                                    false => {
+                                                        hashes_of_data
+                                                            .entry((
+                                                                feed_id.clone(),
+                                                                UrlType::VehiclePositions,
+                                                            ))
+                                                            .and_modify(|value| *value = hash)
+                                                            .or_insert(hash);
+                                                        Some(bytes)
+                                                    }
+                                                }
+                                            }
+                                            None => Some(bytes),
+                                        }
+                                    }
+                                    _ => None,
+                                },
+                                match trip_updates_data {
+                                    Some(Ok(response)) => {
+                                        let bytes =
+                                            response.bytes().await.unwrap().as_ref().to_vec();
+
+                                        let hash = ahash_fast_hash(&bytes);
+
+                                        match hashes_of_data
+                                            .get(&(feed_id.clone(), UrlType::TripUpdates))
+                                        {
+                                            Some(old_hash) => {
+                                                let old_hash = old_hash.get();
+
+                                                //if the data has not changed, don't send it
+                                                match hash == *old_hash {
+                                                    true => None,
+                                                    false => {
+                                                        hashes_of_data
+                                                            .entry((
+                                                                feed_id.clone(),
+                                                                UrlType::TripUpdates,
+                                                            ))
+                                                            .and_modify(|value| *value = hash)
+                                                            .or_insert(hash);
+                                                        Some(bytes)
+                                                    }
+                                                }
+                                            }
+                                            None => Some(bytes),
+                                        }
+                                    }
+                                    _ => None,
+                                },
+                                match alerts_data {
+                                    Some(Ok(response)) => {
+                                        let bytes =
+                                            response.bytes().await.unwrap().as_ref().to_vec();
+
+                                        let hash = ahash_fast_hash(&bytes);
+
+                                        match hashes_of_data
+                                            .get(&(feed_id.clone(), UrlType::Alerts))
+                                        {
+                                            Some(old_hash) => {
+                                                let old_hash = old_hash.get();
+
+                                                //if the data has not changed, don't send it
+                                                match hash == *old_hash {
+                                                    true => None,
+                                                    false => {
+                                                        hashes_of_data
+                                                            .entry((
+                                                                feed_id.clone(),
+                                                                UrlType::Alerts,
+                                                            ))
+                                                            .and_modify(|value| *value = hash)
+                                                            .or_insert(hash);
+                                                        Some(bytes)
+                                                    }
+                                                }
+                                            }
+                                            None => Some(bytes),
+                                        }
+                                    }
+                                    _ => None,
+                                },
+                                assignment.realtime_vehicle_positions.is_some(),
+                                assignment.realtime_trip_updates.is_some(),
+                                assignment.realtime_alerts.is_some(),
+                                vehicle_positions_http_status,
+                                trip_updates_http_status,
+                                alerts_http_status,
+                                duration_since_unix_epoch().as_millis() as u64,
+                            )
+                            .await;
+
+                        match tarpc_send_to_aspen {
+                            Ok(_) => {
+                                println!(
+                                    "{}: Successfully sent data sent to {}",
+                                    feed_id, worker_id
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "{}: Error sending data to {}: {}",
+                                    feed_id, worker_id, e
+                                );
+                            }
+                        }
+                    } else {
+                        println!("{}: No data to send", feed_id);
+                    }
                 }
                 None => {
                     eprintln!("{} was not assigned to a worker", feed_id);
@@ -172,6 +282,7 @@ async fn run_optional_req(
     }
 }
 
+#[derive(Debug, Hash, Clone, Eq, PartialEq)]
 pub enum UrlType {
     VehiclePositions,
     TripUpdates,

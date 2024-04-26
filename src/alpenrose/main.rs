@@ -50,7 +50,6 @@ use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -74,6 +73,8 @@ pub struct RealtimeFeedFetch {
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
+    println!("Worker id {}", this_worker_id);
+
     // if a node drops out, ingestion will be automatically reassigned to the other nodes
 
     //hands off data to aspen to do additional cleanup and processing, Aspen will perform association with the GTFS schedule data + update dynamic graphs for routing and map representation,
@@ -95,6 +96,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
         .await
         .unwrap();
+
+    println!("Connected to zookeeper!");
 
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
@@ -142,7 +145,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 CreateMode::Ephemeral,
             )
             .await
-            .unwrap()
             .unwrap();
 
         let workers_assignments = zk
@@ -161,7 +163,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 format!("/alpenrose_assignments/{}", this_worker_id).as_str(),
                 bincode::serialize(&None::<u64>).unwrap(),
                 Acl::open_unsafe(),
-                CreateMode::Ephemeral,
+                CreateMode::Persistent,
             )
             .await
             .unwrap();
@@ -568,11 +570,10 @@ async fn get_feed_metadata(
             realtime_vehicle_positions: vehicles_url,
             realtime_trip_updates: trip_updates_url,
             realtime_alerts: alerts_url,
-            key_formats: realtime_passwords_hashmap
-                .get(feed_id)
-                .unwrap()
-                .key_formats
-                .clone(),
+            key_formats: match realtime_passwords_hashmap.get(feed_id) {
+                Some(password_format) => password_format.key_formats.clone(),
+                None => vec![],
+            },
             passwords: realtime_passwords_hashmap
                 .get(feed_id)
                 .map(|password_format| password_format.passwords.clone()),
