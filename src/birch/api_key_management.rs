@@ -81,6 +81,7 @@ pub async fn set_realtime_key(
     let is_authorised = login(pool.as_ref().clone(), email, password).await.unwrap();
 
     if !is_authorised {
+        println!("User not authenticated! {}", email);
         return HttpResponse::Unauthorized().finish();
     }
 
@@ -89,7 +90,13 @@ pub async fn set_realtime_key(
     let conn = &mut conn_pre.unwrap();
 
     //convert password format to js value
-    let password_format = serde_json::to_value(data.passwords.clone()).unwrap();
+    let password_format = serde_json::to_value(data.passwords.clone());
+
+    if password_format.is_err() {
+        return HttpResponse::InternalServerError().body(format!("{:#?}", password_format.unwrap_err()));
+    }
+
+    let password_format = password_format.unwrap();
 
     use catenary::schema::gtfs::realtime_passwords as realtime_passwords_table;
 
