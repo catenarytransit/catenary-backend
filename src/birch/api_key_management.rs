@@ -102,7 +102,7 @@ pub async fn set_realtime_key(
 
     //insert or update the password
 
-    let _insert_result = diesel::insert_into(realtime_passwords_table::table)
+    let insert_result = diesel::insert_into(realtime_passwords_table::table)
         .values((
             realtime_passwords_table::onestop_feed_id.eq(&feed_id),
             realtime_passwords_table::passwords.eq(password_format.clone()),
@@ -113,16 +113,28 @@ pub async fn set_realtime_key(
         .execute(conn)
         .await;
 
+    if let Err(insert_result) = &insert_result {
+        eprintln!("could not insert / update realtime passwords\n{}", insert_result);
+
+        return HttpResponse::InternalServerError().body("insert into realtime passwords failed");
+    }
+
     //upload the fetch interval
 
     use catenary::schema::gtfs::realtime_feeds as realtime_feeds_table;
 
-    let _update_result = diesel::update(
+    let update_result = diesel::update(
         realtime_feeds_table::table.filter(realtime_feeds_table::onestop_feed_id.eq(&feed_id)),
     )
     .set(realtime_feeds_table::fetch_interval_ms.eq(data.fetch_interval_ms))
     .execute(conn)
     .await;
+
+    if let Err(update_result) = &update_result {
+        eprintln!("could not insert / update realtime update interval\n{}", update_result);
+
+        return HttpResponse::InternalServerError().body("insert update interval fail");
+    }
 
     HttpResponse::Ok().finish()
 }
