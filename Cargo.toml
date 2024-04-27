@@ -115,7 +115,7 @@ crossbeam = "0.8.4"
 leapfrog = { version = "0.3.0", features = ["stable_alloc"] }
 scc = "2.1.0"
 env_logger = "0.11.3"
-femark = "0.1.6"
+ron = "0.8.1"
 
 [[bin]]
 name = "maple"
@@ -139,9 +139,9 @@ path = "src/spruce/main.rs"
 
 #Test binaries
 
-[[bin]]
-name = "test_maple_syrup"
-path = "src/maple_syrup/test.rs"
+#[[bin]]
+#name = "test_maple_syrup"
+#path = "src/maple_syrup/test.rs"
 
 [[bin]]
 name = "alpenrose"
@@ -154,6 +154,6 @@ prost-build = "0.11"
 name = "manual_login_manager"
 path = "src/manual_login_manager/main.rs"
 
-[[bin]]
-name = "test_tarpc"
-path = "src/test_tarpc/main.rs"
+#[[bin]]
+#name = "test_tarpc"
+#path = "src/test_tarpc/main.rs"
