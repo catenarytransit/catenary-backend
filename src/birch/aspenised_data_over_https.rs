@@ -1,27 +1,27 @@
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use ahash::{AHashMap, AHashSet};
 use catenary::aspen::lib::ChateauMetadataZookeeper;
-use serde::{Serialize, Deserialize};
-use ahash::{AHashMap,AHashSet};
-use tarpc::{client, context, tokio_serde::formats::Bincode};
+use catenary::aspen::lib::GetVehicleLocationsResponse;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::aspen_dataset::AspenisedVehicleRouteCache;
-use catenary::aspen::lib::GetVehicleLocationsResponse;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tarpc::{client, context, tokio_serde::formats::Bincode};
 
 #[derive(Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum CategoryOfRealtimeVehicleData {
     Metro,
     Bus,
     Rail,
-    Other
+    Other,
 }
 
 fn category_to_allowed_route_ids(category: &CategoryOfRealtimeVehicleData) -> Vec<i16> {
     match category {
-        CategoryOfRealtimeVehicleData::Metro => vec![0,1,12],
-        CategoryOfRealtimeVehicleData::Bus => vec![3,11],
+        CategoryOfRealtimeVehicleData::Metro => vec![0, 1, 12],
+        CategoryOfRealtimeVehicleData::Bus => vec![3, 11],
         CategoryOfRealtimeVehicleData::Rail => vec![2],
-        CategoryOfRealtimeVehicleData::Other => vec![4,5,6,7],
+        CategoryOfRealtimeVehicleData::Other => vec![4, 5, 6, 7],
     }
 }
 
@@ -101,25 +101,29 @@ pub async fn get_realtime_locations(
                     })
                     .collect::<AHashMap<String, AspenisedVehiclePosition>>();
 
-                    let filtered_routes_cache: Option<AHashMap<String, AspenisedVehicleRouteCache>> = match response.vehicle_route_cache {
+                let filtered_routes_cache: Option<AHashMap<String, AspenisedVehicleRouteCache>> =
+                    match response.vehicle_route_cache {
                         Some(vehicle_route_cache) => {
-                            let filtered_vehicle_route_cache = vehicle_route_cache.into_iter().filter(|(route_id, vehicle_route_cache)| {
-                                route_ids_allowed.contains(&vehicle_route_cache.route_type)
-                            }).collect::<AHashMap<String, AspenisedVehicleRouteCache>>();
+                            let filtered_vehicle_route_cache = vehicle_route_cache
+                                .into_iter()
+                                .filter(|(route_id, vehicle_route_cache)| {
+                                    route_ids_allowed.contains(&vehicle_route_cache.route_type)
+                                })
+                                .collect::<AHashMap<String, AspenisedVehicleRouteCache>>();
                             Some(filtered_vehicle_route_cache)
-                        },
-                        None => None
+                        }
+                        None => None,
                     };
 
-                    let filtered_response = GetVehicleLocationsResponse {
-                        vehicle_positions: filtered_vehicle_positions,
-                        vehicle_route_cache: filtered_routes_cache,
-                        hash_of_routes: response.hash_of_routes,
-                        last_updated_time_ms: response.last_updated_time_ms,
-                    };
+                let filtered_response = GetVehicleLocationsResponse {
+                    vehicle_positions: filtered_vehicle_positions,
+                    vehicle_route_cache: filtered_routes_cache,
+                    hash_of_routes: response.hash_of_routes,
+                    last_updated_time_ms: response.last_updated_time_ms,
+                };
 
-                    HttpResponse::Ok().json(filtered_response)
-            },
+                HttpResponse::Ok().json(filtered_response)
+            }
         },
         None => HttpResponse::NotFound().body("No data found"),
     }

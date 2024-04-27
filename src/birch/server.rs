@@ -876,8 +876,8 @@ async fn chateaus(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-   // std::env::set_var("RUST_LOG", "debug");
-   // env_logger::init();
+    // std::env::set_var("RUST_LOG", "debug");
+    // env_logger::init();
 
     // Connect to the database.
     let pool = Arc::new(make_async_pool().await.unwrap());

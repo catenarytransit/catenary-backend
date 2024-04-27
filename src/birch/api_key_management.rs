@@ -71,7 +71,7 @@ pub async fn set_realtime_key(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     req: HttpRequest,
     feed_id: web::Path<String>,
-    data: web::Json<EachPasswordRow>,
+    input_data: String,
 ) -> impl Responder {
     let feed_id = feed_id.into_inner();
 
@@ -89,32 +89,49 @@ pub async fn set_realtime_key(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
 
-    //convert password format to js value
-    let password_format = serde_json::to_value(data.passwords.clone());
+    let time = catenary::duration_since_unix_epoch().as_millis() as i64;
 
-    if password_format.is_err() {
-        return HttpResponse::InternalServerError().body(format!("{:#?}", password_format.unwrap_err()));
+    let data = ron::from_str::<EachPasswordRow>(&input_data);
+
+    if data.is_err() {
+        return HttpResponse::InternalServerError().body("Deserialise password failed");
     }
 
-    let password_format = password_format.unwrap();
+    let data = data.unwrap();
+
+    //convert password format to js value
+    let password_for_postgres = match &data.passwords {
+        Some(x) => Some(serde_json::to_value(x).unwrap()),
+        None => None
+    };
 
     use catenary::schema::gtfs::realtime_passwords as realtime_passwords_table;
 
     //insert or update the password
+    use catenary::models::RealtimePasswordRow;
+
+    let password_row = RealtimePasswordRow {
+        onestop_feed_id: feed_id.clone(),
+        passwords: password_for_postgres.clone(),
+        last_updated_ms: time
+    };
 
     let insert_result = diesel::insert_into(realtime_passwords_table::table)
-        .values((
-            realtime_passwords_table::onestop_feed_id.eq(&feed_id),
-            realtime_passwords_table::passwords.eq(password_format.clone()),
-        ))
+        .values(password_row)
         .on_conflict(realtime_passwords_table::onestop_feed_id)
         .do_update()
-        .set(realtime_passwords_table::passwords.eq(password_format))
+        .set(
+            (realtime_passwords_table::passwords.eq(password_for_postgres),
+            realtime_passwords_table::last_updated_ms.eq(time))
+        )
         .execute(conn)
         .await;
 
     if let Err(insert_result) = &insert_result {
-        eprintln!("could not insert / update realtime passwords\n{}", insert_result);
+        eprintln!(
+            "could not insert / update realtime passwords\n{}",
+            insert_result
+        );
 
         return HttpResponse::InternalServerError().body("insert into realtime passwords failed");
     }
@@ -131,7 +148,10 @@ pub async fn set_realtime_key(
     .await;
 
     if let Err(update_result) = &update_result {
-        eprintln!("could not insert / update realtime update interval\n{}", update_result);
+        eprintln!(
+            "could not insert / update realtime update interval\n{}",
+            update_result
+        );
 
         return HttpResponse::InternalServerError().body("insert update interval fail");
     }
