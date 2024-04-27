@@ -113,9 +113,9 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     //make client for reqwest
     //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
     let client = reqwest::ClientBuilder::new()
-        //timeout queries after 20 seconds
-        .timeout(Duration::from_secs(20))
-        .connect_timeout(Duration::from_secs(20))
+        //timeout queries
+        .timeout(Duration::from_secs(8))
+        .connect_timeout(Duration::from_secs(5))
         .deflate(true)
         .gzip(true)
         .brotli(true)
