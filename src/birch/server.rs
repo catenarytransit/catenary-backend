@@ -485,7 +485,7 @@ async fn routesofchateau(
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=86400"))
+        .insert_header(("Cache-Control", "max-age=3600"))
         .body(serde_json::to_string(&routes).unwrap())
 }
 

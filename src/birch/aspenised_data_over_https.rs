@@ -55,7 +55,9 @@ pub async fn get_realtime_locations(
         .unwrap();
 
     if fetch_assigned_node_for_this_realtime_feed.is_none() {
-        return HttpResponse::NotFound().body("No assigned node found for this chateau");
+        return HttpResponse::NotFound()
+            .header("Cache-Control", "no-cache")
+            .body("No assigned node found for this chateau");
     }
 
     let (fetch_assigned_node_for_this_realtime_feed, stat) =
@@ -122,9 +124,13 @@ pub async fn get_realtime_locations(
                     last_updated_time_ms: response.last_updated_time_ms,
                 };
 
-                HttpResponse::Ok().json(filtered_response)
+                HttpResponse::Ok()
+                    .header("Cache-Control", "no-cache")
+                    .json(filtered_response)
             }
         },
-        None => HttpResponse::NotFound().body("No data found"),
+        None => HttpResponse::NotFound()
+            .header("Cache-Control", "no-cache")
+            .body("No data found"),
     }
 }
