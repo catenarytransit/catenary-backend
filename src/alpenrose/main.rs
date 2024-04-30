@@ -123,19 +123,29 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .build()
         .unwrap();
 
-    loop {
         //create parent node for workers
 
         let _ = zk
-            .create(
-                "/alpenrose_workers",
-                vec![],
-                Acl::open_unsafe(),
-                CreateMode::Persistent,
-            )
-            .await
-            .unwrap();
+        .create(
+            "/alpenrose_workers",
+            vec![],
+            Acl::open_unsafe(),
+            CreateMode::Persistent,
+        )
+        .await
+        .unwrap();
 
+        let workers_assignments = zk
+        .create(
+            "/alpenrose_assignments",
+            vec![],
+            Acl::open_unsafe(),
+            CreateMode::Persistent,
+        )
+        .await
+        .unwrap();
+
+    loop {
         // create this worker as an ephemeral node
         let this_worker_assignment = zk
             .create(
@@ -143,16 +153,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 vec![],
                 Acl::open_unsafe(),
                 CreateMode::Ephemeral,
-            )
-            .await
-            .unwrap();
-
-        let workers_assignments = zk
-            .create(
-                "/alpenrose_assignments",
-                vec![],
-                Acl::open_unsafe(),
-                CreateMode::Persistent,
             )
             .await
             .unwrap();
