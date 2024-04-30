@@ -154,12 +154,12 @@ pub async fn set_realtime_key(
         );
 
         return HttpResponse::InternalServerError()
-            .header("Cache-Control", "no-cache")
+            .append_header(("Cache-Control", "no-cache"))
             .body("insert update interval fail");
     }
 
     HttpResponse::Ok()
-        .header("Cache-Control", "no-cache")
+        .append_header(("Cache-Control", "no-cache"))
         .finish()
 }
 
@@ -236,7 +236,7 @@ pub async fn get_realtime_keys(
                     }
 
                     HttpResponse::Ok()
-                        .header("Cache-Control", "no-cache")
+                        .append_header(("Cache-Control", "no-cache"))
                         .json(KeyResponse {
                             passwords: passwords,
                         })
@@ -244,7 +244,7 @@ pub async fn get_realtime_keys(
                 Err(e) => {
                     println!("Error: {:?}", e);
                     return HttpResponse::InternalServerError()
-                        .header("Cache-Control", "no-cache")
+                        .append_header(("Cache-Control", "no-cache"))
                         .finish();
                 }
             }
@@ -252,7 +252,7 @@ pub async fn get_realtime_keys(
         Err(e) => {
             println!("Error: {:?}", e);
             HttpResponse::InternalServerError()
-                .header("Cache-Control", "no-cache")
+                .append_header(("Cache-Control", "no-cache"))
                 .finish()
         }
     }

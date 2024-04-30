@@ -62,6 +62,16 @@ pub async fn get_realtime_locations(
             .body("No assigned node found for this chateau");
     }
 
+    let (fetch_assigned_node_for_this_realtime_feed, stat) =
+        fetch_assigned_node_for_this_realtime_feed.unwrap();
+
+    //deserialise into ChateauMetadataZookeeper
+
+    let assigned_chateau_data = bincode::deserialize::<ChateauMetadataZookeeper>(
+        &fetch_assigned_node_for_this_realtime_feed,
+    )
+    .unwrap();
+
     //then connect to the node via tarpc
 
     let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
@@ -108,13 +118,6 @@ pub async fn get_realtime_locations(
                         }
                         None => None,
                     };
-
-                let filtered_response = GetVehicleLocationsResponse {
-                    vehicle_positions: filtered_vehicle_positions,
-                    vehicle_route_cache: filtered_routes_cache,
-                    hash_of_routes: response.hash_of_routes,
-                    last_updated_time_ms: response.last_updated_time_ms,
-                };
 
                 let filtered_response = GetVehicleLocationsResponse {
                     vehicle_positions: filtered_vehicle_positions,

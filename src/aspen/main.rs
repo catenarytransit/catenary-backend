@@ -119,7 +119,7 @@ impl AspenRpc for AspenServer {
         let trips_gtfs_rt = match trips_response_code {
             Some(200) => match trips {
                 Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
-                    Ok(t) => Some(id_cleanup::gtfs_rt_cleanup(a)),
+                    Ok(t) => Some(id_cleanup::gtfs_rt_cleanup(t)),
                     Err(e) => {
                         println!("Error decoding trips: {}", e);
                         None
