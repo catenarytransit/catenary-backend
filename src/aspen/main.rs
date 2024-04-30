@@ -266,7 +266,15 @@ async fn main() -> anyhow::Result<()> {
         .await
         .unwrap();
 
-    let _ = zk
+    //if zookeeper /aspen_workers doesn't exist, create it
+
+    let get_zk_aspen_workers_parent = zk
+        .get_data("/aspen_workers")
+        .await
+        .unwrap();
+
+    if get_zk_aspen_workers_parent.is_none() {
+        let _ = zk
         .create(
             "/aspen_workers",
             vec![],
@@ -275,6 +283,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .await
         .unwrap();
+    }
 
     //register that the worker exists
     let _ = zk

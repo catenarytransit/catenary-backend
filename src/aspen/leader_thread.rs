@@ -29,12 +29,12 @@ pub async fn aspen_leader_thread(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("starting leader thread");
 
-    loop {
-        // println!("loop");
-
-        let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
+    let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
             .await
             .unwrap();
+
+    loop {
+        // println!("loop");
 
         println!("Connected to zookeeper!");
 
