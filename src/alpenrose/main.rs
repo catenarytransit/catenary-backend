@@ -199,7 +199,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                     Some(last_check_time_ms) => {
                         let current_time_ms = chrono::Utc::now().timestamp_millis() as u64;
                         let time_since_last_check = current_time_ms - last_check_time_ms;
-                        time_since_last_check > 60000
+                        time_since_last_check > 60_000
                     }
                     None => true,
                 };

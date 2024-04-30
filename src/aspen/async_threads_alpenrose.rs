@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use std::error::Error;
+use tokio::task::JoinSet;
 
 use crate::import_alpenrose::new_rt_data;
 
@@ -20,30 +22,27 @@ pub async fn alpenrose_process_threads(
     alpenrosethreadcount: usize,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut handler_vec: Vec<tokio::task::JoinHandle<_>> = vec![];
+    let mut set: JoinSet<_> = JoinSet::new();
 
     for i in 0..alpenrosethreadcount {
-        handler_vec.push(tokio::task::spawn({
-            let alpenrose_to_process_queue = Arc::clone(&alpenrose_to_process_queue);
-            let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
-            let authoritative_data_store = Arc::clone(&authoritative_data_store);
-            let conn_pool = Arc::clone(&conn_pool);
-            let chateau_queue_list = Arc::clone(&chateau_queue_list);
-            move || async move {
-                println!("Starting alpenrose task queue thread {}", i);
-                let _ = alpenrose_loop_process_thread(
+        let alpenrose_to_process_queue = Arc::clone(&alpenrose_to_process_queue);
+        let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
+        let authoritative_data_store = Arc::clone(&authoritative_data_store);
+        let conn_pool = Arc::clone(&conn_pool);
+        let chateau_queue_list = Arc::clone(&chateau_queue_list);
+        set
+        .spawn(
+            async move {
+                alpenrose_loop_process_thread(
                     alpenrose_to_process_queue,
                     authoritative_gtfs_rt_store,
                     authoritative_data_store,
                     conn_pool,
                     chateau_queue_list,
                 )
-                .await;
-            }
-        }()));
+                .await
+        });
     }
-
-    futures::future::join_all(handler_vec).await;
 
     Ok(())
 }
@@ -54,7 +53,7 @@ pub async fn alpenrose_loop_process_thread(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
-) {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     loop {
         // println!("From-Alpenrose process thread");
         if let Steal::Success(new_ingest_task) = alpenrose_to_process_queue.steal() {
