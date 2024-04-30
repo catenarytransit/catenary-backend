@@ -40,6 +40,9 @@ pub mod models;
 pub mod postgis_to_diesel;
 pub mod postgres_tools;
 pub mod schema;
+pub mod validate_gtfs_rt;
+pub mod id_cleanup;
+//pub mod gtfs_rt_rough_hash;
 
 use ahash::AHasher;
 use fasthash::MetroHasher;

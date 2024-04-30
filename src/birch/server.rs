@@ -61,6 +61,9 @@ use tokio_postgres::Client;
 use tokio_postgres::Error as PostgresError;
 use tokio_zookeeper::ZooKeeper;
 use zstd_safe::WriteBuf;
+use scc::HashMap as SccHashMap;
+use catenary::aspen::lib::ChateauMetadataZookeeper;
+use actix_web::web::Data;
 
 mod api_key_management;
 mod aspenised_data_over_https;
@@ -99,6 +102,10 @@ struct OperatorPostgres {
     gtfs_realtime_feeds: Vec<String>,
     static_onestop_feeds_to_gtfs_ids: HashMap<String, Option<String>>,
     realtime_onestop_feeds_to_gtfs_ids: HashMap<String, Option<String>>,
+}
+
+pub struct BirchGlobalDatastore {
+    pub chateau_assignment_cache: Arc<SccHashMap<String, (u64, ChateauMetadataZookeeper)>>
 }
 
 async fn index(req: HttpRequest) -> impl Responder {
@@ -900,6 +907,10 @@ async fn main() -> std::io::Result<()> {
 
     let zk = Arc::new(zk);
 
+    let global_cache = Arc::new(BirchGlobalDatastore {
+        chateau_assignment_cache: Arc::new(SccHashMap::new())          
+    });
+
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
         App::new()
@@ -919,6 +930,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(actix_web::web::Data::new(Arc::new(RwLock::new(
                 None::<ChateauCache>,
             ))))
+            .app_data(Data::new(Arc::clone(&global_cache)))
             .app_data(actix_web::web::Data::new(Arc::clone(&zk)))
             .route("/", web::get().to(index))
             .route("robots.txt", web::get().to(robots))

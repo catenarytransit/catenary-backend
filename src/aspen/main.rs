@@ -24,7 +24,7 @@
     clippy::iter_nth,
     clippy::iter_cloned_collect
 )]
-use catenary::aspen::lib::*;
+use catenary::{aspen::lib::*, id_cleanup};
 use catenary::postgres_tools::make_async_pool;
 use clap::Parser;
 use futures::{future, prelude::*};
@@ -105,7 +105,7 @@ impl AspenRpc for AspenServer {
         let vehicles_gtfs_rt = match vehicles_response_code {
             Some(200) => match vehicles {
                 Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
-                    Ok(v) => Some(v),
+                    Ok(v) => Some(id_cleanup::gtfs_rt_cleanup(v)),
                     Err(e) => {
                         println!("Error decoding vehicles: {}", e);
                         None
@@ -119,7 +119,7 @@ impl AspenRpc for AspenServer {
         let trips_gtfs_rt = match trips_response_code {
             Some(200) => match trips {
                 Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
-                    Ok(t) => Some(t),
+                    Ok(t) => Some(id_cleanup::gtfs_rt_cleanup(a)),
                     Err(e) => {
                         println!("Error decoding trips: {}", e);
                         None
@@ -133,7 +133,7 @@ impl AspenRpc for AspenServer {
         let alerts_gtfs_rt = match alerts_response_code {
             Some(200) => match alerts {
                 Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
-                    Ok(a) => Some(a),
+                    Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
                     Err(e) => {
                         println!("Error decoding alerts: {}", e);
                         None
@@ -148,21 +148,21 @@ impl AspenRpc for AspenServer {
 
         //  println!("Parsed FeedMessages for {}", realtime_feed_id);
 
-        if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
+        if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
             self.authoritative_gtfs_rt_store
                 .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
                 .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
                 .or_insert(vehicles_gtfs_rt.clone());
         }
 
-        if let Some(trip_gtfs_rt) = &trips_gtfs_rt {
+        if let Some(trip_gtfs_rt) = trips_gtfs_rt {
             self.authoritative_gtfs_rt_store
                 .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
                 .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
                 .or_insert(trip_gtfs_rt.clone());
         }
 
-        if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
+        if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
             self.authoritative_gtfs_rt_store
                 .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
                 .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
