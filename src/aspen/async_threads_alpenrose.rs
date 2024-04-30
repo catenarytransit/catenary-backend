@@ -20,19 +20,15 @@ pub async fn alpenrose_process_threads(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
-    chateau_queue_list: Arc<Mutex<HashSet<String>>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut set: JoinSet<_> = JoinSet::new();
-
-    for i in 0..alpenrosethreadcount {
+    chateau_queue_list: Arc<Mutex<HashSet<String>>>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+   
+    let mut set:JoinSet<_> = (0..alpenrosethreadcount).map(|i| {
         let alpenrose_to_process_queue = Arc::clone(&alpenrose_to_process_queue);
         let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
         let authoritative_data_store = Arc::clone(&authoritative_data_store);
         let conn_pool = Arc::clone(&conn_pool);
         let chateau_queue_list = Arc::clone(&chateau_queue_list);
-        set
-        .spawn(
-            async move {
+        async move {
                 alpenrose_loop_process_thread(
                     alpenrose_to_process_queue,
                     authoritative_gtfs_rt_store,
@@ -41,8 +37,7 @@ pub async fn alpenrose_process_threads(
                     chateau_queue_list,
                 )
                 .await
-        });
-    }
+        }   } ).collect();
 
     Ok(())
 }
