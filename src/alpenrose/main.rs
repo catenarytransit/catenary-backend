@@ -123,9 +123,9 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .build()
         .unwrap();
 
-        //create parent node for workers
+    //create parent node for workers
 
-        let _ = zk
+    let _ = zk
         .create(
             "/alpenrose_workers",
             vec![],
@@ -135,7 +135,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .await
         .unwrap();
 
-        let workers_assignments = zk
+    let workers_assignments = zk
         .create(
             "/alpenrose_assignments",
             vec![],

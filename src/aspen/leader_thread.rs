@@ -30,8 +30,28 @@ pub async fn aspen_leader_thread(
     println!("starting leader thread");
 
     let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
-            .await
-            .unwrap();
+        .await
+        .unwrap();
+
+    let _ = zk
+        .create(
+            "/aspen_assigned_chateaus",
+            vec![],
+            Acl::open_unsafe(),
+            CreateMode::Persistent,
+        )
+        .await
+        .unwrap();
+
+    let _ = zk
+        .create(
+            "/aspen_assigned_realtime_feed_ids",
+            vec![],
+            Acl::open_unsafe(),
+            CreateMode::Persistent,
+        )
+        .await
+        .unwrap();
 
     loop {
         // println!("loop");
@@ -45,26 +65,6 @@ pub async fn aspen_leader_thread(
                 bincode::serialize(&tailscale_ip).unwrap(),
                 Acl::open_unsafe(),
                 CreateMode::Ephemeral,
-            )
-            .await
-            .unwrap();
-
-        let _ = zk
-            .create(
-                "/aspen_assigned_chateaus",
-                vec![],
-                Acl::open_unsafe(),
-                CreateMode::Persistent,
-            )
-            .await
-            .unwrap();
-
-        let _ = zk
-            .create(
-                "/aspen_assigned_realtime_feed_ids",
-                vec![],
-                Acl::open_unsafe(),
-                CreateMode::Persistent,
             )
             .await
             .unwrap();

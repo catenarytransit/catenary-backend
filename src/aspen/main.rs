@@ -268,21 +268,18 @@ async fn main() -> anyhow::Result<()> {
 
     //if zookeeper /aspen_workers doesn't exist, create it
 
-    let get_zk_aspen_workers_parent = zk
-        .get_data("/aspen_workers")
-        .await
-        .unwrap();
+    let get_zk_aspen_workers_parent = zk.get_data("/aspen_workers").await.unwrap();
 
     if get_zk_aspen_workers_parent.is_none() {
         let _ = zk
-        .create(
-            "/aspen_workers",
-            vec![],
-            Acl::open_unsafe(),
-            CreateMode::Persistent,
-        )
-        .await
-        .unwrap();
+            .create(
+                "/aspen_workers",
+                vec![],
+                Acl::open_unsafe(),
+                CreateMode::Persistent,
+            )
+            .await
+            .unwrap();
     }
 
     //register that the worker exists
@@ -378,7 +375,7 @@ async fn main() -> anyhow::Result<()> {
     match result_series {
         Ok(_) => {
             println!("All threads have exited successfully");
-        Ok(())
+            Ok(())
         }
         Err(e) => {
             println!("Error: {:?}", e);
