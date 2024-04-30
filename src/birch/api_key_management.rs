@@ -102,7 +102,7 @@ pub async fn set_realtime_key(
     //convert password format to js value
     let password_for_postgres = match &data.passwords {
         Some(x) => Some(serde_json::to_value(x).unwrap()),
-        None => None
+        None => None,
     };
 
     use catenary::schema::gtfs::realtime_passwords as realtime_passwords_table;
@@ -113,17 +113,17 @@ pub async fn set_realtime_key(
     let password_row = RealtimePasswordRow {
         onestop_feed_id: feed_id.clone(),
         passwords: password_for_postgres.clone(),
-        last_updated_ms: time
+        last_updated_ms: time,
     };
 
     let insert_result = diesel::insert_into(realtime_passwords_table::table)
         .values(password_row)
         .on_conflict(realtime_passwords_table::onestop_feed_id)
         .do_update()
-        .set(
-            (realtime_passwords_table::passwords.eq(password_for_postgres),
-            realtime_passwords_table::last_updated_ms.eq(time))
-        )
+        .set((
+            realtime_passwords_table::passwords.eq(password_for_postgres),
+            realtime_passwords_table::last_updated_ms.eq(time),
+        ))
         .execute(conn)
         .await;
 
@@ -153,10 +153,14 @@ pub async fn set_realtime_key(
             update_result
         );
 
-        return HttpResponse::InternalServerError().body("insert update interval fail");
+        return HttpResponse::InternalServerError()
+            .header("Cache-Control", "no-cache")
+            .body("insert update interval fail");
     }
 
-    HttpResponse::Ok().finish()
+    HttpResponse::Ok()
+        .header("Cache-Control", "no-cache")
+        .finish()
 }
 
 #[actix_web::get("/getrealtimekeys/")]
@@ -229,19 +233,25 @@ pub async fn get_realtime_keys(
                         );
                     }
 
-                    HttpResponse::Ok().json(KeyResponse {
-                        passwords: passwords,
-                    })
+                    HttpResponse::Ok()
+                        .header("Cache-Control", "no-cache")
+                        .json(KeyResponse {
+                            passwords: passwords,
+                        })
                 }
                 Err(e) => {
                     println!("Error: {:?}", e);
-                    return HttpResponse::InternalServerError().finish();
+                    return HttpResponse::InternalServerError()
+                        .header("Cache-Control", "no-cache")
+                        .finish();
                 }
             }
         }
         Err(e) => {
             println!("Error: {:?}", e);
-            HttpResponse::InternalServerError().finish()
+            HttpResponse::InternalServerError()
+                .header("Cache-Control", "no-cache")
+                .finish()
         }
     }
 }

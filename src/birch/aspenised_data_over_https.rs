@@ -56,19 +56,11 @@ pub async fn get_realtime_locations(
         .await
         .unwrap();
 
-        if fetch_assigned_node_for_this_realtime_feed.is_none() {
-            return HttpResponse::NotFound().body("No assigned node found for this chateau");
-        }
-    
-        let (fetch_assigned_node_for_this_realtime_feed, stat) =
-            fetch_assigned_node_for_this_realtime_feed.unwrap();
-    
-        //deserialise into ChateauMetadataZookeeper
-    
-        let assigned_chateau_data = bincode::deserialize::<ChateauMetadataZookeeper>(
-            &fetch_assigned_node_for_this_realtime_feed,
-        )
-        .unwrap();
+    if fetch_assigned_node_for_this_realtime_feed.is_none() {
+        return HttpResponse::NotFound()
+            .header("Cache-Control", "no-cache")
+            .body("No assigned node found for this chateau");
+    }
     
         //then connect to the node via tarpc
     
@@ -123,10 +115,21 @@ pub async fn get_realtime_locations(
                         hash_of_routes: response.hash_of_routes,
                         last_updated_time_ms: response.last_updated_time_ms,
                     };
-    
-                    HttpResponse::Ok().json(filtered_response)
-                }
-            },
-            None => HttpResponse::NotFound().body("No data found"),
-        }
+
+                let filtered_response = GetVehicleLocationsResponse {
+                    vehicle_positions: filtered_vehicle_positions,
+                    vehicle_route_cache: filtered_routes_cache,
+                    hash_of_routes: response.hash_of_routes,
+                    last_updated_time_ms: response.last_updated_time_ms,
+                };
+
+                HttpResponse::Ok()
+                    .header("Cache-Control", "no-cache")
+                    .json(filtered_response)
+            }
+        },
+        None => HttpResponse::NotFound()
+            .header("Cache-Control", "no-cache")
+            .body("No data found"),
+    }
 }
