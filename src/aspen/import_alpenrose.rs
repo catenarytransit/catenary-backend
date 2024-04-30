@@ -16,11 +16,8 @@ use gtfs_rt::FeedMessage;
 use gtfs_rt::TripUpdate;
 use prost::Message;
 use scc::HashMap as SccHashMap;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-mta~nyc~rt~subway~1~2~3~4~5~6~7",
@@ -56,8 +53,6 @@ pub async fn new_rt_data(
     let conn = &mut conn_pre?;
     println!("Connected to postges");
 
-    let this_chateau_dashmap = authoritative_data_store.get(&realtime_feed_id);
-
     // take all the gtfs rt data and merge it together
 
     let mut aspenised_vehicle_positions: AHashMap<String, AspenisedVehiclePosition> =
@@ -69,20 +64,20 @@ pub async fn new_rt_data(
 
     use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
-    use catenary::schema::gtfs::static_download_attempts as static_download_attempts_pg_schema;
 
     //get this chateau
     let this_chateau = chateaus_pg_schema::dsl::chateaus
         .filter(chateaus_pg_schema::dsl::chateau.eq(&chateau_id))
-        .first::<catenary::models::Chateau>(conn)
-        .await?;
+        .first::<catenary::models::Chateau>(conn);
 
     //get all routes inside chateau from postgres db
-    let routes: Vec<catenary::models::Route> = routes_pg_schema::dsl::routes
+    //: Vec<catenary::models::Route>
+    let routes = routes_pg_schema::dsl::routes
         .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
         .select(catenary::models::Route::as_select())
-        .load::<catenary::models::Route>(conn)
-        .await?;
+        .load::<catenary::models::Route>(conn);
+
+    let (this_chateau, routes) = tokio::try_join!(this_chateau, routes)?;
 
     let mut route_id_to_route: HashMap<String, catenary::models::Route> = HashMap::new();
 
@@ -163,7 +158,7 @@ pub async fn new_rt_data(
 
         //also lookup all the headsigns from the trips via itinerary patterns
 
-        let mut list_of_itinerary_patterns_to_lookup: HashSet<String> = HashSet::new();
+        let mut list_of_itinerary_patterns_to_lookup: AHashSet<String> = AHashSet::new();
 
         for trip in trip_id_to_trip.values() {
             list_of_itinerary_patterns_to_lookup.insert(trip.itinerary_pattern_id.clone());
