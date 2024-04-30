@@ -369,12 +369,20 @@ async fn main() -> anyhow::Result<()> {
             }
         }());
 
-    let result_series = futures::future::join_all(vec![
+    let result_series = tokio::try_join!(
         leader_thread_handler,
         async_from_alpenrose_processor_handler,
         tarpc_server,
-    ])
-    .await;
+    );
 
-    Ok(())
+    match result_series {
+        Ok(_) => {
+            println!("All threads have exited successfully");
+        Ok(())
+        }
+        Err(e) => {
+            println!("Error: {:?}", e);
+            Err(anyhow::Error::new(e))
+        }
+    }
 }
