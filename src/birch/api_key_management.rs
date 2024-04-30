@@ -204,10 +204,12 @@ pub async fn get_realtime_keys(
                         Option<catenary::agency_secret::PasswordFormat>,
                     > = HashMap::new();
                     for password in passwords {
-                        let password_formatted = password.passwords.as_ref().map(|value| serde_json::from_value::<catenary::agency_secret::PasswordFormat>(
-                            value.clone(),
+                        let password_formatted = password.passwords.as_ref().map(|value| {
+                            serde_json::from_value::<catenary::agency_secret::PasswordFormat>(
+                                value.clone(),
                             )
-                            .unwrap());
+                            .unwrap()
+                        });
 
                         raw_password_data
                             .insert(password.onestop_feed_id.clone(), password_formatted);

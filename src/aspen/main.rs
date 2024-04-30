@@ -24,8 +24,8 @@
     clippy::iter_nth,
     clippy::iter_cloned_collect
 )]
-use catenary::{aspen::lib::*, id_cleanup};
 use catenary::postgres_tools::make_async_pool;
+use catenary::{aspen::lib::*, id_cleanup};
 use clap::Parser;
 use futures::{future, prelude::*};
 use rand::{

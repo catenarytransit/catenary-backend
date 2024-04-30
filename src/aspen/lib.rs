@@ -5,13 +5,13 @@
 /// This is the service definition. It looks a lot like a trait definition.
 /// It defines one RPC, hello, which takes one arg, name, and returns a String.
 use crate::aspen_dataset::*;
+use crate::id_cleanup;
 use crate::ChateauDataNoGeometry;
 use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use crate::id_cleanup;
 
 #[tarpc::service]
 pub trait AspenRpc {

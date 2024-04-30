@@ -1,3 +1,4 @@
+use crate::BirchGlobalDatastore;
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use ahash::{AHashMap, AHashSet};
 use catenary::aspen::lib::ChateauMetadataZookeeper;
@@ -7,7 +8,6 @@ use catenary::aspen_dataset::AspenisedVehicleRouteCache;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tarpc::{client, context, tokio_serde::formats::Bincode};
-use crate::BirchGlobalDatastore;
 
 #[derive(Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum CategoryOfRealtimeVehicleData {
@@ -41,7 +41,7 @@ pub async fn get_realtime_locations(
         "bus" => CategoryOfRealtimeVehicleData::Bus,
         "rail" => CategoryOfRealtimeVehicleData::Rail,
         "other" => CategoryOfRealtimeVehicleData::Other,
-        _ => return HttpResponse::NotFound().body("Invalid category"), 
+        _ => return HttpResponse::NotFound().body("Invalid category"),
     };
 
     let existing_fasthash_of_routes = match existing_fasthash_of_routes {
@@ -61,60 +61,60 @@ pub async fn get_realtime_locations(
             .header("Cache-Control", "no-cache")
             .body("No assigned node found for this chateau");
     }
-    
-        //then connect to the node via tarpc
-    
-        let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
-    
-        let transport = tarpc::serde_transport::tcp::connect(socket_addr, Bincode::default)
-            .await
-            .unwrap();
-    
-        let aspen_client =
-            catenary::aspen::lib::AspenRpcClient::new(client::Config::default(), transport).spawn();
-    
-        //then call the get_vehicle_locations method
-    
-        let response = aspen_client
-            .get_vehicle_locations(context::current(), chateau_id, existing_fasthash_of_routes)
-            .await
-            .unwrap();
-    
-        //serde the response into json and send it
-    
-        match response {
-            Some(response) => match client_last_updated_time_ms == response.last_updated_time_ms {
-                true => HttpResponse::NoContent().finish(),
-                false => {
-                    let route_ids_allowed = category_to_allowed_route_ids(&category_requested);
-                    let filtered_vehicle_positions = response
-                        .vehicle_positions
-                        .into_iter()
-                        .filter(|vehicle_position| {
-                            route_ids_allowed.contains(&vehicle_position.1.route_type)
-                        })
-                        .collect::<AHashMap<String, AspenisedVehiclePosition>>();
-    
-                    let filtered_routes_cache: Option<AHashMap<String, AspenisedVehicleRouteCache>> =
-                        match response.vehicle_route_cache {
-                            Some(vehicle_route_cache) => {
-                                let filtered_vehicle_route_cache = vehicle_route_cache
-                                    .into_iter()
-                                    .filter(|(route_id, vehicle_route_cache)| {
-                                        route_ids_allowed.contains(&vehicle_route_cache.route_type)
-                                    })
-                                    .collect::<AHashMap<String, AspenisedVehicleRouteCache>>();
-                                Some(filtered_vehicle_route_cache)
-                            }
-                            None => None,
-                        };
-    
-                    let filtered_response = GetVehicleLocationsResponse {
-                        vehicle_positions: filtered_vehicle_positions,
-                        vehicle_route_cache: filtered_routes_cache,
-                        hash_of_routes: response.hash_of_routes,
-                        last_updated_time_ms: response.last_updated_time_ms,
+
+    //then connect to the node via tarpc
+
+    let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
+
+    let transport = tarpc::serde_transport::tcp::connect(socket_addr, Bincode::default)
+        .await
+        .unwrap();
+
+    let aspen_client =
+        catenary::aspen::lib::AspenRpcClient::new(client::Config::default(), transport).spawn();
+
+    //then call the get_vehicle_locations method
+
+    let response = aspen_client
+        .get_vehicle_locations(context::current(), chateau_id, existing_fasthash_of_routes)
+        .await
+        .unwrap();
+
+    //serde the response into json and send it
+
+    match response {
+        Some(response) => match client_last_updated_time_ms == response.last_updated_time_ms {
+            true => HttpResponse::NoContent().finish(),
+            false => {
+                let route_ids_allowed = category_to_allowed_route_ids(&category_requested);
+                let filtered_vehicle_positions = response
+                    .vehicle_positions
+                    .into_iter()
+                    .filter(|vehicle_position| {
+                        route_ids_allowed.contains(&vehicle_position.1.route_type)
+                    })
+                    .collect::<AHashMap<String, AspenisedVehiclePosition>>();
+
+                let filtered_routes_cache: Option<AHashMap<String, AspenisedVehicleRouteCache>> =
+                    match response.vehicle_route_cache {
+                        Some(vehicle_route_cache) => {
+                            let filtered_vehicle_route_cache = vehicle_route_cache
+                                .into_iter()
+                                .filter(|(route_id, vehicle_route_cache)| {
+                                    route_ids_allowed.contains(&vehicle_route_cache.route_type)
+                                })
+                                .collect::<AHashMap<String, AspenisedVehicleRouteCache>>();
+                            Some(filtered_vehicle_route_cache)
+                        }
+                        None => None,
                     };
+
+                let filtered_response = GetVehicleLocationsResponse {
+                    vehicle_positions: filtered_vehicle_positions,
+                    vehicle_route_cache: filtered_routes_cache,
+                    hash_of_routes: response.hash_of_routes,
+                    last_updated_time_ms: response.last_updated_time_ms,
+                };
 
                 let filtered_response = GetVehicleLocationsResponse {
                     vehicle_positions: filtered_vehicle_positions,

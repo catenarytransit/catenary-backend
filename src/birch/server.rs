@@ -27,9 +27,11 @@
 
 use actix_web::dev::Service;
 use actix_web::middleware::DefaultHeaders;
+use actix_web::web::Data;
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use bb8::Pool;
 use cached::proc_macro::once;
+use catenary::aspen::lib::ChateauMetadataZookeeper;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use diesel::query_dsl::methods::FilterDsl;
@@ -44,6 +46,7 @@ use geojson::{Feature, GeoJson, Geometry, JsonValue, Value};
 use qstring::QString;
 use rand::Rng;
 use rstar::RTree;
+use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde_derive::Serialize;
 use serde_json::to_string;
@@ -61,9 +64,6 @@ use tokio_postgres::Client;
 use tokio_postgres::Error as PostgresError;
 use tokio_zookeeper::ZooKeeper;
 use zstd_safe::WriteBuf;
-use scc::HashMap as SccHashMap;
-use catenary::aspen::lib::ChateauMetadataZookeeper;
-use actix_web::web::Data;
 
 mod api_key_management;
 mod aspenised_data_over_https;
@@ -105,7 +105,7 @@ struct OperatorPostgres {
 }
 
 pub struct BirchGlobalDatastore {
-    pub chateau_assignment_cache: Arc<SccHashMap<String, (u64, ChateauMetadataZookeeper)>>
+    pub chateau_assignment_cache: Arc<SccHashMap<String, (u64, ChateauMetadataZookeeper)>>,
 }
 
 async fn index(req: HttpRequest) -> impl Responder {
@@ -908,7 +908,7 @@ async fn main() -> std::io::Result<()> {
     let zk = Arc::new(zk);
 
     let global_cache = Arc::new(BirchGlobalDatastore {
-        chateau_assignment_cache: Arc::new(SccHashMap::new())          
+        chateau_assignment_cache: Arc::new(SccHashMap::new()),
     });
 
     // Create a new HTTP server.
