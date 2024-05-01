@@ -161,7 +161,7 @@ pub async fn single_fetch_time(
                         let tarpc_send_to_aspen = aspen_client
                             .from_alpenrose(
                                 tarpc::context::current(),
-                                data.chateau_id,
+                                data.chateau_id.clone(),
                                 feed_id.clone(),
                                 match vehicle_positions_data {
                                     Some(Ok(response)) => {
@@ -212,8 +212,8 @@ pub async fn single_fetch_time(
                         match tarpc_send_to_aspen {
                             Ok(_) => {
                                 println!(
-                                    "{}: Successfully sent data sent to {}",
-                                    feed_id, worker_id
+                                    "feed {}|chateau {}: Successfully sent data sent to {}",
+                                    feed_id, data.chateau_id, worker_id
                                 );
                             }
                             Err(e) => {
