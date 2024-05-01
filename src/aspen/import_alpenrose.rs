@@ -68,16 +68,18 @@ pub async fn new_rt_data(
     //get this chateau
     let this_chateau = chateaus_pg_schema::dsl::chateaus
         .filter(chateaus_pg_schema::dsl::chateau.eq(&chateau_id))
-        .first::<catenary::models::Chateau>(conn);
+        .first::<catenary::models::Chateau>(conn)
+        .await?;
 
     //get all routes inside chateau from postgres db
     //: Vec<catenary::models::Route>
     let routes = routes_pg_schema::dsl::routes
         .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
         .select(catenary::models::Route::as_select())
-        .load::<catenary::models::Route>(conn);
+        .load::<catenary::models::Route>(conn)
+        .await?;
 
-    let (this_chateau, routes) = tokio::try_join!(this_chateau, routes)?;
+    //let (this_chateau, routes) = tokio::try_join!(this_chateau, routes)?;
 
     let mut route_id_to_route: HashMap<String, catenary::models::Route> = HashMap::new();
 
