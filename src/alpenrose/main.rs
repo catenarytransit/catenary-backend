@@ -34,6 +34,7 @@ use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use catenary::schema::gtfs::admin_credentials::last_updated_ms;
 use dashmap::DashMap;
+use diesel::dsl::exists;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::select_dsl::SelectDsl;
 use diesel::sql_types::{Float, Integer};
@@ -275,7 +276,50 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                         let feed_id_str = feed_id.clone();
 
                                         //update each feed under the workers node's assignment
-                                        let assignment = zk
+                                        let existing_assignment = zk
+                                            .get_data(
+                                                format!(
+                                                    "/alpenrose_assignments/{}/{}",
+                                                    worker_id, feed_id_str
+                                                )
+                                                .as_str(),
+                                            )
+                                            .await?;
+
+                                        if let Some(existing_assignment) = existing_assignment {
+                                            let existing_realtime_instruction: RealtimeFeedFetch =
+                                                bincode::deserialize(&existing_assignment.0).unwrap();
+
+                                                //check if the data has changed
+                                            if existing_realtime_instruction != *realtime_instruction {
+                                                let set_assignment = zk
+                                                .set_data(
+                                                    format!(
+                                                        "/alpenrose_assignments/{}/{}",
+                                                        worker_id, feed_id_str
+                                                    )
+                                                    .as_str(),
+                                                    None,
+                                                    bincode::serialize(&realtime_instruction)
+                                                        .unwrap(),
+                                                )
+                                                .await?;
+
+                                            match set_assignment {
+                                                Ok(_) => {
+                                                    println!(
+                                                        "Reassigned feed {} to worker {}",
+                                                        feed_id_str, worker_id
+                                                    );
+                                                }
+                                                Err(err) => {
+                                                    eprintln!("Error reassigning feed {} to worker {}: {:?}", feed_id_str, worker_id, err);
+                                                }
+                                            }
+                                            }
+                                        } else {
+                                            // the node doesn't exist, create it
+                                            let assignment = zk
                                             .create(
                                                 format!(
                                                     "/alpenrose_assignments/{}/{}",
@@ -287,46 +331,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                                 CreateMode::Persistent,
                                             )
                                             .await?;
-
-                                        match assignment {
-                                            Ok(_) => {
-                                                println!(
-                                                    "Assigned feed {} to worker {}",
-                                                    feed_id_str, worker_id
-                                                );
-                                            }
-                                            Err(error::Create::NodeExists) => {
-                                                let set_assignment = zk
-                                                    .set_data(
-                                                        format!(
-                                                            "/alpenrose_assignments/{}/{}",
-                                                            worker_id, feed_id_str
-                                                        )
-                                                        .as_str(),
-                                                        None,
-                                                        bincode::serialize(&realtime_instruction)
-                                                            .unwrap(),
-                                                    )
-                                                    .await?;
-
-                                                match set_assignment {
-                                                    Ok(_) => {
-                                                        println!(
-                                                            "Reassigned feed {} to worker {}",
-                                                            feed_id_str, worker_id
-                                                        );
-                                                    }
-                                                    Err(err) => {
-                                                        eprintln!("Error reassigning feed {} to worker {}: {:?}", feed_id_str, worker_id, err);
-                                                    }
-                                                }
-                                            }
-                                            Err(err) => {
-                                                eprintln!(
-                                                    "Error assigning feed {} to worker {}: {:?}",
-                                                    feed_id_str, worker_id, err
-                                                );
-                                            }
                                         }
                                     }
 
