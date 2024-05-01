@@ -21,8 +21,8 @@ pub async fn alpenrose_process_threads(
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut set: JoinSet<Result<(), Box<dyn Error + Sync + Send>>> = (0..alpenrosethreadcount)
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut set: JoinSet<_> = (0usize..alpenrosethreadcount)
         .map(|i| {
             let alpenrose_to_process_queue = Arc::clone(&alpenrose_to_process_queue);
             let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
@@ -41,6 +41,10 @@ pub async fn alpenrose_process_threads(
             }
         })
         .collect();
+
+    while let Some(res) = set.join_next().await {
+        res.unwrap().unwrap();
+    }
 
     Ok(())
 }
