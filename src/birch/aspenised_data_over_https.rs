@@ -58,7 +58,7 @@ pub async fn get_realtime_locations(
     if let Err(err_fetch) = &fetch_assigned_node_for_this_realtime_feed {
         eprintln!("{}", err_fetch);
         return HttpResponse::InternalServerError()
-            .header("Cache-Control", "no-cache")
+            .append_header(("Cache-Control", "no-cache"))
             .body(format!(
                 "Error fetching assigned node: {}, failed to connect to zookeeper",
                 err_fetch
@@ -69,8 +69,8 @@ pub async fn get_realtime_locations(
         fetch_assigned_node_for_this_realtime_feed.unwrap();
 
     if fetch_assigned_node_for_this_realtime_feed.is_none() {
-        return HttpResponse::NotFound()
-            .header("Cache-Control", "no-cache")
+        return HttpResponse::Ok()
+            .append_header(("Cache-Control", "no-cache"))
             .body("No assigned node found for this chateau");
     }
 
