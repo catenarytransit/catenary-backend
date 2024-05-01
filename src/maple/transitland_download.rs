@@ -65,6 +65,7 @@ pub async fn download_return_eligible_feeds(
     transitland_meta: &ReturnDmfrAnalysis,
     pool: &Arc<CatenaryPostgresPool>,
     feeds_to_discard: &HashSet<String>,
+    restrict_to_feed_id: &Option<String>
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
 
@@ -83,6 +84,13 @@ pub async fn download_return_eligible_feeds(
                         _ => false,
                     }
                     && feed.urls.static_current.is_some()
+            })
+            .filter(|(_, feed)| {
+                if let Some(restrict_to_feed_id) = restrict_to_feed_id {
+                    return feed.id == *restrict_to_feed_id;
+                } else {
+                    return true;
+                }
             })
             .map(|(string, feed)| StaticFeedToDownload {
                 feed_id: feed.id.clone(),
