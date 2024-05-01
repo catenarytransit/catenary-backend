@@ -81,6 +81,10 @@ pub async fn new_rt_data(
 
     //let (this_chateau, routes) = tokio::try_join!(this_chateau, routes)?;
 
+    if routes.is_empty() {
+        println!("No routes found for chateau {}", chateau_id);
+    }
+
     let mut route_id_to_route: HashMap<String, catenary::models::Route> = HashMap::new();
 
     for route in routes {
