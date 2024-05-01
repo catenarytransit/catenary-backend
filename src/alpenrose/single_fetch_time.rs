@@ -28,7 +28,7 @@ async fn cleanup_response(
 
             let hash = ahash_fast_hash(&bytes);
 
-            match hashes_of_data.get(&(feed_id.to_string(), urltype)) {
+            match hashes_of_data.get(&(feed_id.to_string(), urltype.clone())) {
                 Some(old_hash) => {
                     let old_hash = old_hash.get();
 
@@ -37,7 +37,7 @@ async fn cleanup_response(
                         true => None,
                         false => {
                             hashes_of_data
-                                .entry((feed_id.to_string(), urltype))
+                                .entry((feed_id.to_string(), urltype.clone()))
                                 .and_modify(|value| *value = hash)
                                 .or_insert(hash);
                             Some(bytes)
