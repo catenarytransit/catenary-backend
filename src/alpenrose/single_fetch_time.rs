@@ -306,32 +306,37 @@ pub fn make_reqwest_for_url(
 
             if let Some(passwords) = &assignment.passwords {
                 //choose random account to use
-                let password_info = passwords.choose(&mut rand::thread_rng()).unwrap();
+                if passwords.len() > 0 {
+                    let password_info = passwords.choose(&mut rand::thread_rng());
 
-                if password_info.password.len() == assignment.key_formats.len() {
-                    let mut url_parameter_seq: Vec<(String, String)> = vec![];
-                    for (key_index, key_format) in assignment.key_formats.iter().enumerate() {
-                        match key_format {
-                            KeyFormat::Header(header) => {
-                                request =
-                                    request.header(header, &password_info.password[key_index]);
+                    if let Some(password_info) = password_info {
+                        if password_info.password.len() == assignment.key_formats.len() {
+                            let mut url_parameter_seq: Vec<(String, String)> = vec![];
+                            for (key_index, key_format) in assignment.key_formats.iter().enumerate()
+                            {
+                                match key_format {
+                                    KeyFormat::Header(header) => {
+                                        request = request
+                                            .header(header, &password_info.password[key_index]);
+                                    }
+                                    KeyFormat::UrlQuery(query) => {
+                                        url_parameter_seq.push((
+                                            query.to_string(),
+                                            password_info.password[key_index].to_string(),
+                                        ));
+                                    }
+                                }
                             }
-                            KeyFormat::UrlQuery(query) => {
-                                url_parameter_seq.push((
-                                    query.to_string(),
-                                    password_info.password[key_index].to_string(),
-                                ));
-                            }
+
+                            request = request.query(&url_parameter_seq);
+                        } else {
+                            println!(
+                                "Password length does not match key format length for feed_id: {}",
+                                assignment.feed_id
+                            );
+                            return None;
                         }
                     }
-
-                    request = request.query(&url_parameter_seq);
-                } else {
-                    println!(
-                        "Password length does not match key format length for feed_id: {}",
-                        assignment.feed_id
-                    );
-                    return None;
                 }
             }
 
