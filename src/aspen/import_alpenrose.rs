@@ -73,7 +73,7 @@ pub async fn new_rt_data(
 
     //get all routes inside chateau from postgres db
     //: Vec<catenary::models::Route>
-    let routes = routes_pg_schema::dsl::routes
+    let routes: Vec<catenary::models::Route> = routes_pg_schema::dsl::routes
         .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
         .select(catenary::models::Route::as_select())
         .load::<catenary::models::Route>(conn)
