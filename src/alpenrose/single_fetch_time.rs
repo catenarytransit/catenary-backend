@@ -306,7 +306,7 @@ pub fn make_reqwest_for_url(
 
             if let Some(passwords) = &assignment.passwords {
                 //choose random account to use
-                if passwords.len() > 0 {
+                if !passwords.is_empty() {
                     let password_info = passwords.choose(&mut rand::thread_rng());
 
                     if let Some(password_info) = password_info {
