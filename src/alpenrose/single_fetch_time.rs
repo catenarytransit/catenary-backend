@@ -16,6 +16,36 @@ use tarpc::{client, context, tokio_serde::formats::Bincode};
 use tokio::sync::RwLock;
 use tokio_zookeeper::ZooKeeper;
 
+async fn cleanup_response(response: Response, urltype: UrlType, feed_id: &str, hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>>) -> Option<Vec<u8>> {
+    match response.bytes().await {
+        Ok(bytes_pre) => {
+            let bytes = bytes_pre.as_ref().to_vec();
+
+            let hash = ahash_fast_hash(&bytes);
+
+            match hashes_of_data.get(&(feed_id.to_string(), urltype)) {
+                Some(old_hash) => {
+                    let old_hash = old_hash.get();
+
+                    //if the data has not changed, don't send it
+                    match hash == *old_hash {
+                        true => None,
+                        false => {
+                            hashes_of_data
+                                .entry((feed_id.to_string(), urltype))
+                                .and_modify(|value| *value = hash)
+                                .or_insert(hash);
+                            Some(bytes)
+                        }
+                    }
+                }
+                None => Some(bytes),
+            }
+        }
+        Err(_) => None,
+    }
+}
+
 pub async fn single_fetch_time(
     client: reqwest::Client,
     assignments: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>>,
@@ -123,119 +153,39 @@ pub async fn single_fetch_time(
                         || trip_updates_http_status == Some(200)
                         || alerts_http_status == Some(200)
                     {
-                        let tarpc_send_to_aspen = aspen_client
-                            .from_alpenrose(
-                                tarpc::context::current(),
-                                data.chateau_id,
-                                feed_id.clone(),
-                                match vehicle_positions_data {
-                                    Some(Ok(response)) => {
-                                        let bytes =
-                                            response.bytes().await.unwrap().as_ref().to_vec();
-
-                                        let hash = ahash_fast_hash(&bytes);
-
-                                        match hashes_of_data
-                                            .get(&(feed_id.clone(), UrlType::VehiclePositions))
-                                        {
-                                            Some(old_hash) => {
-                                                let old_hash = old_hash.get();
-
-                                                //if the data has not changed, don't send it
-                                                match hash == *old_hash {
-                                                    true => None,
-                                                    false => {
-                                                        hashes_of_data
-                                                            .entry((
-                                                                feed_id.clone(),
-                                                                UrlType::VehiclePositions,
-                                                            ))
-                                                            .and_modify(|value| *value = hash)
-                                                            .or_insert(hash);
-                                                        Some(bytes)
-                                                    }
-                                                }
-                                            }
-                                            None => Some(bytes),
+                        let tarpc_send_to_aspen =
+                            aspen_client
+                                .from_alpenrose(
+                                    tarpc::context::current(),
+                                    data.chateau_id,
+                                    feed_id.clone(),
+                                    match vehicle_positions_data {
+                                        Some(Ok(response)) => {
+                                            cleanup_response(response, UrlType::VehiclePositions, feed_id, Arc::clone(&hashes_of_data)).await
                                         }
-                                    }
-                                    _ => None,
-                                },
-                                match trip_updates_data {
-                                    Some(Ok(response)) => {
-                                        let bytes =
-                                            response.bytes().await.unwrap().as_ref().to_vec();
-
-                                        let hash = ahash_fast_hash(&bytes);
-
-                                        match hashes_of_data
-                                            .get(&(feed_id.clone(), UrlType::TripUpdates))
-                                        {
-                                            Some(old_hash) => {
-                                                let old_hash = old_hash.get();
-
-                                                //if the data has not changed, don't send it
-                                                match hash == *old_hash {
-                                                    true => None,
-                                                    false => {
-                                                        hashes_of_data
-                                                            .entry((
-                                                                feed_id.clone(),
-                                                                UrlType::TripUpdates,
-                                                            ))
-                                                            .and_modify(|value| *value = hash)
-                                                            .or_insert(hash);
-                                                        Some(bytes)
-                                                    }
-                                                }
-                                            }
-                                            None => Some(bytes),
+                                        _ => None,
+                                    },
+                                    match trip_updates_data {
+                                        Some(Ok(response)) => {
+                                            cleanup_response(response, UrlType::TripUpdates, feed_id, Arc::clone(&hashes_of_data)).await
                                         }
-                                    }
-                                    _ => None,
-                                },
-                                match alerts_data {
-                                    Some(Ok(response)) => {
-                                        let bytes =
-                                            response.bytes().await.unwrap().as_ref().to_vec();
-
-                                        let hash = ahash_fast_hash(&bytes);
-
-                                        match hashes_of_data
-                                            .get(&(feed_id.clone(), UrlType::Alerts))
-                                        {
-                                            Some(old_hash) => {
-                                                let old_hash = old_hash.get();
-
-                                                //if the data has not changed, don't send it
-                                                match hash == *old_hash {
-                                                    true => None,
-                                                    false => {
-                                                        hashes_of_data
-                                                            .entry((
-                                                                feed_id.clone(),
-                                                                UrlType::Alerts,
-                                                            ))
-                                                            .and_modify(|value| *value = hash)
-                                                            .or_insert(hash);
-                                                        Some(bytes)
-                                                    }
-                                                }
-                                            }
-                                            None => Some(bytes),
+                                        _ => None,
+                                    },
+                                    match alerts_data {
+                                        Some(Ok(response)) => {
+                                            cleanup_response(response, UrlType::Alerts, feed_id, Arc::clone(&hashes_of_data)).await
                                         }
-                                    }
-                                    _ => None,
-                                },
-                                assignment.realtime_vehicle_positions.is_some(),
-                                assignment.realtime_trip_updates.is_some(),
-                                assignment.realtime_alerts.is_some(),
-                                vehicle_positions_http_status,
-                                trip_updates_http_status,
-                                alerts_http_status,
-                                duration_since_unix_epoch().as_millis() as u64,
-                            )
-                            .await;
+                                        _ => None,
+                                    },
+                                    assignment.realtime_vehicle_positions.is_some(),
+                                    assignment.realtime_trip_updates.is_some(),
+                                    assignment.realtime_alerts.is_some(),
+                                    vehicle_positions_http_status,
+                                    trip_updates_http_status,
+                                    alerts_http_status,
+                                    duration_since_unix_epoch().as_millis() as u64,
+                                )
+                                .await;
 
                         match tarpc_send_to_aspen {
                             Ok(_) => {

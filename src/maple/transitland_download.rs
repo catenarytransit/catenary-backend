@@ -65,7 +65,7 @@ pub async fn download_return_eligible_feeds(
     transitland_meta: &ReturnDmfrAnalysis,
     pool: &Arc<CatenaryPostgresPool>,
     feeds_to_discard: &HashSet<String>,
-    restrict_to_feed_id: &Option<String>
+    restrict_to_feed_id: &Option<String>,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
 
