@@ -50,7 +50,7 @@ mod leader_thread;
 use leader_thread::aspen_leader_thread;
 mod import_alpenrose;
 use catenary::aspen_dataset::GtfsRtType;
-use catenary::aspen_dataset::*;
+use catenary::{aspen_dataset::*, gtfs_rt_rough_hash};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 use futures::join;
@@ -62,6 +62,7 @@ use catenary::parse_gtfs_rt_message;
 use std::collections::HashSet;
 use tokio_zookeeper::ZooKeeper;
 use tokio_zookeeper::{Acl, CreateMode};
+use catenary::gtfs_rt_rough_hash::rough_hash_of_gtfs_rt;
 
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
@@ -76,6 +77,7 @@ pub struct AspenServer {
     pub conn_pool: Arc<CatenaryPostgresPool>,
     pub alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
     pub alpenrose_to_process_queue_chateaus: Arc<Mutex<HashSet<String>>>,
+    pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
 }
 
 impl AspenRpc for AspenServer {
@@ -148,6 +150,80 @@ impl AspenRpc for AspenServer {
 
         //  println!("Parsed FeedMessages for {}", realtime_feed_id);
 
+        let mut new_data = false;
+
+        if !new_data {
+            if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
+                let hash = rough_hash_of_gtfs_rt(&vehicles_gtfs_rt);
+
+                let key = (realtime_feed_id.clone(), GtfsRtType::VehiclePositions);
+
+                match self.rough_hash_of_gtfs_rt.get(&key) {
+                    Some(existing_hash) => {
+                        if existing_hash.get() != &hash {
+                            new_data = true;
+                        }
+                    }
+                    None => {
+                        new_data = true;
+                    }
+                }
+
+                self.rough_hash_of_gtfs_rt
+                    .entry(key)
+                    .and_modify(|gtfs_data| *gtfs_data = hash)
+                    .or_insert(hash);
+            }
+        }
+
+        if !new_data {
+            if let Some(trips_gtfs_rt) = &trips_gtfs_rt {
+                let hash = rough_hash_of_gtfs_rt(&trips_gtfs_rt);
+
+                let key = (realtime_feed_id.clone(), GtfsRtType::TripUpdates);
+
+                match self.rough_hash_of_gtfs_rt.get(&key) {
+                    Some(existing_hash) => {
+                        if existing_hash.get() != &hash {
+                            new_data = true;
+                        }
+                    }
+                    None => {
+                        new_data = true;
+                    }
+                }
+
+                self.rough_hash_of_gtfs_rt
+                    .entry(key)
+                    .and_modify(|gtfs_data| *gtfs_data = hash)
+                    .or_insert(hash);
+            }
+        }
+
+        if !new_data {
+            if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
+                let hash = rough_hash_of_gtfs_rt(&alerts_gtfs_rt);
+
+                let key = (realtime_feed_id.clone(), GtfsRtType::Alerts);
+
+                match self.rough_hash_of_gtfs_rt.get(&key) {
+                    Some(existing_hash) => {
+                        if existing_hash.get() != &hash {
+                            new_data = true;
+                        }
+                    }
+                    None => {
+                        new_data = true;
+                    }
+                }
+
+                self.rough_hash_of_gtfs_rt
+                    .entry(key)
+                    .and_modify(|gtfs_data| *gtfs_data = hash)
+                    .or_insert(hash);
+            }
+        }
+
         if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
             self.authoritative_gtfs_rt_store
                 .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
@@ -171,21 +247,25 @@ impl AspenRpc for AspenServer {
 
         //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
-        let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
+        if (new_data) {
+            let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
 
-        if !lock_chateau_queue.contains(&chateau_id) {
-            lock_chateau_queue.insert(chateau_id.clone());
-            self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
-                chateau_id,
-                realtime_feed_id,
-                has_vehicles,
-                has_trips,
-                has_alerts,
-                vehicles_response_code,
-                trips_response_code,
-                alerts_response_code,
-                time_of_submission_ms,
-            });
+            if !lock_chateau_queue.contains(&chateau_id) {
+                lock_chateau_queue.insert(chateau_id.clone());
+                self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
+                    chateau_id,
+                    realtime_feed_id,
+                    has_vehicles,
+                    has_trips,
+                    has_alerts,
+                    vehicles_response_code,
+                    trips_response_code,
+                    alerts_response_code,
+                    time_of_submission_ms,
+                });
+            }
+        } else {
+            println!("No new data for {} under chateau {}, rough hash is the same", realtime_feed_id, chateau_id);
         }
 
         true
@@ -300,6 +380,8 @@ async fn main() -> anyhow::Result<()> {
     let raw_gtfs = Arc::new(SccHashMap::new());
     let authoritative_data_store = Arc::new(SccHashMap::new());
     let alpenrose_to_process_queue_chateaus = Arc::new(Mutex::new(HashSet::new()));
+    let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
+        Arc::new(SccHashMap::new());
     //run both the leader and the listener simultaniously
 
     let workers_nodes_for_leader_thread = Arc::clone(&workers_nodes);
@@ -320,7 +402,7 @@ async fn main() -> anyhow::Result<()> {
     let b_authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
     let b_authoritative_data_store = Arc::clone(&authoritative_data_store);
     let b_conn_pool = Arc::clone(&arc_conn_pool);
-    let b_thread_count = alpenrosethreadcount.clone();
+    let b_thread_count = alpenrosethreadcount;
 
     let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
         Result<(), Box<dyn Error + Sync + Send>>,
@@ -354,6 +436,7 @@ async fn main() -> anyhow::Result<()> {
                             alpenrose_to_process_queue_chateaus: Arc::clone(
                                 &alpenrose_to_process_queue_chateaus,
                             ),
+                            rough_hash_of_gtfs_rt: Arc::clone(&rough_hash_of_gtfs_rt),
                         };
                         channel.execute(server.serve()).for_each(spawn)
                     })

@@ -35,6 +35,7 @@ pub mod aspen;
 pub mod custom_pg_types;
 pub mod enum_to_int;
 pub mod gtfs_rt_handlers;
+pub mod gtfs_rt_rough_hash;
 pub mod id_cleanup;
 pub mod maple_syrup;
 pub mod models;
@@ -42,7 +43,6 @@ pub mod postgis_to_diesel;
 pub mod postgres_tools;
 pub mod schema;
 pub mod validate_gtfs_rt;
-//pub mod gtfs_rt_rough_hash;
 
 use ahash::AHasher;
 use fasthash::MetroHasher;
