@@ -143,8 +143,8 @@ pub async fn get_realtime_locations(
                     .json(filtered_response)
             }
         },
-        None => HttpResponse::NotFound()
-            .header("Cache-Control", "no-cache")
-            .body("No data found"),
+        None => HttpResponse::Ok()
+        .append_header(("Cache-Control", "no-cache"))
+        .body("No realtime data found for this chateau"),
     }
 }
