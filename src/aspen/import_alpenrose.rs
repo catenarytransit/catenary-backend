@@ -206,6 +206,8 @@ pub async fn new_rt_data(
         let itinerary_pattern_id_to_itinerary_pattern_meta =
             itinerary_pattern_id_to_itinerary_pattern_meta;
 
+        let mut route_ids_to_insert = AHashSet::new();
+
         for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
             if let Some(vehicle_gtfs_rt_for_feed_id) =
                 authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
@@ -302,22 +304,12 @@ pub async fn new_rt_data(
 
                         if let Some(trip) = &vehicle_pos.trip {
                             if let Some(route_id) = &trip.route_id {
-                                if !vehicle_routes_cache.contains_key(route_id) {
-                                    let route = route_id_to_route.get(route_id);
-                                    if let Some(route) = route {
-                                        vehicle_routes_cache.insert(
-                                            route_id.clone(),
-                                            AspenisedVehicleRouteCache {
-                                                route_short_name: route.short_name.clone(),
-                                                route_long_name: route.long_name.clone(),
-                                                // route_short_name_langs: route.short_name_translations.clone(),
-                                                //route_long_name_langs: route.short_name_translations.clone(),
-                                                route_colour: route.color.clone(),
-                                                route_text_colour: route.text_color.clone(),
-                                                route_type: route.route_type,
-                                                route_desc: route.gtfs_desc.clone(),
-                                            },
-                                        );
+                                route_ids_to_insert.insert(route_id.clone());
+                            } else {
+                                if let Some(trip_id) = &trip.trip_id {
+                                    let trip = trip_id_to_trip.get(trip_id);
+                                    if let Some(trip) = &trip {
+                                        route_ids_to_insert.insert(trip.route_id.clone());
                                     }
                                 }
                             }
@@ -382,6 +374,25 @@ pub async fn new_rt_data(
                         trip_updates.insert(trip_update_entity.id.clone(), trip_update);
                     }
                 }
+            }
+        }
+
+        //insert the route cache
+
+        for route_id in route_ids_to_insert.iter() {
+            let route = route_id_to_route.get(route_id);
+            if let Some(route) = route {
+                vehicle_routes_cache.insert(
+                    route_id.clone(),
+                    AspenisedVehicleRouteCache {
+                        route_desc: route.gtfs_desc.clone(),
+                        route_short_name: route.short_name.clone(),
+                        route_long_name: route.long_name.clone(),
+                        route_type: route.route_type,
+                        route_colour: route.color.clone(),
+                        route_text_colour: route.text_color.clone(),
+                    },
+                );
             }
         }
 
