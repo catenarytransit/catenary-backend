@@ -642,7 +642,7 @@ pub async fn shapes_bus_meta(req: HttpRequest) -> impl Responder {
 
 #[actix_web::get("/metrolinktrackproxy")]
 pub async fn metrolinktrackproxy(req: HttpRequest) -> impl Responder {
-    let raw_data = reqwest::get("https://metrolinktrains.com/rtt/StationScheduleList.json").await;
+    let raw_data = reqwest::get("https://rtt.metrolinktrains.com/StationScheduleList.json").await;
 
     match raw_data {
         Ok(raw_data) => {
