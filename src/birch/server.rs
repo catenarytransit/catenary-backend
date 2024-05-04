@@ -663,48 +663,6 @@ pub async fn metrolinktrackproxy(req: HttpRequest) -> impl Responder {
     }
 }
 
-#[actix_web::get("/irvinevehproxy")]
-pub async fn irvinevehproxy(req: HttpRequest) -> impl Responder {
-    let raw_data =
-        reqwest::get("https://passio3.com/irvine/passioTransit/gtfs/realtime/vehiclePositions")
-            .await;
-
-    let qs = QString::from(req.query_string());
-
-    match raw_data {
-        Ok(raw_data) => {
-            //println!("Raw data successfully downloaded");
-
-            let raw_text = raw_data.bytes().await;
-
-            match raw_text {
-                Ok(raw_bytes) => {
-                    let hashofresult = fasthash::metro::hash64(raw_bytes.as_ref());
-
-                    if let Some(hashofbodyclient) = qs.get("bodyhash") {
-                        if let Ok(clienthash) = hashofbodyclient.parse::<u64>() {
-                            if clienthash == hashofresult {
-                                return HttpResponse::NoContent().body("");
-                            }
-                        }
-                    }
-
-                    HttpResponse::Ok()
-                        .insert_header(("Content-Type", "application/x-protobuf"))
-                        .insert_header(("hash", hashofresult))
-                        .body(raw_bytes)
-                }
-                Err(error) => HttpResponse::InternalServerError()
-                    .insert_header(("Content-Type", "text/plain"))
-                    .body("Could not fetch Irvine data"),
-            }
-        }
-        Err(error) => HttpResponse::InternalServerError()
-            .insert_header(("Content-Type", "text/plain"))
-            .body("Could not fetch Irvine data"),
-    }
-}
-
 #[actix_web::get("/amtrakproxy")]
 pub async fn amtrakproxy(req: HttpRequest) -> impl Responder {
     let raw_data =
