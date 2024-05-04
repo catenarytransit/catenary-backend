@@ -901,7 +901,6 @@ async fn main() -> std::io::Result<()> {
             .service(shapes_not_bus_meta)
             .service(shapes_bus)
             .service(shapes_bus_meta)
-            .service(irvinevehproxy)
             .service(routesofchateau)
             .service(bus_stops_meta)
             .service(bus_stops)
