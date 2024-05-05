@@ -122,6 +122,14 @@ pub async fn single_fetch_time(
                 _ => None,
             };
 
+            if (vehicle_positions_http_status == Some(429))
+                || (trip_updates_http_status == Some(429))
+                || (alerts_http_status == Some(429))
+            {
+                println!("{}: 429 Rate limited", feed_id);
+                return;
+            }
+
             //lookup currently assigned realtime dataset in zookeeper
             let fetch_assigned_node_for_this_realtime_feed = zk
                 .get_data(format!("/aspen_assigned_realtime_feed_ids/{}", feed_id).as_str())

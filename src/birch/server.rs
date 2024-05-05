@@ -67,6 +67,7 @@ use zstd_safe::WriteBuf;
 
 mod api_key_management;
 mod aspenised_data_over_https;
+mod chicago_proxy;
 
 #[derive(Clone, Debug)]
 struct ChateauCache {
@@ -909,6 +910,7 @@ async fn main() -> std::io::Result<()> {
             .service(api_key_management::get_realtime_keys)
             .service(api_key_management::set_realtime_key)
             .service(aspenised_data_over_https::get_realtime_locations)
+            .service(chicago_proxy::ttarrivals_proxy)
     })
     .workers(16);
 
