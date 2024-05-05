@@ -50,19 +50,19 @@ mod leader_thread;
 use leader_thread::aspen_leader_thread;
 mod import_alpenrose;
 use catenary::aspen_dataset::GtfsRtType;
-use catenary::{aspen_dataset::*, gtfs_rt_rough_hash};
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::{aspen_dataset::*, gtfs_rt_rough_hash};
 use crossbeam::deque::{Injector, Steal};
 use futures::join;
 use gtfs_rt::FeedMessage;
 use scc::HashMap as SccHashMap;
 use std::error::Error;
 mod async_threads_alpenrose;
+use catenary::gtfs_rt_rough_hash::rough_hash_of_gtfs_rt;
 use catenary::parse_gtfs_rt_message;
 use std::collections::HashSet;
 use tokio_zookeeper::ZooKeeper;
 use tokio_zookeeper::{Acl, CreateMode};
-use catenary::gtfs_rt_rough_hash::rough_hash_of_gtfs_rt;
 
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
@@ -265,7 +265,10 @@ impl AspenRpc for AspenServer {
                 });
             }
         } else {
-            println!("No new data for {} under chateau {}, rough hash is the same", realtime_feed_id, chateau_id);
+            println!(
+                "No new data for {} under chateau {}, rough hash is the same",
+                realtime_feed_id, chateau_id
+            );
         }
 
         true

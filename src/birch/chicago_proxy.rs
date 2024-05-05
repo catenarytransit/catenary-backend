@@ -1,4 +1,4 @@
-use actix_web::{Responder, HttpRequest, HttpResponse};
+use actix_web::{HttpRequest, HttpResponse, Responder};
 use tungstenite::http::request;
 #[actix_web::get("/cta_ttarrivals_proxy")]
 pub async fn ttarrivals_proxy(req: HttpRequest) -> impl Responder {
@@ -15,8 +15,6 @@ pub async fn ttarrivals_proxy(req: HttpRequest) -> impl Responder {
             let body = res.text().await.unwrap();
             HttpResponse::Ok().body(body)
         }
-        Err(err) => {
-            HttpResponse::InternalServerError().body(format!("Error: {:?}", err))
-        }
+        Err(err) => HttpResponse::InternalServerError().body(format!("Error: {:?}", err)),
     }
 }
