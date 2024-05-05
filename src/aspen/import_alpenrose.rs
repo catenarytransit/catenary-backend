@@ -18,6 +18,7 @@ use prost::Message;
 use scc::HashMap as SccHashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+use catenary::route_id_transform;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-mta~nyc~rt~subway~1~2~3~4~5~6~7",
@@ -221,11 +222,11 @@ pub async fn new_rt_data(
                                     AspenisedVehicleTripInfo {
                                         trip_id: trip.trip_id.clone(),
                                         route_id: match &trip.route_id {
-                                            Some(route_id) => Some(route_id.clone()),
+                                            Some(route_id) => Some(route_id_transform(realtime_feed_id, route_id.clone())),
                                             None => match &trip.trip_id {
                                                 Some(trip_id) => {
                                                     let trip = trip_id_to_trip.get(&trip_id.clone());
-                                                    trip.map(|trip| trip.route_id.clone())
+                                                    trip.map(|trip| route_id_transform(realtime_feed_id, trip.route_id.clone()))
                                                 },
                                                 None => None
                                             }
@@ -304,15 +305,13 @@ pub async fn new_rt_data(
 
                         if let Some(trip) = &vehicle_pos.trip {
                             if let Some(route_id) = &trip.route_id {
-                                route_ids_to_insert.insert(route_id.clone());
+                                route_ids_to_insert.insert(route_id_transform(realtime_feed_id,route_id.clone()));
                             } else {
                                 if let Some(trip_id) = &trip.trip_id {
                                     let trip = trip_id_to_trip.get(trip_id);
                                     if let Some(trip) = &trip {
-                                        route_ids_to_insert.insert(trip.route_id.clone());
-                                    }
-                                }
-                            }
+                                        route_ids_to_insert.insert(route_id_transform(realtime_feed_id,trip.route_id.clone()))
+                                    }}
                         }
                     }
                 }
@@ -380,10 +379,10 @@ pub async fn new_rt_data(
         //insert the route cache
 
         for route_id in route_ids_to_insert.iter() {
-            let route = route_id_to_route.get(route_id);
+            let route = route_id_to_route.get(&route_id_transform(realtime_feed_id,&route_id));
             if let Some(route) = route {
                 vehicle_routes_cache.insert(
-                    route_id.clone(),
+                    route.route_id.clone(),
                     AspenisedVehicleRouteCache {
                         route_desc: route.gtfs_desc.clone(),
                         route_short_name: route.short_name.clone(),

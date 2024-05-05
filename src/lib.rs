@@ -378,6 +378,8 @@ pub fn route_id_transform(feed_id: &str, route_id: String) -> String {
     match feed_id {
         "f-mta~nyc~rt~lirr" => format!("lirr{}", route_id),
         "f-mta~nyc~rt~mnr" => format!("mnr{}", route_id),
+        "f-dr5-mtanyclirr" => format!("lirr{}", route_id),
+        "f-dr7-mtanyc~metro~north" => format!("mnr{}", route_id),
         _ => route_id,
     }
 }

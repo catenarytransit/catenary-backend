@@ -2,12 +2,15 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct TTArrivalsQuery {
-    map_id: String
- }
+    map_id: String,
+}
 
-use actix_web::{HttpRequest, HttpResponse, Responder, web};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 #[actix_web::get("/cta_ttarrivals_proxy")]
-pub async fn ttarrivals_proxy(req: HttpRequest, query: web::Query<TTArrivalsQuery>) -> impl Responder {
+pub async fn ttarrivals_proxy(
+    req: HttpRequest,
+    query: web::Query<TTArrivalsQuery>,
+) -> impl Responder {
     //get query param mapid
 
     let map_id = &query.map_id;
