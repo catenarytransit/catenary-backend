@@ -1,3 +1,5 @@
+use serde::Deserialize;
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct TTArrivalsQuery {
     map_id: String
