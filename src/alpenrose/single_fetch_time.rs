@@ -76,7 +76,7 @@ pub async fn single_fetch_time(
         async move {
             let start = Instant::now();
 
-            let fetch_interval_ms = assignment.fetch_interval_ms.unwrap_or(10_000);
+            let fetch_interval_ms = assignment.fetch_interval_ms.unwrap_or(1_000);
 
             if let Some(last_fetch) = last_fetch_per_feed.get(&feed_id.clone()) {
                 let duration_since_last_fetch = last_fetch.elapsed().as_millis();
@@ -86,6 +86,8 @@ pub async fn single_fetch_time(
                     return;
                 }
             }
+
+            last_fetch_per_feed.insert(feed_id.clone(), Instant::now());
 
             let vehicle_positions_request =
                 make_reqwest_for_url(UrlType::VehiclePositions, assignment, client.clone());
