@@ -28,11 +28,7 @@ csv = "1.3"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.33", features = ["full"] }
 futures = "0.3"
-<<<<<<< HEAD
 gtfs-structures = "0.41.2"
-=======
-gtfs-structures = "0.40"
->>>>>>> e23fa8008ad431d03ccb62810a5646f4abf636d7
 tungstenite = "0.21.0"
 postgres = "0.19.7"
 postgis = "0.9.0"
@@ -44,15 +40,8 @@ tokio-postgres = { version = "0.7.10", features = [
 rust_decimal = "1.32.0"
 serde_json = "1.0.107"
 actix-web = "4.4.0"
-<<<<<<< HEAD
-regress = "0.9"
-=======
-regress = "0.8.0"
->>>>>>> e23fa8008ad431d03ccb62810a5646f4abf636d7
+regress = "0.9.1"
 color-eyre = {version = "0.6.2", features = ["url", "issue-url"]}
-fasthash = "0.4.0"
-rgb = "0.8.36"
-clap = {version = "4.4.7", features = ["derive"]}
 itertools = "0.12.0"
 fs_extra = "1.3.0"
 r2d2 = "0.8.10"
@@ -70,12 +59,8 @@ geo = "0.28.0"
 tarpc = {version = "0.34.0", features = ["full"]}
 anyhow = "1.0.75"
 tracing = "0.1.40"
-<<<<<<< HEAD
 tokio-serde = "0.9"
-=======
 service = "0.0.0"
-tokio-serde = "0.9.0"
->>>>>>> e23fa8008ad431d03ccb62810a5646f4abf636d7
 tracing-subscriber = "0.3.17"
 futures-util = "0.3.29"
 actix_block_ai_crawling = "0.2.8"
