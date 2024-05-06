@@ -114,6 +114,9 @@ scc = "2.1.0"
 env_logger = "0.11.3"
 ron = "0.8.1"
 regex = "1.10.4"
+fasthash = "0.4.0"
+clap = "4.5.4"
+rgb = "0.8.37"
 
 [[bin]]
 name = "maple"
