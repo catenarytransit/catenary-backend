@@ -7,6 +7,7 @@ use ahash::{AHashMap, AHashSet};
 use catenary::aspen_dataset::*;
 use catenary::parse_gtfs_rt_message;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::route_id_transform;
 use dashmap::DashMap;
 use diesel::ExpressionMethods;
 use diesel::QueryDsl;
@@ -18,7 +19,6 @@ use prost::Message;
 use scc::HashMap as SccHashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use catenary::route_id_transform;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-mta~nyc~rt~subway~1~2~3~4~5~6~7",
@@ -305,14 +305,20 @@ pub async fn new_rt_data(
 
                         if let Some(trip) = &vehicle_pos.trip {
                             if let Some(route_id) = &trip.route_id {
-                                route_ids_to_insert.insert(route_id_transform(realtime_feed_id,route_id.clone()));
+                                route_ids_to_insert
+                                    .insert(route_id_transform(realtime_feed_id, route_id.clone()));
                             } else {
                                 if let Some(trip_id) = &trip.trip_id {
                                     let trip = trip_id_to_trip.get(trip_id);
                                     if let Some(trip) = &trip {
-                                        route_ids_to_insert.insert(route_id_transform(realtime_feed_id,trip.route_id.clone()));
+                                        route_ids_to_insert.insert(route_id_transform(
+                                            realtime_feed_id,
+                                            trip.route_id.clone(),
+                                        ));
                                     }
-                        }}}
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -379,7 +385,8 @@ pub async fn new_rt_data(
         //insert the route cache
 
         for route_id in route_ids_to_insert.iter() {
-            let route = route_id_to_route.get(&route_id_transform(realtime_feed_id,route_id.clone()));
+            let route =
+                route_id_to_route.get(&route_id_transform(realtime_feed_id, route_id.clone()));
             if let Some(route) = route {
                 vehicle_routes_cache.insert(
                     route.route_id.clone(),
