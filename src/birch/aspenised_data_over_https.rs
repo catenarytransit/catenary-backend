@@ -88,12 +88,17 @@ pub async fn get_realtime_locations(
 
     let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
 
-    let transport = tarpc::serde_transport::tcp::connect(socket_addr, Bincode::default)
-        .await
-        .unwrap();
+    let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
 
-    let aspen_client =
-        catenary::aspen::lib::AspenRpcClient::new(client::Config::default(), transport).spawn();
+    if (aspen_client.is_err()) {
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body(format!(
+                "Error connecting to assigned node. Failed to connect to tarpc",
+            ));
+    }
+
+    let aspen_client = aspen_client.unwrap();
 
     //then call the get_vehicle_locations method
 

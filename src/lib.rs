@@ -43,7 +43,7 @@ pub mod postgis_to_diesel;
 pub mod postgres_tools;
 pub mod schema;
 pub mod validate_gtfs_rt;
-
+use crate::aspen::lib::RealtimeFeedMetadataZookeeper;
 use ahash::AHasher;
 use fasthash::MetroHasher;
 use gtfs_rt::VehicleDescriptor;
@@ -381,5 +381,32 @@ pub fn route_id_transform(feed_id: &str, route_id: String) -> String {
         "f-dr5-mtanyclirr" => format!("lirr{}", route_id),
         "f-dr7-mtanyc~metro~north" => format!("mnr{}", route_id),
         _ => route_id,
+    }
+}
+
+use tokio_zookeeper::Stat;
+
+pub async fn get_node_for_realtime_feed_id(
+    zk: &tokio_zookeeper::ZooKeeper,
+    realtime_feed_id: &str,
+) -> Option<(RealtimeFeedMetadataZookeeper, Stat)> {
+    let node = zk
+        .get_data(format!("/aspen_assigned_realtime_feed_ids/{}", realtime_feed_id).as_str())
+        .await
+        .unwrap();
+
+    match node {
+        Some((bytes, stat)) => {
+            let data = bincode::deserialize::<RealtimeFeedMetadataZookeeper>(&bytes);
+
+            match data {
+                Ok(data) => Some((data, stat)),
+                Err(e) => {
+                    println!("Error deserializing RealtimeFeedMetadataZookeeper: {:?}", e);
+                    None
+                }
+            }
+        }
+        None => None,
     }
 }

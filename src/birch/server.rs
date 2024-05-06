@@ -486,7 +486,7 @@ async fn routesofchateau(
 
     let routes = routes_pg_schema::dsl::routes
         .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
-        .select((catenary::models::Route::as_select()))
+        .select(catenary::models::Route::as_select())
         .load::<catenary::models::Route>(conn)
         .await
         .unwrap();

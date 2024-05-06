@@ -266,26 +266,20 @@ pub async fn new_rt_data(
                                         }
                                     }
                                 }),
-                                position: match &vehicle_pos.position {
-                                    Some(position) => Some(CatenaryRtVehiclePosition {
-                                        latitude: position.latitude,
-                                        longitude: position.longitude,
-                                        bearing: position.bearing,
-                                        odometer: position.odometer,
-                                        speed: position.speed,
+                                position: vehicle_pos.position.as_ref().map(|position| CatenaryRtVehiclePosition {
+                                    latitude: position.latitude,
+                                    longitude: position.longitude,
+                                    bearing: position.bearing,
+                                    odometer: position.odometer,
+                                    speed: position.speed,
                                     }),
-                                    None => None
-                                },
-                                timestamp: vehicle_pos.timestamp.clone(),
-                                vehicle: match &vehicle_pos.vehicle {
-                                    Some(vehicle) => Some(AspenisedVehicleDescriptor {
-                                        id: vehicle.id.clone(),
-                                        label: vehicle.label.clone(),
-                                        license_plate: vehicle.license_plate.clone(),
-                                        wheelchair_accessible: vehicle.wheelchair_accessible,
+                                timestamp: vehicle_pos.timestamp,
+                                vehicle: vehicle_pos.vehicle.as_ref().map(|vehicle| AspenisedVehicleDescriptor {
+                                    id: vehicle.id.clone(),
+                                    label: vehicle.label.clone(),
+                                    license_plate: vehicle.license_plate.clone(),
+                                    wheelchair_accessible: vehicle.wheelchair_accessible,
                                     }),
-                                    None => None
-                                },
                                 route_type: match &vehicle_pos.trip {
                                     Some(trip) => match &trip.route_id {
                                         Some(route_id) => {

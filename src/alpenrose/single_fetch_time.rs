@@ -3,18 +3,29 @@ use crate::RealtimeFeedFetch;
 use catenary::ahash_fast_hash;
 use catenary::aspen::lib::RealtimeFeedMetadataZookeeper;
 use catenary::duration_since_unix_epoch;
+use catenary::get_node_for_realtime_feed_id;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use dashmap::DashMap;
 use futures::StreamExt;
+use lazy_static::lazy_static;
 use rand::seq::SliceRandom;
 use reqwest::Response;
 use scc::HashMap as SccHashMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tarpc::{client, context, tokio_serde::formats::Bincode};
 use tokio::sync::RwLock;
 use tokio_zookeeper::ZooKeeper;
+
+use crate::custom_rt_feeds;
+use gtfs_structures::Gtfs;
+
+lazy_static! {
+    static ref CUSTOM_FEEDS: HashSet<&'static str> =
+        HashSet::from_iter(vec!["f-anteaterexpress~rt", "f-amtrak~rt"]);
+}
 
 async fn cleanup_response(
     response: Response,
@@ -62,6 +73,12 @@ pub async fn single_fetch_time(
         .await
         .unwrap();
 
+        let amtrak_gtfs = Gtfs::from_url_async("https://content.amtrak.com/content/gtfs/GTFS.zip")
+        .await
+        .unwrap();
+
+        let amtrak_gtfs = Arc::new(amtrak_gtfs);
+
     let zk = Arc::new(zk);
 
     let assignments_lock = assignments.read().await;
@@ -73,6 +90,7 @@ pub async fn single_fetch_time(
         let zk = zk.clone();
         let hashes_of_data = Arc::clone(&hashes_of_data);
         let last_fetch_per_feed = last_fetch_per_feed.clone();
+        let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
         async move {
             let start = Instant::now();
 
@@ -109,136 +127,138 @@ pub async fn single_fetch_time(
 
             //send the data to aspen via tarpc
 
-            let vehicle_positions_http_status = match &vehicle_positions_data {
-                Some(Ok(response)) => Some(response.status().as_u16()),
-                _ => None,
-            };
+            if !CUSTOM_FEEDS.contains(feed_id.as_str()) {
+                let vehicle_positions_http_status = match &vehicle_positions_data {
+                    Some(Ok(response)) => Some(response.status().as_u16()),
+                    _ => None,
+                };
 
-            let trip_updates_http_status = match &trip_updates_data {
-                Some(Ok(response)) => Some(response.status().as_u16()),
-                _ => None,
-            };
+                let trip_updates_http_status = match &trip_updates_data {
+                    Some(Ok(response)) => Some(response.status().as_u16()),
+                    _ => None,
+                };
 
-            let alerts_http_status = match &alerts_data {
-                Some(Ok(response)) => Some(response.status().as_u16()),
-                _ => None,
-            };
+                let alerts_http_status = match &alerts_data {
+                    Some(Ok(response)) => Some(response.status().as_u16()),
+                    _ => None,
+                };
 
-            if (vehicle_positions_http_status == Some(429))
-                || (trip_updates_http_status == Some(429))
-                || (alerts_http_status == Some(429))
-            {
-                println!("{}: 429 Rate limited", feed_id);
-                return;
-            }
+                if (vehicle_positions_http_status == Some(429))
+                    || (trip_updates_http_status == Some(429))
+                    || (alerts_http_status == Some(429))
+                {
+                    println!("{}: 429 Rate limited", feed_id);
+                    return;
+                }
 
-            //lookup currently assigned realtime dataset in zookeeper
-            let fetch_assigned_node_for_this_realtime_feed = zk
-                .get_data(format!("/aspen_assigned_realtime_feed_ids/{}", feed_id).as_str())
-                .await
-                .unwrap();
+                //lookup currently assigned realtime dataset in zookeeper
+                let fetch_assigned_node_meta = get_node_for_realtime_feed_id(&zk, feed_id).await;
 
-            match fetch_assigned_node_for_this_realtime_feed {
-                Some((bytes_realtime_id, stat)) => {
-                    let data =
-                        bincode::deserialize::<RealtimeFeedMetadataZookeeper>(&bytes_realtime_id)
-                            .unwrap();
+                match fetch_assigned_node_meta {
+                    Some((data, stat)) => {
+                        let worker_id = data.worker_id;
 
-                    let worker_id = data.worker_id;
+                        //send the data to the worker
+                        println!(
+                            "Attempting to send {} data to {} via tarpc",
+                            feed_id, data.tailscale_ip
+                        );
+                        let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
 
-                    //send the data to the worker
-                    println!(
-                        "Attempting to send {} data to {} via tarpc",
-                        feed_id, data.tailscale_ip
-                    );
-                    let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
+                        let aspen_client =
+                            catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
+                                .await
+                                .unwrap();
 
-                    let transport =
-                        tarpc::serde_transport::tcp::connect(socket_addr, Bincode::default)
-                            .await
-                            .unwrap();
+                        if vehicle_positions_http_status == Some(200)
+                            || trip_updates_http_status == Some(200)
+                            || alerts_http_status == Some(200)
+                        {
+                            let tarpc_send_to_aspen = aspen_client
+                                .from_alpenrose(
+                                    tarpc::context::current(),
+                                    data.chateau_id.clone(),
+                                    feed_id.clone(),
+                                    match vehicle_positions_data {
+                                        Some(Ok(response)) => {
+                                            cleanup_response(
+                                                response,
+                                                UrlType::VehiclePositions,
+                                                feed_id,
+                                                Arc::clone(&hashes_of_data),
+                                            )
+                                            .await
+                                        }
+                                        _ => None,
+                                    },
+                                    match trip_updates_data {
+                                        Some(Ok(response)) => {
+                                            cleanup_response(
+                                                response,
+                                                UrlType::TripUpdates,
+                                                feed_id,
+                                                Arc::clone(&hashes_of_data),
+                                            )
+                                            .await
+                                        }
+                                        _ => None,
+                                    },
+                                    match alerts_data {
+                                        Some(Ok(response)) => {
+                                            cleanup_response(
+                                                response,
+                                                UrlType::Alerts,
+                                                feed_id,
+                                                Arc::clone(&hashes_of_data),
+                                            )
+                                            .await
+                                        }
+                                        _ => None,
+                                    },
+                                    assignment.realtime_vehicle_positions.is_some(),
+                                    assignment.realtime_trip_updates.is_some(),
+                                    assignment.realtime_alerts.is_some(),
+                                    vehicle_positions_http_status,
+                                    trip_updates_http_status,
+                                    alerts_http_status,
+                                    duration_since_unix_epoch().as_millis() as u64,
+                                )
+                                .await;
 
-                    let aspen_client = catenary::aspen::lib::AspenRpcClient::new(
-                        client::Config::default(),
-                        transport,
-                    )
-                    .spawn();
-
-                    if vehicle_positions_http_status == Some(200)
-                        || trip_updates_http_status == Some(200)
-                        || alerts_http_status == Some(200)
-                    {
-                        let tarpc_send_to_aspen = aspen_client
-                            .from_alpenrose(
-                                tarpc::context::current(),
-                                data.chateau_id.clone(),
-                                feed_id.clone(),
-                                match vehicle_positions_data {
-                                    Some(Ok(response)) => {
-                                        cleanup_response(
-                                            response,
-                                            UrlType::VehiclePositions,
-                                            feed_id,
-                                            Arc::clone(&hashes_of_data),
-                                        )
-                                        .await
-                                    }
-                                    _ => None,
-                                },
-                                match trip_updates_data {
-                                    Some(Ok(response)) => {
-                                        cleanup_response(
-                                            response,
-                                            UrlType::TripUpdates,
-                                            feed_id,
-                                            Arc::clone(&hashes_of_data),
-                                        )
-                                        .await
-                                    }
-                                    _ => None,
-                                },
-                                match alerts_data {
-                                    Some(Ok(response)) => {
-                                        cleanup_response(
-                                            response,
-                                            UrlType::Alerts,
-                                            feed_id,
-                                            Arc::clone(&hashes_of_data),
-                                        )
-                                        .await
-                                    }
-                                    _ => None,
-                                },
-                                assignment.realtime_vehicle_positions.is_some(),
-                                assignment.realtime_trip_updates.is_some(),
-                                assignment.realtime_alerts.is_some(),
-                                vehicle_positions_http_status,
-                                trip_updates_http_status,
-                                alerts_http_status,
-                                duration_since_unix_epoch().as_millis() as u64,
-                            )
-                            .await;
-
-                        match tarpc_send_to_aspen {
-                            Ok(_) => {
-                                println!(
-                                    "feed {}|chateau {}: Successfully sent data sent to {}",
-                                    feed_id, data.chateau_id, worker_id
-                                );
+                            match tarpc_send_to_aspen {
+                                Ok(_) => {
+                                    println!(
+                                        "feed {}|chateau {}: Successfully sent data sent to {}",
+                                        feed_id, data.chateau_id, worker_id
+                                    );
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "{}: Error sending data to {}: {}",
+                                        feed_id, worker_id, e
+                                    );
+                                }
                             }
-                            Err(e) => {
-                                eprintln!(
-                                    "{}: Error sending data to {}: {}",
-                                    feed_id, worker_id, e
-                                );
-                            }
+                        } else {
+                            println!("{}: No data to send", feed_id);
                         }
-                    } else {
-                        println!("{}: No data to send", feed_id);
+                    }
+                    None => {
+                        eprintln!("{} was not assigned to a worker", feed_id);
                     }
                 }
-                None => {
-                    eprintln!("{} was not assigned to a worker", feed_id);
+            } else {
+                match feed_id.as_str() {
+                    "f-anteaterexpress~rt" => {
+                        custom_rt_feeds::anteater_express::fetch_anteater_express_data(
+                            &zk, &feed_id,
+                        )
+                        .await;
+                    },
+                    "f-amtrak~rt" => {
+                        custom_rt_feeds::amtrak::fetch_amtrak_data(&zk, &feed_id, &amtrak_gtfs, &client).await;
+                    }
+                    _ => {}
                 }
             }
 
