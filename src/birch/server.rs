@@ -486,7 +486,7 @@ async fn routesofchateau(
 
     let routes = routes_pg_schema::dsl::routes
         .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
-        .select((catenary::models::Route::as_select()))
+        .select(catenary::models::Route::as_select())
         .load::<catenary::models::Route>(conn)
         .await
         .unwrap();
@@ -722,7 +722,7 @@ async fn chateaus(
         {
             return HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/json"))
-                .insert_header(("Cache-Control", "max-age=86400"))
+                .insert_header(("Cache-Control", "max-age=60"))
                 .body(cloned_chateau_data.chateau_geojson);
         }
     }
