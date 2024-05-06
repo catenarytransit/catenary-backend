@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::net::SocketAddr;
+use tarpc::{client, context, tokio_serde::formats::Bincode};
 
 #[tarpc::service]
 pub trait AspenRpc {
@@ -77,4 +79,12 @@ pub struct ProcessAlpenroseData {
     pub trips_response_code: Option<u16>,
     pub alerts_response_code: Option<u16>,
     pub time_of_submission_ms: u64,
+}
+
+pub async fn spawn_aspen_client_from_ip(
+    addr: &SocketAddr,
+) -> Result<AspenRpcClient, Box<dyn std::error::Error + Sync + Send>> {
+    let transport = tarpc::serde_transport::tcp::connect(addr, Bincode::default).await?;
+
+    Ok(AspenRpcClient::new(client::Config::default(), transport).spawn())
 }

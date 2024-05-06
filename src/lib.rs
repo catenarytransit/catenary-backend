@@ -43,7 +43,7 @@ pub mod postgis_to_diesel;
 pub mod postgres_tools;
 pub mod schema;
 pub mod validate_gtfs_rt;
-
+use crate::aspen::lib::RealtimeFeedMetadataZookeeper;
 use ahash::AHasher;
 use fasthash::MetroHasher;
 use gtfs_rt::VehicleDescriptor;
@@ -376,10 +376,47 @@ pub fn parse_gtfs_rt_message(
 
 pub fn route_id_transform(feed_id: &str, route_id: String) -> String {
     match feed_id {
-        "f-mta~nyc~rt~lirr" => format!("lirr{}", route_id),
-        "f-mta~nyc~rt~mnr" => format!("mnr{}", route_id),
-        "f-dr5-mtanyclirr" => format!("lirr{}", route_id),
-        "f-dr7-mtanyc~metro~north" => format!("mnr{}", route_id),
+        "f-mta~nyc~rt~lirr" | "f-dr5-mtanyclirr" => {
+            if !route_id.contains("lirr") {
+                format!("lirr{}", route_id)
+            } else {
+                route_id.to_owned() // Return unmodified route_id if it contains "lirr"
+            }
+        }
+        "f-mta~nyc~rt~mnr" | "f-dr7-mtanyc~metro~north" => {
+            if !route_id.contains("mnr") {
+                format!("mnr{}", route_id)
+            } else {
+                route_id.to_owned() // Return unmodified route_id if it contains "mnr"
+            }
+        }
         _ => route_id,
+    }
+}
+
+use tokio_zookeeper::Stat;
+
+pub async fn get_node_for_realtime_feed_id(
+    zk: &tokio_zookeeper::ZooKeeper,
+    realtime_feed_id: &str,
+) -> Option<(RealtimeFeedMetadataZookeeper, Stat)> {
+    let node = zk
+        .get_data(format!("/aspen_assigned_realtime_feed_ids/{}", realtime_feed_id).as_str())
+        .await
+        .unwrap();
+
+    match node {
+        Some((bytes, stat)) => {
+            let data = bincode::deserialize::<RealtimeFeedMetadataZookeeper>(&bytes);
+
+            match data {
+                Ok(data) => Some((data, stat)),
+                Err(e) => {
+                    println!("Error deserializing RealtimeFeedMetadataZookeeper: {:?}", e);
+                    None
+                }
+            }
+        }
+        None => None,
     }
 }

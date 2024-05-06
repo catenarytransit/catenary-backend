@@ -57,6 +57,7 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio_zookeeper::*;
 use uuid::Uuid;
+mod custom_rt_feeds;
 mod single_fetch_time;
 
 #[derive(Serialize, Clone, Deserialize, Debug, Hash, PartialEq, Eq)]
@@ -520,10 +521,7 @@ async fn get_feed_metadata(
         .feed_hashmap
         .iter()
         //filter dmfr database for only GTFS rt feeds
-        .filter(|(_, feed)| match feed.spec {
-            dmfr::FeedSpec::GtfsRt => true,
-            _ => false,
-        })
+        .filter(|(_, feed)| matches!(feed.spec, dmfr::FeedSpec::GtfsRt))
     {
         let vehicles_url = match realtime_passwords_hashmap.get(feed_id) {
             Some(password_format) => match &password_format.override_realtime_vehicle_positions {
