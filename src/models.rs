@@ -58,6 +58,7 @@ pub struct CompressedTrip {
     pub has_frequencies: bool,
     pub itinerary_pattern_id: String,
     pub route_id: String,
+    pub start_time: u32
 }
 
 #[derive(Queryable, Selectable, Insertable, Clone)]

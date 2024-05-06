@@ -277,6 +277,7 @@ pub async fn gtfs_process_feed(
                     .get(itinerary_id)
                     .unwrap()
                     .direction_id,
+                start_time: compressed_trip_raw.start_time.clone(),
                 trip_short_name: compressed_trip_raw.trip_short_name.clone(),
                 block_id: compressed_trip_raw.block_id.clone(),
                 wheelchair_accessible: compressed_trip_raw.wheelchair_accessible,

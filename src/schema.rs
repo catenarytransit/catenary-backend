@@ -451,6 +451,7 @@ pub mod gtfs {
             has_frequencies -> Bool,
             itinerary_pattern_id -> Text,
             route_id -> Text,
+            start_time -> Oid,
         }
     }
 
