@@ -1,0 +1,484 @@
+// @generated automatically by Diesel CLI.
+
+pub mod gtfs {
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.admin_credentials (email) {
+            email -> Text,
+            hash -> Text,
+            salt -> Text,
+            last_updated_ms -> Int8,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.agencies (static_onestop_id, attempt_id, agency_id) {
+            static_onestop_id -> Text,
+            agency_id -> Text,
+            attempt_id -> Text,
+            agency_name -> Text,
+            agency_name_translations -> Nullable<Jsonb>,
+            agency_url -> Text,
+            agency_url_translations -> Nullable<Jsonb>,
+            agency_timezone -> Text,
+            agency_lang -> Nullable<Text>,
+            agency_phone -> Nullable<Text>,
+            agency_fare_url -> Nullable<Text>,
+            agency_fare_url_translations -> Nullable<Jsonb>,
+            chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.calendar (onestop_feed_id, attempt_id, service_id) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            service_id -> Text,
+            monday -> Bool,
+            tuesday -> Bool,
+            wednesday -> Bool,
+            thursday -> Bool,
+            friday -> Bool,
+            saturday -> Bool,
+            sunday -> Bool,
+            gtfs_start_date -> Date,
+            gtfs_end_date -> Date,
+            chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.calendar_dates (onestop_feed_id, service_id, gtfs_date) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            service_id -> Text,
+            gtfs_date -> Date,
+            exception_type -> Int2,
+            chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.chateau_metadata_last_updated_time (catenary) {
+            catenary -> Int2,
+            last_updated_ms -> Int8,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.chateaus (chateau) {
+            chateau -> Text,
+            static_feeds -> Array<Nullable<Text>>,
+            realtime_feeds -> Array<Nullable<Text>>,
+            languages_avaliable -> Array<Nullable<Text>>,
+            hull -> Nullable<Geometry>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.f_test (trip_id) {
+            trip_id -> Text,
+            f -> Nullable<Array<Nullable<TripFrequency>>>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.feed_info (onestop_feed_id, attempt_id, feed_publisher_name) {
+            onestop_feed_id -> Text,
+            feed_publisher_name -> Text,
+            feed_publisher_url -> Text,
+            feed_lang -> Text,
+            default_lang -> Nullable<Text>,
+            feed_start_date -> Nullable<Date>,
+            feed_end_date -> Nullable<Date>,
+            feed_version -> Nullable<Text>,
+            feed_contact_email -> Nullable<Text>,
+            feed_contact_url -> Nullable<Text>,
+            attempt_id -> Text,
+            chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.gtfs_errors (onestop_feed_id, attempt_id) {
+            onestop_feed_id -> Text,
+            error -> Text,
+            attempt_id -> Text,
+            file_hash -> Nullable<Text>,
+            chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.in_progress_static_ingests (onestop_feed_id, attempt_id) {
+            onestop_feed_id -> Text,
+            file_hash -> Text,
+            attempt_id -> Text,
+            ingest_start_unix_time_ms -> Int8,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.ingested_static (onestop_feed_id, attempt_id) {
+            onestop_feed_id -> Text,
+            file_hash -> Text,
+            attempt_id -> Text,
+            ingest_start_unix_time_ms -> Int8,
+            ingest_end_unix_time_ms -> Int8,
+            ingest_duration_ms -> Int4,
+            ingesting_in_progress -> Bool,
+            ingestion_successfully_finished -> Bool,
+            ingestion_errored -> Bool,
+            production -> Bool,
+            deleted -> Bool,
+            feed_expiration_date -> Nullable<Date>,
+            feed_start_date -> Nullable<Date>,
+            default_lang -> Nullable<Text>,
+            languages_avaliable -> Array<Nullable<Text>>,
+            ingestion_version -> Int4,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.itinerary_pattern (onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            itinerary_pattern_id -> Text,
+            stop_sequence -> Int4,
+            arrival_time_since_start -> Nullable<Int4>,
+            departure_time_since_start -> Nullable<Int4>,
+            stop_id -> Text,
+            chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.itinerary_pattern_meta (onestop_feed_id, attempt_id, itinerary_pattern_id) {
+            onestop_feed_id -> Text,
+            route_id -> Text,
+            attempt_id -> Text,
+            trip_ids -> Array<Nullable<Text>>,
+            itinerary_pattern_id -> Text,
+            chateau -> Text,
+            trip_headsign -> Nullable<Text>,
+            trip_headsign_translations -> Nullable<Jsonb>,
+            shape_id -> Nullable<Text>,
+            timezone -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.realtime_feeds (onestop_feed_id) {
+            onestop_feed_id -> Text,
+            name -> Nullable<Text>,
+            previous_chateau_name -> Text,
+            chateau -> Text,
+            fetch_interval_ms -> Nullable<Int4>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.realtime_passwords (onestop_feed_id) {
+            onestop_feed_id -> Text,
+            passwords -> Nullable<Jsonb>,
+            last_updated_ms -> Int8,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.routes (onestop_feed_id, attempt_id, route_id) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            route_id -> Text,
+            short_name -> Nullable<Text>,
+            short_name_translations -> Nullable<Jsonb>,
+            long_name -> Nullable<Text>,
+            long_name_translations -> Nullable<Jsonb>,
+            gtfs_desc -> Nullable<Text>,
+            gtfs_desc_translations -> Nullable<Jsonb>,
+            route_type -> Int2,
+            url -> Nullable<Text>,
+            url_translations -> Nullable<Jsonb>,
+            agency_id -> Nullable<Text>,
+            gtfs_order -> Nullable<Oid>,
+            color -> Nullable<Text>,
+            text_color -> Nullable<Text>,
+            continuous_pickup -> Int2,
+            continuous_drop_off -> Int2,
+            shapes_list -> Nullable<Array<Nullable<Text>>>,
+            chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.shapes (onestop_feed_id, attempt_id, shape_id) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            shape_id -> Text,
+            linestring -> Geometry,
+            color -> Nullable<Text>,
+            routes -> Nullable<Array<Nullable<Text>>>,
+            route_type -> Int2,
+            route_label -> Nullable<Text>,
+            route_label_translations -> Nullable<Jsonb>,
+            text_color -> Nullable<Text>,
+            chateau -> Text,
+            allowed_spatial_query -> Bool,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.shapes_not_bus (onestop_feed_id, attempt_id, shape_id) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            shape_id -> Text,
+            linestring -> Geometry,
+            color -> Nullable<Text>,
+            routes -> Nullable<Array<Nullable<Text>>>,
+            route_type -> Int2,
+            route_label -> Nullable<Text>,
+            route_label_translations -> Nullable<Jsonb>,
+            text_color -> Nullable<Text>,
+            chateau -> Text,
+            allowed_spatial_query -> Bool,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.static_download_attempts (onestop_feed_id, downloaded_unix_time_ms) {
+            onestop_feed_id -> Text,
+            file_hash -> Nullable<Text>,
+            downloaded_unix_time_ms -> Int8,
+            ingested -> Bool,
+            url -> Text,
+            failed -> Bool,
+            ingestion_version -> Int4,
+            mark_for_redo -> Bool,
+            http_response_code -> Nullable<Text>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.static_feeds (onestop_feed_id) {
+            onestop_feed_id -> Text,
+            chateau -> Text,
+            default_lang -> Nullable<Text>,
+            languages_avaliable -> Array<Nullable<Text>>,
+            previous_chateau_name -> Text,
+            hull -> Nullable<Geometry>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.static_passwords (onestop_feed_id) {
+            onestop_feed_id -> Text,
+            passwords -> Nullable<Jsonb>,
+            last_updated_ms -> Int8,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.stops (onestop_feed_id, attempt_id, gtfs_id) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            gtfs_id -> Text,
+            name -> Nullable<Text>,
+            name_translations -> Nullable<Jsonb>,
+            displayname -> Nullable<Text>,
+            code -> Nullable<Text>,
+            gtfs_desc -> Nullable<Text>,
+            gtfs_desc_translations -> Nullable<Jsonb>,
+            location_type -> Int2,
+            parent_station -> Nullable<Text>,
+            zone_id -> Nullable<Text>,
+            url -> Nullable<Text>,
+            point -> Nullable<Geometry>,
+            timezone -> Nullable<Text>,
+            wheelchair_boarding -> Int2,
+            primary_route_type -> Nullable<Int2>,
+            level_id -> Nullable<Text>,
+            platform_code -> Nullable<Text>,
+            platform_code_translations -> Nullable<Jsonb>,
+            routes -> Array<Nullable<Text>>,
+            route_types -> Array<Nullable<Int2>>,
+            children_ids -> Array<Nullable<Text>>,
+            children_route_types -> Array<Nullable<Int2>>,
+            station_feature -> Bool,
+            hidden -> Bool,
+            chateau -> Text,
+            location_alias -> Nullable<Array<Nullable<Text>>>,
+            tts_name -> Nullable<Text>,
+            tts_name_translations -> Nullable<Jsonb>,
+            allowed_spatial_query -> Bool,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.stopsforroute (onestop_feed_id, attempt_id, route_id) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            route_id -> Text,
+            stops -> Nullable<Bytea>,
+            chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.trip_frequencies (onestop_feed_id, attempt_id, trip_id, index) {
+            onestop_feed_id -> Text,
+            trip_id -> Text,
+            attempt_id -> Text,
+            index -> Int2,
+            start_time -> Oid,
+            end_time -> Oid,
+            headway_secs -> Oid,
+            exact_times -> Bool,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.trips_compressed (onestop_feed_id, attempt_id, trip_id) {
+            onestop_feed_id -> Text,
+            trip_id -> Text,
+            attempt_id -> Text,
+            service_id -> Text,
+            trip_short_name -> Nullable<Text>,
+            direction_id -> Nullable<Bool>,
+            block_id -> Nullable<Text>,
+            wheelchair_accessible -> Int2,
+            bikes_allowed -> Int2,
+            chateau -> Text,
+            frequencies -> Nullable<Bytea>,
+            has_frequencies -> Bool,
+            itinerary_pattern_id -> Text,
+            route_id -> Text,
+        }
+    }
+
+    diesel::allow_tables_to_appear_in_same_query!(
+        admin_credentials,
+        agencies,
+        calendar,
+        calendar_dates,
+        chateau_metadata_last_updated_time,
+        chateaus,
+        f_test,
+        feed_info,
+        gtfs_errors,
+        in_progress_static_ingests,
+        ingested_static,
+        itinerary_pattern,
+        itinerary_pattern_meta,
+        realtime_feeds,
+        realtime_passwords,
+        routes,
+        shapes,
+        shapes_not_bus,
+        static_download_attempts,
+        static_feeds,
+        static_passwords,
+        stops,
+        stopsforroute,
+        trip_frequencies,
+        trips_compressed,
+    );
+}

@@ -1,80 +1,96 @@
+## Architecture
+
+Catenary Backend is a distributed system comprised of microservices operating in Kubernetes. The system is designed for fault tolerance, high-avaliability, and native execution speed in x86-64 using the Rust systems programming language.
+
+- **Maple**: GTFS Downloader and ingestion engine
+- **Prairie**: Routing Preprocessor and execution engine (Research and design in progress)
+- **Alpenrose**: Distributed system to ingest GTFS-rt and other realtime data (Rose des Alpes), successor to Kactus.
+- **Aspen**: Processing of realtime data and dynamic insertion into other engines
+- **Edelweiss**: Map tile geometry server, will serve line ordering optimised graph maps (LOOM) in the future.
+- **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times
+- **Birch**: General API server
+
+The kubernetes configuration is generated using Helm templates. See Helm's documentation for further information on that.
+
+The code is heavily commented, go to each folder in src for more information.
+
+### Submodules maintained 
+- **Dmfr folder reader**: reads data from transitland-atlas into raw structs
+- **Château**: Associates feeds with operators and vise versa using depth first search in knowledge graph
+- **Amtrak GTFS rt**: Conversion of proprietary realtime data from amtrak's website into gtfs-rt.
+- **Zotgtfs**: conversion of Transloc data and hand typed schedules from Anteater Express to GTFS schedule and realtime.
+
 ## Install Dependencies
 
 ```bash
 sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip wget
 ```
 
-## Loading in Data
-Loading in data into the Postgres database is a multistep process. Ensure your postgres database is working and your password is set correctly.
-
-### Download the Transitland repo
-Transitland acts as an initial source of knowledge for Catenary-Backend, and associates static feeds and realtime feeds together.
-Download and Update it via:
-```bash
-git submodule init && git submodule update
-```
-
-If you already have it, remember to git pull / merge changes
-To do this, cd into the folder `transitland-atlas` and run `git pull`
-
-### Download GTFS static data
-This downloads the world's GTFS Static Data. This step may take a while, so go play some Minecraft / touch grass and come back when it's all finished!
-```bash
-cargo run --release --bin transitlanddownload
-```
-
-### Unzip and format the zip files
-```bash
-./src/ingest_gtfs_schedule/unzip-statics.sh
-```
-
-### Import data into the postgres database
-
-```bash
-cargo run --release --bin import -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple" --threads 25 --startfresh true --isprod false
-```
-
-This command writes to `gtfs_stage`. 
-Omit startfresh if you would want to wipe the staging directory.
-
-For safety reasons, you are unable to wipe the `gtfs` schema, which is the production database, from this version.
-
-You can also write to production, especially loading in a single agency, like this.
-
-```bash
-cargo run --release --bin import -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple" --threads 25 --startfresh false --limittostaticfeed f-9q9-caltrain --isprod true
-```
-
-### Moving staging to be the new production database.
-
-Moving the `gtfs_stage` set of tables to `gtfs` is really simple
-
-```bash
-cargo run --bin move_to_prod -- --postgres "host=localhost user=postgres password=correcthorsebatterystaple"
-```
-
-Move to prod **deletes the current production database, renames the staging and then commits the change**.
-
-You're all done! Data is fully ready for serving to users!
-
-## Running the Application
-
-### Install Systemd Service
-```bash
-sudo cp transitbackend.service /etc/systemd/system/transitbackend.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now transitbackend.service
-```
-
-Example endpoints
-
-`http://localhost:5401/getroutesperagency?feed_id=f-9mu-orangecountytransportationauthority`
-
-`http://localhost:5401/gettrip?feed_id=f-9mu-orangecountytransportationauthority&trip_id=10995882`
-
 ## For Contributors
 
-For unix users, running `git config core.hooksPath .githooks` is required.
-Pull requests will not be merged without this.
+For unix users, running `git config core.hooksPath .githooks` is recommended.
+Good commit messages are required to contribute to this project.
 
 No option exists for Windows users at the moment. Please try WSL Ubuntu for the moment. We're working on adding this.
+
+### Installation of Postgres
+
+See https://www.postgresql.org/download
+
+PostGIS is also required like 
+```bash
+sudo apt install postgresql-16-postgis-3
+```
+
+See https://trac.osgeo.org/postgis/wiki/UsersWikiPostGIS3UbuntuPGSQLApt for more instructions
+
+### SQL notes
+We've switched to diesel for our queries. Read the diesel documentation to learn how to use it.
+https://diesel.rs/guides/getting-started.html
+
+Lib PQ is also required to install the diesel cli. Only postgres is required.
+Example
+```bash
+sudo apt-get install libpq-dev
+cargo install diesel_cli --no-default-features --features postgres
+```
+
+### Common Database debugging
+
+Is Postgis not installing? This page may be helpful: https://trac.osgeo.org/postgis/wiki/UsersWikiPostGIS3UbuntuPGSQLApt
+
+### Updating transitland submodules
+
+```bash
+git submodule update --rebase --remote
+```
+
+### Style Guide
+
+Code should be formatted with `cargo fmt` and be well documented.
+The following `cargo clippy` rules are enforced.
+
+```rs
+#![deny(
+    clippy::mutable_key_type,
+    clippy::map_entry,
+    clippy::boxed_local,
+    clippy::let_unit_value,
+    clippy::redundant_allocation,
+    clippy::bool_comparison,
+    clippy::bind_instead_of_map,
+    clippy::vec_box,
+    clippy::while_let_loop,
+    clippy::useless_asref,
+    clippy::repeat_once,
+    clippy::deref_addrof,
+    clippy::suspicious_map,
+    clippy::arc_with_non_send_sync,
+    clippy::single_char_pattern,
+    clippy::for_kv_map,
+    clippy::let_unit_value,
+    clippy::let_and_return,
+    clippy::iter_nth,
+    clippy::iter_cloned_collect
+)]
+```
