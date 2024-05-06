@@ -57,6 +57,7 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio_zookeeper::*;
 use uuid::Uuid;
+mod custom_rt_feeds;
 mod single_fetch_time;
 
 #[derive(Serialize, Clone, Deserialize, Debug, Hash, PartialEq, Eq)]

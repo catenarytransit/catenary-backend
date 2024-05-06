@@ -48,7 +48,7 @@ pub async fn login(
     match admin_credentials.len() {
         0 => Ok(false),
         _ => {
-            let admin_credentials = admin_credentials.first();
+            let admin_credentials = admin_credentials[0].clone();
 
             let db_hash = admin_credentials.hash.clone();
             let db_salt = SaltString::from_b64(admin_credentials.salt.as_str()).unwrap();
@@ -100,7 +100,10 @@ pub async fn set_realtime_key(
     let data = data.unwrap();
 
     //convert password format to js value
-    let password_for_postgres = data.passwords.as_ref().map(|x| serde_json::to_value(x).unwrap());
+    let password_for_postgres = data
+        .passwords
+        .as_ref()
+        .map(|x| serde_json::to_value(x).unwrap());
 
     use catenary::schema::gtfs::realtime_passwords as realtime_passwords_table;
 

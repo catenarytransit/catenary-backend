@@ -1,6 +1,7 @@
 use crate::ahash_fast_hash;
 use ahash::AHashMap;
 use ordered_float::OrderedFloat;
+use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Hash, PartialEq, Eq)]

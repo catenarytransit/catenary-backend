@@ -19,6 +19,9 @@ use tarpc::{client, context, tokio_serde::formats::Bincode};
 use tokio::sync::RwLock;
 use tokio_zookeeper::ZooKeeper;
 
+use crate::custom_rt_feeds;
+use gtfs_structures::Gtfs;
+
 lazy_static! {
     static ref CUSTOM_FEEDS: HashSet<&'static str> =
         HashSet::from_iter(vec!["f-anteaterexpress~rt", "f-amtrak~rt"]);
@@ -70,6 +73,12 @@ pub async fn single_fetch_time(
         .await
         .unwrap();
 
+        let amtrak_gtfs = Gtfs::from_url_async("https://content.amtrak.com/content/gtfs/GTFS.zip")
+        .await
+        .unwrap();
+
+        let amtrak_gtfs = Arc::new(amtrak_gtfs);
+
     let zk = Arc::new(zk);
 
     let assignments_lock = assignments.read().await;
@@ -81,6 +90,7 @@ pub async fn single_fetch_time(
         let zk = zk.clone();
         let hashes_of_data = Arc::clone(&hashes_of_data);
         let last_fetch_per_feed = last_fetch_per_feed.clone();
+        let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
         async move {
             let start = Instant::now();
 
@@ -142,11 +152,6 @@ pub async fn single_fetch_time(
                 }
 
                 //lookup currently assigned realtime dataset in zookeeper
-                let fetch_assigned_node_for_this_realtime_feed = zk
-                    .get_data(format!("/aspen_assigned_realtime_feed_ids/{}", feed_id).as_str())
-                    .await
-                    .unwrap();
-
                 let fetch_assigned_node_meta = get_node_for_realtime_feed_id(&zk, feed_id).await;
 
                 match fetch_assigned_node_meta {
@@ -241,6 +246,19 @@ pub async fn single_fetch_time(
                     None => {
                         eprintln!("{} was not assigned to a worker", feed_id);
                     }
+                }
+            } else {
+                match feed_id.as_str() {
+                    "f-anteaterexpress~rt" => {
+                        custom_rt_feeds::anteater_express::fetch_anteater_express_data(
+                            &zk, &feed_id,
+                        )
+                        .await;
+                    },
+                    "f-amtrak~rt" => {
+                        custom_rt_feeds::amtrak::fetch_amtrak_data(&zk, &feed_id, &amtrak_gtfs, &client).await;
+                    }
+                    _ => {}
                 }
             }
 
