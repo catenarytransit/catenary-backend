@@ -222,11 +222,11 @@ pub async fn new_rt_data(
                                     AspenisedVehicleTripInfo {
                                         trip_id: trip.trip_id.clone(),
                                         route_id: match &trip.route_id {
-                                            Some(route_id) => Some(route_id_transform(realtime_feed_id, route_id.clone())),
+                                            Some(route_id) => Some(route_id.clone()),
                                             None => match &trip.trip_id {
                                                 Some(trip_id) => {
                                                     let trip = trip_id_to_trip.get(&trip_id.clone());
-                                                    trip.map(|trip| route_id_transform(realtime_feed_id, trip.route_id.clone()))
+                                                    trip.map(|trip| trip.route_id.clone())
                                                 },
                                                 None => None
                                             }

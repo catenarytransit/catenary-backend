@@ -73,11 +73,11 @@ pub async fn single_fetch_time(
         .await
         .unwrap();
 
-        let amtrak_gtfs = Gtfs::from_url_async("https://content.amtrak.com/content/gtfs/GTFS.zip")
+    let amtrak_gtfs = Gtfs::from_url_async("https://content.amtrak.com/content/gtfs/GTFS.zip")
         .await
         .unwrap();
 
-        let amtrak_gtfs = Arc::new(amtrak_gtfs);
+    let amtrak_gtfs = Arc::new(amtrak_gtfs);
 
     let zk = Arc::new(zk);
 
@@ -254,9 +254,15 @@ pub async fn single_fetch_time(
                             &zk, &feed_id,
                         )
                         .await;
-                    },
+                    }
                     "f-amtrak~rt" => {
-                        custom_rt_feeds::amtrak::fetch_amtrak_data(&zk, &feed_id, &amtrak_gtfs, &client).await;
+                        custom_rt_feeds::amtrak::fetch_amtrak_data(
+                            &zk,
+                            &feed_id,
+                            &amtrak_gtfs,
+                            &client,
+                        )
+                        .await;
                     }
                     _ => {}
                 }
