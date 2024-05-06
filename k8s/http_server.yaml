@@ -1,0 +1,38 @@
+#
+# This deployment config calls for a cluster config
+# file with _ labeling. Most likely you DO NOT need
+# to edit this file!!!
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: http-server
+spec:
+  template:
+    spec:
+      containers:
+        - name: gtfs-static-db
+          image: postgres:16
+          ports: 
+            - containerPort: localhost:5432
+              name: backend-shared-network
+          volumeMounts:
+            - mountPath: /var/lib/postgresql
+              name: gtfs-static-db-vol
+        - name: gtfs-static-webserve
+          image: localhost/http-server
+          ports:
+            - containerPort: localhost:5432
+              name: backend-shared-network
+            - port: 5401
+              protocol: TCP
+              name: gtfs-static-webserve-port
+          command:
+            - http_server
+      volumes:
+        - name: gtfs-static-db-vol
+          configMap:
+  initContainers:
+    - name: gtfs-static-db-generator
+      image:
+      command:
