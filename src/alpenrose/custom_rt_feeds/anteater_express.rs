@@ -26,7 +26,7 @@ pub async fn fetch_anteater_express_data(zk: &ZooKeeper, feed_id: &str) {
             let tarpc_send_to_aspen = aspen_client
                 .from_alpenrose(
                     tarpc::context::current(),
-                    data.chateau_id.clone(),
+                    String::from("uc~irvine~anteater~express"),
                     String::from(feed_id),
                     Some(zotgtfs_realtime_data.encode_to_vec()),
                     None,
