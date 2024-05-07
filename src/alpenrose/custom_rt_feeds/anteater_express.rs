@@ -43,7 +43,7 @@ pub async fn fetch_anteater_express_data(zk: &ZooKeeper, feed_id: &str) {
 
             match tarpc_send_to_aspen {
                 Ok(_) => {
-                    println!("Successfully sent zotgtfs data to, feed {} to chateau {}", data.tailscale_ip, feed_id, data.chateau_id);
+                    println!("Successfully sent zotgtfs data to {}, feed {} to chateau {}", data.tailscale_ip, feed_id, data.chateau_id);
                 }
                 Err(e) => {
                     eprintln!("{}: Error sending data to {}: {}", feed_id, worker_id, e);
