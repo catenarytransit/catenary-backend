@@ -28,3 +28,27 @@ pub async fn nearby_from_coords(req: HttpRequest, query: Query<NearbyFromCoords>
 
     HttpResponse::Ok().body("Hello!")
 }
+
+#[derive(Deserialize, Clone, Debug)]
+struct NearbyFromStops {
+    stops: Vec<String>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+struct NearbyStopsDeserialize {
+    stop_id: String,
+    chateau_id: String
+}
+
+#[actix_web::get("/nearbydeparturesfromstops/")]
+pub async fn nearby_from_stops(req: HttpRequest, query: Query<NearbyFromStops>) -> impl Responder {
+    // search through itineraries matching those stops and then put them in a hashmap of stop to itineraries
+
+    //get the start of the trip and the offset for the current stop
+    
+    //look through time compressed and decompress the itineraries, using timezones and calendar calcs
+
+    //look through gtfs-rt times and hydrate the itineraries
+
+    HttpResponse::Ok().body("Hello!")
+}
