@@ -214,7 +214,7 @@ pub async fn aspen_leader_thread(
                                         .unwrap(),
                                 };
 
-                                let _ = zk
+                                let assigned_chateaus = zk
                                     .create(
                                         format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
                                         bincode::serialize(&assigned_chateau_data).unwrap(),
@@ -223,6 +223,18 @@ pub async fn aspen_leader_thread(
                                     )
                                     .await
                                     .unwrap();
+
+                                if let Err(assigned_chateaus) = assigned_chateaus {
+                                    //overwrite data
+                                    let reassign_attempt = zk
+                                        .set_data(
+                                            format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
+                                            None,
+                                            bincode::serialize(&assigned_chateau_data).unwrap(),
+                                        )
+                                        .await
+                                        .unwrap();
+                                }
 
                                 for realtime_feed_id in chateau.realtime_feeds.iter() {
                                     let assigned_realtime_feed_data =
@@ -234,7 +246,7 @@ pub async fn aspen_leader_thread(
                                             chateau_id: chateau_id.clone(),
                                         };
 
-                                    let _ = zk
+                                    let assign_realtime_feed_id = zk
                                         .create(
                                             format!(
                                                 "/aspen_assigned_realtime_feed_ids/{}",
@@ -247,6 +259,23 @@ pub async fn aspen_leader_thread(
                                             CreateMode::Persistent,
                                         )
                                         .await?;
+
+                                    if let Err(assign_realtime_feed_id) = assign_realtime_feed_id {
+                                        //overwrite data
+                                        let reassign_attempt = zk
+                                            .set_data(
+                                                format!(
+                                                    "/aspen_assigned_realtime_feed_ids/{}",
+                                                    realtime_feed_id
+                                                )
+                                                .as_str(),
+                                                None,
+                                                bincode::serialize(&assigned_realtime_feed_data)
+                                                    .unwrap(),
+                                            )
+                                            .await
+                                            .unwrap();
+                                    }
                                 }
                             }
                             println!(

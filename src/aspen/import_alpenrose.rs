@@ -94,10 +94,6 @@ pub async fn new_rt_data(
 
     let route_id_to_route = route_id_to_route;
 
-    if (chateau_id == "irvine~ca~us") {
-        println!("irvine~ca~us route collection, {:#?}", route_id_to_route);
-    }
-
     //combine them together and insert them with the vehicles positions
 
     // trips can be left fairly raw for now, with a lot of data references

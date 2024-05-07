@@ -117,7 +117,7 @@ regex = "1.10.4"
 fasthash = "0.4.0"
 clap = "4.5.4"
 rgb = "0.8.37"
-zotgtfs = "0.3.2"
+zotgtfs = "0.3.3"
 amtrak-gtfs-rt = "0.2.1"
 
 [[bin]]
