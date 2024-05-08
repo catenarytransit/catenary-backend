@@ -217,6 +217,10 @@ pub async fn new_rt_data(
                                 trip: vehicle_pos.trip.as_ref().map(|trip| {
                                     AspenisedVehicleTripInfo {
                                         trip_id: trip.trip_id.clone(),
+                                        direction_id: trip.direction_id,
+                                       start_date: trip.start_date.clone(),
+                                       start_time: trip.start_time.clone(),
+                                        schedule_relationship: trip.schedule_relationship,
                                         route_id: match &trip.route_id {
                                             Some(route_id) => Some(route_id.clone()),
                                             None => match &trip.trip_id {
