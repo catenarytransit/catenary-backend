@@ -31,6 +31,7 @@ pub async fn nearby_from_coords(req: HttpRequest, query: Query<NearbyFromCoords>
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyFromStops {
+    //serialise and deserialise using serde_json
     stops: Vec<String>,
 }
 
