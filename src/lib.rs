@@ -328,6 +328,10 @@ pub mod aspen_dataset {
         pub trip_headsign: Option<String>,
         pub route_id: Option<String>,
         pub trip_short_name: Option<String>,
+        pub direction_id: Option<u32>,
+        pub start_time: Option<String>,
+        pub start_date: Option<String>,
+        pub schedule_relationship: Option<i32>
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
