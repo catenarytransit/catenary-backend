@@ -747,14 +747,12 @@ async fn chateaus(
             realtime_feeds: pg_chateau
                 .realtime_feeds
                 .into_iter()
-                .filter(|opt_string| opt_string.is_some())
-                .map(|string| string.unwrap())
+                .flatten()
                 .collect(),
             schedule_feeds: pg_chateau
                 .static_feeds
                 .into_iter()
-                .filter(|opt_string| opt_string.is_some())
-                .map(|string| string.unwrap())
+                .flatten()
                 .collect(),
             hull: diesel_multi_polygon_to_geo(pg_chateau.hull.unwrap()),
         })
