@@ -98,7 +98,7 @@ pub async fn get_trip(
 
         if let Err(itin_meta) = &itin_meta {
             eprintln!("{}", itin_meta);
-            return HttpResponse::InternalServerError().body("Error fetching itinerary pattern");
+            return HttpResponse::InternalServerError().body("Error fetching itinerary pattern metadata");
         }
 
         let itin_meta = itin_meta.unwrap();
@@ -108,6 +108,36 @@ pub async fn get_trip(
         .filter(itinerary_pattern_pg_schema::dsl::itinerary_pattern_id.eq(&trip_compressed.itinerary_pattern_id))
         .select(catenary::models::ItineraryPatternRow::as_select())
         .load(conn).await;
+
+        if let Err(itin_rows_err) = &itin_rows {
+            eprintln!("{}", itin_rows_err);
+            return HttpResponse::InternalServerError().body("Error fetching itinerary pattern rows");
+        }
+
+        let itin_rows = itin_rows.unwrap();
+
+        if itin_meta.len() == 0 {
+            return HttpResponse::NotFound().body("Trip Itin not found");
+        }
+
+        let itin_meta:catenary::models::ItineraryPatternMeta = itin_meta[0].clone();
+
+        let mut itin_rows_to_use:Vec<catenary::models::ItineraryPatternRow> = itin_rows.into_iter().filter(|row| itin_meta.attempt_id == row.attempt_id).collect::<Vec<_>>();
+
+        itin_rows_to_use.sort_by_key(|x| x.stop_sequence);
+
+        let itin_rows_to_use = itin_rows_to_use;
+
+        let tz = chrono_tz::Tz::from_str_insensitive(itin_meta.timezone.as_str());
+
+        if let Err(tz_parsing_error) = &tz {
+            eprintln!("Could not parse timezone {}", itin_meta.timezone.as_str());
+            return HttpResponse::InternalServerError().body(
+                format!("Could not parse timezone {} from itinerary {}", itin_meta.timezone, itin_meta.itinerary_pattern_id)
+            );
+        }
+
+        let tz = tz.unwrap();
 
     HttpResponse::Ok().body("get_vehicle_metadata")
 }

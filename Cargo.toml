@@ -119,6 +119,7 @@ clap = "4.5.4"
 rgb = "0.8.37"
 zotgtfs = "0.3.3"
 amtrak-gtfs-rt = "0.2.1"
+chrono-tz = { version = "0.9.0", features = ["case-insensitive"] }
 
 [[bin]]
 name = "maple"
