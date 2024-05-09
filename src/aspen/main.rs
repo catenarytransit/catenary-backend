@@ -118,9 +118,11 @@ impl AspenRpc for AspenServer {
             _ => None,
         };
 
-        let vehicles_gtfs_rt = vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
-            "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
-            _ => gtfs_rt_feed});
+        let vehicles_gtfs_rt =
+            vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
+                "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
+                _ => gtfs_rt_feed,
+            });
 
         let trips_gtfs_rt = match trips_response_code {
             Some(200) => match trips {
@@ -138,7 +140,8 @@ impl AspenRpc for AspenServer {
 
         let trips_gtfs_rt = trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
             "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
-            _ => gtfs_rt_feed});
+            _ => gtfs_rt_feed,
+        });
 
         let alerts_gtfs_rt = match alerts_response_code {
             Some(200) => match alerts {

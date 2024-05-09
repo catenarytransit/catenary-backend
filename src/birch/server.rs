@@ -68,6 +68,7 @@ use zstd_safe::WriteBuf;
 mod api_key_management;
 mod aspenised_data_over_https;
 mod chicago_proxy;
+mod get_vehicle_trip_information;
 mod nearby_departures;
 
 #[derive(Clone, Debug)]
@@ -745,16 +746,8 @@ async fn chateaus(
         .filter(|pg_chateau| pg_chateau.hull.is_some())
         .map(|pg_chateau| ChateauToSend {
             chateau: pg_chateau.chateau,
-            realtime_feeds: pg_chateau
-                .realtime_feeds
-                .into_iter()
-                .flatten()
-                .collect(),
-            schedule_feeds: pg_chateau
-                .static_feeds
-                .into_iter()
-                .flatten()
-                .collect(),
+            realtime_feeds: pg_chateau.realtime_feeds.into_iter().flatten().collect(),
+            schedule_feeds: pg_chateau.static_feeds.into_iter().flatten().collect(),
             hull: diesel_multi_polygon_to_geo(pg_chateau.hull.unwrap()),
         })
         .collect::<Vec<ChateauToSend>>();

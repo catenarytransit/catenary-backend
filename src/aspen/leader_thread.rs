@@ -228,7 +228,8 @@ pub async fn aspen_leader_thread(
                                     //overwrite data
                                     let reassign_attempt = zk
                                         .set_data(
-                                            format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
+                                            format!("/aspen_assigned_chateaus/{}", chateau_id)
+                                                .as_str(),
                                             None,
                                             bincode::serialize(&assigned_chateau_data).unwrap(),
                                         )
