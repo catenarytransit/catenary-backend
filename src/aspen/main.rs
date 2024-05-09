@@ -320,6 +320,52 @@ impl AspenRpc for AspenServer {
             None => None,
         }
     }
+
+    async fn get_trip_updates_from_trip_id(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        trip_id: String,
+    ) -> Option<Vec<AspenisedTripUpdate>> {
+        match self.authoritative_data_store.get(&chateau_id) {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let trip_updates_id_list = aspenised_data
+                    .trip_updates_lookup_by_trip_id_to_trip_update_ids
+                    .get(&trip_id);
+
+                match trip_updates_id_list {
+                    Some(trip_updates_id_list) => {
+                        let mut trip_updates = Vec::new();
+
+                        for trip_update_id in trip_updates_id_list {
+                            let trip_update = aspenised_data.trip_updates.get(trip_update_id);
+
+                            match trip_update {
+                                Some(trip_update) => {
+                                    trip_updates.push(trip_update.clone());
+                                }
+                                None => {
+                                    println!(
+                                        "Trip update not found for trip update id {}",
+                                        trip_update_id
+                                    );
+                                }
+                            }
+                        }
+
+                        Some(trip_updates)
+                    }
+                    None => {
+                        println!("Trip id not found in trip updates lookup table");
+                        None
+                    }
+                }
+            }
+            None => None,
+        }
+    }
 }
 
 async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {

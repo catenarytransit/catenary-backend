@@ -40,6 +40,11 @@ pub trait AspenRpc {
         chateau_id: String,
         existing_fasthash_of_routes: Option<u64>,
     ) -> (Option<GetVehicleLocationsResponse>);
+
+    async fn get_trip_updates_from_trip_id(
+        chateau_id: String,
+        trip_id: String,
+    ) -> Option<Vec<AspenisedTripUpdate>>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
