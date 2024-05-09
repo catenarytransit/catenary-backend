@@ -382,10 +382,12 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .into_iter()
                 .filter(|unzipped_feed| unzipped_feed.1)
                 .map(|(feed_id, _)| (feed_id.clone(), attempt_ids.get(&feed_id).unwrap().clone()))
-                .filter_map(|(feed_id, attempt_id)| match feed_id_to_chateau_lookup.get(&feed_id) {
-                    Some(chateau_id) => Some((feed_id, attempt_id, chateau_id.clone())),
-                    None => None,
-                    })
+                .filter_map(
+                    |(feed_id, attempt_id)| match feed_id_to_chateau_lookup.get(&feed_id) {
+                        Some(chateau_id) => Some((feed_id, attempt_id, chateau_id.clone())),
+                        None => None,
+                    },
+                )
                 .collect();
 
             let total_feeds_to_process = feeds_to_process.len() as u16;

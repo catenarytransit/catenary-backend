@@ -93,9 +93,7 @@ pub async fn get_realtime_locations(
     if (aspen_client.is_err()) {
         return HttpResponse::InternalServerError()
             .append_header(("Cache-Control", "no-cache"))
-            .body(format!(
-                "Error connecting to assigned node. Failed to connect to tarpc",
-            ));
+            .body("Error connecting to assigned node. Failed to connect to tarpc");
     }
 
     let aspen_client = aspen_client.unwrap();

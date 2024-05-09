@@ -14,6 +14,7 @@ use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres;
 use crate::DownloadedFeedsInformation;
 use catenary::enum_to_int::*;
+use catenary::gtfs_schedule_protobuf::frequencies_to_protobuf;
 use catenary::maple_syrup;
 use catenary::models::ItineraryPatternMeta;
 use catenary::models::Route as RoutePgModel;
@@ -31,6 +32,7 @@ use gtfs_structures::FeedInfo;
 use gtfs_structures::{BikesAllowedType, ExactTimes};
 use gtfs_translations::translation_csv_text_to_translations;
 use gtfs_translations::TranslationResult;
+use prost::Message;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
@@ -282,9 +284,16 @@ pub async fn gtfs_process_feed(
                 block_id: compressed_trip_raw.block_id.clone(),
                 wheelchair_accessible: compressed_trip_raw.wheelchair_accessible,
                 bikes_allowed: compressed_trip_raw.bikes_allowed,
-                has_frequencies: compressed_trip_raw.frequencies.len() > 0,
+                has_frequencies: !compressed_trip_raw.frequencies.is_empty(),
                 route_id: route_id_transform(feed_id, compressed_trip_raw.route_id.clone()),
-                frequencies: None,
+                frequencies: match !compressed_trip_raw.frequencies.is_empty() {
+                    true => {
+                        let prost_message =
+                            frequencies_to_protobuf(&compressed_trip_raw.frequencies);
+                        Some(prost_message.encode_to_vec())
+                    }
+                    false => None,
+                },
             })
             .collect::<Vec<_>>();
 

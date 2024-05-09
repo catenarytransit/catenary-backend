@@ -22,7 +22,13 @@
     clippy::let_unit_value,
     clippy::let_and_return,
     clippy::iter_nth,
-    clippy::iter_cloned_collect
+    clippy::iter_cloned_collect,
+    clippy::bytes_nth,
+    clippy::deprecated_clippy_cfg_attr,
+    clippy::match_result_ok,
+    clippy::cmp_owned,
+    clippy::cmp_null,
+    clippy::op_ref
 )]
 
 #[macro_use]
@@ -331,7 +337,7 @@ pub mod aspen_dataset {
         pub direction_id: Option<u32>,
         pub start_time: Option<String>,
         pub start_date: Option<String>,
-        pub schedule_relationship: Option<i32>
+        pub schedule_relationship: Option<i32>,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]

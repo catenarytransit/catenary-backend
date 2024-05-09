@@ -118,9 +118,11 @@ impl AspenRpc for AspenServer {
             _ => None,
         };
 
-        let vehicles_gtfs_rt = vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
-            "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
-            _ => gtfs_rt_feed});
+        let vehicles_gtfs_rt =
+            vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
+                "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
+                _ => gtfs_rt_feed,
+            });
 
         let trips_gtfs_rt = match trips_response_code {
             Some(200) => match trips {
@@ -138,7 +140,8 @@ impl AspenRpc for AspenServer {
 
         let trips_gtfs_rt = trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
             "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
-            _ => gtfs_rt_feed});
+            _ => gtfs_rt_feed,
+        });
 
         let alerts_gtfs_rt = match alerts_response_code {
             Some(200) => match alerts {
@@ -313,6 +316,52 @@ impl AspenRpc for AspenServer {
                     hash_of_routes: fast_hash_of_routes,
                     last_updated_time_ms: aspenised_data.last_updated_time_ms,
                 })
+            }
+            None => None,
+        }
+    }
+
+    async fn get_trip_updates_from_trip_id(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        trip_id: String,
+    ) -> Option<Vec<AspenisedTripUpdate>> {
+        match self.authoritative_data_store.get(&chateau_id) {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let trip_updates_id_list = aspenised_data
+                    .trip_updates_lookup_by_trip_id_to_trip_update_ids
+                    .get(&trip_id);
+
+                match trip_updates_id_list {
+                    Some(trip_updates_id_list) => {
+                        let mut trip_updates = Vec::new();
+
+                        for trip_update_id in trip_updates_id_list {
+                            let trip_update = aspenised_data.trip_updates.get(trip_update_id);
+
+                            match trip_update {
+                                Some(trip_update) => {
+                                    trip_updates.push(trip_update.clone());
+                                }
+                                None => {
+                                    println!(
+                                        "Trip update not found for trip update id {}",
+                                        trip_update_id
+                                    );
+                                }
+                            }
+                        }
+
+                        Some(trip_updates)
+                    }
+                    None => {
+                        println!("Trip id not found in trip updates lookup table");
+                        None
+                    }
+                }
             }
             None => None,
         }
