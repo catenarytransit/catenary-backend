@@ -341,6 +341,7 @@ pub async fn get_trip(
 
                 if let Ok(get_trip) = get_trip {
                     if let Some(get_trip) = get_trip {
+                        println!("recieved {} trip options from aspen", get_trip.len());
                         if !get_trip.is_empty() {
                             let rt_trip_update = match get_trip.len() {
                                 1 => &get_trip[0],
@@ -377,6 +378,8 @@ pub async fn get_trip(
 
                             vehicle = rt_trip_update.vehicle.clone();
 
+                            println!("rt data contains {} stop updates", rt_trip_update.stop_time_update.len());
+
                             for stop_time_update in &rt_trip_update.stop_time_update {
                                 // per gtfs rt spec, the stop can be targeted with either stop id or stop sequence
                                 let stop_time = stop_times_for_this_trip.iter_mut().find(|x| {
@@ -392,12 +395,16 @@ pub async fn get_trip(
                                 });
 
                                 if let Some(stop_time) = stop_time {
+                                    println!("Found stop time {:#?}", stop_time);
                                     if let Some(arrival) = &stop_time_update.arrival {
                                         stop_time.rt_arrival = Some(arrival.clone());
+                                        println!("changed arrival to {:#?}", arrival);
                                     }
 
                                     if let Some(departure) = &stop_time_update.departure {
                                         stop_time.rt_departure = Some(departure.clone());
+                                        
+                                        println!("changed departure to {:#?}", departure);
                                     }
 
                                     if let Some(schedule_relationship) =
@@ -413,6 +420,8 @@ pub async fn get_trip(
                         eprintln!("Trip id not found {} {}", chateau, query.trip_id);
                     }
                 }
+            } else {
+                eprintln!("Error connecting to assigned node. Failed to connect to tarpc");
             }
         } else {
             eprintln!("No assigned node found for this chateau");
