@@ -24,6 +24,7 @@ pub struct ItineraryPatternRow {
     pub departure_time_since_start: Option<i32>,
     pub stop_id: String,
     pub chateau: String,
+    pub gtfs_stop_sequence: u32
 }
 
 #[derive(Queryable, Selectable, Insertable, Clone)]

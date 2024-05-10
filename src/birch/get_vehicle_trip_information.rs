@@ -1,20 +1,22 @@
 use actix_web::{web, HttpResponse, Responder};
+use catenary::aspen::lib::ChateauMetadataZookeeper;
 use catenary::aspen_dataset::AspenStopTimeEvent;
 use catenary::postgres_tools::CatenaryPostgresPool;
-use catenary::schema::gtfs::trips_compressed as trips_compressed_pg_schema;
 use catenary::schema::gtfs::itinerary_pattern as itinerary_pattern_pg_schema;
 use catenary::schema::gtfs::itinerary_pattern_meta as itinerary_pattern_meta_pg_schema;
 use catenary::schema::gtfs::stops as stops_pg_schema;
+use catenary::schema::gtfs::trips_compressed as trips_compressed_pg_schema;
+use chrono::TimeZone;
+use chrono_tz::Tz;
 use diesel::query_dsl::methods::FilterDsl;
-use diesel::ExpressionMethods;
 use diesel::query_dsl::methods::SelectDsl;
+use diesel::ExpressionMethods;
+use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use chrono_tz::Tz;
-use diesel::SelectableHelper;
 use std::collections::BTreeMap;
-use chrono::TimeZone;
+use std::sync::Arc;
+use tarpc::{client, context, tokio_serde::formats::Bincode};
 
 #[actix_web::get("/get_vehicle_metadata/{chateau}/{vehicle_id}")]
 pub async fn get_vehicle_metadata(path: web::Path<(String, String)>) -> impl Responder {
@@ -48,6 +50,8 @@ struct StopTimeIntroduction {
     pub scheduled_departure_time_unix_seconds: Option<u64>,
     pub rt_arrival: Option<AspenStopTimeEvent>,
     pub rt_departure: Option<AspenStopTimeEvent>,
+    pub schedule_relationship: Option<i32>,
+    pub gtfs_stop_sequence: u16,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -66,7 +70,6 @@ pub async fn get_trip(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
 ) -> impl Responder {
     let chateau = path.into_inner();
-
 
     let query = query.into_inner();
 
@@ -96,7 +99,7 @@ pub async fn get_trip(
 
     let trip_compressed = trip_compressed.unwrap();
 
-    if trip_compressed.len() == 0 {
+    if trip_compressed.is_empty() {
         return HttpResponse::NotFound().body("Compressed trip not found");
     }
 
@@ -105,78 +108,93 @@ pub async fn get_trip(
 
     let itin_meta = itinerary_pattern_meta_pg_schema::dsl::itinerary_pattern_meta
         .filter(itinerary_pattern_meta_pg_schema::dsl::chateau.eq(&chateau))
-        .filter(itinerary_pattern_meta_pg_schema::dsl::itinerary_pattern_id.eq(&trip_compressed.itinerary_pattern_id))
+        .filter(
+            itinerary_pattern_meta_pg_schema::dsl::itinerary_pattern_id
+                .eq(&trip_compressed.itinerary_pattern_id),
+        )
         .select(catenary::models::ItineraryPatternMeta::as_select())
-        .load(conn).await;
+        .load(conn)
+        .await;
 
-        if let Err(itin_meta) = &itin_meta {
-            eprintln!("{}", itin_meta);
-            return HttpResponse::InternalServerError().body("Error fetching itinerary pattern metadata");
-        }
+    if let Err(itin_meta) = &itin_meta {
+        eprintln!("{}", itin_meta);
+        return HttpResponse::InternalServerError()
+            .body("Error fetching itinerary pattern metadata");
+    }
 
-        let itin_meta = itin_meta.unwrap();
+    let itin_meta = itin_meta.unwrap();
 
-        let itin_rows = itinerary_pattern_pg_schema::dsl::itinerary_pattern
+    let itin_rows = itinerary_pattern_pg_schema::dsl::itinerary_pattern
         .filter(itinerary_pattern_pg_schema::dsl::chateau.eq(&chateau))
-        .filter(itinerary_pattern_pg_schema::dsl::itinerary_pattern_id.eq(&trip_compressed.itinerary_pattern_id))
+        .filter(
+            itinerary_pattern_pg_schema::dsl::itinerary_pattern_id
+                .eq(&trip_compressed.itinerary_pattern_id),
+        )
         .select(catenary::models::ItineraryPatternRow::as_select())
-        .load(conn).await;
+        .load(conn)
+        .await;
 
-        if let Err(itin_rows_err) = &itin_rows {
-            eprintln!("{}", itin_rows_err);
-            return HttpResponse::InternalServerError().body("Error fetching itinerary pattern rows");
-        }
+    if let Err(itin_rows_err) = &itin_rows {
+        eprintln!("{}", itin_rows_err);
+        return HttpResponse::InternalServerError().body("Error fetching itinerary pattern rows");
+    }
 
-        let itin_rows = itin_rows.unwrap();
+    let itin_rows = itin_rows.unwrap();
 
-        if itin_meta.is_empty() {
-            return HttpResponse::NotFound().body("Trip Itin not found");
-        }
+    if itin_meta.is_empty() {
+        return HttpResponse::NotFound().body("Trip Itin not found");
+    }
 
-        let itin_meta:catenary::models::ItineraryPatternMeta = itin_meta[0].clone();
+    let itin_meta: catenary::models::ItineraryPatternMeta = itin_meta[0].clone();
 
-        let mut itin_rows_to_use:Vec<catenary::models::ItineraryPatternRow> = itin_rows.into_iter().filter(|row| itin_meta.attempt_id == row.attempt_id).collect::<Vec<_>>();
+    let mut itin_rows_to_use: Vec<catenary::models::ItineraryPatternRow> = itin_rows
+        .into_iter()
+        .filter(|row| itin_meta.attempt_id == row.attempt_id)
+        .collect::<Vec<_>>();
 
-        itin_rows_to_use.sort_by_key(|x| x.stop_sequence);
+    itin_rows_to_use.sort_by_key(|x| x.stop_sequence);
 
-        let itin_rows_to_use = itin_rows_to_use;
+    let itin_rows_to_use = itin_rows_to_use;
 
-        let tz = chrono_tz::Tz::from_str_insensitive(itin_meta.timezone.as_str());
+    let tz = chrono_tz::Tz::from_str_insensitive(itin_meta.timezone.as_str());
 
-        if let Err(tz_parsing_error) = &tz {
-            eprintln!("Could not parse timezone {}", itin_meta.timezone.as_str());
-            return HttpResponse::InternalServerError().body(
-                format!("Could not parse timezone {} from itinerary {}", itin_meta.timezone, itin_meta.itinerary_pattern_id)
-            );
-        }
+    if let Err(tz_parsing_error) = &tz {
+        eprintln!("Could not parse timezone {}", itin_meta.timezone.as_str());
+        return HttpResponse::InternalServerError().body(format!(
+            "Could not parse timezone {} from itinerary {}",
+            itin_meta.timezone, itin_meta.itinerary_pattern_id
+        ));
+    }
 
-        let timezone = tz.unwrap();
+    let timezone = tz.unwrap();
 
-        let stop_ids_to_lookup: Vec<String> = itin_rows_to_use.iter().map(|x| x.stop_id.clone()).collect();
+    let stop_ids_to_lookup: Vec<String> =
+        itin_rows_to_use.iter().map(|x| x.stop_id.clone()).collect();
 
-        let stops_data = stops_pg_schema::dsl::stops
+    let stops_data = stops_pg_schema::dsl::stops
         .filter(stops_pg_schema::dsl::chateau.eq(&chateau))
         .filter(stops_pg_schema::dsl::gtfs_id.eq_any(stop_ids_to_lookup))
         .select(catenary::models::Stop::as_select())
-        .load(conn).await;
+        .load(conn)
+        .await;
 
-        if let Err(stops_data_err) = &stops_data {
-            eprintln!("{}", stops_data_err);
-            return HttpResponse::InternalServerError().body("Error fetching stops data");
-        }
+    if let Err(stops_data_err) = &stops_data {
+        eprintln!("{}", stops_data_err);
+        return HttpResponse::InternalServerError().body("Error fetching stops data");
+    }
 
-        let stops_data = stops_data.unwrap();
+    let stops_data = stops_data.unwrap();
 
-        let mut stops_data_map: BTreeMap<String, catenary::models::Stop> = BTreeMap::new();
+    let mut stops_data_map: BTreeMap<String, catenary::models::Stop> = BTreeMap::new();
 
-        for stop in stops_data {
-            stops_data_map.insert(stop.gtfs_id.clone(), stop);
-        }
+    for stop in stops_data {
+        stops_data_map.insert(stop.gtfs_id.clone(), stop);
+    }
 
-        let stops_data_map = stops_data_map;
+    let stops_data_map = stops_data_map;
 
-        let mut stop_times_for_this_trip:Vec<StopTimeIntroduction> = vec![];
-        
+    let mut stop_times_for_this_trip: Vec<StopTimeIntroduction> = vec![];
+
     //map start date to a YYYY, MM, DD format
     let start_naive_date = if let Some(start_date) = query.start_date {
         let start_date = chrono::NaiveDate::parse_from_str(&start_date, "%Y%m%d");
@@ -189,12 +207,12 @@ pub async fn get_trip(
         start_date.unwrap()
     } else {
         //get current date under the timezone
-       chrono::Utc::now().with_timezone(&timezone).date_naive()
+        chrono::Utc::now().with_timezone(&timezone).date_naive()
     };
 
     // get reference time as 12 hours before noon of the starting date
     let reference_time_noon = chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap();
-    
+
     let noon_on_start_date = chrono::NaiveDateTime::new(start_naive_date, reference_time_noon);
     let noon_on_start_date_with_tz = timezone.from_local_datetime(&noon_on_start_date).unwrap();
 
@@ -203,7 +221,7 @@ pub async fn get_trip(
 
     //calculate start of the trip time
 
-    let start_of_trip_datetime = if let Some(start_time) = query.start_time {
+    let start_of_trip_datetime = if let Some(ref start_time) = query.start_time {
         let start_time = chrono::NaiveTime::parse_from_str(&start_time, "%H:%M:%S");
 
         if let Err(start_time_err) = start_time {
@@ -214,7 +232,9 @@ pub async fn get_trip(
         let start_time = start_time.unwrap();
 
         let start_of_trip_datetime = chrono::NaiveDateTime::new(start_naive_date, start_time);
-        timezone.from_local_datetime(&start_of_trip_datetime).unwrap()
+        timezone
+            .from_local_datetime(&start_of_trip_datetime)
+            .unwrap()
     } else {
         // number of seconds since midnight + compressed_trip.start_time
         reference_time + chrono::Duration::seconds(trip_compressed.start_time as i64)
@@ -239,18 +259,121 @@ pub async fn get_trip(
             code: stop.code.clone(),
             longitude: stop.point.map(|point| point.x),
             latitude: stop.point.map(|point| point.y),
-            scheduled_arrival_time_unix_seconds: row.arrival_time_since_start.map(|arrival_time_since_start|
-                start_of_trip_datetime.timestamp() as u64 + arrival_time_since_start as u64
+            scheduled_arrival_time_unix_seconds: row.arrival_time_since_start.map(
+                |arrival_time_since_start| {
+                    start_of_trip_datetime.timestamp() as u64 + arrival_time_since_start as u64
+                },
             ),
-            scheduled_departure_time_unix_seconds: row.departure_time_since_start.map(|departure_time_since_start|
-                start_of_trip_datetime.timestamp() as u64 + departure_time_since_start as u64
-            
+            scheduled_departure_time_unix_seconds: row.departure_time_since_start.map(
+                |departure_time_since_start| {
+                    start_of_trip_datetime.timestamp() as u64 + departure_time_since_start as u64
+                },
             ),
+            gtfs_stop_sequence: row.gtfs_stop_sequence as u16,
             rt_arrival: None,
             rt_departure: None,
+            schedule_relationship: None,
         };
 
         stop_times_for_this_trip.push(stop_time);
+    }
+
+    // find zookeeper node ip
+    let fetch_assigned_node_for_this_chateau = zk
+        .get_data(format!("/aspen_assigned_chateaus/{}", chateau).as_str())
+        .await;
+
+    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
+        if let Some((fetch_assigned_node_for_this_chateau_data, stat)) =
+            fetch_assigned_node_for_this_chateau
+        {
+            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataZookeeper>(
+                &fetch_assigned_node_for_this_chateau_data,
+            )
+            .unwrap();
+
+            let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
+
+            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
+
+            if let Ok(aspen_client) = aspen_client {
+                let get_trip = aspen_client
+                    .get_trip_updates_from_trip_id(
+                        context::current(),
+                        chateau.clone(),
+                        query.trip_id.clone(),
+                    )
+                    .await;
+
+                if let Ok(get_trip) = get_trip {
+                    if let Some(get_trip) = get_trip {
+                        if !get_trip.is_empty() {
+                            let rt_trip_update = match get_trip.len() {
+                                1 => &get_trip[0],
+                                _ => {
+                                    println!(
+                                        "Multiple trip updates found for trip id {} {}",
+                                        chateau, query.trip_id
+                                    );
+                                    match &query.start_time {
+                                        Some(ref query_start_time) => {
+                                            let find_trip = get_trip.iter().find(|each_update| {
+                                                match each_update.trip.start_time.as_ref().map(|start_time| {
+                                                    start_time.clone() == *query_start_time
+                                                }) {
+                                                    Some(true) => true,
+                                                    _ => false,
+                                                }
+                                            });
+
+                                            match find_trip {
+                                                Some(find_trip) => find_trip,
+                                                None => &get_trip[0],
+                                            }
+                                        }
+                                        None => &get_trip[0],
+                                    }
+                                }
+                            };
+
+                            for stop_time_update in &rt_trip_update.stop_time_update {
+                                // per gtfs rt spec, the stop can be targeted with either stop id or stop sequence
+                                let stop_time = stop_times_for_this_trip
+                                        .iter_mut()
+                                        .find(|x| match stop_time_update.stop_id.clone() {
+                                            Some(rt_stop_id) => rt_stop_id == x.stop_id,
+                                            None => match stop_time_update.stop_sequence {
+                                                Some(rt_stop_sequence) => rt_stop_sequence as u16 == x.gtfs_stop_sequence,
+                                                None => false
+                                            }
+                                        });
+
+                                    if let Some(stop_time) = stop_time {
+                                        if let Some(arrival) = &stop_time_update.arrival {
+                                            stop_time.rt_arrival = Some(arrival.clone());
+                                        }
+
+                                        if let Some(departure) = &stop_time_update.departure {
+                                            stop_time.rt_departure = Some(departure.clone());
+                                        }
+
+                                        if let Some(schedule_relationship) =
+                                            stop_time_update.schedule_relationship
+                                        {
+                                            stop_time.schedule_relationship =
+                                                Some(schedule_relationship);
+                                        }
+                                    }
+                            }
+                        }
+                    } else {
+                        eprintln!("Trip id not found {} {}", chateau, query.trip_id);
+                    }
+                }
+            }
+        } else {
+            eprintln!("No assigned node found for this chateau");
+        }
     }
 
     let response = TripIntroductionInformation {
