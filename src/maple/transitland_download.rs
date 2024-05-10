@@ -202,8 +202,11 @@ pub async fn download_return_eligible_feeds(
                                         match download_attempts_postgres_lookup {
                                             Ok(download_attempts_postgres_lookup) => {
                                                 answer.operation_success = true;
-            
-                                                    // this zip file has never been seen before! Insert it!
+
+                                                if std::env::var("ONLY_FEED_ID").is_ok() {
+                                                    answer.ingest = true;
+                                                } else {
+                                                     // this zip file has never been seen before! Insert it!
                                                 if download_attempts_postgres_lookup.len() == 0 {
                                                     answer.ingest = true;
                                                 } else {
@@ -222,6 +225,8 @@ pub async fn download_return_eligible_feeds(
                                                         answer.ingest = true;
                                                     }
                                                 }
+                                                }
+                                                   
                                             }
                                             Err(error) => {
                                                 //could not connect to the postgres, or this query failed. Don't ingest without access to postgres
