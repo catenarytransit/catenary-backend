@@ -123,6 +123,44 @@ pub async fn delete_attempt_objects(
     .execute(conn)
     .await;
 
+    use catenary::schema::gtfs::itinerary_pattern_meta;
+
+    use catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta as itinerary_pattern_meta_table;
+
+    let _ = diesel::delete(
+        itinerary_pattern_meta_table.filter(
+            itinerary_pattern_meta::dsl::onestop_feed_id
+                .eq(&feed_id)
+                .and(itinerary_pattern_meta::dsl::attempt_id.eq(&attempt_id)),
+        ),
+    )
+    .execute(conn)
+    .await;
+
+    use catenary::schema::gtfs::itinerary_pattern;
+
+    use catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern as itinerary_patterns_table;
+
+    let _ = diesel::delete(
+        itinerary_patterns_table.filter(
+            itinerary_pattern::dsl::onestop_feed_id
+                .eq(&feed_id)
+                .and(itinerary_pattern::dsl::attempt_id.eq(&attempt_id)),
+        ),
+    ).execute(conn).await;
+
+    use catenary::schema::gtfs::trips_compressed;
+
+    use catenary::schema::gtfs::trips_compressed::dsl::trips_compressed as trips_compressed_table;
+
+    let _ = diesel::delete(
+        trips_compressed_table.filter(
+            trips_compressed::dsl::onestop_feed_id
+                .eq(&feed_id)
+                .and(trips_compressed::dsl::attempt_id.eq(&attempt_id)),
+        ),
+    ).execute(conn).await;
+
     //delete ingested static_download_attempts
     /*
 
