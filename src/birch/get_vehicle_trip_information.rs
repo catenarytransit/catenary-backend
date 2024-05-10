@@ -106,15 +106,24 @@ pub async fn get_trip(
     let trip_compressed = trip_compressed[0].clone();
     // get itin data and itin meta data
 
-    let itin_meta = itinerary_pattern_meta_pg_schema::dsl::itinerary_pattern_meta
-        .filter(itinerary_pattern_meta_pg_schema::dsl::chateau.eq(&chateau))
-        .filter(
-            itinerary_pattern_meta_pg_schema::dsl::itinerary_pattern_id
-                .eq(&trip_compressed.itinerary_pattern_id),
-        )
-        .select(catenary::models::ItineraryPatternMeta::as_select())
-        .load(conn)
-        .await;
+    let (itin_meta, itin_rows) = futures::join!(
+        itinerary_pattern_meta_pg_schema::dsl::itinerary_pattern_meta
+            .filter(itinerary_pattern_meta_pg_schema::dsl::chateau.eq(&chateau))
+            .filter(
+                itinerary_pattern_meta_pg_schema::dsl::itinerary_pattern_id
+                    .eq(&trip_compressed.itinerary_pattern_id),
+            )
+            .select(catenary::models::ItineraryPatternMeta::as_select())
+            .load(conn),
+        itinerary_pattern_pg_schema::dsl::itinerary_pattern
+            .filter(itinerary_pattern_pg_schema::dsl::chateau.eq(&chateau))
+            .filter(
+                itinerary_pattern_pg_schema::dsl::itinerary_pattern_id
+                    .eq(&trip_compressed.itinerary_pattern_id),
+            )
+            .select(catenary::models::ItineraryPatternRow::as_select())
+            .load(conn)
+    );
 
     if let Err(itin_meta) = &itin_meta {
         eprintln!("{}", itin_meta);
@@ -123,16 +132,6 @@ pub async fn get_trip(
     }
 
     let itin_meta = itin_meta.unwrap();
-
-    let itin_rows = itinerary_pattern_pg_schema::dsl::itinerary_pattern
-        .filter(itinerary_pattern_pg_schema::dsl::chateau.eq(&chateau))
-        .filter(
-            itinerary_pattern_pg_schema::dsl::itinerary_pattern_id
-                .eq(&trip_compressed.itinerary_pattern_id),
-        )
-        .select(catenary::models::ItineraryPatternRow::as_select())
-        .load(conn)
-        .await;
 
     if let Err(itin_rows_err) = &itin_rows {
         eprintln!("{}", itin_rows_err);
@@ -317,14 +316,19 @@ pub async fn get_trip(
                                     );
                                     match &query.start_time {
                                         Some(ref query_start_time) => {
-                                            let find_trip = get_trip.iter().find(|each_update| {
-                                                match each_update.trip.start_time.as_ref().map(|start_time| {
-                                                    start_time.clone() == *query_start_time
-                                                }) {
-                                                    Some(true) => true,
-                                                    _ => false,
-                                                }
-                                            });
+                                            let find_trip =
+                                                get_trip.iter().find(
+                                                    |each_update| match each_update
+                                                        .trip
+                                                        .start_time
+                                                        .as_ref()
+                                                        .map(|start_time| {
+                                                            start_time.clone() == *query_start_time
+                                                        }) {
+                                                        Some(true) => true,
+                                                        _ => false,
+                                                    },
+                                                );
 
                                             match find_trip {
                                                 Some(find_trip) => find_trip,
@@ -338,32 +342,34 @@ pub async fn get_trip(
 
                             for stop_time_update in &rt_trip_update.stop_time_update {
                                 // per gtfs rt spec, the stop can be targeted with either stop id or stop sequence
-                                let stop_time = stop_times_for_this_trip
-                                        .iter_mut()
-                                        .find(|x| match stop_time_update.stop_id.clone() {
-                                            Some(rt_stop_id) => rt_stop_id == x.stop_id,
-                                            None => match stop_time_update.stop_sequence {
-                                                Some(rt_stop_sequence) => rt_stop_sequence as u16 == x.gtfs_stop_sequence,
-                                                None => false
+                                let stop_time = stop_times_for_this_trip.iter_mut().find(|x| {
+                                    match stop_time_update.stop_id.clone() {
+                                        Some(rt_stop_id) => rt_stop_id == x.stop_id,
+                                        None => match stop_time_update.stop_sequence {
+                                            Some(rt_stop_sequence) => {
+                                                rt_stop_sequence as u16 == x.gtfs_stop_sequence
                                             }
-                                        });
-
-                                    if let Some(stop_time) = stop_time {
-                                        if let Some(arrival) = &stop_time_update.arrival {
-                                            stop_time.rt_arrival = Some(arrival.clone());
-                                        }
-
-                                        if let Some(departure) = &stop_time_update.departure {
-                                            stop_time.rt_departure = Some(departure.clone());
-                                        }
-
-                                        if let Some(schedule_relationship) =
-                                            stop_time_update.schedule_relationship
-                                        {
-                                            stop_time.schedule_relationship =
-                                                Some(schedule_relationship);
-                                        }
+                                            None => false,
+                                        },
                                     }
+                                });
+
+                                if let Some(stop_time) = stop_time {
+                                    if let Some(arrival) = &stop_time_update.arrival {
+                                        stop_time.rt_arrival = Some(arrival.clone());
+                                    }
+
+                                    if let Some(departure) = &stop_time_update.departure {
+                                        stop_time.rt_departure = Some(departure.clone());
+                                    }
+
+                                    if let Some(schedule_relationship) =
+                                        stop_time_update.schedule_relationship
+                                    {
+                                        stop_time.schedule_relationship =
+                                            Some(schedule_relationship);
+                                    }
+                                }
                             }
                         }
                     } else {
