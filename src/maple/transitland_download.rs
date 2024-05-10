@@ -214,7 +214,7 @@ pub async fn download_return_eligible_feeds(
                                                     // a previous succcessful ingest has happened
                                                     let check_for_previous_insert_sucesses = download_attempts_postgres_lookup
                                                         .iter()
-                                                        .find(|&x| x.ingested);
+                                                        .find(|&x| x.ingested && !x.mark_for_redo);
             
                                                         //thus, don't perform the ingest
                                                     if check_for_previous_insert_sucesses.is_some() {
