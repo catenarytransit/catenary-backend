@@ -6,6 +6,7 @@ use catenary::schema::gtfs::itinerary_pattern as itinerary_pattern_pg_schema;
 use catenary::schema::gtfs::itinerary_pattern_meta as itinerary_pattern_meta_pg_schema;
 use catenary::schema::gtfs::stops as stops_pg_schema;
 use catenary::schema::gtfs::trips_compressed as trips_compressed_pg_schema;
+use catenary::schema::gtfs::routes as routes_pg_schema;
 use chrono::TimeZone;
 use chrono_tz::Tz;
 use diesel::query_dsl::methods::FilterDsl;
@@ -16,6 +17,7 @@ use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use catenary::aspen_dataset::AspenisedVehicleDescriptor;
 use tarpc::{client, context, tokio_serde::formats::Bincode};
 
 #[actix_web::get("/get_vehicle_metadata/{chateau}/{vehicle_id}")]
@@ -32,8 +34,20 @@ pub async fn get_vehicle_information(path: web::Path<(String, String)>) -> impl 
 
 #[derive(Deserialize, Serialize)]
 struct TripIntroductionInformation {
-    stoptimes: Vec<StopTimeIntroduction>,
-    tz: Tz,
+    pub stoptimes: Vec<StopTimeIntroduction>,
+    pub tz: Tz,
+    pub block_id: Option<String>,
+    pub bikes_allowed: i16,
+    pub wheelchair_accessible: i16,
+    pub has_frequencies: bool,
+    pub route_id: String,
+    pub trip_headsign: Option<String>,
+    pub route_short_name: Option<String>,
+    pub trip_short_name: Option<String>,
+    pub route_long_name: Option<String>,
+    pub color: Option<String>,
+    pub text_color: Option<String>,
+    pub vehicle: Option<AspenisedVehicleDescriptor>
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -106,7 +120,7 @@ pub async fn get_trip(
     let trip_compressed = trip_compressed[0].clone();
     // get itin data and itin meta data
 
-    let (itin_meta, itin_rows) = futures::join!(
+    let (itin_meta, itin_rows, route) = futures::join!(
         itinerary_pattern_meta_pg_schema::dsl::itinerary_pattern_meta
             .filter(itinerary_pattern_meta_pg_schema::dsl::chateau.eq(&chateau))
             .filter(
@@ -122,8 +136,26 @@ pub async fn get_trip(
                     .eq(&trip_compressed.itinerary_pattern_id),
             )
             .select(catenary::models::ItineraryPatternRow::as_select())
-            .load(conn)
+            .load(conn),
+        routes_pg_schema::dsl::routes
+        .filter(routes_pg_schema::dsl::chateau.eq(&chateau))
+        .filter(routes_pg_schema::dsl::route_id.eq(&trip_compressed.route_id))
+        .select(catenary::models::Route::as_select())
+        .load(conn)
     );
+
+    if let Err(route_err) = &route {
+        eprintln!("{}", route_err);
+        return HttpResponse::InternalServerError().body("Error fetching route data");
+    }
+
+    let route = route.unwrap();
+
+    if route.is_empty() {
+        return HttpResponse::NotFound().body("Route not found");
+    }
+
+    let route = route[0].clone();
 
     if let Err(itin_meta) = &itin_meta {
         eprintln!("{}", itin_meta);
@@ -282,6 +314,9 @@ pub async fn get_trip(
         .get_data(format!("/aspen_assigned_chateaus/{}", chateau).as_str())
         .await;
 
+    
+        let mut vehicle = None;
+
     if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
         if let Some((fetch_assigned_node_for_this_chateau_data, stat)) =
             fetch_assigned_node_for_this_chateau
@@ -340,6 +375,8 @@ pub async fn get_trip(
                                 }
                             };
 
+                            vehicle = rt_trip_update.vehicle.clone();
+
                             for stop_time_update in &rt_trip_update.stop_time_update {
                                 // per gtfs rt spec, the stop can be targeted with either stop id or stop sequence
                                 let stop_time = stop_times_for_this_trip.iter_mut().find(|x| {
@@ -382,9 +419,22 @@ pub async fn get_trip(
         }
     }
 
+
     let response = TripIntroductionInformation {
         stoptimes: stop_times_for_this_trip,
         tz: timezone,
+        color: route.color,
+        text_color: route.text_color,
+        route_id: route.route_id,
+        block_id: trip_compressed.block_id,
+        bikes_allowed: trip_compressed.bikes_allowed,
+        wheelchair_accessible: trip_compressed.wheelchair_accessible,
+        has_frequencies: trip_compressed.has_frequencies,
+        trip_headsign: itin_meta.trip_headsign,
+        trip_short_name: trip_compressed.trip_short_name,
+        route_long_name: route.long_name,
+        route_short_name: route.short_name,
+        vehicle: vehicle
     };
 
     let text = serde_json::to_string(&response).unwrap();
