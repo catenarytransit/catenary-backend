@@ -36,6 +36,7 @@ pub struct StopDifference {
     pub pickup_type: i16,
     //true is exact, false is approximate
     pub timepoint: bool,
+    pub gtfs_stop_sequence: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -105,6 +106,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                 drop_off_type: pickup_dropoff_to_i16(&stop_time.drop_off_type),
                 pickup_type: pickup_dropoff_to_i16(&stop_time.pickup_type),
                 timepoint: timepoint_to_bool(&stop_time.timepoint),
+                gtfs_stop_sequence: stop_time.stop_sequence,
             };
 
             stop_diffs.push(stop_diff);

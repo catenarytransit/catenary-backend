@@ -250,6 +250,7 @@ pub async fn gtfs_process_feed(
                     itinerary_pattern_id: itinerary_id.to_string(),
                     stop_sequence: stop_index as i32,
                     stop_id: stop_sequence.stop_id.clone(),
+                    gtfs_stop_sequence: stop_sequence.gtfs_stop_sequence as u32,
                     arrival_time_since_start: stop_sequence.arrival_time_since_start,
                     departure_time_since_start: stop_sequence.departure_time_since_start,
                 },

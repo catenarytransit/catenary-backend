@@ -196,6 +196,7 @@ pub mod gtfs {
             departure_time_since_start -> Nullable<Int4>,
             stop_id -> Text,
             chateau -> Text,
+            gtfs_stop_sequence -> Oid,
         }
     }
 

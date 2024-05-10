@@ -142,7 +142,7 @@ pub async fn get_realtime_locations(
                 };
 
                 HttpResponse::Ok()
-                    .header("Cache-Control", "no-cache")
+                    .append_header(("Cache-Control", "no-cache"))
                     .json(filtered_response)
             }
         },
