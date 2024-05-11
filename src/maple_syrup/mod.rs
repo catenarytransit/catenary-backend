@@ -7,6 +7,7 @@ use gtfs_structures::DirectionType;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use itertools::Itertools;
 use tzf_rs::DefaultFinder;
 
 lazy_static! {
@@ -147,6 +148,21 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             }
         };
 
+        let trip_headsign_calculated = match &trip.trip_headsign {
+            Some(x) => Some(x.clone()),
+            None => {
+                let stop_headsigns:Vec<Option<String>> = stop_diffs.iter().map(|x| x.stop_headsign.clone()).unique().collect();
+
+                match stop_headsigns.len() {
+                    0 => None,
+                    1 => stop_headsigns[0].clone(),
+                    _ => {
+                        None
+                    }
+                }
+            }
+        };
+
         let itinerary_cover = ItineraryCover {
             stop_sequences: stop_diffs,
             direction_id: trip.direction_id.map(|direction| match direction {
@@ -154,7 +170,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                 DirectionType::Inbound => true,
             }),
             route_id: trip.route_id.clone(),
-            trip_headsign: trip.trip_headsign.clone(),
+            trip_headsign: trip_headsign_calculated,
             timezone,
             shape_id: trip.shape_id.clone(),
         };

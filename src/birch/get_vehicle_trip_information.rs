@@ -395,16 +395,12 @@ pub async fn get_trip(
                                 });
 
                                 if let Some(stop_time) = stop_time {
-                                    println!("Found stop time {:#?}", stop_time);
                                     if let Some(arrival) = &stop_time_update.arrival {
                                         stop_time.rt_arrival = Some(arrival.clone());
-                                        println!("changed arrival to {:#?}", arrival);
                                     }
 
                                     if let Some(departure) = &stop_time_update.departure {
                                         stop_time.rt_departure = Some(departure.clone());
-                                        
-                                        println!("changed departure to {:#?}", departure);
                                     }
 
                                     if let Some(schedule_relationship) =
