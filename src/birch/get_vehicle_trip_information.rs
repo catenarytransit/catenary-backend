@@ -75,6 +75,19 @@ struct QueryTripInformationParams {
     pub start_date: Option<String>,
 }
 
+/*
+#[actix_web::get("/get_trip_information_rt_update/{chateau}/")]
+pub async fn get_trip_rt_update(
+    path: web::Path<String>,
+    query: web::Query<QueryTripInformationParams>,
+    zk: web::Data<Arc<tokio_zookeeper::ZooKeeper>>,
+   // pool: web::Data<Arc<CatenaryPostgresPool>>,
+) -> impl Responder {
+    let chateau = path.into_inner();
+
+    let query = query.into_inner();
+}*/
+
 #[actix_web::get("/get_trip_information/{chateau}/")]
 pub async fn get_trip(
     path: web::Path<String>,

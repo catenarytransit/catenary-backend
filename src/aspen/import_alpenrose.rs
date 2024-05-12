@@ -292,7 +292,12 @@ pub async fn new_rt_data(
                                         None => 3
                                     },
                                     None => 3
-                                }
+                                },
+                                current_status: vehicle_pos.current_status,
+                                current_stop_sequence: vehicle_pos.current_stop_sequence,
+                                occupancy_status: vehicle_pos.occupancy_status,
+                                occupancy_percentage: vehicle_pos.occupancy_percentage,
+                                congestion_level: vehicle_pos.congestion_level
                             });
 
                         //insert the route cache

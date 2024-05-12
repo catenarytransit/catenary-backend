@@ -78,6 +78,8 @@ pub struct AspenServer {
     pub alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
     pub alpenrose_to_process_queue_chateaus: Arc<Mutex<HashSet<String>>>,
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
+    pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
 }
 
 impl AspenRpc for AspenServer {
@@ -439,6 +441,8 @@ async fn main() -> anyhow::Result<()> {
     let process_from_alpenrose_queue = Arc::new(Injector::<ProcessAlpenroseData>::new());
     let raw_gtfs = Arc::new(SccHashMap::new());
     let authoritative_data_store = Arc::new(SccHashMap::new());
+    let backup_data_store = Arc::new(SccHashMap::new());
+    let backup_raw_gtfs = Arc::new(SccHashMap::new());
     let alpenrose_to_process_queue_chateaus = Arc::new(Mutex::new(HashSet::new()));
     let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
@@ -463,6 +467,8 @@ async fn main() -> anyhow::Result<()> {
     let b_authoritative_data_store = Arc::clone(&authoritative_data_store);
     let b_conn_pool = Arc::clone(&arc_conn_pool);
     let b_thread_count = alpenrosethreadcount;
+    let b_backup_data_store = Arc::clone(&backup_data_store);
+    let b_backup_gtfs_rt_store = Arc::clone(&backup_raw_gtfs);
 
     let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
         Result<(), Box<dyn Error + Sync + Send>>,
@@ -493,6 +499,8 @@ async fn main() -> anyhow::Result<()> {
                             conn_pool: Arc::clone(&arc_conn_pool),
                             alpenrose_to_process_queue: Arc::clone(&process_from_alpenrose_queue),
                             authoritative_gtfs_rt_store: Arc::clone(&raw_gtfs),
+                            backup_data_store: Arc::clone(&backup_data_store),
+                            backup_gtfs_rt_store: Arc::clone(&backup_raw_gtfs),
                             alpenrose_to_process_queue_chateaus: Arc::clone(
                                 &alpenrose_to_process_queue_chateaus,
                             ),

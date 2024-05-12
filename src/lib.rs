@@ -296,6 +296,11 @@ pub mod aspen_dataset {
         pub position: Option<CatenaryRtVehiclePosition>,
         pub timestamp: Option<u64>,
         pub route_type: i16,
+        pub current_stop_sequence: Option<u32>,
+        pub current_status: Option<i32>,
+        pub congestion_level: Option<i32>,
+        pub occupancy_status: Option<i32>,
+        pub occupancy_percentage: Option<u32>,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
