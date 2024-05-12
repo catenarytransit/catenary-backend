@@ -32,6 +32,26 @@ pub async fn get_vehicle_information(path: web::Path<(String, String)>) -> impl 
     HttpResponse::Ok().body("get_vehicle_metadata")
 }
 
+#[derive(Deserialize, Serialize, Clone, Debug)]
+struct ResponseForGtfsRtRefresh {
+    pub found_data: bool,
+    pub data: GtfsRtRefreshData
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+struct GtfsRtRefreshData {
+    stoptimes: Vec<StopTimeRefresh>
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+struct StopTimeRefresh {
+    pub stop_id: String,
+    pub rt_arrival: Option<AspenStopTimeEvent>,
+    pub rt_departure: Option<AspenStopTimeEvent>,
+    pub schedule_relationship: Option<i32>,
+    pub gtfs_stop_sequence: u16,
+}
+
 #[derive(Deserialize, Serialize)]
 struct TripIntroductionInformation {
     pub stoptimes: Vec<StopTimeIntroduction>,
@@ -49,7 +69,6 @@ struct TripIntroductionInformation {
     pub text_color: Option<String>,
     pub vehicle: Option<AspenisedVehicleDescriptor>
 }
-
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
     pub stop_id: String,
@@ -75,7 +94,6 @@ struct QueryTripInformationParams {
     pub start_date: Option<String>,
 }
 
-/*
 #[actix_web::get("/get_trip_information_rt_update/{chateau}/")]
 pub async fn get_trip_rt_update(
     path: web::Path<String>,
@@ -86,10 +104,47 @@ pub async fn get_trip_rt_update(
     let chateau = path.into_inner();
 
     let query = query.into_inner();
-}*/
+
+    let fetch_assigned_node_for_this_chateau = zk
+        .get_data(format!("/aspen_assigned_chateaus/{}", chateau).as_str())
+        .await;
+
+    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
+        if let Some((fetch_assigned_node_for_this_chateau_data, stat)) =
+            fetch_assigned_node_for_this_chateau
+        {
+            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataZookeeper>(
+                &fetch_assigned_node_for_this_chateau_data,
+            )
+            .unwrap();
+
+            let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
+
+            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
+
+            if let Ok(aspen_client) = aspen_client {
+                let get_trip = aspen_client
+                    .get_trip_updates_from_trip_id(
+                        context::current(),
+                        chateau.clone(),
+                        query.trip_id.clone(),
+                    )
+                    .await;
+
+                    HttpResponse::InternalServerError().body("FEATURE TODO, NOT DONE YET")
+            } else {
+                HttpResponse::InternalServerError().body("Could not connect to realtime data server")
+            }
+        } else {
+            HttpResponse::InternalServerError().body("Could not connect to realtime data server")
+        }
+    } else {
+        HttpResponse::InternalServerError().body("Could not connect to zookeeper")
+    }
+}
 
 #[actix_web::get("/get_trip_information/{chateau}/")]
-pub async fn get_trip(
+pub async fn get_trip_init(
     path: web::Path<String>,
     query: web::Query<QueryTripInformationParams>,
     zk: web::Data<Arc<tokio_zookeeper::ZooKeeper>>,
@@ -397,7 +452,10 @@ pub async fn get_trip(
                                 // per gtfs rt spec, the stop can be targeted with either stop id or stop sequence
                                 let stop_time = stop_times_for_this_trip.iter_mut().find(|x| {
                                     match stop_time_update.stop_id.clone() {
-                                        Some(rt_stop_id) => rt_stop_id == x.stop_id,
+                                        Some(rt_stop_id) => match stop_time_update.stop_sequence {
+                                            Some(rt_stop_sequence) => rt_stop_id == x.stop_id && rt_stop_sequence as u16 == x.gtfs_stop_sequence,
+                                            None => rt_stop_id == x.stop_id
+                                        },
                                         None => match stop_time_update.stop_sequence {
                                             Some(rt_stop_sequence) => {
                                                 rt_stop_sequence as u16 == x.gtfs_stop_sequence

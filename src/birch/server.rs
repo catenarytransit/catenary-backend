@@ -904,7 +904,8 @@ async fn main() -> std::io::Result<()> {
             .service(aspenised_data_over_https::get_realtime_locations)
             .service(chicago_proxy::ttarrivals_proxy)
             .service(nearby_departures::nearby_from_coords)
-            .service(get_vehicle_trip_information::get_trip)
+            .service(get_vehicle_trip_information::get_trip_init)
+            .service(get_vehicle_trip_information::get_trip_rt_update)
     })
     .workers(16);
 

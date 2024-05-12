@@ -3,6 +3,7 @@
 // Attribution cannot be removed
 
 extern crate catenary;
+use serde::Serialize;
 use ahash::{AHashMap, AHashSet};
 use catenary::aspen_dataset::*;
 use catenary::parse_gtfs_rt_message;
@@ -17,6 +18,7 @@ use gtfs_rt::FeedMessage;
 use gtfs_rt::TripUpdate;
 use prost::Message;
 use scc::HashMap as SccHashMap;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -31,6 +33,23 @@ const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-mta~nyc~rt~subway~sir",
     "f-bart~rt",
 ];
+
+#[derive(Serialize, Deserialize)]
+struct MetrolinkTrackData {
+    #[serde(rename="TrainDesignation")]
+    train_designation: String,
+    #[serde(rename="RouteCode")]
+    route_code: String,
+    #[serde(rename="PlatformName")]
+    event_type: String,
+    #[serde(rename="FormattedTrackDesignation")]
+    formatted_track_designation: String
+}
+
+enum TrackData {
+    Metrolink(Option<Vec<MetrolinkTrackData>>),
+    None
+}
 
 pub async fn new_rt_data(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
