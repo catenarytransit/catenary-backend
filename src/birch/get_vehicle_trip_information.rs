@@ -131,7 +131,50 @@ pub async fn get_trip_rt_update(
                     )
                     .await;
 
-                HttpResponse::InternalServerError().body("FEATURE TODO, NOT DONE YET")
+                    if let Some(get_trip) = get_trip {
+                        println!("recieved {} trip options from aspen", get_trip.len());
+                        if !get_trip.is_empty() {
+                            let rt_trip_update = match get_trip.len() {
+                                1 => &get_trip[0],
+                                _ => {
+                                    println!(
+                                        "Multiple trip updates found for trip id {} {}",
+                                        chateau, query.trip_id
+                                    );
+                                    match &query.start_time {
+                                        Some(ref query_start_time) => {
+                                            let find_trip =
+                                                get_trip.iter().find(
+                                                    |each_update| match each_update
+                                                        .trip
+                                                        .start_time
+                                                        .as_ref()
+                                                        .map(|start_time| {
+                                                            start_time.clone() == *query_start_time
+                                                        }) {
+                                                        Some(true) => true,
+                                                        _ => false,
+                                                    },
+                                                );
+
+                                            match find_trip {
+                                                Some(find_trip) => find_trip,
+                                                None => &get_trip[0],
+                                            }
+                                        }
+                                        None => &get_trip[0],
+                                    }
+                                }
+                            };
+
+                          
+
+                            println!(
+                                "rt data contains {} stop updates",
+                                rt_trip_update.stop_time_update.len()
+                            );
+                        }
+                    }
             } else {
                 HttpResponse::InternalServerError()
                     .body("Could not connect to realtime data server")
