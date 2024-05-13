@@ -30,7 +30,7 @@ pub async fn delete_attempt_objects(
         ),
     )
     .execute(conn)
-    .await;
+    .await?;
 
     use catenary::schema::gtfs::calendar_dates;
     use catenary::schema::gtfs::calendar_dates::dsl::calendar_dates as calendar_dates_table;
@@ -43,7 +43,7 @@ pub async fn delete_attempt_objects(
         ),
     )
     .execute(conn)
-    .await;
+    .await?;
 
     use catenary::schema::gtfs::calendar;
     use catenary::schema::gtfs::calendar::dsl::calendar as calendar_table;
@@ -56,7 +56,7 @@ pub async fn delete_attempt_objects(
         ),
     )
     .execute(conn)
-    .await;
+    .await?;
 
     use catenary::schema::gtfs::routes;
     use catenary::schema::gtfs::routes::dsl::routes as routes_table;
@@ -69,7 +69,7 @@ pub async fn delete_attempt_objects(
         ),
     )
     .execute(conn)
-    .await;
+    .await?;
 
     use catenary::schema::gtfs::shapes;
     use catenary::schema::gtfs::shapes::dsl::shapes as shapes_table;
@@ -82,7 +82,7 @@ pub async fn delete_attempt_objects(
         ),
     )
     .execute(conn)
-    .await;
+    .await?;
 
     use catenary::schema::gtfs::shapes_not_bus;
     use catenary::schema::gtfs::shapes_not_bus::dsl::shapes_not_bus as shapes_not_bus_table;
@@ -95,7 +95,7 @@ pub async fn delete_attempt_objects(
         ),
     )
     .execute(conn)
-    .await;
+    .await?;
 
     use catenary::schema::gtfs::stops;
     use catenary::schema::gtfs::stops::dsl::stops as stops_table;
@@ -108,7 +108,7 @@ pub async fn delete_attempt_objects(
         ),
     )
     .execute(conn)
-    .await;
+    .await?;
 
     use catenary::schema::gtfs::feed_info;
     use catenary::schema::gtfs::feed_info::dsl::feed_info as feed_info_table;
@@ -121,7 +121,7 @@ pub async fn delete_attempt_objects(
         ),
     )
     .execute(conn)
-    .await;
+    .await?;
 
     use catenary::schema::gtfs::itinerary_pattern_meta;
 
@@ -135,7 +135,7 @@ pub async fn delete_attempt_objects(
         ),
     )
     .execute(conn)
-    .await;
+    .await?;
 
     use catenary::schema::gtfs::itinerary_pattern;
 
@@ -147,7 +147,9 @@ pub async fn delete_attempt_objects(
                 .eq(&feed_id)
                 .and(itinerary_pattern::dsl::attempt_id.eq(&attempt_id)),
         ),
-    ).execute(conn).await;
+    )
+    .execute(conn)
+    .await?;
 
     use catenary::schema::gtfs::trips_compressed;
 
@@ -159,7 +161,9 @@ pub async fn delete_attempt_objects(
                 .eq(&feed_id)
                 .and(trips_compressed::dsl::attempt_id.eq(&attempt_id)),
         ),
-    ).execute(conn).await;
+    )
+    .execute(conn)
+    .await?;
 
     //delete ingested static_download_attempts
     /*

@@ -109,6 +109,30 @@ pub async fn update_schedules_with_new_chateau_id(
         .execute(conn)
         .await?;
 
+    use catenary::schema::gtfs::trips_compressed;
+
+    let _ = diesel::update(trips_compressed::dsl::trips_compressed)
+        .filter(trips_compressed::dsl::onestop_feed_id.eq(feed_id))
+        .set(trips_compressed::dsl::chateau.eq(new_chateau_id))
+        .execute(conn)
+        .await?;
+
+    use catenary::schema::gtfs::itinerary_pattern;
+
+    let _ = diesel::update(itinerary_pattern::dsl::itinerary_pattern)
+        .filter(itinerary_pattern::dsl::onestop_feed_id.eq(feed_id))
+        .set(itinerary_pattern::dsl::chateau.eq(new_chateau_id))
+        .execute(conn)
+        .await?;
+
+    use catenary::schema::gtfs::itinerary_pattern_meta;
+
+    let _ = diesel::update(itinerary_pattern_meta::dsl::itinerary_pattern_meta)
+        .filter(itinerary_pattern_meta::dsl::onestop_feed_id.eq(feed_id))
+        .set(itinerary_pattern_meta::dsl::chateau.eq(new_chateau_id))
+        .execute(conn)
+        .await?;
+
     println!(
         "Finished reassignment of feed {} to Château {}",
         feed_id, new_chateau_id

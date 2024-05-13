@@ -3,7 +3,6 @@
 // Attribution cannot be removed
 
 extern crate catenary;
-use serde::Serialize;
 use ahash::{AHashMap, AHashSet};
 use catenary::aspen_dataset::*;
 use catenary::parse_gtfs_rt_message;
@@ -19,6 +18,7 @@ use gtfs_rt::TripUpdate;
 use prost::Message;
 use scc::HashMap as SccHashMap;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -36,19 +36,19 @@ const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
 
 #[derive(Serialize, Deserialize)]
 struct MetrolinkTrackData {
-    #[serde(rename="TrainDesignation")]
+    #[serde(rename = "TrainDesignation")]
     train_designation: String,
-    #[serde(rename="RouteCode")]
+    #[serde(rename = "RouteCode")]
     route_code: String,
-    #[serde(rename="PlatformName")]
+    #[serde(rename = "PlatformName")]
     event_type: String,
-    #[serde(rename="FormattedTrackDesignation")]
-    formatted_track_designation: String
+    #[serde(rename = "FormattedTrackDesignation")]
+    formatted_track_designation: String,
 }
 
 enum TrackData {
     Metrolink(Option<Vec<MetrolinkTrackData>>),
-    None
+    None,
 }
 
 pub async fn new_rt_data(

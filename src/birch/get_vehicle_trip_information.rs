@@ -1,12 +1,13 @@
 use actix_web::{web, HttpResponse, Responder};
 use catenary::aspen::lib::ChateauMetadataZookeeper;
 use catenary::aspen_dataset::AspenStopTimeEvent;
+use catenary::aspen_dataset::AspenisedVehicleDescriptor;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::itinerary_pattern as itinerary_pattern_pg_schema;
 use catenary::schema::gtfs::itinerary_pattern_meta as itinerary_pattern_meta_pg_schema;
+use catenary::schema::gtfs::routes as routes_pg_schema;
 use catenary::schema::gtfs::stops as stops_pg_schema;
 use catenary::schema::gtfs::trips_compressed as trips_compressed_pg_schema;
-use catenary::schema::gtfs::routes as routes_pg_schema;
 use chrono::TimeZone;
 use chrono_tz::Tz;
 use diesel::query_dsl::methods::FilterDsl;
@@ -17,7 +18,6 @@ use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use catenary::aspen_dataset::AspenisedVehicleDescriptor;
 use tarpc::{client, context, tokio_serde::formats::Bincode};
 
 #[actix_web::get("/get_vehicle_metadata/{chateau}/{vehicle_id}")]
@@ -35,12 +35,12 @@ pub async fn get_vehicle_information(path: web::Path<(String, String)>) -> impl 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct ResponseForGtfsRtRefresh {
     pub found_data: bool,
-    pub data: GtfsRtRefreshData
+    pub data: GtfsRtRefreshData,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct GtfsRtRefreshData {
-    stoptimes: Vec<StopTimeRefresh>
+    stoptimes: Vec<StopTimeRefresh>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -67,7 +67,7 @@ struct TripIntroductionInformation {
     pub route_long_name: Option<String>,
     pub color: Option<String>,
     pub text_color: Option<String>,
-    pub vehicle: Option<AspenisedVehicleDescriptor>
+    pub vehicle: Option<AspenisedVehicleDescriptor>,
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -99,7 +99,7 @@ pub async fn get_trip_rt_update(
     path: web::Path<String>,
     query: web::Query<QueryTripInformationParams>,
     zk: web::Data<Arc<tokio_zookeeper::ZooKeeper>>,
-   // pool: web::Data<Arc<CatenaryPostgresPool>>,
+    // pool: web::Data<Arc<CatenaryPostgresPool>>,
 ) -> impl Responder {
     let chateau = path.into_inner();
 
@@ -131,9 +131,10 @@ pub async fn get_trip_rt_update(
                     )
                     .await;
 
-                    HttpResponse::InternalServerError().body("FEATURE TODO, NOT DONE YET")
+                HttpResponse::InternalServerError().body("FEATURE TODO, NOT DONE YET")
             } else {
-                HttpResponse::InternalServerError().body("Could not connect to realtime data server")
+                HttpResponse::InternalServerError()
+                    .body("Could not connect to realtime data server")
             }
         } else {
             HttpResponse::InternalServerError().body("Could not connect to realtime data server")
@@ -206,10 +207,10 @@ pub async fn get_trip_init(
             .select(catenary::models::ItineraryPatternRow::as_select())
             .load(conn),
         routes_pg_schema::dsl::routes
-        .filter(routes_pg_schema::dsl::chateau.eq(&chateau))
-        .filter(routes_pg_schema::dsl::route_id.eq(&trip_compressed.route_id))
-        .select(catenary::models::Route::as_select())
-        .load(conn)
+            .filter(routes_pg_schema::dsl::chateau.eq(&chateau))
+            .filter(routes_pg_schema::dsl::route_id.eq(&trip_compressed.route_id))
+            .select(catenary::models::Route::as_select())
+            .load(conn)
     );
 
     if let Err(route_err) = &route {
@@ -382,8 +383,7 @@ pub async fn get_trip_init(
         .get_data(format!("/aspen_assigned_chateaus/{}", chateau).as_str())
         .await;
 
-    
-        let mut vehicle = None;
+    let mut vehicle = None;
 
     if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
         if let Some((fetch_assigned_node_for_this_chateau_data, stat)) =
@@ -446,15 +446,22 @@ pub async fn get_trip_init(
 
                             vehicle = rt_trip_update.vehicle.clone();
 
-                            println!("rt data contains {} stop updates", rt_trip_update.stop_time_update.len());
+                            println!(
+                                "rt data contains {} stop updates",
+                                rt_trip_update.stop_time_update.len()
+                            );
 
                             for stop_time_update in &rt_trip_update.stop_time_update {
                                 // per gtfs rt spec, the stop can be targeted with either stop id or stop sequence
                                 let stop_time = stop_times_for_this_trip.iter_mut().find(|x| {
                                     match stop_time_update.stop_id.clone() {
                                         Some(rt_stop_id) => match stop_time_update.stop_sequence {
-                                            Some(rt_stop_sequence) => rt_stop_id == x.stop_id && rt_stop_sequence as u16 == x.gtfs_stop_sequence,
-                                            None => rt_stop_id == x.stop_id
+                                            Some(rt_stop_sequence) => {
+                                                rt_stop_id == x.stop_id
+                                                    && rt_stop_sequence as u16
+                                                        == x.gtfs_stop_sequence
+                                            }
+                                            None => rt_stop_id == x.stop_id,
                                         },
                                         None => match stop_time_update.stop_sequence {
                                             Some(rt_stop_sequence) => {
@@ -495,7 +502,6 @@ pub async fn get_trip_init(
         }
     }
 
-
     let response = TripIntroductionInformation {
         stoptimes: stop_times_for_this_trip,
         tz: timezone,
@@ -510,7 +516,7 @@ pub async fn get_trip_init(
         trip_short_name: trip_compressed.trip_short_name,
         route_long_name: route.long_name,
         route_short_name: route.short_name,
-        vehicle: vehicle
+        vehicle: vehicle,
     };
 
     let text = serde_json::to_string(&response).unwrap();

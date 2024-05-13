@@ -4,10 +4,10 @@ use crate::enum_to_int::*;
 use crate::fast_hash;
 use ahash::AHashMap;
 use gtfs_structures::DirectionType;
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use itertools::Itertools;
 use tzf_rs::DefaultFinder;
 
 lazy_static! {
@@ -151,14 +151,16 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         let trip_headsign_calculated = match &trip.trip_headsign {
             Some(x) => Some(x.clone()),
             None => {
-                let stop_headsigns:Vec<Option<String>> = stop_diffs.iter().map(|x| x.stop_headsign.clone()).unique().collect();
+                let stop_headsigns: Vec<Option<String>> = stop_diffs
+                    .iter()
+                    .map(|x| x.stop_headsign.clone())
+                    .unique()
+                    .collect();
 
                 match stop_headsigns.len() {
                     0 => None,
                     1 => stop_headsigns[0].clone(),
-                    _ => {
-                        None
-                    }
+                    _ => None,
                 }
             }
         };
