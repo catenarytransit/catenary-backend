@@ -94,6 +94,7 @@ struct QueryTripInformationParams {
     pub start_date: Option<String>,
 }
 
+/*
 #[actix_web::get("/get_trip_information_rt_update/{chateau}/")]
 pub async fn get_trip_rt_update(
     path: web::Path<String>,
@@ -185,7 +186,7 @@ pub async fn get_trip_rt_update(
     } else {
         HttpResponse::InternalServerError().body("Could not connect to zookeeper")
     }
-}
+}*/
 
 #[actix_web::get("/get_trip_information/{chateau}/")]
 pub async fn get_trip_init(
