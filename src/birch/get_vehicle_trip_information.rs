@@ -489,7 +489,13 @@ pub async fn get_trip_init(
             name: stop.name.clone(),
             translations: None,
             platform_code: stop.platform_code.clone(),
-            timezone: Some(timezone),
+            timezone: match stop.timezone.as_ref() {
+                Some(tz) => match chrono_tz::Tz::from_str_insensitive(tz) {
+                    Ok(tz) => Some(tz),
+                    Err(_) => None,
+                },
+                None => None,
+            },
             code: stop.code.clone(),
             longitude: stop.point.map(|point| point.x),
             latitude: stop.point.map(|point| point.y),
