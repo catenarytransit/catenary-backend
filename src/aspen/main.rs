@@ -323,6 +323,27 @@ impl AspenRpc for AspenServer {
         }
     }
 
+    async fn get_single_vehicle_location_from_gtfsid(self, _: context::Context, chateau_id: String, gtfs_id: String) -> Option<AspenisedVehiclePosition> {
+       match self.authoritative_data_store.get(&chateau_id) {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let vehicle_position = aspenised_data.vehicle_positions.get(&gtfs_id);
+
+                match vehicle_position {
+                    Some(vehicle_position) => {
+                        Some(vehicle_position.clone())
+                    }
+                    None => {
+                        println!("Vehicle position not found for gtfs id {}", gtfs_id);
+                        None
+                    }
+                }
+            }
+            None => None,
+        }
+    }
+
     async fn get_trip_updates_from_trip_id(
         self,
         _: context::Context,

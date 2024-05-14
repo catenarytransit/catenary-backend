@@ -2,6 +2,7 @@ use actix_web::{web, HttpResponse, Responder};
 use catenary::aspen::lib::ChateauMetadataZookeeper;
 use catenary::aspen_dataset::AspenStopTimeEvent;
 use catenary::aspen_dataset::AspenisedVehicleDescriptor;
+use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::itinerary_pattern as itinerary_pattern_pg_schema;
 use catenary::schema::gtfs::itinerary_pattern_meta as itinerary_pattern_meta_pg_schema;
@@ -27,15 +28,74 @@ pub async fn get_vehicle_metadata(path: web::Path<(String, String)>) -> impl Res
 }
 
 #[actix_web::get("/get_vehicle_information/{chateau}/{gtfs_rt_id}")]
-pub async fn get_vehicle_information(path: web::Path<(String, String)>) -> impl Responder {
-    let (chateau, vehicle_id) = path.into_inner();
-    HttpResponse::Ok().body("get_vehicle_metadata")
+pub async fn get_vehicle_information(
+    path: web::Path<(String, String)>,
+    zk: web::Data<Arc<tokio_zookeeper::ZooKeeper>>,
+) -> impl Responder {
+    let (chateau, gtfs_id) = path.into_inner();
+
+    let fetch_assigned_node_for_this_chateau = zk
+        .get_data(format!("/aspen_assigned_chateaus/{}", chateau).as_str())
+        .await;
+
+    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
+        if let Some((fetch_assigned_node_for_this_chateau_data, stat)) =
+            fetch_assigned_node_for_this_chateau
+        {
+            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataZookeeper>(
+                &fetch_assigned_node_for_this_chateau_data,
+            )
+            .unwrap();
+
+            let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
+
+            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
+
+            if let Ok(aspen_client) = aspen_client {
+                let get_vehicle = aspen_client
+                    .get_single_vehicle_location_from_gtfsid(
+                        context::current(),
+                        chateau.clone(),
+                        gtfs_id.clone(),
+                    )
+                    .await;
+
+                if let Ok(get_vehicle) = get_vehicle {
+                    if let Some(get_vehicle) = get_vehicle {
+                        let response_struct = ResponseForGtfsVehicle {
+                            found_data: true,
+                            data: Some(get_vehicle),
+                        };
+
+                        let response = serde_json::to_string(&response_struct).unwrap();
+                        return HttpResponse::Ok().body(response);
+                    } else {
+                        let response_struct = ResponseForGtfsVehicle {
+                            found_data: false,
+                            data: None,
+                        };
+
+                        let response = serde_json::to_string(&response_struct).unwrap();
+                        return HttpResponse::Ok().body(response);
+                    }
+                }
+            }
+        }
+    }
+
+    HttpResponse::InternalServerError().body("Could not connect to assigned node")
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+struct ResponseForGtfsVehicle {
+    found_data: bool,
+    data: Option<AspenisedVehiclePosition>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct ResponseForGtfsRtRefresh {
     pub found_data: bool,
-    pub data: GtfsRtRefreshData,
+    pub data: Option<GtfsRtRefreshData>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -45,11 +105,13 @@ struct GtfsRtRefreshData {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeRefresh {
-    pub stop_id: String,
+    pub stop_id: Option<String>,
     pub rt_arrival: Option<AspenStopTimeEvent>,
     pub rt_departure: Option<AspenStopTimeEvent>,
     pub schedule_relationship: Option<i32>,
-    pub gtfs_stop_sequence: u16,
+    pub gtfs_stop_sequence: Option<u16>,
+    pub rt_platform_string: Option<String>,
+    pub departure_occupancy_status: Option<i32>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -94,7 +156,6 @@ struct QueryTripInformationParams {
     pub start_date: Option<String>,
 }
 
-/*
 #[actix_web::get("/get_trip_information_rt_update/{chateau}/")]
 pub async fn get_trip_rt_update(
     path: web::Path<String>,
@@ -132,50 +193,79 @@ pub async fn get_trip_rt_update(
                     )
                     .await;
 
-                    if let Some(get_trip) = get_trip {
-                        println!("recieved {} trip options from aspen", get_trip.len());
-                        if !get_trip.is_empty() {
-                            let rt_trip_update = match get_trip.len() {
-                                1 => &get_trip[0],
-                                _ => {
-                                    println!(
-                                        "Multiple trip updates found for trip id {} {}",
-                                        chateau, query.trip_id
-                                    );
-                                    match &query.start_time {
-                                        Some(ref query_start_time) => {
-                                            let find_trip =
-                                                get_trip.iter().find(
-                                                    |each_update| match each_update
-                                                        .trip
-                                                        .start_time
-                                                        .as_ref()
-                                                        .map(|start_time| {
-                                                            start_time.clone() == *query_start_time
-                                                        }) {
-                                                        Some(true) => true,
-                                                        _ => false,
-                                                    },
-                                                );
+                if let Ok(Some(get_trip)) = get_trip {
+                    println!("recieved {} trip options from aspen", get_trip.len());
+                    if !get_trip.is_empty() {
+                        let rt_trip_update = match get_trip.len() {
+                            1 => &get_trip[0],
+                            _ => {
+                                println!(
+                                    "Multiple trip updates found for trip id {} {}",
+                                    chateau, query.trip_id
+                                );
+                                match &query.start_time {
+                                    Some(ref query_start_time) => {
+                                        let find_trip = get_trip.iter().find(|each_update| {
+                                            matches!(
+                                                each_update.trip.start_time.as_ref().map(
+                                                    |start_time| {
+                                                        start_time.clone() == *query_start_time
+                                                    }
+                                                ),
+                                                Some(true)
+                                            )
+                                        });
 
-                                            match find_trip {
-                                                Some(find_trip) => find_trip,
-                                                None => &get_trip[0],
-                                            }
+                                        match find_trip {
+                                            Some(find_trip) => find_trip,
+                                            None => &get_trip[0],
                                         }
-                                        None => &get_trip[0],
                                     }
+                                    None => &get_trip[0],
                                 }
-                            };
+                            }
+                        };
 
-                          
+                        println!(
+                            "rt data contains {} stop updates",
+                            rt_trip_update.stop_time_update.len()
+                        );
 
-                            println!(
-                                "rt data contains {} stop updates",
-                                rt_trip_update.stop_time_update.len()
-                            );
-                        }
+                        let stop_data: Vec<StopTimeRefresh> = rt_trip_update
+                            .stop_time_update
+                            .iter()
+                            .map(|stop_time_update| StopTimeRefresh {
+                                stop_id: stop_time_update.stop_id.clone(),
+                                rt_arrival: stop_time_update.arrival.clone(),
+                                rt_departure: stop_time_update.departure.clone(),
+                                schedule_relationship: stop_time_update.schedule_relationship,
+                                gtfs_stop_sequence: stop_time_update
+                                    .stop_sequence
+                                    .map(|x| x as u16),
+                                rt_platform_string: stop_time_update.platform_string.clone(),
+                                departure_occupancy_status: stop_time_update
+                                    .departure_occupancy_status,
+                            })
+                            .collect();
+
+                        HttpResponse::Ok().json(ResponseForGtfsRtRefresh {
+                            found_data: true,
+                            data: Some(GtfsRtRefreshData {
+                                stoptimes: stop_data,
+                            }),
+                        })
+                    } else {
+                        HttpResponse::Ok().json(ResponseForGtfsRtRefresh {
+                            found_data: false,
+                            data: None,
+                        })
                     }
+                } else {
+                    HttpResponse::Ok().json(ResponseForGtfsRtRefresh {
+                        found_data: false,
+                        data: None,
+                    })
+                }
             } else {
                 HttpResponse::InternalServerError()
                     .body("Could not connect to realtime data server")
@@ -186,7 +276,7 @@ pub async fn get_trip_rt_update(
     } else {
         HttpResponse::InternalServerError().body("Could not connect to zookeeper")
     }
-}*/
+}
 
 #[actix_web::get("/get_trip_information/{chateau}/")]
 pub async fn get_trip_init(

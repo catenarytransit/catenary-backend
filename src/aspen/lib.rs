@@ -36,6 +36,11 @@ pub trait AspenRpc {
         time_of_submission_ms: u64,
     ) -> bool;
 
+    async fn get_single_vehicle_location_from_gtfsid(
+        chateau_id: String,
+        gtfs_id: String,
+    ) -> Option<AspenisedVehiclePosition>;
+
     async fn get_vehicle_locations(
         chateau_id: String,
         existing_fasthash_of_routes: Option<u64>,

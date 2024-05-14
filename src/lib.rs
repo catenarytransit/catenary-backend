@@ -253,7 +253,7 @@ pub mod aspen_dataset {
         pub departure_occupancy_status: Option<i32>,
         pub schedule_relationship: Option<i32>,
         pub stop_time_properties: Option<AspenisedStopTimeProperties>,
-        pub platform: Option<String>,
+        pub platform_string: Option<String>,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]

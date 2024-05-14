@@ -374,7 +374,7 @@ pub async fn new_rt_data(
                                             uncertainty: departure.uncertainty,
                                         }
                                     }),
-                                    platform: None,
+                                    platform_string: None,
                                     schedule_relationship: stu.schedule_relationship,
                                     departure_occupancy_status: stu.departure_occupancy_status,
                                     stop_time_properties: stu
