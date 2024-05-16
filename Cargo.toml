@@ -161,3 +161,7 @@ path = "src/manual_login_manager/main.rs"
 #[[bin]]
 #name = "test_tarpc"
 #path = "src/test_tarpc/main.rs"
+
+[[bin]]
+name = "sage"
+path = "src/sage/main.rs"

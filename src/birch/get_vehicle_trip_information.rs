@@ -130,6 +130,7 @@ struct TripIntroductionInformation {
     pub color: Option<String>,
     pub text_color: Option<String>,
     pub vehicle: Option<AspenisedVehicleDescriptor>,
+    pub route_type: i16,
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -657,6 +658,7 @@ pub async fn get_trip_init(
         route_long_name: route.long_name,
         route_short_name: route.short_name,
         vehicle: vehicle,
+        route_type: route.route_type,
     };
 
     let text = serde_json::to_string(&response).unwrap();
