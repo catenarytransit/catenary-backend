@@ -393,6 +393,73 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                         }
                                     }
                                 }
+
+                                //garbage collect old assignments for workers that no longer exist
+
+                                let worker_assignments =
+                                    zk.get_children("/alpenrose_assignments").await.unwrap();
+
+                                let get_worker_nodes_again =
+                                    zk.watch().get_children("/alpenrose_workers").await.unwrap();
+
+                                if let Some(get_worker_nodes_again) = get_worker_nodes_again {
+                                    let hashset_of_worker_nodes = get_worker_nodes_again
+                                        .iter()
+                                        .map(|x| x.to_string())
+                                        .collect::<HashSet<String>>();
+
+                                    if let Some(worker_assignments) = worker_assignments {
+                                        for worker_assignment in worker_assignments {
+                                            let worker_id = worker_assignment.to_string();
+
+                                            let worker_exists =
+                                                hashset_of_worker_nodes.contains(&worker_id);
+
+                                            if !worker_exists {
+                                                let worker_assignments = zk
+                                                    .get_children(
+                                                        format!(
+                                                            "/alpenrose_assignments/{}",
+                                                            worker_id
+                                                        )
+                                                        .as_str(),
+                                                    )
+                                                    .await
+                                                    .unwrap();
+
+                                                if let Some(worker_assignments) = worker_assignments
+                                                {
+                                                    for feed_id in worker_assignments {
+                                                        let feed_id = feed_id.to_string();
+
+                                                        let delete_assignment = zk
+                                                            .delete(
+                                                                format!(
+                                                                    "/alpenrose_assignments/{}/{}",
+                                                                    worker_id, feed_id
+                                                                )
+                                                                .as_str(),
+                                                                None,
+                                                            )
+                                                            .await?;
+
+                                                        match delete_assignment {
+                                                            Ok(_) => {
+                                                                println!(
+                                                                            "Deleted assignment for feed {} for worker {}",
+                                                                            feed_id, worker_id
+                                                                        );
+                                                            }
+                                                            Err(err) => {
+                                                                eprintln!("Error deleting assignment for feed {} for worker {}: {:?}", feed_id, worker_id, err);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

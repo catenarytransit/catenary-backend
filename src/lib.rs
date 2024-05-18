@@ -179,7 +179,7 @@ pub mod aspen_dataset {
         //id to trip update
         pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
         pub trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
-        pub raw_alerts: Option<AHashMap<String, gtfs_rt::Alert>>,
+        pub raw_alerts: AHashMap<String, gtfs_rt::Alert>,
         pub impacted_routes_alerts: Option<AHashMap<String, Vec<String>>>,
         pub impacted_stops_alerts: Option<AHashMap<String, Vec<String>>>,
         pub impacted_routes_stops_alerts: Option<AHashMap<String, Vec<String>>>,
