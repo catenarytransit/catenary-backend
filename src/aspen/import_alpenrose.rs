@@ -431,7 +431,7 @@ pub async fn new_rt_data(
                     trip_updates: trip_updates.clone(),
                     trip_updates_lookup_by_trip_id_to_trip_update_ids:
                         trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
-                    raw_alerts: None,
+                    raw_alerts: AHashMap::new(),
                     impacted_routes_alerts: None,
                     impacted_stops_alerts: None,
                     impacted_routes_stops_alerts: None,
@@ -444,7 +444,7 @@ pub async fn new_rt_data(
                 trip_updates: trip_updates.clone(),
                 trip_updates_lookup_by_trip_id_to_trip_update_ids:
                     trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
-                raw_alerts: None,
+                raw_alerts: AHashMap::new(),
                 impacted_routes_alerts: None,
                 impacted_stops_alerts: None,
                 impacted_routes_stops_alerts: None,
