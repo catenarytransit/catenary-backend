@@ -123,7 +123,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .brotli(true)
         .cookie_store(true)
         .danger_accept_invalid_certs(true)
-        .danger_accept_invalid_hostnames(true)
         .build()
         .unwrap();
 

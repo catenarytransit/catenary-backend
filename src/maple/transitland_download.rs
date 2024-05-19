@@ -116,7 +116,6 @@ pub async fn download_return_eligible_feeds(
                                 .timeout(Duration::from_secs(60 * 4))
                                 .connect_timeout(Duration::from_secs(20))
                                 .danger_accept_invalid_certs(true)
-                                .danger_accept_invalid_hostnames(true)
                                 .deflate(true)
                                 .gzip(true)
                                 .brotli(true)
