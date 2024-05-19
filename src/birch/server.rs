@@ -279,6 +279,149 @@ FROM (
     }
 }
 
+
+#[actix_web::get("/nanotime")]
+pub async fn nanotime(req: HttpRequest) -> impl Responder {
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "text/plain"))
+        .body(format!(
+            "{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+}
+
+#[actix_web::get("/station_features")]
+pub async fn station_features_meta(req: HttpRequest) -> impl Responder {
+    let mut fields = std::collections::BTreeMap::new();
+
+    fields.insert(String::from("onestop_feed_id"), String::from("text"));
+    fields.insert(String::from("attempt_id"), String::from("text"));
+    fields.insert(String::from("gtfs_id"), String::from("text"));
+    fields.insert(String::from("name"), String::from("text"));
+    fields.insert(String::from("displayname"), String::from("text"));
+    fields.insert(String::from("code"), String::from("text"));
+    fields.insert(String::from("gtfs_desc"), String::from("text"));
+    fields.insert(String::from("location_type"), String::from("smallint"));
+    fields.insert(String::from("parent_station"), String::from("text"));
+    fields.insert(String::from("zone_id"), String::from("text"));
+    fields.insert(String::from("url"), String::from("text"));
+    fields.insert(String::from("timezone"), String::from("text"));
+    fields.insert(
+        String::from("wheelchair_boarding"),
+        String::from("smallint"),
+    );
+    fields.insert(String::from("level_id"), String::from("text"));
+    fields.insert(String::from("platform_code"), String::from("text"));
+    fields.insert(String::from("routes"), String::from("text[]"));
+    fields.insert(String::from("route_types"), String::from("smallint[]"));
+    fields.insert(String::from("children_ids"), String::from("text[]"));
+    fields.insert(
+        String::from("children_route_types"),
+        String::from("smallint[]"),
+    );
+
+    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
+
+    let tile_json = TileJSON {
+        vector_layers: Some(vec![fields]),
+        tilejson: String::from("3.0.0"),
+        bounds: None,
+        center: None,
+        data: None,
+        description: None,
+        fillzoom: None,
+        grids: None,
+        legend: None,
+        maxzoom: None,
+        minzoom: None,
+        name: Some(String::from("station_features")),
+        scheme: None,
+        template: None,
+        version: None,
+        other: std::collections::BTreeMap::new(),
+        tiles: vec![String::from(
+            "https://birch.catenarymaps.org/station_features/{z}/{x}/{y}",
+        )],
+        attribution: None,
+    };
+
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "application/json"))
+        .insert_header(("Cache-Control", "max-age=100000"))
+        .body(serde_json::to_string(&tile_json).unwrap())
+}
+
+#[actix_web::get("/station_features/{z}/{x}/{y}")]
+pub async fn station_features(sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+pool: web::Data<Arc<CatenaryPostgresPool>>,
+path: web::Path<(u8, u32, u32)>,
+req: HttpRequest,
+) -> impl Responder {
+let (z, x, y) = path.into_inner();
+
+//let grid = tile_grid::Grid::wgs84();
+
+// let bbox = grid.tile_extent(x, y, z);
+
+let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+
+let query_str = format!("
+SELECT
+ST_AsMVT(q, 'data', 4096, 'geom')
+FROM (
+SELECT
+    onestop_feed_id,
+    attempt_id,
+    gtfs_id,
+    name,
+    displayname,
+    code,
+    gtfs_desc,
+    location_type,
+    parent_station,
+    zone_id,
+    url,
+    timezone,
+    wheelchair_boarding,
+    level_id,
+    platform_code,
+    routes,
+    route_types,
+    children_ids,
+    children_route_types,
+    ST_AsMVTGeom(ST_Transform(point, 3857), 
+    ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
+FROM
+    gtfs.stops
+WHERE
+    (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
+    AND (location_type=2 OR location_type=3 OR location_type=4)
+) q", z = z, x = x, y= y);
+
+// println!("Performing query \n {}", query_str);
+
+match sqlx::query(query_str.as_str())
+    .fetch_one(sqlx_pool_ref)
+    .await
+{
+    Ok(mvt_result) => {
+        let mvt_bytes: Vec<u8> = mvt_result.get(0);
+
+        HttpResponse::Ok()
+            .insert_header(("Content-Type", "application/x-protobuf"))
+            .insert_header(("Cache-Control", "max-age=86400"))
+            .body(mvt_bytes)
+    }
+    Err(err) => {
+        eprintln!("{:?}", err);
+        HttpResponse::InternalServerError().body("Failed to fetch from postgres!")
+    }
+}
+}
+
 #[actix_web::get("/railstops/{z}/{x}/{y}")]
 pub async fn rail_stops(
     sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
@@ -396,13 +539,147 @@ pub async fn rail_stops_meta(req: HttpRequest) -> impl Responder {
         legend: None,
         maxzoom: None,
         minzoom: None,
-        name: Some(String::from("busstops")),
+        name: Some(String::from("railstops")),
         scheme: None,
         template: None,
         version: None,
         other: std::collections::BTreeMap::new(),
         tiles: vec![String::from(
             "https://birch.catenarymaps.org/railstops/{z}/{x}/{y}",
+        )],
+        attribution: None,
+    };
+
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "application/json"))
+        .insert_header(("Cache-Control", "max-age=100000"))
+        .body(serde_json::to_string(&tile_json).unwrap())
+}
+
+#[actix_web::get("/otherstops/{z}/{x}/{y}")]
+pub async fn other_stops(
+    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    path: web::Path<(u8, u32, u32)>,
+    req: HttpRequest,
+) -> impl Responder {
+    let (z, x, y) = path.into_inner();
+
+    if (z < 4) {
+        return HttpResponse::BadRequest().body("Zoom level too low");
+    }
+
+    //let grid = tile_grid::Grid::wgs84();
+
+    // let bbox = grid.tile_extent(x, y, z);
+
+    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+
+    let query_str = format!("
+    SELECT
+    ST_AsMVT(q, 'data', 4096, 'geom')
+FROM (
+    SELECT
+        onestop_feed_id,
+        attempt_id,
+        gtfs_id,
+        name,
+        displayname,
+        code,
+        gtfs_desc,
+        location_type,
+        parent_station,
+        zone_id,
+        url,
+        timezone,
+        wheelchair_boarding,
+        level_id,
+        platform_code,
+        routes,
+        route_types,
+        children_ids,
+        children_route_types,
+        ST_AsMVTGeom(ST_Transform(point, 3857), 
+        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
+    FROM
+        gtfs.stops
+    WHERE
+        (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
+        AND (ARRAY[4,6,7]::smallint[] && route_types::smallint[] OR ARRAY[4,6,7]::smallint[] && children_route_types::smallint[])
+) q", z = z, x = x, y= y);
+
+    // println!("Performing query \n {}", query_str);
+
+    match sqlx::query(query_str.as_str())
+        .fetch_one(sqlx_pool_ref)
+        .await
+    {
+        Ok(mvt_result) => {
+            let mvt_bytes: Vec<u8> = mvt_result.get(0);
+
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/x-protobuf"))
+                .insert_header(("Cache-Control", "max-age=86400"))
+                .body(mvt_bytes)
+        }
+        Err(err) => {
+            eprintln!("{:?}", err);
+            HttpResponse::InternalServerError().body("Failed to fetch from postgres!")
+        }
+    }
+}
+
+#[actix_web::get("/otherstops")]
+pub async fn other_stops_meta(req: HttpRequest) -> impl Responder {
+    let mut fields = std::collections::BTreeMap::new();
+
+    fields.insert(String::from("onestop_feed_id"), String::from("text"));
+    fields.insert(String::from("attempt_id"), String::from("text"));
+    fields.insert(String::from("gtfs_id"), String::from("text"));
+    fields.insert(String::from("name"), String::from("text"));
+    fields.insert(String::from("displayname"), String::from("text"));
+    fields.insert(String::from("code"), String::from("text"));
+    fields.insert(String::from("gtfs_desc"), String::from("text"));
+    fields.insert(String::from("location_type"), String::from("smallint"));
+    fields.insert(String::from("parent_station"), String::from("text"));
+    fields.insert(String::from("zone_id"), String::from("text"));
+    fields.insert(String::from("url"), String::from("text"));
+    fields.insert(String::from("timezone"), String::from("text"));
+    fields.insert(
+        String::from("wheelchair_boarding"),
+        String::from("smallint"),
+    );
+    fields.insert(String::from("level_id"), String::from("text"));
+    fields.insert(String::from("platform_code"), String::from("text"));
+    fields.insert(String::from("routes"), String::from("text[]"));
+    fields.insert(String::from("route_types"), String::from("smallint[]"));
+    fields.insert(String::from("children_ids"), String::from("text[]"));
+    fields.insert(
+        String::from("children_route_types"),
+        String::from("smallint[]"),
+    );
+
+    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
+
+    let tile_json = TileJSON {
+        vector_layers: Some(vec![fields]),
+        tilejson: String::from("3.0.0"),
+        bounds: None,
+        center: None,
+        data: None,
+        description: None,
+        fillzoom: None,
+        grids: None,
+        legend: None,
+        maxzoom: None,
+        minzoom: None,
+        name: Some(String::from("otherstops")),
+        scheme: None,
+        template: None,
+        version: None,
+        other: std::collections::BTreeMap::new(),
+        tiles: vec![String::from(
+            "https://birch.catenarymaps.org/otherstops/{z}/{x}/{y}",
         )],
         attribution: None,
     };
@@ -899,6 +1176,10 @@ async fn main() -> std::io::Result<()> {
             .service(bus_stops)
             .service(rail_stops)
             .service(rail_stops_meta)
+            .service(station_features)
+            .service(station_features_meta)
+            .service(other_stops)
+            .service(other_stops_meta)
             .service(api_key_management::get_realtime_keys)
             .service(api_key_management::set_realtime_key)
             .service(aspenised_data_over_https::get_realtime_locations)
