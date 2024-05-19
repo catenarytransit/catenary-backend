@@ -9,6 +9,7 @@ use serde::Deserialize;
 struct NearbyFromCoords {
     lat: f64,
     lon: f64,
+    timestamp_seconds: u64,
 }
 
 #[actix_web::get("/nearbydeparturesfromcoords/")]
@@ -42,6 +43,7 @@ struct NearbyFromStops {
 struct NearbyStopsDeserialize {
     stop_id: String,
     chateau_id: String,
+    timestamp_seconds: u64,
 }
 
 #[actix_web::get("/nearbydeparturesfromstops/")]
