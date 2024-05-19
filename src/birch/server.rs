@@ -279,20 +279,6 @@ FROM (
     }
 }
 
-
-#[actix_web::get("/nanotime")]
-pub async fn nanotime(req: HttpRequest) -> impl Responder {
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "text/plain"))
-        .body(format!(
-            "{}",
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ))
-}
-
 #[actix_web::get("/station_features")]
 pub async fn station_features_meta(req: HttpRequest) -> impl Responder {
     let mut fields = std::collections::BTreeMap::new();
