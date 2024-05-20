@@ -110,12 +110,10 @@ impl AspenRpc for AspenServer {
         let vehicles_gtfs_rt = match vehicles_response_code {
             Some(200) => match vehicles {
                 Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
-                    Ok(v) => Some(
-                        gtfs_rt_correct_route_id_string(
-                            id_cleanup::gtfs_rt_cleanup(v),
-                            realtime_feed_id.as_str(),
-                        ),
-                    ),
+                    Ok(v) => Some(gtfs_rt_correct_route_id_string(
+                        id_cleanup::gtfs_rt_cleanup(v),
+                        realtime_feed_id.as_str(),
+                    )),
                     Err(e) => {
                         println!("Error decoding vehicles: {}", e);
                         None

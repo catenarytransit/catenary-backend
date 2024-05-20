@@ -23,11 +23,8 @@ use crate::custom_rt_feeds;
 use gtfs_structures::Gtfs;
 
 lazy_static! {
-    static ref CUSTOM_FEEDS: HashSet<&'static str> = HashSet::from_iter([
-        "f-anteaterexpress~rt",
-        "f-amtrak~rt",
-        "f-mta~nyc~rt~mnr"
-    ]);
+    static ref CUSTOM_FEEDS: HashSet<&'static str> =
+        HashSet::from_iter(["f-anteaterexpress~rt", "f-amtrak~rt", "f-mta~nyc~rt~mnr"]);
 }
 
 async fn cleanup_response(
