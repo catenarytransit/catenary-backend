@@ -22,7 +22,13 @@
     clippy::let_unit_value,
     clippy::let_and_return,
     clippy::iter_nth,
-    clippy::iter_cloned_collect
+    clippy::iter_cloned_collect,
+    clippy::bytes_nth,
+    clippy::deprecated_clippy_cfg_attr,
+    clippy::match_result_ok,
+    clippy::cmp_owned,
+    clippy::cmp_null,
+    clippy::op_ref
 )]
 
 use actix_web::dev::Service;
@@ -341,20 +347,22 @@ pub async fn station_features_meta(req: HttpRequest) -> impl Responder {
 }
 
 #[actix_web::get("/station_features/{z}/{x}/{y}")]
-pub async fn station_features(sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
-pool: web::Data<Arc<CatenaryPostgresPool>>,
-path: web::Path<(u8, u32, u32)>,
-req: HttpRequest,
+pub async fn station_features(
+    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    path: web::Path<(u8, u32, u32)>,
+    req: HttpRequest,
 ) -> impl Responder {
-let (z, x, y) = path.into_inner();
+    let (z, x, y) = path.into_inner();
 
-//let grid = tile_grid::Grid::wgs84();
+    //let grid = tile_grid::Grid::wgs84();
 
-// let bbox = grid.tile_extent(x, y, z);
+    // let bbox = grid.tile_extent(x, y, z);
 
-let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
-let query_str = format!("
+    let query_str = format!(
+        "
 SELECT
 ST_AsMVT(q, 'data', 4096, 'geom')
 FROM (
@@ -385,27 +393,31 @@ FROM
 WHERE
     (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
     AND (location_type=2 OR location_type=3 OR location_type=4)
-) q", z = z, x = x, y= y);
+) q",
+        z = z,
+        x = x,
+        y = y
+    );
 
-// println!("Performing query \n {}", query_str);
+    // println!("Performing query \n {}", query_str);
 
-match sqlx::query(query_str.as_str())
-    .fetch_one(sqlx_pool_ref)
-    .await
-{
-    Ok(mvt_result) => {
-        let mvt_bytes: Vec<u8> = mvt_result.get(0);
+    match sqlx::query(query_str.as_str())
+        .fetch_one(sqlx_pool_ref)
+        .await
+    {
+        Ok(mvt_result) => {
+            let mvt_bytes: Vec<u8> = mvt_result.get(0);
 
-        HttpResponse::Ok()
-            .insert_header(("Content-Type", "application/x-protobuf"))
-            .insert_header(("Cache-Control", "max-age=86400"))
-            .body(mvt_bytes)
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/x-protobuf"))
+                .insert_header(("Cache-Control", "max-age=86400"))
+                .body(mvt_bytes)
+        }
+        Err(err) => {
+            eprintln!("{:?}", err);
+            HttpResponse::InternalServerError().body("Failed to fetch from postgres!")
+        }
     }
-    Err(err) => {
-        eprintln!("{:?}", err);
-        HttpResponse::InternalServerError().body("Failed to fetch from postgres!")
-    }
-}
 }
 
 #[actix_web::get("/railstops/{z}/{x}/{y}")]

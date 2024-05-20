@@ -22,7 +22,13 @@
     clippy::let_unit_value,
     clippy::let_and_return,
     clippy::iter_nth,
-    clippy::iter_cloned_collect
+    clippy::iter_cloned_collect,
+    clippy::bytes_nth,
+    clippy::deprecated_clippy_cfg_attr,
+    clippy::match_result_ok,
+    clippy::cmp_owned,
+    clippy::cmp_null,
+    clippy::op_ref
 )]
 
 use ahash::AHashMap;
@@ -141,7 +147,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             "f-9q9-acealtamontcorridorexpress",
             //BAN HAMMER SECTION
             //PRIVATE STUPID BUS COMPANY THAT CHARGES $60 TO DROP YOU OFF IN OLD TOWN FROM LAX
-            "f-relaxsan~ca~us"
+            "f-relaxsan~ca~us",
         ]
         .into_iter()
         .map(String::from),

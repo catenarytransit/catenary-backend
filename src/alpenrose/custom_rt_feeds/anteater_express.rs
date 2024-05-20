@@ -10,10 +10,6 @@ pub async fn fetch_anteater_express_data(zk: &ZooKeeper, feed_id: &str) {
         let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
         let worker_id = data.worker_id;
 
-        let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
-            .await
-            .unwrap();
-
         let zotgtfs_realtime_data = zotgtfs::get_gtfs_rt().await;
 
         if let Ok(zotgtfs_realtime_data) = zotgtfs_realtime_data {

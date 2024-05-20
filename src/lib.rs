@@ -435,3 +435,14 @@ pub async fn get_node_for_realtime_feed_id(
         None => None,
     }
 }
+
+pub fn make_feed_from_entity_vec(entities: Vec<gtfs_rt::FeedEntity>) -> gtfs_rt::FeedMessage {
+    gtfs_rt::FeedMessage {
+        header: gtfs_rt::FeedHeader {
+            gtfs_realtime_version: "2.0".to_string(),
+            incrementality: Some(gtfs_rt::feed_header::Incrementality::FullDataset as i32),
+            timestamp: Some(duration_since_unix_epoch().as_secs() as u64),
+        },
+        entity: entities,
+    }
+}
