@@ -130,7 +130,10 @@ pub async fn new_rt_data(
         {
             let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
 
-            for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
+            for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter().filter(|x| match realtime_feed_id.as_str() {
+                "f-mta~nyc~rt~lirr" => x.id.ends_with('V'),
+                _ => true
+            }) {
                 if let Some(vehicle_pos) = &vehicle_entity.vehicle {
                     if let Some(trip) = &vehicle_pos.trip {
                         if let Some(trip_id) = &trip.trip_id {
@@ -230,7 +233,10 @@ pub async fn new_rt_data(
             {
                 let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
 
-                for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
+                for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter().filter(|x| match realtime_feed_id.as_str() {
+                    "f-mta~nyc~rt~lirr" => x.id.ends_with('V'),
+                    _ => true
+                }) {
                     if let Some(vehicle_pos) = &vehicle_entity.vehicle {
                         aspenised_vehicle_positions.insert(vehicle_entity.id.clone(), AspenisedVehiclePosition {
                                 trip: vehicle_pos.trip.as_ref().map(|trip| {
@@ -343,7 +349,10 @@ pub async fn new_rt_data(
             {
                 let trip_updates_gtfs_rt_for_feed_id = trip_updates_gtfs_rt_for_feed_id.get();
 
-                for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
+                for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter().filter(|x| match realtime_feed_id.as_str() {
+                    "f-mta~nyc~rt~lirr" => x.id.ends_with('T'),
+                    _ => true
+                }) {
                     if let Some(trip_update) = &trip_update_entity.trip_update {
                         let trip_id = trip_update.trip.trip_id.clone();
 
