@@ -58,6 +58,7 @@ use gtfs_rt::FeedMessage;
 use scc::HashMap as SccHashMap;
 use std::error::Error;
 mod async_threads_alpenrose;
+use crate::id_cleanup::gtfs_rt_correct_route_id_string;
 use catenary::gtfs_rt_rough_hash::rough_hash_of_gtfs_rt;
 use catenary::parse_gtfs_rt_message;
 use std::collections::HashSet;
@@ -109,7 +110,12 @@ impl AspenRpc for AspenServer {
         let vehicles_gtfs_rt = match vehicles_response_code {
             Some(200) => match vehicles {
                 Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
-                    Ok(v) => Some(id_cleanup::gtfs_rt_cleanup(v)),
+                    Ok(v) => Some(
+                        gtfs_rt_correct_route_id_string(
+                            id_cleanup::gtfs_rt_cleanup(v),
+                            realtime_feed_id.as_str(),
+                        ),
+                    ),
                     Err(e) => {
                         println!("Error decoding vehicles: {}", e);
                         None
@@ -129,7 +135,10 @@ impl AspenRpc for AspenServer {
         let trips_gtfs_rt = match trips_response_code {
             Some(200) => match trips {
                 Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
-                    Ok(t) => Some(id_cleanup::gtfs_rt_cleanup(t)),
+                    Ok(t) => Some(gtfs_rt_correct_route_id_string(
+                        id_cleanup::gtfs_rt_cleanup(t),
+                        realtime_feed_id.as_str(),
+                    )),
                     Err(e) => {
                         println!("Error decoding trips: {}", e);
                         None

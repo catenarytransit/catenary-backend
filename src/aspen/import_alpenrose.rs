@@ -323,16 +323,12 @@ pub async fn new_rt_data(
 
                         if let Some(trip) = &vehicle_pos.trip {
                             if let Some(route_id) = &trip.route_id {
-                                route_ids_to_insert
-                                    .insert(route_id_transform(realtime_feed_id, route_id.clone()));
+                                route_ids_to_insert.insert(route_id.clone());
                             } else {
                                 if let Some(trip_id) = &trip.trip_id {
                                     let trip = trip_id_to_trip.get(trip_id);
                                     if let Some(trip) = &trip {
-                                        route_ids_to_insert.insert(route_id_transform(
-                                            realtime_feed_id,
-                                            trip.route_id.clone(),
-                                        ));
+                                        route_ids_to_insert.insert(trip.route_id.clone());
                                     }
                                 }
                             }
@@ -403,8 +399,7 @@ pub async fn new_rt_data(
         //insert the route cache
 
         for route_id in route_ids_to_insert.iter() {
-            let route =
-                route_id_to_route.get(&route_id_transform(realtime_feed_id, route_id.clone()));
+            let route = route_id_to_route.get(&route_id.clone());
             if let Some(route) = route {
                 vehicle_routes_cache.insert(
                     route.route_id.clone(),

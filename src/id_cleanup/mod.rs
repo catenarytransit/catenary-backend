@@ -1,6 +1,8 @@
 use lazy_static::lazy_static;
 use regex::{Captures, Regex};
 
+use crate::route_id_transform;
+
 lazy_static! {
     static ref STARTING_DASHES_REGEX: Regex = Regex::new("^(-|_)").unwrap();
     static ref ENDING_DASHES_REGEX: Regex = Regex::new("(-|_)$").unwrap();
@@ -37,6 +39,42 @@ pub fn gtfs_rt_cleanup(x: gtfs_rt::FeedMessage) -> gtfs_rt::FeedMessage {
             }
         })
         .collect();
+
+    gtfs_rt::FeedMessage {
+        entity: new_entities,
+        ..x
+    }
+}
+
+pub fn gtfs_rt_correct_route_id_string(
+    x: gtfs_rt::FeedMessage,
+    realtime_feed_id: &str,
+) -> gtfs_rt::FeedMessage {
+    let new_entities: Vec<gtfs_rt::FeedEntity> = x
+        .entity
+        .into_iter()
+        .map(|entity| {
+            let mut entity = entity;
+
+            //apply route_id_transform
+
+            if let Some(trip_update) = entity.trip_update.as_mut() {
+                if let Some(route_id) = trip_update.trip.route_id.as_mut() {
+                    *route_id = route_id_transform(realtime_feed_id, route_id.clone())
+                }
+            }
+
+            if let Some(vehicle) = entity.vehicle.as_mut() {
+                if let Some(trip) = vehicle.trip.as_mut() {
+                    if let Some(route_id) = trip.route_id.as_mut() {
+                        *route_id = route_id_transform(realtime_feed_id, route_id.clone())
+                    }
+                }
+            }
+
+            entity
+        })
+        .collect::<Vec<gtfs_rt::FeedEntity>>();
 
     gtfs_rt::FeedMessage {
         entity: new_entities,
