@@ -23,8 +23,12 @@ use crate::custom_rt_feeds;
 use gtfs_structures::Gtfs;
 
 lazy_static! {
-    static ref CUSTOM_FEEDS: HashSet<&'static str> =
-        HashSet::from_iter(["f-anteaterexpress~rt", "f-amtrak~rt", "f-mta~nyc~rt~mnr"]);
+    static ref CUSTOM_FEEDS: HashSet<&'static str> = HashSet::from_iter([
+        "f-anteaterexpress~rt",
+        "f-amtrak~rt",
+        "f-mta~nyc~rt~mnr",
+        "f-mta~nyc~rt~lirr"
+    ]);
 }
 
 async fn cleanup_response(
@@ -263,6 +267,9 @@ pub async fn single_fetch_time(
                             &client,
                         )
                         .await;
+                    }
+                    "f-mta~nyc~rt~lirr" => {
+                        custom_rt_feeds::mta::fetch_mta_lirr_data(&zk, feed_id, &client).await;
                     }
                     "f-mta~nyc~rt~mnr" => {
                         custom_rt_feeds::mta::fetch_mta_metronorth_data(&zk, feed_id, &client)
