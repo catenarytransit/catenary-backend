@@ -42,6 +42,7 @@ use std::thread;
 use tokio::runtime;
 
 use crate::cleanup::delete_attempt_objects;
+use crate::cleanup::wipe_whole_feed;
 
 mod assign_production_tables;
 mod chateau_postprocess;
@@ -146,6 +147,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         .map(String::from),
     );
 
+    let ban_list = ["f-relaxsan~ca~us"];
+
     println!("Initializing database connection");
 
     let restrict_to_feed_id = match std::env::var("ONLY_FEED_ID") {
@@ -218,6 +221,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         }
 
         //refresh the metadata for anything that's changed
+
+        for banned_feed_id in ban_list {
+            wipe_whole_feed(banned_feed_id, Arc::clone(&arc_conn_pool)).await?;
+        }
 
         //insert the feeds that are new
 
