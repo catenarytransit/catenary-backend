@@ -113,10 +113,10 @@ fn get_threads_gtfs() -> usize {
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
     update_transitland_submodule()?;
-
-    //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
     let feeds_to_discard: HashSet<String> = HashSet::from_iter(
         vec![
+            //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
+            //these are all good little feeds, and they have the blessing of being merged into MTC's regional feed
             "f-9q8y-sfmta",
             "f-9qc-westcat~ca~us",
             "f-9q9-actransit",
@@ -138,6 +138,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             "f-sfo~airtrain~shuttles",
             "f-9qbdx-santarosacitybus",
             "f-9q9-acealtamontcorridorexpress",
+            //BAN HAMMER SECTION
+            //PRIVATE STUPID BUS COMPANY THAT CHARGES $60 TO DROP YOU OFF IN OLD TOWN FROM LAX
+            "f-relaxsan~ca~us"
         ]
         .into_iter()
         .map(String::from),
