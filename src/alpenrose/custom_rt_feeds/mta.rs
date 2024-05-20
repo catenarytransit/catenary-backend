@@ -2,50 +2,8 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use tokio_zookeeper::ZooKeeper;
 
-const LIRR_TRIPS_FEED: &str =
-    "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/lirr%2Fgtfs-lirr";
-
 const MNR_TRIPS_FEED: &str =
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr";
-
-pub async fn fetch_mta_lirr_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest::Client) {
-    let fetch_url =
-        "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=LIRR";
-
-    let request = client
-        .get(fetch_url)
-        .header("Accept-Version", "3.0")
-        .send()
-        .await;
-
-    let gtfs_rt_trips = get_mta_trips(client, LIRR_TRIPS_FEED).await;
-
-    if let Ok(request) = request {
-        if let Ok(gtfs_rt_trips) = gtfs_rt_trips {
-            let body = request.text().await.unwrap();
-
-            let import_data = serde_json::from_str::<Vec<MtaTrain>>(body.as_str());
-
-            if let Ok(import_data) = import_data {
-                let converted = convert(&import_data, MtaRailroad::LIRR, &gtfs_rt_trips);
-
-                let lirr_vehicle_position = catenary::make_feed_from_entity_vec(converted);
-
-                let lirr_vehicle_position_bytes = lirr_vehicle_position.encode_to_vec();
-                let lirr_trip_updates_bytes = gtfs_rt_trips.encode_to_vec();
-
-                send_mta_rail_to_aspen(
-                    zk,
-                    MtaRailroad::LIRR,
-                    lirr_vehicle_position_bytes,
-                    lirr_trip_updates_bytes,
-                    feed_id,
-                )
-                .await;
-            }
-        }
-    }
-}
 
 pub async fn fetch_mta_metronorth_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest::Client) {
     let fetch_url = "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=MNR";
@@ -243,7 +201,7 @@ fn convert(
                 .filter(|mta_entity| {
                     let status: bool = match mta.railroad.as_str() {
                         "MNR" => mta.train_num == mta_entity.id,
-                        "LIRR" => mta.train_num == get_lirr_train_id(&mta_entity),
+                        "LIRR" => mta.train_num == get_lirr_train_id(mta_entity),
                         _ => false,
                     };
 
@@ -251,7 +209,7 @@ fn convert(
                 })
                 .collect::<Vec<gtfs_rt::FeedEntity>>();
 
-            if candidates_for_id.len() >= 1 {
+            if !candidates_for_id.is_empty() {
                 supporting_gtfs = Some(candidates_for_id[0].clone());
             }
 
@@ -262,7 +220,7 @@ fn convert(
                     .filter(|mta_entity| mta_entity.vehicle.is_some())
                     .collect::<Vec<gtfs_rt::FeedEntity>>();
 
-                if candidates_for_id.len() >= 1 {
+                if !candidates_for_id.is_empty() {
                     supporting_gtfs = Some(candidates_for_id[0].clone());
                 }
             }
