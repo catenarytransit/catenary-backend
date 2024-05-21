@@ -21,6 +21,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+use catenary::metrolink_ptc_to_stop_id::METROLINK_STOP_LIST;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-mta~nyc~rt~subway~1~2~3~4~5~6~7",
@@ -34,7 +35,7 @@ const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-bart~rt",
 ];
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct MetrolinkTrackData {
     #[serde(rename = "TrainDesignation")]
     train_designation: String,
@@ -44,9 +45,28 @@ struct MetrolinkTrackData {
     event_type: String,
     #[serde(rename = "FormattedTrackDesignation")]
     formatted_track_designation: String,
+    #[serde(rename = "TrainMovementTime")]
+    train_movement_time: String,
 }
 
-enum TrackData {
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct MetrolinkTrackDataCleaned {
+    train_movement_time: u64,
+    stop_id: String,
+    trip_id: String,
+    event_type: MetrolinkEventType,
+    formatted_track_designation: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+enum MetrolinkEventType {
+    Arrival,
+    Departure
+}
+
+
+#[derive(Clone, Debug)]
+pub enum TrackData {
     Metrolink(Option<Vec<MetrolinkTrackData>>),
     None,
 }
@@ -68,6 +88,8 @@ pub async fn new_rt_data(
 
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
+
+    let fetched_track_data: TrackData = fetch_track_data(&chateau_id).await;
 
     println!("Forming pg connection");
     let conn = &mut conn_pre?;
@@ -347,54 +369,226 @@ pub async fn new_rt_data(
             {
                 let trip_updates_gtfs_rt_for_feed_id = trip_updates_gtfs_rt_for_feed_id.get();
 
-                for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
-                    if let Some(trip_update) = &trip_update_entity.trip_update {
-                        let trip_id = trip_update.trip.trip_id.clone();
+                match chateau_id.as_str() {
+                    "metrolinktrains" => {
+                        //query all the trips using eq any
 
-                        let mut trip_update = AspenisedTripUpdate {
-                            trip: trip_update.trip.clone().into(),
-                            vehicle: trip_update.vehicle.clone().map(|x| x.into()),
-                            stop_time_update: trip_update
-                                .stop_time_update
-                                .iter()
-                                .map(|stu| AspenisedStopTimeUpdate {
-                                    stop_sequence: stu.stop_sequence,
-                                    stop_id: stu.stop_id.clone(),
-                                    arrival: stu.arrival.clone().map(|arrival| {
-                                        AspenStopTimeEvent {
-                                            delay: arrival.delay,
-                                            time: arrival.time,
-                                            uncertainty: arrival.uncertainty,
-                                        }
-                                    }),
-                                    departure: stu.departure.clone().map(|departure| {
-                                        AspenStopTimeEvent {
-                                            delay: departure.delay,
-                                            time: departure.time,
-                                            uncertainty: departure.uncertainty,
-                                        }
-                                    }),
-                                    platform_string: None,
-                                    schedule_relationship: stu.schedule_relationship,
-                                    departure_occupancy_status: stu.departure_occupancy_status,
-                                    stop_time_properties: stu
-                                        .stop_time_properties
-                                        .clone()
-                                        .map(|x| x.into()),
-                                })
-                                .collect(),
-                            timestamp: trip_update.timestamp,
-                            delay: trip_update.delay,
-                            trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),
-                        };
+                        let mut trip_id_to_trip: AHashMap<String, catenary::models::CompressedTrip> =
+                            AHashMap::new();
 
-                        if trip_id.is_some() {
-                            trip_updates_lookup_by_trip_id_to_trip_update_ids
-                                .entry(trip_id.as_ref().unwrap().clone())
-                                .or_insert(vec![trip_update_entity.id.clone()]);
+                        let trips_compressed_lookup:Vec<catenary::models::CompressedTrip> = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                            .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(&chateau_id))
+                            .filter(
+                                catenary::schema::gtfs::trips_compressed::dsl::trip_id
+                                    .eq_any(trip_ids_to_lookup.iter()),
+                            )
+                            .load::<catenary::models::CompressedTrip>(conn)
+                            .await?;
+
+                        for trip in trips_compressed_lookup {
+                            trip_id_to_trip.insert(trip.trip_id.clone(), trip);
                         }
 
-                        trip_updates.insert(trip_update_entity.id.clone(), trip_update);
+                        let trip_id_to_trip = trip_id_to_trip;
+
+                        let short_name_to_id = {
+                            let mut short_name_to_id:AHashMap<String, String> = AHashMap::new();
+
+                            for trip in trip_id_to_trip.values() {
+                                if let Some(short_name) = &trip.trip_short_name {
+                                    short_name_to_id.insert(short_name.clone(), trip.trip_id.clone());
+                                }
+                            }
+
+                            short_name_to_id
+                        };
+
+                        let cleaned_array:Vec<MetrolinkTrackDataCleaned> = match fetched_track_data.clone() {
+                            TrackData::Metrolink(metrolinktrackdata) => {
+                                metrolinktrackdata.map(|metrolinktrackdata| metrolinktrackdata.into_iter().map(|x| {
+                                    let formatted_track_designation = x.formatted_track_designation.clone();
+                                    let stop_id = METROLINK_STOP_LIST.iter().find(|x| x.1 == formatted_track_designation);
+                                    let trip_id = short_name_to_id.get(&x.train_designation);
+                                    match stop_id {
+                                        Some(stop_id) => {
+                                            match trip_id {
+                                                Some(trip_id) => {
+                                                    let train_movement_time_num = x.train_movement_time.replace("/Date(", "").replace(")/", "").parse::<u64>().unwrap() / 1000;
+                                                    Some(MetrolinkTrackDataCleaned {
+                                                        stop_id: stop_id.0.to_string(),
+                                                        train_movement_time: train_movement_time_num,
+                                                        trip_id: trip_id.clone(),
+                                                        event_type: match x.event_type.as_str() {
+                                                            "Arrival" => MetrolinkEventType::Arrival,
+                                                            "Departure" => MetrolinkEventType::Departure,
+                                                            _ => MetrolinkEventType::Arrival
+                                                        },
+                                                        formatted_track_designation
+                                                    })
+                                                },
+                                                None => {
+                                                   None
+                                                }
+                                            }
+                                        },
+                                        None => {
+                                           None
+                                        }
+                                    }
+                                })).into_iter().flatten().flatten().collect()
+                            },
+                            _ => vec![]
+                        };
+
+                        //convert into hashmap of (trip_id, stop_id)
+                        let mut metrolink_track_data: AHashMap<(String, String), Vec<MetrolinkTrackDataCleaned>> = AHashMap::new();
+
+                        for cleaned in cleaned_array {
+                            metrolink_track_data.entry((cleaned.trip_id.clone(), cleaned.stop_id.clone())).and_modify(|x| x.push(cleaned.clone())).or_insert(vec![cleaned.clone()]);
+                        }
+
+                        for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
+                            if let Some(trip_update) = &trip_update_entity.trip_update {
+                                let trip_id = trip_update.trip.trip_id.clone();
+        
+                                let mut trip_update = AspenisedTripUpdate {
+                                    trip: trip_update.trip.clone().into(),
+                                    vehicle: trip_update.vehicle.clone().map(|x| x.into()),
+                                    stop_time_update: trip_update
+                                        .stop_time_update
+                                        .iter()
+                                        .map(|stu| {
+
+                                            let mut arrival = stu.arrival.clone().map(|arrival| {
+                                                AspenStopTimeEvent {
+                                                    delay: arrival.delay,
+                                                    time: arrival.time,
+                                                    uncertainty: arrival.uncertainty,
+                                                }
+                                            });
+
+                                            let mut departure = stu.departure.clone().map(|departure| {
+                                                AspenStopTimeEvent {
+                                                    delay: departure.delay,
+                                                    time: departure.time,
+                                                    uncertainty: departure.uncertainty,
+                                                }
+                                            });
+
+                                            let mut metrolink_platform_str = None;
+
+                                            if let Some(trip_id) = &trip_id {
+                                                if let Some(stop_id) = &stu.stop_id {
+                                                    if let Some(metrolink_ptc_for_this_stu) = metrolink_track_data.get(&(trip_id.clone(), stop_id.clone())) {
+                                                        arrival = None;
+                                                        departure = None;
+
+                                                        for metrolink_ptc in metrolink_ptc_for_this_stu {
+                                                            match metrolink_ptc.event_type {
+                                                                MetrolinkEventType::Arrival => {
+                                                                    arrival = Some(AspenStopTimeEvent {
+                                                                        delay: None,
+                                                                        time: Some(metrolink_ptc.train_movement_time as i64),
+                                                                        uncertainty: None
+                                                                    });
+
+                                                                    metrolink_platform_str = Some(metrolink_ptc.formatted_track_designation.clone());
+                                                                },
+                                                                MetrolinkEventType::Departure => {
+                                                                    departure = Some(AspenStopTimeEvent {
+                                                                        delay: None,
+                                                                        time: Some(metrolink_ptc.train_movement_time as i64),
+                                                                        uncertainty: None
+                                                                    });
+
+                                                                    metrolink_platform_str = Some(metrolink_ptc.formatted_track_designation.clone());
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            
+
+                                            AspenisedStopTimeUpdate {
+                                                stop_sequence: stu.stop_sequence,
+                                                stop_id: stu.stop_id.clone(),
+                                                arrival,
+                                                departure,
+                                                platform_string: metrolink_platform_str,
+                                                schedule_relationship: stu.schedule_relationship,
+                                                departure_occupancy_status: stu.departure_occupancy_status,
+                                                stop_time_properties: stu
+                                                    .stop_time_properties
+                                                    .clone()
+                                                    .map(|x| x.into()),
+                                            }
+                                        })
+                                        .collect(),
+                                    timestamp: trip_update.timestamp,
+                                    delay: trip_update.delay,
+                                    trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),
+                                };
+        
+                                if trip_id.is_some() {
+                                    trip_updates_lookup_by_trip_id_to_trip_update_ids
+                                        .entry(trip_id.as_ref().unwrap().clone())
+                                        .or_insert(vec![trip_update_entity.id.clone()]);
+                                }
+        
+                                trip_updates.insert(trip_update_entity.id.clone(), trip_update);
+                            }
+                        }
+                    },
+                    _ => for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
+                        if let Some(trip_update) = &trip_update_entity.trip_update {
+                            let trip_id = trip_update.trip.trip_id.clone();
+    
+                            let mut trip_update = AspenisedTripUpdate {
+                                trip: trip_update.trip.clone().into(),
+                                vehicle: trip_update.vehicle.clone().map(|x| x.into()),
+                                stop_time_update: trip_update
+                                    .stop_time_update
+                                    .iter()
+                                    .map(|stu| AspenisedStopTimeUpdate {
+                                        stop_sequence: stu.stop_sequence,
+                                        stop_id: stu.stop_id.clone(),
+                                        arrival: stu.arrival.clone().map(|arrival| {
+                                            AspenStopTimeEvent {
+                                                delay: arrival.delay,
+                                                time: arrival.time,
+                                                uncertainty: arrival.uncertainty,
+                                            }
+                                        }),
+                                        departure: stu.departure.clone().map(|departure| {
+                                            AspenStopTimeEvent {
+                                                delay: departure.delay,
+                                                time: departure.time,
+                                                uncertainty: departure.uncertainty,
+                                            }
+                                        }),
+                                        platform_string: None,
+                                        schedule_relationship: stu.schedule_relationship,
+                                        departure_occupancy_status: stu.departure_occupancy_status,
+                                        stop_time_properties: stu
+                                            .stop_time_properties
+                                            .clone()
+                                            .map(|x| x.into()),
+                                    })
+                                    .collect(),
+                                timestamp: trip_update.timestamp,
+                                delay: trip_update.delay,
+                                trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),
+                            };
+    
+                            if trip_id.is_some() {
+                                trip_updates_lookup_by_trip_id_to_trip_update_ids
+                                    .entry(trip_id.as_ref().unwrap().clone())
+                                    .or_insert(vec![trip_update_entity.id.clone()]);
+                            }
+    
+                            trip_updates.insert(trip_update_entity.id.clone(), trip_update);
+                        }
                     }
                 }
             }
@@ -460,4 +654,20 @@ pub async fn new_rt_data(
         );
     }
     Ok(true)
+}
+
+pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
+    match chateau_id {
+        "metrolinktrains" => {
+            let url = "https://rtt.metrolinktrains.com/StationScheduleList.json";
+            let response = reqwest::get(url)
+                .await
+                .unwrap()
+                .json::<Vec<MetrolinkTrackData>>()
+                .await
+                .unwrap();
+            TrackData::Metrolink(Some(response))
+        }
+        _ => TrackData::None,
+    }
 }
