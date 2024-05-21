@@ -408,7 +408,7 @@ pub async fn new_rt_data(
                                 metrolinktrackdata.map(|metrolinktrackdata| metrolinktrackdata.into_iter().map(|x| {
                                     let formatted_track_designation = x.formatted_track_designation.clone();
                                     let stop_id = METROLINK_STOP_LIST.iter().find(|x| x.1 == formatted_track_designation);
-                                    let trip_id = short_name_to_id.get(&x.train_designation);
+                                    let trip_id = short_name_to_id.get(&x.train_designation.replace('M', ""));
                                     match stop_id {
                                         Some(stop_id) => {
                                             match trip_id {
