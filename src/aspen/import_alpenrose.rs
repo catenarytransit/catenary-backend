@@ -440,6 +440,8 @@ pub async fn new_rt_data(
                             _ => vec![]
                         };
 
+                        println!("Metrolink Cleaned array: {:?}", cleaned_array);
+
                         //convert into hashmap of (trip_id, stop_id)
                         let mut metrolink_track_data: AHashMap<(String, String), Vec<MetrolinkTrackDataCleaned>> = AHashMap::new();
 
