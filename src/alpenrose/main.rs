@@ -155,310 +155,326 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .unwrap();
 
     loop {
-        // create this worker as an ephemeral node
-        let this_worker_assignment = zk
-            .create(
-                format!("/alpenrose_workers/{}", this_worker_id).as_str(),
-                vec![],
-                Acl::open_unsafe(),
-                CreateMode::Ephemeral,
-            )
-            .await
-            .unwrap();
+        let is_online = online::tokio::check(Some(5)).await.is_ok();
 
-        //each feed id ephemeral id contains the last time updated, with none meaning the data has not been assigned to the node yet
-        let this_worker_assignments = zk
-            .create(
-                format!("/alpenrose_assignments/{}", this_worker_id).as_str(),
-                bincode::serialize(&None::<u64>).unwrap(),
-                Acl::open_unsafe(),
-                CreateMode::Persistent,
-            )
-            .await
-            .unwrap();
-
-        let leader_exists = zk.exists("/alpenrose_leader").await.unwrap();
-
-        if leader_exists.is_none() {
-            //attempt to become leader
-            let leader = zk
+        if is_online {
+            // create this worker as an ephemeral node
+            let this_worker_assignment = zk
                 .create(
-                    "/alpenrose_leader",
-                    bincode::serialize(&this_worker_id).unwrap(),
+                    format!("/alpenrose_workers/{}", this_worker_id).as_str(),
+                    vec![],
                     Acl::open_unsafe(),
                     CreateMode::Ephemeral,
                 )
                 .await
                 .unwrap();
 
-            if leader.is_err() {
-                println!("Failed to become leader");
+            //each feed id ephemeral id contains the last time updated, with none meaning the data has not been assigned to the node yet
+            let this_worker_assignments = zk
+                .create(
+                    format!("/alpenrose_assignments/{}", this_worker_id).as_str(),
+                    bincode::serialize(&None::<u64>).unwrap(),
+                    Acl::open_unsafe(),
+                    CreateMode::Persistent,
+                )
+                .await
+                .unwrap();
+
+            let leader_exists = zk.exists("/alpenrose_leader").await.unwrap();
+
+            if leader_exists.is_none() {
+                //attempt to become leader
+                let leader = zk
+                    .create(
+                        "/alpenrose_leader",
+                        bincode::serialize(&this_worker_id).unwrap(),
+                        Acl::open_unsafe(),
+                        CreateMode::Ephemeral,
+                    )
+                    .await
+                    .unwrap();
+
+                if leader.is_err() {
+                    println!("Failed to become leader");
+                }
             }
-        }
 
-        let leader = zk.watch().get_data("/alpenrose_leader").await.unwrap();
+            let leader = zk.watch().get_data("/alpenrose_leader").await.unwrap();
 
-        if let Some((leader_str_bytes, leader_stats)) = leader {
-            let leader_id: String = bincode::deserialize(&leader_str_bytes).unwrap();
+            if let Some((leader_str_bytes, leader_stats)) = leader {
+                let leader_id: String = bincode::deserialize(&leader_str_bytes).unwrap();
 
-            if &leader_id == this_worker_id.as_ref() {
-                //I am the leader!
+                if &leader_id == this_worker_id.as_ref() {
+                    //I am the leader!
 
-                let can_refresh_data = match last_check_time_ms {
-                    Some(last_check_time_ms) => {
-                        let current_time_ms = chrono::Utc::now().timestamp_millis() as u64;
-                        let time_since_last_check = current_time_ms - last_check_time_ms;
-                        time_since_last_check > 60_000
-                    }
-                    None => true,
-                };
+                    let can_refresh_data = match last_check_time_ms {
+                        Some(last_check_time_ms) => {
+                            let current_time_ms = chrono::Utc::now().timestamp_millis() as u64;
+                            let time_since_last_check = current_time_ms - last_check_time_ms;
+                            time_since_last_check > 60_000
+                        }
+                        None => true,
+                    };
 
-                //Get data from postgres
-                let feeds = get_feed_metadata(Arc::clone(&arc_conn_pool)).await;
+                    //Get data from postgres
+                    let feeds = get_feed_metadata(Arc::clone(&arc_conn_pool)).await;
 
-                match feeds {
-                    Ok(feeds) => {
-                        //sort into BTreeMap
+                    match feeds {
+                        Ok(feeds) => {
+                            //sort into BTreeMap
 
-                        let feeds_map: BTreeMap<String, RealtimeFeedFetch> = {
-                            let mut feeds_map = BTreeMap::new();
-                            for feed in feeds {
-                                feeds_map.insert(feed.feed_id.clone(), feed);
-                            }
-                            feeds_map
-                        };
-
-                        let fast_hash_of_feeds = fast_hash(&feeds_map);
-
-                        // list of current active worker nodes
-
-                        let mut worker_nodes =
-                            zk.watch().get_children("/alpenrose_workers").await.unwrap();
-
-                        if let Some(worker_nodes) = &mut worker_nodes {
-                            //sort worker nodes
-                            worker_nodes.sort();
-
-                            let fast_hash_of_worker_nodes = fast_hash(&worker_nodes);
-
-                            // either the list of workers
-                            if last_set_of_active_nodes_hash != Some(fast_hash_of_worker_nodes)
-                                || last_updated_feeds_hash != Some(fast_hash_of_feeds)
-                            {
-                                // divide feeds between worker nodes
-
-                                // feed id -> List of realtime fetch instructions
-                                let mut assignments: BTreeMap<
-                                    String,
-                                    HashMap<String, RealtimeFeedFetch>,
-                                > = BTreeMap::new();
-
-                                for (index, (feed_id, realtime_instructions)) in
-                                    feeds_map.iter().enumerate()
-                                {
-                                    let node_to_assign = &worker_nodes[index % worker_nodes.len()];
-
-                                    //append to list
-                                    assignments
-                                        .entry(node_to_assign.to_string())
-                                        .and_modify(|instructions| {
-                                            instructions.insert(
-                                                feed_id.clone(),
-                                                realtime_instructions.clone(),
-                                            );
-                                        })
-                                        .or_insert({
-                                            let mut map = HashMap::new();
-                                            map.insert(
-                                                feed_id.clone(),
-                                                realtime_instructions.clone(),
-                                            );
-                                            map
-                                        });
+                            let feeds_map: BTreeMap<String, RealtimeFeedFetch> = {
+                                let mut feeds_map = BTreeMap::new();
+                                for feed in feeds {
+                                    feeds_map.insert(feed.feed_id.clone(), feed);
                                 }
+                                feeds_map
+                            };
 
-                                //update assignments in zookeeper
+                            let fast_hash_of_feeds = fast_hash(&feeds_map);
 
-                                for (worker_id, instructions_hashmap) in assignments.iter() {
-                                    for (feed_id, realtime_instruction) in instructions_hashmap {
-                                        let feed_id_str = feed_id.clone();
+                            // list of current active worker nodes
 
-                                        //update each feed under the workers node's assignment
-                                        let existing_assignment = zk
-                                            .get_data(
-                                                format!(
-                                                    "/alpenrose_assignments/{}/{}",
-                                                    worker_id, feed_id_str
-                                                )
-                                                .as_str(),
-                                            )
-                                            .await?;
+                            let mut worker_nodes =
+                                zk.watch().get_children("/alpenrose_workers").await.unwrap();
 
-                                        if let Some(existing_assignment) = existing_assignment {
-                                            let existing_realtime_instruction: RealtimeFeedFetch =
-                                                bincode::deserialize(&existing_assignment.0)
-                                                    .unwrap();
+                            if let Some(worker_nodes) = &mut worker_nodes {
+                                //sort worker nodes
+                                worker_nodes.sort();
 
-                                            //check if the data has changed
-                                            if existing_realtime_instruction
-                                                != *realtime_instruction
-                                            {
-                                                let set_assignment = zk
-                                                    .set_data(
-                                                        format!(
-                                                            "/alpenrose_assignments/{}/{}",
-                                                            worker_id, feed_id_str
-                                                        )
-                                                        .as_str(),
-                                                        None,
-                                                        bincode::serialize(&realtime_instruction)
-                                                            .unwrap(),
-                                                    )
-                                                    .await?;
+                                let fast_hash_of_worker_nodes = fast_hash(&worker_nodes);
 
-                                                match set_assignment {
-                                                    Ok(_) => {
-                                                        println!(
-                                                            "Reassigned feed {} to worker {}",
-                                                            feed_id_str, worker_id
-                                                        );
-                                                    }
-                                                    Err(err) => {
-                                                        eprintln!("Error reassigning feed {} to worker {}: {:?}", feed_id_str, worker_id, err);
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            // the node doesn't exist, create it
-                                            let assignment = zk
-                                                .create(
+                                // either the list of workers
+                                if last_set_of_active_nodes_hash != Some(fast_hash_of_worker_nodes)
+                                    || last_updated_feeds_hash != Some(fast_hash_of_feeds)
+                                {
+                                    // divide feeds between worker nodes
+
+                                    // feed id -> List of realtime fetch instructions
+                                    let mut assignments: BTreeMap<
+                                        String,
+                                        HashMap<String, RealtimeFeedFetch>,
+                                    > = BTreeMap::new();
+
+                                    for (index, (feed_id, realtime_instructions)) in
+                                        feeds_map.iter().enumerate()
+                                    {
+                                        let node_to_assign =
+                                            &worker_nodes[index % worker_nodes.len()];
+
+                                        //append to list
+                                        assignments
+                                            .entry(node_to_assign.to_string())
+                                            .and_modify(|instructions| {
+                                                instructions.insert(
+                                                    feed_id.clone(),
+                                                    realtime_instructions.clone(),
+                                                );
+                                            })
+                                            .or_insert({
+                                                let mut map = HashMap::new();
+                                                map.insert(
+                                                    feed_id.clone(),
+                                                    realtime_instructions.clone(),
+                                                );
+                                                map
+                                            });
+                                    }
+
+                                    //update assignments in zookeeper
+
+                                    for (worker_id, instructions_hashmap) in assignments.iter() {
+                                        for (feed_id, realtime_instruction) in instructions_hashmap
+                                        {
+                                            let feed_id_str = feed_id.clone();
+
+                                            //update each feed under the workers node's assignment
+                                            let existing_assignment = zk
+                                                .get_data(
                                                     format!(
                                                         "/alpenrose_assignments/{}/{}",
                                                         worker_id, feed_id_str
                                                     )
                                                     .as_str(),
-                                                    bincode::serialize(&realtime_instruction)
-                                                        .unwrap(),
-                                                    Acl::open_unsafe(),
-                                                    CreateMode::Persistent,
                                                 )
                                                 .await?;
-                                        }
-                                    }
 
-                                    //update the worker's last updated time
-                                    let worker_assignment_metadata = zk
-                                        .create(
-                                            format!("/alpenrose_assignments/{}", this_worker_id)
-                                                .as_str(),
-                                            bincode::serialize(&Some(
-                                                catenary::duration_since_unix_epoch().as_millis(),
-                                            ))
-                                            .unwrap(),
-                                            Acl::open_unsafe(),
-                                            CreateMode::Persistent,
-                                        )
-                                        .await?;
+                                            if let Some(existing_assignment) = existing_assignment {
+                                                let existing_realtime_instruction: RealtimeFeedFetch =
+                                                bincode::deserialize(&existing_assignment.0)
+                                                    .unwrap();
 
-                                    match worker_assignment_metadata {
-                                        Ok(_) => {
-                                            println!("Updated worker assignment metadata");
-                                        }
-                                        Err(error::Create::NodeExists) => {
-                                            let set_worker_assignment_metadata = zk
-                                                .set_data(
-                                                    format!(
-                                                        "/alpenrose_assignments/{}",
-                                                        this_worker_id
+                                                //check if the data has changed
+                                                if existing_realtime_instruction
+                                                    != *realtime_instruction
+                                                {
+                                                    let set_assignment = zk
+                                                        .set_data(
+                                                            format!(
+                                                                "/alpenrose_assignments/{}/{}",
+                                                                worker_id, feed_id_str
+                                                            )
+                                                            .as_str(),
+                                                            None,
+                                                            bincode::serialize(
+                                                                &realtime_instruction,
+                                                            )
+                                                            .unwrap(),
+                                                        )
+                                                        .await?;
+
+                                                    match set_assignment {
+                                                        Ok(_) => {
+                                                            println!(
+                                                                "Reassigned feed {} to worker {}",
+                                                                feed_id_str, worker_id
+                                                            );
+                                                        }
+                                                        Err(err) => {
+                                                            eprintln!("Error reassigning feed {} to worker {}: {:?}", feed_id_str, worker_id, err);
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                // the node doesn't exist, create it
+                                                let assignment = zk
+                                                    .create(
+                                                        format!(
+                                                            "/alpenrose_assignments/{}/{}",
+                                                            worker_id, feed_id_str
+                                                        )
+                                                        .as_str(),
+                                                        bincode::serialize(&realtime_instruction)
+                                                            .unwrap(),
+                                                        Acl::open_unsafe(),
+                                                        CreateMode::Persistent,
                                                     )
-                                                    .as_str(),
-                                                    None,
-                                                    bincode::serialize(&Some(
-                                                        catenary::duration_since_unix_epoch()
-                                                            .as_millis(),
-                                                    ))
-                                                    .unwrap(),
-                                                )
-                                                .await?;
-
-                                            match set_worker_assignment_metadata {
-                                                Ok(_) => {
-                                                    println!(
-                                                        "Reassigned worker assignment metadata"
-                                                    );
-                                                }
-                                                Err(err) => {
-                                                    eprintln!("Error reassigning worker assignment metadata: {:?}", err);
-                                                }
+                                                    .await?;
                                             }
                                         }
-                                        Err(err) => {
-                                            eprintln!(
+
+                                        //update the worker's last updated time
+                                        let worker_assignment_metadata = zk
+                                            .create(
+                                                format!(
+                                                    "/alpenrose_assignments/{}",
+                                                    this_worker_id
+                                                )
+                                                .as_str(),
+                                                bincode::serialize(&Some(
+                                                    catenary::duration_since_unix_epoch()
+                                                        .as_millis(),
+                                                ))
+                                                .unwrap(),
+                                                Acl::open_unsafe(),
+                                                CreateMode::Persistent,
+                                            )
+                                            .await?;
+
+                                        match worker_assignment_metadata {
+                                            Ok(_) => {
+                                                println!("Updated worker assignment metadata");
+                                            }
+                                            Err(error::Create::NodeExists) => {
+                                                let set_worker_assignment_metadata = zk
+                                                    .set_data(
+                                                        format!(
+                                                            "/alpenrose_assignments/{}",
+                                                            this_worker_id
+                                                        )
+                                                        .as_str(),
+                                                        None,
+                                                        bincode::serialize(&Some(
+                                                            catenary::duration_since_unix_epoch()
+                                                                .as_millis(),
+                                                        ))
+                                                        .unwrap(),
+                                                    )
+                                                    .await?;
+
+                                                match set_worker_assignment_metadata {
+                                                    Ok(_) => {
+                                                        println!(
+                                                            "Reassigned worker assignment metadata"
+                                                        );
+                                                    }
+                                                    Err(err) => {
+                                                        eprintln!("Error reassigning worker assignment metadata: {:?}", err);
+                                                    }
+                                                }
+                                            }
+                                            Err(err) => {
+                                                eprintln!(
                                                 "Error updating worker assignment metadata: {:?}",
                                                 err
                                             );
+                                            }
                                         }
                                     }
-                                }
 
-                                //garbage collect old assignments for workers that no longer exist
+                                    //garbage collect old assignments for workers that no longer exist
 
-                                let worker_assignments =
-                                    zk.get_children("/alpenrose_assignments").await.unwrap();
+                                    let worker_assignments =
+                                        zk.get_children("/alpenrose_assignments").await.unwrap();
 
-                                let get_worker_nodes_again =
-                                    zk.watch().get_children("/alpenrose_workers").await.unwrap();
+                                    let get_worker_nodes_again = zk
+                                        .watch()
+                                        .get_children("/alpenrose_workers")
+                                        .await
+                                        .unwrap();
 
-                                if let Some(get_worker_nodes_again) = get_worker_nodes_again {
-                                    let hashset_of_worker_nodes = get_worker_nodes_again
-                                        .iter()
-                                        .map(|x| x.to_string())
-                                        .collect::<HashSet<String>>();
+                                    if let Some(get_worker_nodes_again) = get_worker_nodes_again {
+                                        let hashset_of_worker_nodes = get_worker_nodes_again
+                                            .iter()
+                                            .map(|x| x.to_string())
+                                            .collect::<HashSet<String>>();
 
-                                    if let Some(worker_assignments) = worker_assignments {
-                                        for worker_assignment in worker_assignments {
-                                            let worker_id = worker_assignment.to_string();
+                                        if let Some(worker_assignments) = worker_assignments {
+                                            for worker_assignment in worker_assignments {
+                                                let worker_id = worker_assignment.to_string();
 
-                                            let worker_exists =
-                                                hashset_of_worker_nodes.contains(&worker_id);
+                                                let worker_exists =
+                                                    hashset_of_worker_nodes.contains(&worker_id);
 
-                                            if !worker_exists {
-                                                let worker_assignments = zk
-                                                    .get_children(
-                                                        format!(
-                                                            "/alpenrose_assignments/{}",
-                                                            worker_id
+                                                if !worker_exists {
+                                                    let worker_assignments = zk
+                                                        .get_children(
+                                                            format!(
+                                                                "/alpenrose_assignments/{}",
+                                                                worker_id
+                                                            )
+                                                            .as_str(),
                                                         )
-                                                        .as_str(),
-                                                    )
-                                                    .await
-                                                    .unwrap();
+                                                        .await
+                                                        .unwrap();
 
-                                                if let Some(worker_assignments) = worker_assignments
-                                                {
-                                                    for feed_id in worker_assignments {
-                                                        let feed_id = feed_id.to_string();
+                                                    if let Some(worker_assignments) =
+                                                        worker_assignments
+                                                    {
+                                                        for feed_id in worker_assignments {
+                                                            let feed_id = feed_id.to_string();
 
-                                                        let delete_assignment = zk
-                                                            .delete(
-                                                                format!(
+                                                            let delete_assignment = zk
+                                                                .delete(
+                                                                    format!(
                                                                     "/alpenrose_assignments/{}/{}",
                                                                     worker_id, feed_id
                                                                 )
-                                                                .as_str(),
-                                                                None,
-                                                            )
-                                                            .await?;
+                                                                    .as_str(),
+                                                                    None,
+                                                                )
+                                                                .await?;
 
-                                                        match delete_assignment {
-                                                            Ok(_) => {
-                                                                println!(
+                                                            match delete_assignment {
+                                                                Ok(_) => {
+                                                                    println!(
                                                                             "Deleted assignment for feed {} for worker {}",
                                                                             feed_id, worker_id
                                                                         );
-                                                            }
-                                                            Err(err) => {
-                                                                eprintln!("Error deleting assignment for feed {} for worker {}: {:?}", feed_id, worker_id, err);
+                                                                }
+                                                                Err(err) => {
+                                                                    eprintln!("Error deleting assignment for feed {} for worker {}: {:?}", feed_id, worker_id, err);
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -469,72 +485,106 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                 }
                             }
                         }
-                    }
-                    Err(err) => {
-                        eprintln!("Error getting feed metadata: {:?}", err);
-                    }
-                }
-            }
-        }
-
-        //read from zookeeper to get the current assignments for this node
-
-        let last_updated_assignment_time_zk_fetch = zk
-            .get_data(format!("/alpenrose_assignments/{}", this_worker_id).as_str())
-            .await
-            .unwrap();
-
-        if let Some(last_updated_assignment_time) = last_updated_assignment_time_zk_fetch {
-            let last_updated_assignment_time =
-                bincode::deserialize(&last_updated_assignment_time.0).unwrap_or(None::<u64>);
-
-            //is the time newer than the last time we updated the assignments for this worker node?
-            if last_updated_assignment_time != last_updated_ms_for_this_worker {
-                let feed_ids = zk
-                    .get_children(format!("/alpenrose_assignments/{}", this_worker_id).as_str())
-                    .await
-                    .unwrap();
-
-                if let Some(feed_ids) = feed_ids {
-                    let mut assignments_for_this_worker_lock =
-                        assignments_for_this_worker.write().await;
-
-                    let hashset_of_feed_ids: HashSet<String> =
-                        feed_ids.iter().map(|x| x.to_string()).collect();
-
-                    for feed_id in feed_ids.iter() {
-                        let assignment_data = zk
-                            .get_data(
-                                format!("/alpenrose_assignments/{}/{}", this_worker_id, feed_id)
-                                    .as_str(),
-                            )
-                            .await
-                            .unwrap();
-
-                        if let Some(assignment_data) = assignment_data {
-                            let realtime_feed_fetch: RealtimeFeedFetch =
-                                bincode::deserialize(&assignment_data.0).unwrap();
-
-                            assignments_for_this_worker_lock
-                                .insert(feed_id.to_string(), realtime_feed_fetch);
+                        Err(err) => {
+                            eprintln!("Error getting feed metadata: {:?}", err);
                         }
                     }
-
-                    //cleanup from hashmap this worker is no longer supposed to handle
-                    assignments_for_this_worker_lock
-                        .retain(|key, _value| hashset_of_feed_ids.contains(key));
                 }
             }
+
+            //read from zookeeper to get the current assignments for this node
+
+            let last_updated_assignment_time_zk_fetch = zk
+                .get_data(format!("/alpenrose_assignments/{}", this_worker_id).as_str())
+                .await
+                .unwrap();
+
+            if let Some(last_updated_assignment_time) = last_updated_assignment_time_zk_fetch {
+                let last_updated_assignment_time =
+                    bincode::deserialize(&last_updated_assignment_time.0).unwrap_or(None::<u64>);
+
+                //is the time newer than the last time we updated the assignments for this worker node?
+                if last_updated_assignment_time != last_updated_ms_for_this_worker {
+                    let feed_ids = zk
+                        .get_children(format!("/alpenrose_assignments/{}", this_worker_id).as_str())
+                        .await
+                        .unwrap();
+
+                    if let Some(feed_ids) = feed_ids {
+                        let mut assignments_for_this_worker_lock =
+                            assignments_for_this_worker.write().await;
+
+                        let hashset_of_feed_ids: HashSet<String> =
+                            feed_ids.iter().map(|x| x.to_string()).collect();
+
+                        for feed_id in feed_ids.iter() {
+                            let assignment_data = zk
+                                .get_data(
+                                    format!(
+                                        "/alpenrose_assignments/{}/{}",
+                                        this_worker_id, feed_id
+                                    )
+                                    .as_str(),
+                                )
+                                .await
+                                .unwrap();
+
+                            if let Some(assignment_data) = assignment_data {
+                                let realtime_feed_fetch: RealtimeFeedFetch =
+                                    bincode::deserialize(&assignment_data.0).unwrap();
+
+                                assignments_for_this_worker_lock
+                                    .insert(feed_id.to_string(), realtime_feed_fetch);
+                            }
+                        }
+
+                        //cleanup from hashmap this worker is no longer supposed to handle
+                        assignments_for_this_worker_lock
+                            .retain(|key, _value| hashset_of_feed_ids.contains(key));
+                    }
+                }
+            }
+
+            //get the feed data from the feeds assigned to this worker
+
+            single_fetch_time::single_fetch_time(
+                client.clone(),
+                Arc::clone(&assignments_for_this_worker),
+                Arc::clone(&last_fetch_per_feed),
+            )
+            .await?;
+        } else {
+            //delete the ephemeral node
+            let delete_worker = zk
+                .delete(format!("/alpenrose_workers/{}", this_worker_id).as_str(), None)
+                .await
+                .unwrap();
+
+            if delete_worker.is_err() {
+                println!("Failed to delete worker node");
+            }
+
+            let delete_worker_assignments = zk
+                .delete(
+                    format!("/alpenrose_assignments/{}", this_worker_id).as_str(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            if delete_worker_assignments.is_err() {
+                println!("Failed to delete worker assignments node");
+            }
+
+            let delete_leader = zk
+                .delete("/alpenrose_leader", None)
+                .await
+                .unwrap();
+
+            if delete_leader.is_err() {
+                println!("Failed to delete leader node");
+            }
         }
-
-        //get the feed data from the feeds assigned to this worker
-
-        single_fetch_time::single_fetch_time(
-            client.clone(),
-            Arc::clone(&assignments_for_this_worker),
-            Arc::clone(&last_fetch_per_feed),
-        )
-        .await?;
     }
 }
 

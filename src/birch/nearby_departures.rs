@@ -24,7 +24,7 @@ struct DepartingTrip {
     arrival_realtime_s: u64,
     stop_sequence: Option<u16>,
     stop_id: String,
-    route_type: i16
+    route_type: i16,
 }
 
 #[actix_web::get("/nearbydeparturesfromcoords/")]

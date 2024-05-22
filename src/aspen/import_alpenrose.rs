@@ -5,6 +5,7 @@
 extern crate catenary;
 use ahash::{AHashMap, AHashSet};
 use catenary::aspen_dataset::*;
+use catenary::metrolink_ptc_to_stop_id::METROLINK_STOP_LIST;
 use catenary::parse_gtfs_rt_message;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::route_id_transform;
@@ -21,7 +22,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use catenary::metrolink_ptc_to_stop_id::METROLINK_STOP_LIST;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-mta~nyc~rt~subway~1~2~3~4~5~6~7",
@@ -61,9 +61,8 @@ struct MetrolinkTrackDataCleaned {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 enum MetrolinkEventType {
     Arrival,
-    Departure
+    Departure,
 }
-
 
 #[derive(Clone, Debug)]
 pub enum TrackData {
@@ -373,17 +372,23 @@ pub async fn new_rt_data(
                     "metrolinktrains" => {
                         //query all the trips using eq any
 
-                        let mut trip_id_to_trip: AHashMap<String, catenary::models::CompressedTrip> =
-                            AHashMap::new();
+                        let mut trip_id_to_trip: AHashMap<
+                            String,
+                            catenary::models::CompressedTrip,
+                        > = AHashMap::new();
 
-                        let trips_compressed_lookup:Vec<catenary::models::CompressedTrip> = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                            .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(&chateau_id))
-                            .filter(
-                                catenary::schema::gtfs::trips_compressed::dsl::trip_id
-                                    .eq_any(trip_ids_to_lookup.iter()),
-                            )
-                            .load::<catenary::models::CompressedTrip>(conn)
-                            .await?;
+                        let trips_compressed_lookup: Vec<catenary::models::CompressedTrip> =
+                            catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                                .filter(
+                                    catenary::schema::gtfs::trips_compressed::dsl::chateau
+                                        .eq(&chateau_id),
+                                )
+                                .filter(
+                                    catenary::schema::gtfs::trips_compressed::dsl::trip_id
+                                        .eq_any(trip_ids_to_lookup.iter()),
+                                )
+                                .load::<catenary::models::CompressedTrip>(conn)
+                                .await?;
 
                         for trip in trips_compressed_lookup {
                             trip_id_to_trip.insert(trip.trip_id.clone(), trip);
@@ -392,67 +397,90 @@ pub async fn new_rt_data(
                         let trip_id_to_trip = trip_id_to_trip;
 
                         let short_name_to_id = {
-                            let mut short_name_to_id:AHashMap<String, String> = AHashMap::new();
+                            let mut short_name_to_id: AHashMap<String, String> = AHashMap::new();
 
                             for trip in trip_id_to_trip.values() {
                                 if let Some(short_name) = &trip.trip_short_name {
-                                    short_name_to_id.insert(short_name.clone(), trip.trip_id.clone());
+                                    short_name_to_id
+                                        .insert(short_name.clone(), trip.trip_id.clone());
                                 }
                             }
 
                             short_name_to_id
                         };
 
-                        let cleaned_array:Vec<MetrolinkTrackDataCleaned> = match fetched_track_data.clone() {
-                            TrackData::Metrolink(metrolinktrackdata) => {
-                                metrolinktrackdata.map(|metrolinktrackdata| metrolinktrackdata.into_iter().map(|x| {
-                                    let formatted_track_designation = x.formatted_track_designation.clone();
-                                    let stop_id = METROLINK_STOP_LIST.iter().find(|x| x.1 == formatted_track_designation);
-                                    let trip_id = short_name_to_id.get(&x.train_designation.replace('M', ""));
-                                    match stop_id {
-                                        Some(stop_id) => {
-                                            match trip_id {
+                        let cleaned_array: Vec<MetrolinkTrackDataCleaned> = match fetched_track_data
+                            .clone()
+                        {
+                            TrackData::Metrolink(metrolinktrackdata) => metrolinktrackdata
+                                .map(|metrolinktrackdata| {
+                                    metrolinktrackdata.into_iter().map(|x| {
+                                        let formatted_track_designation =
+                                            x.formatted_track_designation.clone();
+                                        let stop_id = METROLINK_STOP_LIST
+                                            .iter()
+                                            .find(|x| x.1 == formatted_track_designation);
+                                        let trip_id = short_name_to_id
+                                            .get(&x.train_designation.replace('M', ""));
+                                        match stop_id {
+                                            Some(stop_id) => match trip_id {
                                                 Some(trip_id) => {
-                                                    let train_movement_time_num = x.train_movement_time.replace("/Date(", "").replace(")/", "").parse::<u64>().unwrap() / 1000;
+                                                    let train_movement_time_num = x
+                                                        .train_movement_time
+                                                        .replace("/Date(", "")
+                                                        .replace(")/", "")
+                                                        .parse::<u64>()
+                                                        .unwrap()
+                                                        / 1000;
                                                     Some(MetrolinkTrackDataCleaned {
                                                         stop_id: stop_id.0.to_string(),
-                                                        train_movement_time: train_movement_time_num,
+                                                        train_movement_time:
+                                                            train_movement_time_num,
                                                         trip_id: trip_id.clone(),
                                                         event_type: match x.event_type.as_str() {
-                                                            "Arrival" => MetrolinkEventType::Arrival,
-                                                            "Departure" => MetrolinkEventType::Departure,
-                                                            _ => MetrolinkEventType::Arrival
+                                                            "Arrival" => {
+                                                                MetrolinkEventType::Arrival
+                                                            }
+                                                            "Departure" => {
+                                                                MetrolinkEventType::Departure
+                                                            }
+                                                            _ => MetrolinkEventType::Arrival,
                                                         },
-                                                        formatted_track_designation
+                                                        formatted_track_designation,
                                                     })
-                                                },
-                                                None => {
-                                                   None
                                                 }
-                                            }
-                                        },
-                                        None => {
-                                           None
+                                                None => None,
+                                            },
+                                            None => None,
                                         }
-                                    }
-                                })).into_iter().flatten().flatten().collect()
-                            },
-                            _ => vec![]
+                                    })
+                                })
+                                .into_iter()
+                                .flatten()
+                                .flatten()
+                                .collect(),
+                            _ => vec![],
                         };
 
                         println!("Metrolink Cleaned array: {:?}", cleaned_array);
 
                         //convert into hashmap of (trip_id, stop_id)
-                        let mut metrolink_track_data: AHashMap<(String, String), Vec<MetrolinkTrackDataCleaned>> = AHashMap::new();
+                        let mut metrolink_track_data: AHashMap<
+                            (String, String),
+                            Vec<MetrolinkTrackDataCleaned>,
+                        > = AHashMap::new();
 
                         for cleaned in cleaned_array {
-                            metrolink_track_data.entry((cleaned.trip_id.clone(), cleaned.stop_id.clone())).and_modify(|x| x.push(cleaned.clone())).or_insert(vec![cleaned.clone()]);
+                            metrolink_track_data
+                                .entry((cleaned.trip_id.clone(), cleaned.stop_id.clone()))
+                                .and_modify(|x| x.push(cleaned.clone()))
+                                .or_insert(vec![cleaned.clone()]);
                         }
 
                         for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
                             if let Some(trip_update) = &trip_update_entity.trip_update {
                                 let trip_id = trip_update.trip.trip_id.clone();
-        
+
                                 let mut trip_update = AspenisedTripUpdate {
                                     trip: trip_update.trip.clone().into(),
                                     vehicle: trip_update.vehicle.clone().map(|x| x.into()),
@@ -531,65 +559,71 @@ pub async fn new_rt_data(
                                     delay: trip_update.delay,
                                     trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),
                                 };
-        
+
                                 if trip_id.is_some() {
                                     trip_updates_lookup_by_trip_id_to_trip_update_ids
                                         .entry(trip_id.as_ref().unwrap().clone())
                                         .or_insert(vec![trip_update_entity.id.clone()]);
                                 }
-        
+
                                 trip_updates.insert(trip_update_entity.id.clone(), trip_update);
                             }
                         }
-                    },
-                    _ => for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
-                        if let Some(trip_update) = &trip_update_entity.trip_update {
-                            let trip_id = trip_update.trip.trip_id.clone();
-    
-                            let mut trip_update = AspenisedTripUpdate {
-                                trip: trip_update.trip.clone().into(),
-                                vehicle: trip_update.vehicle.clone().map(|x| x.into()),
-                                stop_time_update: trip_update
-                                    .stop_time_update
-                                    .iter()
-                                    .map(|stu| AspenisedStopTimeUpdate {
-                                        stop_sequence: stu.stop_sequence,
-                                        stop_id: stu.stop_id.clone(),
-                                        arrival: stu.arrival.clone().map(|arrival| {
-                                            AspenStopTimeEvent {
-                                                delay: arrival.delay,
-                                                time: arrival.time,
-                                                uncertainty: arrival.uncertainty,
-                                            }
-                                        }),
-                                        departure: stu.departure.clone().map(|departure| {
-                                            AspenStopTimeEvent {
-                                                delay: departure.delay,
-                                                time: departure.time,
-                                                uncertainty: departure.uncertainty,
-                                            }
-                                        }),
-                                        platform_string: None,
-                                        schedule_relationship: stu.schedule_relationship,
-                                        departure_occupancy_status: stu.departure_occupancy_status,
-                                        stop_time_properties: stu
-                                            .stop_time_properties
-                                            .clone()
-                                            .map(|x| x.into()),
-                                    })
-                                    .collect(),
-                                timestamp: trip_update.timestamp,
-                                delay: trip_update.delay,
-                                trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),
-                            };
-    
-                            if trip_id.is_some() {
-                                trip_updates_lookup_by_trip_id_to_trip_update_ids
-                                    .entry(trip_id.as_ref().unwrap().clone())
-                                    .or_insert(vec![trip_update_entity.id.clone()]);
+                    }
+                    _ => {
+                        for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
+                            if let Some(trip_update) = &trip_update_entity.trip_update {
+                                let trip_id = trip_update.trip.trip_id.clone();
+
+                                let mut trip_update = AspenisedTripUpdate {
+                                    trip: trip_update.trip.clone().into(),
+                                    vehicle: trip_update.vehicle.clone().map(|x| x.into()),
+                                    stop_time_update: trip_update
+                                        .stop_time_update
+                                        .iter()
+                                        .map(|stu| AspenisedStopTimeUpdate {
+                                            stop_sequence: stu.stop_sequence,
+                                            stop_id: stu.stop_id.clone(),
+                                            arrival: stu.arrival.clone().map(|arrival| {
+                                                AspenStopTimeEvent {
+                                                    delay: arrival.delay,
+                                                    time: arrival.time,
+                                                    uncertainty: arrival.uncertainty,
+                                                }
+                                            }),
+                                            departure: stu.departure.clone().map(|departure| {
+                                                AspenStopTimeEvent {
+                                                    delay: departure.delay,
+                                                    time: departure.time,
+                                                    uncertainty: departure.uncertainty,
+                                                }
+                                            }),
+                                            platform_string: None,
+                                            schedule_relationship: stu.schedule_relationship,
+                                            departure_occupancy_status: stu
+                                                .departure_occupancy_status,
+                                            stop_time_properties: stu
+                                                .stop_time_properties
+                                                .clone()
+                                                .map(|x| x.into()),
+                                        })
+                                        .collect(),
+                                    timestamp: trip_update.timestamp,
+                                    delay: trip_update.delay,
+                                    trip_properties: trip_update
+                                        .trip_properties
+                                        .clone()
+                                        .map(|x| x.into()),
+                                };
+
+                                if trip_id.is_some() {
+                                    trip_updates_lookup_by_trip_id_to_trip_update_ids
+                                        .entry(trip_id.as_ref().unwrap().clone())
+                                        .or_insert(vec![trip_update_entity.id.clone()]);
+                                }
+
+                                trip_updates.insert(trip_update_entity.id.clone(), trip_update);
                             }
-    
-                            trip_updates.insert(trip_update_entity.id.clone(), trip_update);
                         }
                     }
                 }
