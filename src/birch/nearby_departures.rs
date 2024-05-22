@@ -12,6 +12,21 @@ struct NearbyFromCoords {
     timestamp_seconds: u64,
 }
 
+struct DepartingTrip {
+    chateau_id: String,
+    trip_id: String,
+    gtfs_frequency_start_time: Option<String>,
+    gtfs_schedule_start_day: String,
+    is_frequency: String,
+    departure_schedule_s: u64,
+    departure_realtime_s: u64,
+    arrival_schedule_s: u64,
+    arrival_realtime_s: u64,
+    stop_sequence: Option<u16>,
+    stop_id: String,
+    route_type: i16
+}
+
 #[actix_web::get("/nearbydeparturesfromcoords/")]
 pub async fn nearby_from_coords(
     req: HttpRequest,
