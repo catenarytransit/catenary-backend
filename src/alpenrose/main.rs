@@ -556,7 +556,10 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         } else {
             //delete the ephemeral node
             let delete_worker = zk
-                .delete(format!("/alpenrose_workers/{}", this_worker_id).as_str(), None)
+                .delete(
+                    format!("/alpenrose_workers/{}", this_worker_id).as_str(),
+                    None,
+                )
                 .await
                 .unwrap();
 
@@ -576,13 +579,19 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 println!("Failed to delete worker assignments node");
             }
 
-            let delete_leader = zk
-                .delete("/alpenrose_leader", None)
-                .await
-                .unwrap();
+            //delete the leader node if this node is the leader
+            let leader = zk.watch().get_data("/alpenrose_leader").await.unwrap();
 
-            if delete_leader.is_err() {
-                println!("Failed to delete leader node");
+            if let Some((leader_str_bytes, leader_stats)) = leader {
+                let leader_id: String = bincode::deserialize(&leader_str_bytes).unwrap();
+
+                if &leader_id == this_worker_id.as_ref() {
+                    let delete_leader = zk.delete("/alpenrose_leader", None).await.unwrap();
+
+                    if delete_leader.is_err() {
+                        println!("Failed to delete leader node");
+                    }
+                }
             }
         }
     }
