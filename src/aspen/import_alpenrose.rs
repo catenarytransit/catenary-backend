@@ -288,16 +288,13 @@ pub async fn new_rt_data(
                                                     }
                                                 },
                                                 None => None
-                                            },
+                                            }.map(|headsign| headsign.replace("-Exact Fare", "")),
                                         trip_short_name: match &trip.trip_id {
                                             Some(trip_id) => {
                                                 let trip = trip_id_to_trip.get(&trip_id.clone());
                                                 match trip {
                                                     Some(trip) => {
-                                                        match &trip.trip_short_name {
-                                                            Some(trip_short_name) => Some(trip_short_name.clone()),
-                                                            None => None
-                                                        }
+                                                        trip.trip_short_name.clone()
                                                     },
                                                     None => None
                                                 }
