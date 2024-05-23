@@ -56,6 +56,7 @@ use gtfs_rt::VehicleDescriptor;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::Duration;
+use gtfs_rt::translated_image::LocalizedImage;
 use std::time::{SystemTime, UNIX_EPOCH};
 pub mod metrolink_ptc_to_stop_id;
 
@@ -225,6 +226,24 @@ pub mod aspen_dataset {
         pub url: String,
         pub media_type: String,
         pub language: Option<String>,
+    }
+
+    impl From<gtfs_rt::TranslatedString> for AspenTranslatedString {
+        fn from(translated_string: gtfs_rt::TranslatedString) -> Self {
+            AspenTranslatedString {
+                translation: translated_string.translation.into_iter().map(|x| x.into()).collect(),
+            }
+        }
+    }
+
+    impl From<LocalizedImage> for AspenLocalisedImage {
+        fn from(localised_image: LocalizedImage) -> Self {
+            AspenLocalisedImage {
+                url: localised_image.url,
+                media_type: localised_image.media_type,
+                language: localised_image.language,
+            }
+        }
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
