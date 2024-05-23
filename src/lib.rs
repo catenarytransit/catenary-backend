@@ -180,11 +180,69 @@ pub mod aspen_dataset {
         //id to trip update
         pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
         pub trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
-        pub raw_alerts: AHashMap<String, gtfs_rt::Alert>,
+        //        pub raw_alerts: AHashMap<String, gtfs_rt::Alert>,
+        pub aspenised_alerts: AHashMap<String, AspenisedAlert>,
         pub impacted_routes_alerts: Option<AHashMap<String, Vec<String>>>,
         pub impacted_stops_alerts: Option<AHashMap<String, Vec<String>>>,
         pub impacted_routes_stops_alerts: Option<AHashMap<String, Vec<String>>>,
         pub last_updated_time_ms: u64,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenTimeRange {
+        pub start: Option<u64>,
+        pub end: Option<u64>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenInformedEntity {
+        pub agency_id: Option<String>,
+        pub route_id: Option<String>,
+        pub route_type: Option<i32>,
+        pub trip: Option<AspenRawTripInfo>,
+        pub stop_id: Option<String>,
+        pub direction_id: Option<u32>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenTranslatedString {
+        pub translation: Vec<AspenTranslation>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenTranslation {
+        pub text: String,
+        pub language: Option<String>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenTranslatedImage {
+        pub image: Vec<AspenLocalisedImage>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenLocalisedImage {
+        pub url: String,
+        pub media_type: String,
+        pub language: Option<String>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct AspenisedAlert {
+        pub active_period: Vec<AspenTimeRange>,
+        pub informed_entity: Vec<AspenRawTripInfo>,
+        pub cause: Option<i32>,
+        pub effect: Option<i32>,
+        pub url: Option<AspenTranslatedString>,
+        pub header_text: Option<AspenTranslatedString>,
+        pub description_text: Option<AspenTranslatedString>,
+        pub tts_header_text: Option<AspenTranslatedString>,
+        pub tts_description_text: Option<AspenTranslatedString>,
+        pub severity_level: Option<i32>,
+        pub image: Option<AspenTranslatedImage>,
+        pub image_alternative_text: Option<AspenTranslatedString>,
+        pub cause_detail: Option<AspenTranslatedString>,
+        pub effect_detail: Option<AspenTranslatedString>,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]

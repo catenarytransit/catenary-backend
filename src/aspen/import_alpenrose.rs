@@ -643,6 +643,10 @@ pub async fn new_rt_data(
                 );
             }
         }
+
+        //let alerts hashmap
+        let mut alerts: AHashMap<String, AspenisedAlert> = AHashMap::new();
+
         //Insert data back into process-wide authoritative_data_store
 
         authoritative_data_store
@@ -654,7 +658,7 @@ pub async fn new_rt_data(
                     trip_updates: trip_updates.clone(),
                     trip_updates_lookup_by_trip_id_to_trip_update_ids:
                         trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
-                    raw_alerts: AHashMap::new(),
+                    aspenised_alerts: AHashMap::new(),
                     impacted_routes_alerts: None,
                     impacted_stops_alerts: None,
                     impacted_routes_stops_alerts: None,
@@ -667,7 +671,7 @@ pub async fn new_rt_data(
                 trip_updates: trip_updates.clone(),
                 trip_updates_lookup_by_trip_id_to_trip_update_ids:
                     trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
-                raw_alerts: AHashMap::new(),
+                aspenised_alerts: AHashMap::new(),
                 impacted_routes_alerts: None,
                 impacted_stops_alerts: None,
                 impacted_routes_stops_alerts: None,
