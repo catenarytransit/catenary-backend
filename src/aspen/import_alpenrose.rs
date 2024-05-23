@@ -643,7 +643,6 @@ pub async fn new_rt_data(
                 );
             }
         }
-
         //Insert data back into process-wide authoritative_data_store
 
         authoritative_data_store
