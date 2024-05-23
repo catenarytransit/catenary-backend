@@ -346,12 +346,10 @@ pub async fn new_rt_data(
                         if let Some(trip) = &vehicle_pos.trip {
                             if let Some(route_id) = &trip.route_id {
                                 route_ids_to_insert.insert(route_id.clone());
-                            } else {
-                                if let Some(trip_id) = &trip.trip_id {
-                                    let trip = trip_id_to_trip.get(trip_id);
-                                    if let Some(trip) = &trip {
-                                        route_ids_to_insert.insert(trip.route_id.clone());
-                                    }
+                            } else if let Some(trip_id) = &trip.trip_id {
+                                let trip = trip_id_to_trip.get(trip_id);
+                                if let Some(trip) = &trip {
+                                    route_ids_to_insert.insert(trip.route_id.clone());
                                 }
                             }
                         }
@@ -478,7 +476,7 @@ pub async fn new_rt_data(
                             if let Some(trip_update) = &trip_update_entity.trip_update {
                                 let trip_id = trip_update.trip.trip_id.clone();
 
-                                let mut trip_update = AspenisedTripUpdate {
+                                let trip_update = AspenisedTripUpdate {
                                     trip: trip_update.trip.clone().into(),
                                     vehicle: trip_update.vehicle.clone().map(|x| x.into()),
                                     stop_time_update: trip_update
@@ -557,9 +555,9 @@ pub async fn new_rt_data(
                                     trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),
                                 };
 
-                                if trip_id.is_some() {
+                                if let Some(trip_id) = &trip_id {
                                     trip_updates_lookup_by_trip_id_to_trip_update_ids
-                                        .entry(trip_id.as_ref().unwrap().clone())
+                                        .entry(trip_id.clone())
                                         .or_insert(vec![trip_update_entity.id.clone()]);
                                 }
 
