@@ -297,7 +297,7 @@ pub async fn new_rt_data(
                                                     }
                                                 },
                                                 None => None
-                                            }.map(|headsign| headsign.replace("-Exact Fare", "")),
+                                            }.map(|headsign| headsign.replace("-Exact Fare", "").replace(" - Funded in part by/SB County Measure A", "")),
                                         trip_short_name: match &trip.trip_id {
                                             Some(trip_id) => {
                                                 let trip = trip_id_to_trip.get(&trip_id.clone());
