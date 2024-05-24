@@ -216,7 +216,7 @@ pub async fn gtfs_process_feed(
             chateau: chateau_id.to_string(),
             attempt_id: attempt_id.to_string(),
             timezone: itinerary.timezone.clone(),
-            trip_headsign: itinerary.trip_headsign.clone(),map(|x| x.replace(" - Funded in part by/SB County Measure A", "")),
+            trip_headsign: itinerary.trip_headsign.clone().map(|x| x.replace(" - Funded in part by/SB County Measure A", "")),
             trip_headsign_translations: None,
             itinerary_pattern_id: itinerary_id.to_string(),
             trip_ids: reduction
