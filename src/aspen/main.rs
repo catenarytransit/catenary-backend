@@ -64,6 +64,9 @@ use catenary::parse_gtfs_rt_message;
 use std::collections::HashSet;
 use tokio_zookeeper::ZooKeeper;
 use tokio_zookeeper::{Acl, CreateMode};
+use std::collections::HashMap;
+
+mod alerts_responder;
 
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
@@ -89,6 +92,58 @@ impl AspenRpc for AspenServer {
             Duration::from_millis(Uniform::new_inclusive(1, 10).sample(&mut thread_rng()));
         time::sleep(sleep_time).await;
         format!("Hello, {name}! You are connected from {}", self.addr)
+    }
+
+    async fn get_alerts_from_route_id(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        route_id: String,
+    ) -> Option<Vec<AspenisedAlert>> {
+        alerts_responder::get_alerts_from_route_id(
+            Arc::clone(&self.authoritative_data_store),
+            &chateau_id,
+            &route_id,
+        )
+    }
+
+    async fn get_alerts_from_stop_id(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        stop_id: String,
+    ) -> Option<Vec<AspenisedAlert>> {
+        alerts_responder::get_alerts_from_stop_id(
+            Arc::clone(&self.authoritative_data_store),
+            &chateau_id,
+            &stop_id,
+        )
+    }
+
+    async fn get_alert_from_stop_ids(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        stop_ids: Vec<String>,
+    ) -> Option<HashMap<String, Vec<AspenisedAlert>>> {
+        alerts_responder::get_alert_from_stop_ids(
+            Arc::clone(&self.authoritative_data_store),
+            &chateau_id,
+            stop_ids,
+        )
+    }
+
+    async fn get_alert_from_trip_id(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        trip_id: String,
+    ) -> Option<Vec<AspenisedAlert>> {
+        alerts_responder::get_alert_from_trip_id(
+            Arc::clone(&self.authoritative_data_store),
+            &chateau_id,
+            &trip_id,
+        )
     }
 
     async fn from_alpenrose(

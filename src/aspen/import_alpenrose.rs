@@ -103,6 +103,15 @@ pub async fn new_rt_data(
     let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> =
         AHashMap::new();
 
+
+    //let alerts hashmap
+    let mut alerts: AHashMap<String, AspenisedAlert> = AHashMap::new();
+
+    let mut impacted_route_id_to_alert_ids : AHashMap<String, Vec<String>> = AHashMap::new();
+    let mut impacted_stop_id_to_alert_ids : AHashMap<String, Vec<String>> = AHashMap::new();
+    let mut impact_trip_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
+    let mut general_alerts: AHashMap<String, Vec<String>> = AHashMap::new();
+
     use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
 
@@ -365,6 +374,7 @@ pub async fn new_rt_data(
 
                 match chateau_id.as_str() {
                     "metrolinktrains" => {
+                        println!("METROLINK PROCESSING");
                         //query all the trips using eq any
 
                         let mut trip_id_to_trip: AHashMap<
@@ -623,6 +633,22 @@ pub async fn new_rt_data(
                     }
                 }
             }
+
+            if let Some(alert_updates_gtfs_rt) = authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
+
+            {
+                let alert_updates_gtfs_rt = alert_updates_gtfs_rt.get();
+
+                for alert_entity in alert_updates_gtfs_rt.entity.iter() {
+                    if let Some(alert) = &alert_entity.alert {
+                        let alert_id = alert_entity.id.clone();
+
+                        let mut alert: AspenisedAlert = alert.clone().into();
+
+                        alerts.insert(alert_id.clone(), alert);
+                    }
+                }
+            }
         }
 
         //insert the route cache
@@ -644,9 +670,6 @@ pub async fn new_rt_data(
             }
         }
 
-        //let alerts hashmap
-        let mut alerts: AHashMap<String, AspenisedAlert> = AHashMap::new();
-
         //Insert data back into process-wide authoritative_data_store
 
         authoritative_data_store
@@ -659,9 +682,9 @@ pub async fn new_rt_data(
                     trip_updates_lookup_by_trip_id_to_trip_update_ids:
                         trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
                     aspenised_alerts: AHashMap::new(),
-                    impacted_routes_alerts: None,
-                    impacted_stops_alerts: None,
-                    impacted_routes_stops_alerts: None,
+                    impacted_routes_alerts: AHashMap::new(),
+                    impacted_stops_alerts: AHashMap::new(),
+                    impacted_routes_stops_alerts: AHashMap::new(),
                     last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
                 }
             })
@@ -672,9 +695,9 @@ pub async fn new_rt_data(
                 trip_updates_lookup_by_trip_id_to_trip_update_ids:
                     trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
                 aspenised_alerts: AHashMap::new(),
-                impacted_routes_alerts: None,
-                impacted_stops_alerts: None,
-                impacted_routes_stops_alerts: None,
+                impacted_routes_alerts:AHashMap::new(),
+                impacted_stops_alerts: AHashMap::new(),
+                impacted_routes_stops_alerts: AHashMap::new(),
                 last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
             });
 

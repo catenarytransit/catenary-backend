@@ -183,9 +183,9 @@ pub mod aspen_dataset {
         pub trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
         //        pub raw_alerts: AHashMap<String, gtfs_rt::Alert>,
         pub aspenised_alerts: AHashMap<String, AspenisedAlert>,
-        pub impacted_routes_alerts: Option<AHashMap<String, Vec<String>>>,
-        pub impacted_stops_alerts: Option<AHashMap<String, Vec<String>>>,
-        pub impacted_routes_stops_alerts: Option<AHashMap<String, Vec<String>>>,
+        pub impacted_routes_alerts: AHashMap<String, Vec<String>>,
+        pub impacted_stops_alerts: AHashMap<String, Vec<String>>,
+        pub impacted_routes_stops_alerts: AHashMap<String, Vec<String>>,
         pub last_updated_time_ms: u64,
     }
 
@@ -196,7 +196,7 @@ pub mod aspen_dataset {
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
-    pub struct AspenInformedEntity {
+    pub struct AspenEntitySelector {
         pub agency_id: Option<String>,
         pub route_id: Option<String>,
         pub route_type: Option<i32>,
@@ -218,7 +218,7 @@ pub mod aspen_dataset {
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenTranslatedImage {
-        pub image: Vec<AspenLocalisedImage>,
+        pub localised_image: Vec<AspenLocalisedImage>,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -236,8 +236,8 @@ pub mod aspen_dataset {
         }
     }
 
-    impl From<LocalizedImage> for AspenLocalisedImage {
-        fn from(localised_image: LocalizedImage) -> Self {
+    impl From<gtfs_rt::translated_image::LocalizedImage> for AspenLocalisedImage {
+        fn from(localised_image: gtfs_rt::translated_image::LocalizedImage) -> Self {
             AspenLocalisedImage {
                 url: localised_image.url,
                 media_type: localised_image.media_type,
@@ -246,10 +246,70 @@ pub mod aspen_dataset {
         }
     }
 
+    impl From<gtfs_rt::translated_string::Translation> for AspenTranslation {
+        fn from(translation: gtfs_rt::translated_string::Translation) -> Self {
+            AspenTranslation {
+                text: translation.text,
+                language: translation.language,
+            }
+        }
+    }
+
+    impl From<gtfs_rt::TranslatedImage> for AspenTranslatedImage {
+        fn from(translated_image: gtfs_rt::TranslatedImage) -> Self {
+            AspenTranslatedImage {
+                localised_image: translated_image.localized_image.into_iter().map(|x| x.into()).collect(),
+            }
+        }
+    }
+
+    impl From<gtfs_rt::TimeRange> for AspenTimeRange {
+        fn from(time_range: gtfs_rt::TimeRange) -> Self {
+            AspenTimeRange {
+                start: time_range.start,
+                end: time_range.end,
+            }
+        }
+    }
+
+    impl From<gtfs_rt::EntitySelector> for AspenEntitySelector {
+        fn from(entity_selector: gtfs_rt::EntitySelector) -> Self {
+            AspenEntitySelector {
+                agency_id: entity_selector.agency_id,
+                route_id: entity_selector.route_id,
+                route_type: entity_selector.route_type,
+                trip: entity_selector.trip.map(|x| x.into()),
+                stop_id: entity_selector.stop_id,
+                direction_id: entity_selector.direction_id,
+            }
+        }
+    }
+
+    impl From<gtfs_rt::Alert> for AspenisedAlert {
+        fn from(alert: gtfs_rt::Alert) -> Self {
+            AspenisedAlert {
+                active_period: alert.active_period.into_iter().map(|x| x.into()).collect(),
+                informed_entity: alert.informed_entity.into_iter().map(|x| x.into()).collect(),
+                cause: alert.cause,
+                effect: alert.effect,
+                url: alert.url.map(|x| x.into()),
+                header_text: alert.header_text.map(|x| x.into()),
+                description_text: alert.description_text.map(|x| x.into()),
+                tts_header_text: alert.tts_header_text.map(|x| x.into()),
+                tts_description_text: alert.tts_description_text.map(|x| x.into()),
+                severity_level: alert.severity_level,
+                image: alert.image.map(|x| x.into()),
+                image_alternative_text: alert.image_alternative_text.map(|x| x.into()),
+                cause_detail: alert.cause_detail.map(|x| x.into()),
+                effect_detail: alert.effect_detail.map(|x| x.into()),
+            }
+        }
+    }
+
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenisedAlert {
         pub active_period: Vec<AspenTimeRange>,
-        pub informed_entity: Vec<AspenRawTripInfo>,
+        pub informed_entity: Vec<AspenEntitySelector>,
         pub cause: Option<i32>,
         pub effect: Option<i32>,
         pub url: Option<AspenTranslatedString>,

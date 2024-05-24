@@ -50,6 +50,26 @@ pub trait AspenRpc {
         chateau_id: String,
         trip_id: String,
     ) -> Option<Vec<AspenisedTripUpdate>>;
+
+    async fn get_alerts_from_route_id(
+        chateau_id: String,
+        route_id: String,
+    ) -> Option<Vec<AspenisedAlert>>;
+
+    async fn get_alerts_from_stop_id(
+        chateau_id: String,
+        stop_id: String,
+    ) -> Option<Vec<AspenisedAlert>>;
+
+    async fn get_alert_from_trip_id(
+        chateau_id: String,
+        trip_id: String,
+    ) -> Option<Vec<AspenisedAlert>>;
+
+    async fn get_alert_from_stop_ids(
+        chateau_id: String,
+        stop_ids: Vec<String>,
+    ) -> Option<HashMap<String,Vec<AspenisedAlert>>>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
