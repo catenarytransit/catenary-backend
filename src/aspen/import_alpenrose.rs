@@ -684,6 +684,7 @@ pub async fn new_rt_data(
                     aspenised_alerts: AHashMap::new(),
                     impacted_routes_alerts: AHashMap::new(),
                     impacted_stops_alerts: AHashMap::new(),
+                    impacted_trips_alerts: AHashMap::new(),
                     impacted_routes_stops_alerts: AHashMap::new(),
                     last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
                 }
@@ -697,6 +698,7 @@ pub async fn new_rt_data(
                 aspenised_alerts: AHashMap::new(),
                 impacted_routes_alerts:AHashMap::new(),
                 impacted_stops_alerts: AHashMap::new(),
+                impacted_trips_alerts: AHashMap::new(),
                 impacted_routes_stops_alerts: AHashMap::new(),
                 last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
             });
