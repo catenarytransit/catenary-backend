@@ -61,10 +61,10 @@ mod async_threads_alpenrose;
 use crate::id_cleanup::gtfs_rt_correct_route_id_string;
 use catenary::gtfs_rt_rough_hash::rough_hash_of_gtfs_rt;
 use catenary::parse_gtfs_rt_message;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use tokio_zookeeper::ZooKeeper;
 use tokio_zookeeper::{Acl, CreateMode};
-use std::collections::HashMap;
 
 mod alerts_responder;
 

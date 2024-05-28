@@ -1,9 +1,9 @@
 use catenary::aspen::lib::AlertsforManyStops;
 
 use catenary::aspen_dataset::AspenisedAlert;
-use std::sync::Arc;
 use scc::HashMap as SccHashMap;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub fn get_alerts_from_route_id(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
@@ -25,7 +25,7 @@ pub fn get_alerts_from_route_id(
 
                         match alert {
                             Some(alert) => {
-                                alerts_vec.push((alert_id.clone(),alert.clone()));
+                                alerts_vec.push((alert_id.clone(), alert.clone()));
                             }
                             None => {
                                 println!("Alert not found for alert id {}", alert_id);
@@ -97,7 +97,7 @@ pub fn get_alert_from_trip_id(
             let alerts = aspenised_data.impacted_trips_alerts.get(trip_id);
 
             match alerts {
-                Some(alerts ) => {
+                Some(alerts) => {
                     let mut alerts_vec = Vec::new();
 
                     for alert_id in alerts {
@@ -125,10 +125,10 @@ pub fn get_alert_from_trip_id(
     }
 }
 
-pub fn  get_alert_from_stop_ids(
+pub fn get_alert_from_stop_ids(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     chateau_id: &str,
-    stop_ids: Vec<String>
+    stop_ids: Vec<String>,
 ) -> Option<AlertsforManyStops> {
     None
 }

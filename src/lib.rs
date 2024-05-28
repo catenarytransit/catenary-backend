@@ -52,11 +52,11 @@ pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataZookeeper;
 use ahash::AHasher;
 use fasthash::MetroHasher;
+use gtfs_rt::translated_image::LocalizedImage;
 use gtfs_rt::VehicleDescriptor;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::Duration;
-use gtfs_rt::translated_image::LocalizedImage;
 use std::time::{SystemTime, UNIX_EPOCH};
 pub mod metrolink_ptc_to_stop_id;
 
@@ -232,7 +232,11 @@ pub mod aspen_dataset {
     impl From<gtfs_rt::TranslatedString> for AspenTranslatedString {
         fn from(translated_string: gtfs_rt::TranslatedString) -> Self {
             AspenTranslatedString {
-                translation: translated_string.translation.into_iter().map(|x| x.into()).collect(),
+                translation: translated_string
+                    .translation
+                    .into_iter()
+                    .map(|x| x.into())
+                    .collect(),
             }
         }
     }
@@ -259,7 +263,11 @@ pub mod aspen_dataset {
     impl From<gtfs_rt::TranslatedImage> for AspenTranslatedImage {
         fn from(translated_image: gtfs_rt::TranslatedImage) -> Self {
             AspenTranslatedImage {
-                localised_image: translated_image.localized_image.into_iter().map(|x| x.into()).collect(),
+                localised_image: translated_image
+                    .localized_image
+                    .into_iter()
+                    .map(|x| x.into())
+                    .collect(),
             }
         }
     }
@@ -290,7 +298,11 @@ pub mod aspen_dataset {
         fn from(alert: gtfs_rt::Alert) -> Self {
             AspenisedAlert {
                 active_period: alert.active_period.into_iter().map(|x| x.into()).collect(),
-                informed_entity: alert.informed_entity.into_iter().map(|x| x.into()).collect(),
+                informed_entity: alert
+                    .informed_entity
+                    .into_iter()
+                    .map(|x| x.into())
+                    .collect(),
                 cause: alert.cause,
                 effect: alert.effect,
                 url: alert.url.map(|x| x.into()),

@@ -103,12 +103,11 @@ pub async fn new_rt_data(
     let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> =
         AHashMap::new();
 
-
     //let alerts hashmap
     let mut alerts: AHashMap<String, AspenisedAlert> = AHashMap::new();
 
-    let mut impacted_route_id_to_alert_ids : AHashMap<String, Vec<String>> = AHashMap::new();
-    let mut impacted_stop_id_to_alert_ids : AHashMap<String, Vec<String>> = AHashMap::new();
+    let mut impacted_route_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
+    let mut impacted_stop_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
     let mut impact_trip_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
     let mut general_alerts: AHashMap<String, Vec<String>> = AHashMap::new();
 
@@ -634,8 +633,8 @@ pub async fn new_rt_data(
                 }
             }
 
-            if let Some(alert_updates_gtfs_rt) = authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
-
+            if let Some(alert_updates_gtfs_rt) =
+                authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
             {
                 let alert_updates_gtfs_rt = alert_updates_gtfs_rt.get();
 
@@ -696,7 +695,7 @@ pub async fn new_rt_data(
                 trip_updates_lookup_by_trip_id_to_trip_update_ids:
                     trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
                 aspenised_alerts: AHashMap::new(),
-                impacted_routes_alerts:AHashMap::new(),
+                impacted_routes_alerts: AHashMap::new(),
                 impacted_stops_alerts: AHashMap::new(),
                 impacted_trips_alerts: AHashMap::new(),
                 impacted_routes_stops_alerts: AHashMap::new(),
