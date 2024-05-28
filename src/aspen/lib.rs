@@ -8,6 +8,7 @@ use crate::aspen_dataset::*;
 use crate::id_cleanup;
 use crate::ChateauDataNoGeometry;
 use ahash::AHashMap;
+use ahash::AHashSet;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -54,22 +55,28 @@ pub trait AspenRpc {
     async fn get_alerts_from_route_id(
         chateau_id: String,
         route_id: String,
-    ) -> Option<Vec<AspenisedAlert>>;
+    ) -> Option<Vec<(String, AspenisedAlert)>>;
 
     async fn get_alerts_from_stop_id(
         chateau_id: String,
         stop_id: String,
-    ) -> Option<Vec<AspenisedAlert>>;
+    ) -> Option<Vec<(String, AspenisedAlert)>>;
 
     async fn get_alert_from_trip_id(
         chateau_id: String,
         trip_id: String,
-    ) -> Option<Vec<AspenisedAlert>>;
+    ) -> Option<Vec<(String, AspenisedAlert)>>;
 
     async fn get_alert_from_stop_ids(
         chateau_id: String,
         stop_ids: Vec<String>,
-    ) -> Option<HashMap<String,Vec<AspenisedAlert>>>;
+    ) -> Option<AlertsforManyStops>;
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AlertsforManyStops {
+    pub alerts: AHashMap<String, AspenisedAlert>,
+    pub stops_to_alert_ids: AHashMap<String, AHashSet<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

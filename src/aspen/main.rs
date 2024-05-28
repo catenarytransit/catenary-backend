@@ -99,7 +99,7 @@ impl AspenRpc for AspenServer {
         _: context::Context,
         chateau_id: String,
         route_id: String,
-    ) -> Option<Vec<AspenisedAlert>> {
+    ) -> Option<Vec<(String, AspenisedAlert)>> {
         alerts_responder::get_alerts_from_route_id(
             Arc::clone(&self.authoritative_data_store),
             &chateau_id,
@@ -112,7 +112,7 @@ impl AspenRpc for AspenServer {
         _: context::Context,
         chateau_id: String,
         stop_id: String,
-    ) -> Option<Vec<AspenisedAlert>> {
+    ) -> Option<Vec<(String, AspenisedAlert)>> {
         alerts_responder::get_alerts_from_stop_id(
             Arc::clone(&self.authoritative_data_store),
             &chateau_id,
@@ -125,7 +125,7 @@ impl AspenRpc for AspenServer {
         _: context::Context,
         chateau_id: String,
         stop_ids: Vec<String>,
-    ) -> Option<HashMap<String, Vec<AspenisedAlert>>> {
+    ) -> Option<AlertsforManyStops> {
         alerts_responder::get_alert_from_stop_ids(
             Arc::clone(&self.authoritative_data_store),
             &chateau_id,
@@ -138,7 +138,7 @@ impl AspenRpc for AspenServer {
         _: context::Context,
         chateau_id: String,
         trip_id: String,
-    ) -> Option<Vec<AspenisedAlert>> {
+    ) -> Option<Vec<(String, AspenisedAlert)>> {
         alerts_responder::get_alert_from_trip_id(
             Arc::clone(&self.authoritative_data_store),
             &chateau_id,

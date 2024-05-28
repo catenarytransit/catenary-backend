@@ -1059,7 +1059,7 @@ async fn chateaus(
                         .clone()
                         .into_iter()
                         .map(|x| serde_json::Value::String(x))
-                        .collect(),
+                        .collect()
                 ),
             );
 
