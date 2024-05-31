@@ -31,11 +31,14 @@ struct DepartingTrip {
 pub async fn nearby_from_coords(
     req: HttpRequest,
     query: Query<NearbyFromCoords>,
+    sqlx_pool: web::Data<sqlx::PgPool>,
 ) -> impl Responder {
     // get all the nearby stops from the coords
 
     // trains within 5km, buses within 2km
     // if more than 20 stops within 2km, crop to 1.5km
+
+    //https://postgis.net/docs/ST_DWithin.html
 
     // search through itineraries matching those stops and then put them in a hashmap of stop to itineraries
 
