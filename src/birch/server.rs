@@ -31,12 +31,9 @@
     clippy::op_ref
 )]
 
-use actix_web::dev::Service;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::Data;
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
-use bb8::Pool;
-use cached::proc_macro::once;
 use catenary::aspen::lib::ChateauMetadataZookeeper;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};

@@ -19,6 +19,7 @@ use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use catenary::aspen_dataset::AspenisedAlert;
 use tarpc::{client, context, tokio_serde::formats::Bincode};
 
 #[actix_web::get("/get_vehicle_metadata/{chateau}/{vehicle_id}")]
@@ -131,6 +132,10 @@ struct TripIntroductionInformation {
     pub text_color: Option<String>,
     pub vehicle: Option<AspenisedVehicleDescriptor>,
     pub route_type: i16,
+    pub stop_id_to_alert_ids: BTreeMap<String, Vec<String>>,
+    pub alert_id_to_alert: BTreeMap<String, AspenisedAlert>,
+    pub alert_ids_for_this_route: Vec<String>,
+    pub alert_ids_for_this_trip: Vec<String>
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -430,6 +435,8 @@ pub async fn get_trip_init(
 
     let mut stop_times_for_this_trip: Vec<StopTimeIntroduction> = vec![];
 
+    let mut alert_id_to_alert: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
+
     //map start date to a YYYY, MM, DD format
     let start_naive_date = if let Some(start_date) = query.start_date {
         let start_date = chrono::NaiveDate::parse_from_str(&start_date, "%Y%m%d");
@@ -657,8 +664,12 @@ pub async fn get_trip_init(
         trip_short_name: trip_compressed.trip_short_name,
         route_long_name: route.long_name,
         route_short_name: route.short_name,
-        vehicle: vehicle,
+        vehicle,
         route_type: route.route_type,
+        stop_id_to_alert_ids: BTreeMap::new(),
+        alert_ids_for_this_route: vec![],
+        alert_ids_for_this_trip: vec![],
+        alert_id_to_alert: alert_id_to_alert,
     };
 
     let text = serde_json::to_string(&response).unwrap();
