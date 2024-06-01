@@ -436,6 +436,8 @@ pub async fn get_trip_init(
     let mut stop_times_for_this_trip: Vec<StopTimeIntroduction> = vec![];
 
     let mut alert_id_to_alert: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
+    let mut alert_ids_for_this_route: Vec<String> = vec![];
+    let mut alert_ids_for_this_trip: Vec<String> = vec![];
 
     //map start date to a YYYY, MM, DD format
     let start_naive_date = if let Some(start_date) = query.start_date {
@@ -642,6 +644,34 @@ pub async fn get_trip_init(
                         eprintln!("Trip id not found {} {}", chateau, query.trip_id);
                     }
                 }
+
+                // GET ALERTS
+
+                let alerts_for_route = aspen_client
+                    .get_alerts_from_route_id(context::current(), chateau.clone(), route.route_id.clone())
+                    .await;
+
+                let alerts_for_trip = aspen_client
+                    .get_alert_from_trip_id(context::current(), chateau.clone(), query.trip_id.clone())
+                    .await;
+
+                if let Ok(alerts_for_route) = alerts_for_route {
+                    if let Some(alerts_for_route) = alerts_for_route {
+                        for (alert_id, alert) in alerts_for_route {
+                            alert_id_to_alert.insert(alert_id.clone(), alert.clone());
+                            alert_ids_for_this_route.push(alert_id.clone());
+                        }
+                    }
+                }
+
+                if let Ok(alerts_for_trip) = alerts_for_trip {
+                    if let Some(alerts_for_trip) = alerts_for_trip {
+                        for (alert_id, alert) in alerts_for_trip {
+                            alert_id_to_alert.insert(alert_id.clone(), alert.clone());
+                            alert_ids_for_this_trip.push(alert_id.clone());
+                        }
+                    }
+                }
             } else {
                 eprintln!("Error connecting to assigned node. Failed to connect to tarpc");
             }
@@ -667,8 +697,8 @@ pub async fn get_trip_init(
         vehicle,
         route_type: route.route_type,
         stop_id_to_alert_ids: BTreeMap::new(),
-        alert_ids_for_this_route: vec![],
-        alert_ids_for_this_trip: vec![],
+        alert_ids_for_this_route: alert_ids_for_this_route,
+        alert_ids_for_this_trip: alert_ids_for_this_trip,
         alert_id_to_alert: alert_id_to_alert,
     };
 
