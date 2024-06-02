@@ -642,7 +642,26 @@ pub async fn new_rt_data(
                     if let Some(alert) = &alert_entity.alert {
                         let alert_id = alert_entity.id.clone();
 
-                        let mut alert: AspenisedAlert = alert.clone().into();
+                        let alert: AspenisedAlert = alert.clone().into();
+
+                        for informed_entity in alert.informed_entity.iter() {
+                            if let Some(route_id) = &informed_entity.route_id {
+                                impacted_route_id_to_alert_ids.entry(route_id.clone()).and_modify(|x| x.push(alert_id.clone()))
+                                .or_insert(vec![alert_id.clone()]);
+                            }
+
+                            if let Some(trip) = &informed_entity.trip {
+                                if let Some(trip_id) = &trip.trip_id {
+                                    impact_trip_id_to_alert_ids.entry(trip_id.clone()).and_modify(|x| x.push(alert_id.clone()))
+                                    .or_insert(vec![alert_id.clone()]);
+                                }
+
+                                if let Some(route_id) = &trip.route_id {
+                                    impacted_route_id_to_alert_ids.entry(route_id.clone()).and_modify(|x| x.push(alert_id.clone()))
+                                    .or_insert(vec![alert_id.clone()]);
+                                }
+                            }
+                        }
 
                         alerts.insert(alert_id.clone(), alert);
                     }
@@ -680,11 +699,10 @@ pub async fn new_rt_data(
                     trip_updates: trip_updates.clone(),
                     trip_updates_lookup_by_trip_id_to_trip_update_ids:
                         trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
-                    aspenised_alerts: AHashMap::new(),
+                    aspenised_alerts: alerts.clone(),
                     impacted_routes_alerts: AHashMap::new(),
                     impacted_stops_alerts: AHashMap::new(),
                     impacted_trips_alerts: AHashMap::new(),
-                    impacted_routes_stops_alerts: AHashMap::new(),
                     last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
                 }
             })
@@ -694,11 +712,10 @@ pub async fn new_rt_data(
                 trip_updates: trip_updates.clone(),
                 trip_updates_lookup_by_trip_id_to_trip_update_ids:
                     trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
-                aspenised_alerts: AHashMap::new(),
+                aspenised_alerts: alerts.clone(),
                 impacted_routes_alerts: AHashMap::new(),
                 impacted_stops_alerts: AHashMap::new(),
                 impacted_trips_alerts: AHashMap::new(),
-                impacted_routes_stops_alerts: AHashMap::new(),
                 last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
             });
 

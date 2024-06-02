@@ -439,6 +439,8 @@ pub async fn get_trip_init(
     let mut alert_ids_for_this_route: Vec<String> = vec![];
     let mut alert_ids_for_this_trip: Vec<String> = vec![];
 
+    let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
     //map start date to a YYYY, MM, DD format
     let start_naive_date = if let Some(start_date) = query.start_date {
         let start_date = chrono::NaiveDate::parse_from_str(&start_date, "%Y%m%d");
@@ -696,7 +698,7 @@ pub async fn get_trip_init(
         route_short_name: route.short_name,
         vehicle,
         route_type: route.route_type,
-        stop_id_to_alert_ids: BTreeMap::new(),
+        stop_id_to_alert_ids,
         alert_ids_for_this_route: alert_ids_for_this_route,
         alert_ids_for_this_trip: alert_ids_for_this_trip,
         alert_id_to_alert: alert_id_to_alert,

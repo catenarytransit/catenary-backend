@@ -186,7 +186,6 @@ pub mod aspen_dataset {
         pub impacted_routes_alerts: AHashMap<String, Vec<String>>,
         pub impacted_stops_alerts: AHashMap<String, Vec<String>>,
         pub impacted_trips_alerts: AHashMap<String, Vec<String>>,
-        pub impacted_routes_stops_alerts: AHashMap<String, Vec<String>>,
         pub last_updated_time_ms: u64,
     }
 
