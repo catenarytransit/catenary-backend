@@ -23,11 +23,15 @@ pub async fn stops_into_postgres(
     stop_id_to_children_route: &HashMap<String, HashSet<i16>>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     for (stop_id, stop) in &gtfs.stops {
-        let name: Option<String> = titlecase_process_new(stop.name.as_ref());
+        let name: Option<String> = titlecase_process_new(stop.name.as_ref()).map(|name| 
+            name.replace(" Station", "")
+                .replace(", Bahnhof","")
+                .replace(" Banhhof", "")
+                .replace("Estación de tren ", "")
+        );
         let display_name: Option<String> = match &name {
             Some(name) => Some(
                 name.clone()
-                    .replace(" Station", "")
                     .replace("Northbound", "N.B.")
                     .replace("Eastbound", "E.B.")
                     .replace("Southbound", "S.B.")
