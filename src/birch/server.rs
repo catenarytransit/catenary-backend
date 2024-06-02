@@ -31,7 +31,6 @@
     clippy::op_ref
 )]
 
-use tarpc::{client, context, tokio_serde::formats::Bincode};
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::Data;
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
@@ -61,6 +60,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
+use tarpc::{client, context, tokio_serde::formats::Bincode};
 use tilejson::TileJSON;
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::ToSql;
@@ -798,7 +798,9 @@ pub async fn get_all_raw_alerts_chateau(
             let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
 
             if let Ok(aspen_client) = aspen_client {
-                let raw_alerts = aspen_client.get_all_alerts(context::current(),chateau_id.clone()).await;
+                let raw_alerts = aspen_client
+                    .get_all_alerts(context::current(), chateau_id.clone())
+                    .await;
 
                 if let Ok(raw_alerts) = raw_alerts {
                     return HttpResponse::Ok()

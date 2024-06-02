@@ -1,6 +1,7 @@
 use actix_web::{web, HttpResponse, Responder};
 use catenary::aspen::lib::ChateauMetadataZookeeper;
 use catenary::aspen_dataset::AspenStopTimeEvent;
+use catenary::aspen_dataset::AspenisedAlert;
 use catenary::aspen_dataset::AspenisedVehicleDescriptor;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -19,7 +20,6 @@ use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use catenary::aspen_dataset::AspenisedAlert;
 use tarpc::{client, context, tokio_serde::formats::Bincode};
 
 #[actix_web::get("/get_vehicle_metadata/{chateau}/{vehicle_id}")]
@@ -69,7 +69,9 @@ pub async fn get_vehicle_information(
                         };
 
                         let response = serde_json::to_string(&response_struct).unwrap();
-                        return HttpResponse::Ok().body(response);
+                        return HttpResponse::Ok()
+                            .insert_header(("Content-Type", "application/json"))
+                            .body(response);
                     } else {
                         let response_struct = ResponseForGtfsVehicle {
                             found_data: false,
@@ -77,7 +79,9 @@ pub async fn get_vehicle_information(
                         };
 
                         let response = serde_json::to_string(&response_struct).unwrap();
-                        return HttpResponse::Ok().body(response);
+                        return HttpResponse::Ok()
+                            .insert_header(("Content-Type", "application/json"))
+                            .body(response);
                     }
                 }
             }
@@ -135,7 +139,7 @@ struct TripIntroductionInformation {
     pub stop_id_to_alert_ids: BTreeMap<String, Vec<String>>,
     pub alert_id_to_alert: BTreeMap<String, AspenisedAlert>,
     pub alert_ids_for_this_route: Vec<String>,
-    pub alert_ids_for_this_trip: Vec<String>
+    pub alert_ids_for_this_trip: Vec<String>,
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -650,11 +654,19 @@ pub async fn get_trip_init(
                 // GET ALERTS
 
                 let alerts_for_route = aspen_client
-                    .get_alerts_from_route_id(context::current(), chateau.clone(), route.route_id.clone())
+                    .get_alerts_from_route_id(
+                        context::current(),
+                        chateau.clone(),
+                        route.route_id.clone(),
+                    )
                     .await;
 
                 let alerts_for_trip = aspen_client
-                    .get_alert_from_trip_id(context::current(), chateau.clone(), query.trip_id.clone())
+                    .get_alert_from_trip_id(
+                        context::current(),
+                        chateau.clone(),
+                        query.trip_id.clone(),
+                    )
                     .await;
 
                 if let Ok(alerts_for_route) = alerts_for_route {
@@ -706,5 +718,7 @@ pub async fn get_trip_init(
 
     let text = serde_json::to_string(&response).unwrap();
 
-    HttpResponse::Ok().body(text)
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "application/json"))
+        .body(text)
 }

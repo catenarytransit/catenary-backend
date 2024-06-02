@@ -464,7 +464,13 @@ impl AspenRpc for AspenServer {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
-                Some(aspenised_data.aspenised_alerts.clone().into_iter().collect())
+                Some(
+                    aspenised_data
+                        .aspenised_alerts
+                        .clone()
+                        .into_iter()
+                        .collect(),
+                )
             }
             None => None,
         }
