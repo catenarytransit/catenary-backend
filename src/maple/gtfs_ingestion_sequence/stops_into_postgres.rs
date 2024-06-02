@@ -70,7 +70,25 @@ pub async fn stops_into_postgres(
                     stop.latitude.unwrap(),
                     Some(4326),
                 )),
-                false => None,
+                false => match stop.parent_station.is_some() {
+                    true => {
+                        let parent_station = gtfs.stops.get(stop.parent_station.as_ref().unwrap());
+                        match parent_station {
+                            Some(parent_station) => match parent_station.latitude.is_some()
+                                && parent_station.longitude.is_some()
+                            {
+                                true => Some(postgis_diesel::types::Point::new(
+                                    parent_station.longitude.unwrap(),
+                                    parent_station.latitude.unwrap(),
+                                    Some(4326),
+                                )),
+                                false => None,
+                            },
+                            None => None,
+                        }
+                    }
+                    false => None,
+                },
             },
             timezone: stop.timezone.clone(),
             level_id: stop.level_id.clone(),
