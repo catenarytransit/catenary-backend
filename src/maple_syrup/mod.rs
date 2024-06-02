@@ -149,7 +149,10 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         };
 
         let trip_headsign_calculated = match &trip.trip_headsign {
-            Some(x) => Some(x.clone().replace("-Funded in part by/SB County Measure A", "")),
+            Some(x) => Some(
+                x.clone()
+                    .replace("-Funded in part by/SB County Measure A", ""),
+            ),
             None => {
                 let stop_headsigns: Vec<Option<String>> = stop_diffs
                     .iter()
@@ -163,7 +166,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                             // fallback to stop name if neither trip headsign nor stop headsign is available
                             Some(stop) => stop.name.clone(),
                             None => None,
-                        }
+                        },
                         None => None,
                     },
                     1 => stop_headsigns[0].clone(),
