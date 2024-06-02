@@ -454,6 +454,21 @@ impl AspenRpc for AspenServer {
             None => None,
         }
     }
+
+    async fn get_all_alerts(
+        self,
+        _: context::Context,
+        chateau_id: String,
+    ) -> Option<HashMap<String, AspenisedAlert>> {
+        match self.authoritative_data_store.get(&chateau_id) {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                Some(aspenised_data.aspenised_alerts.clone().into_iter().collect())
+            }
+            None => None,
+        }
+    }
 }
 
 async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {

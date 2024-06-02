@@ -71,6 +71,8 @@ pub trait AspenRpc {
         chateau_id: String,
         stop_ids: Vec<String>,
     ) -> Option<AlertsforManyStops>;
+
+    async fn get_all_alerts(chateau_id: String) -> Option<HashMap<String, AspenisedAlert>>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
