@@ -141,7 +141,9 @@ async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
     ];
 
     let robots_banned_bots = banned_bots
+        .into_iter()
         .map(|x| format!("User-agent: {}", x))
+        .collect::<Vec<String>>()
         .join("\nDisallow: /\n\n");
 
     HttpResponse::Ok()
