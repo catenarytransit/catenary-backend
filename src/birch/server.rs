@@ -350,7 +350,7 @@ pub async fn station_features_meta(req: HttpRequest) -> impl Responder {
         fillzoom: None,
         grids: None,
         legend: None,
-        maxzoom: None,
+        maxzoom: Some(19),
         minzoom: Some(7),
         name: Some(String::from("station_features")),
         scheme: None,
