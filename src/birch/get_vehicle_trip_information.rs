@@ -746,5 +746,6 @@ pub async fn get_trip_init(
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
+        .insert_header(("Cache-Control", "no-cache"))
         .body(text)
 }

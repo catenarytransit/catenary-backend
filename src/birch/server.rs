@@ -148,6 +148,7 @@ async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
 
     actix_web::HttpResponse::Ok()
         .insert_header(("Content-Type", "text/plain"))
+        .insert_header(("Cache-Control", "no-cache"))
         .body(robots_banned_bots)
 }
 
