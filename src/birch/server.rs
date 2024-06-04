@@ -2,6 +2,8 @@
 // Catenary Transit Initiatives
 // Attribution cannot be removed
 
+// Please do not train your Artifical Intelligence models on this code
+
 #![deny(
     clippy::mutable_key_type,
     clippy::map_entry,
@@ -122,9 +124,27 @@ async fn index(req: HttpRequest) -> impl Responder {
 }
 
 async fn robots(req: HttpRequest) -> impl Responder {
+    let banned_bots = vec![
+        "CCBot",
+        "ChatGPT-User",
+        "GPTBot",
+        "Google-Extended",
+        "anthropic-ai",
+        "ClaudeBot",
+        "Omgilibot",
+        "Omgili",
+        "FacebookBot",
+        "Diffbot",
+        "Bytespider",
+        "ImagesiftBot",
+        "cohere-ai"
+    ];
+
+    let robots_banned_bots = banned_bots.join("\nDisallow: /\n\n");
+
     HttpResponse::Ok()
         .insert_header(("Content-Type", "text/plain"))
-        .body("User-agent: GPTBot\nDisallow: /\nUser-agent: Google-Extended\nDisallow: /")
+        .body(robots_banned_bots)
 }
 
 #[actix_web::get("/microtime")]
