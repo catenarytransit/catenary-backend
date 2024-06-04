@@ -21,7 +21,7 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
                 })
                 .flatten()
                 .collect::<MultiPoint>();
-            Some(points.concave_hull(7.0))
+            Some(points.concave_hull(4.0))
         }
         false => {
             match gtfs.stops.len() > 3 {
@@ -41,7 +41,7 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
                             Point::new(stop.longitude.unwrap(), stop.latitude.unwrap())
                         })
                         .collect::<MultiPoint>();
-                    Some(points.concave_hull(7.0))
+                    Some(points.concave_hull(4.0))
                 }
                 false => None,
             }
