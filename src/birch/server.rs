@@ -123,7 +123,7 @@ async fn index(req: HttpRequest) -> impl Responder {
         .body("Hello world!")
 }
 
-async fn robots(req: HttpRequest) -> impl Responder {
+async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
     let banned_bots = vec![
         "CCBot",
         "ChatGPT-User",
@@ -137,10 +137,12 @@ async fn robots(req: HttpRequest) -> impl Responder {
         "Diffbot",
         "Bytespider",
         "ImagesiftBot",
-        "cohere-ai"
+        "cohere-ai",
     ];
 
-    let robots_banned_bots = banned_bots.join("\nDisallow: /\n\n");
+    let robots_banned_bots = banned_bots
+        .map(|x| format!("User-agent: {}", x))
+        .join("\nDisallow: /\n\n");
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "text/plain"))
