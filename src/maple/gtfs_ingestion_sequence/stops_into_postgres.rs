@@ -28,6 +28,7 @@ pub async fn stops_into_postgres(
                 .replace(", Bahnhof", "")
                 .replace(" Banhhof", "")
                 .replace("Estación de tren ", "")
+                .replace(" Metrolink", "")
         });
         let display_name: Option<String> = match &name {
             Some(name) => Some(
