@@ -311,10 +311,10 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
                 "api_key",
                 "3be3d48087754c4998e6b33b65ec9700".parse().unwrap(),
             );
-        },
+        }
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
             headers.insert("Authorization", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJqdGkiOiI3YVNPUVJpVUEyYzRKRTljRURBVDFrZ2ZnVERidjBBNVhUWDRDRW1xU3JFIiwiaWF0IjoxNzE3NjA3MDQyfQ._SbACaNINcZaOTSJbh3O142sQ6WYD7SQbdEjysKexUA".parse().unwrap());
-        },
+        }
         _ => {}
     };
 
