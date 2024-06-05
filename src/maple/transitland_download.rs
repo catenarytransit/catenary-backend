@@ -245,7 +245,7 @@ pub async fn download_return_eligible_feeds(
                                         let mut download_progress  = download_progress.lock().unwrap();
                                         *download_progress += 1;
 
-                                        println!("Failed to download {}/{} [{:.2}%]: {} responding with {}, took {:.3}s",download_progress, total_feeds_to_download, (*download_progress as f32/total_feeds_to_download as f32) * 100.0, &staticfeed.clone().feed_id, response.status().as_str(), duration_ms as f32 / 1000.0);
+                                        println!("Failed to download {}/{} [{:.2}%]: {} responding with {}, took {:.3}s\nURL: {}",download_progress, total_feeds_to_download, (*download_progress as f32/total_feeds_to_download as f32) * 100.0, &staticfeed.clone().feed_id, response.status().as_str(), duration_ms as f32 / 1000.0, &staticfeed.url);
                                     }
                                 }
                                 Err(error) => {
