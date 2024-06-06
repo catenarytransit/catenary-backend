@@ -122,7 +122,6 @@ amtrak-gtfs-rt = "0.2.6"
 chrono-tz = { version = "0.9.0", features = ["case-insensitive", "serde"] }
 ping = "0.5.2"
 online = { version = "4.0.2", features = ["tokio-runtime"] }
-
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"

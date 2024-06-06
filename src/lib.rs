@@ -51,6 +51,7 @@ pub mod schema;
 pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataZookeeper;
 use ahash::AHasher;
+use std::io::Read;
 use fasthash::MetroHasher;
 use gtfs_rt::translated_image::LocalizedImage;
 use gtfs_rt::VehicleDescriptor;
@@ -155,7 +156,7 @@ pub mod tailscale {
 
     /// Retrieve the IP address of the current machine's Tailscale interface, if any.
     /// ```
-    /// let iface = tailscale::interface().expect( "no tailscale interface found");
+    /// let iface = catenary::tailscale::interface().expect( "no tailscale interface found");
     /// ```
     pub fn interface() -> Option<IpAddr> {
         let ifaces = datalink::interfaces();
@@ -594,5 +595,33 @@ pub fn make_feed_from_entity_vec(entities: Vec<gtfs_rt::FeedEntity>) -> gtfs_rt:
             timestamp: Some(duration_since_unix_epoch().as_secs() as u64),
         },
         entity: entities,
+    }
+}
+
+pub mod unzip_uk {
+    use std::io::Read;
+    pub async fn get_raw_gtfs_rt(client: &reqwest::Client) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let url = "https://data.bus-data.dft.gov.uk/avl/download/gtfsrt";
+        let response = client.get(url).send().await?;
+        let bytes = response.bytes().await?;
+
+       //unzip and return file gtfsrt.bin
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
+        let mut file = zip.by_name("gtfsrt.bin")?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        Ok(buf)
+    }
+}
+
+#[cfg(test)]
+mod unzip_uk_test {
+    use super::*;
+    use reqwest::Client;
+    #[tokio::test]
+    async fn test_get_raw_gtfs_rt() {
+        let client = Client::new();
+        let x = unzip_uk::get_raw_gtfs_rt(&client).await.unwrap();
+        assert!(x.len() > 0);
     }
 }

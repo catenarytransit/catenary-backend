@@ -27,7 +27,8 @@ lazy_static! {
         "f-anteaterexpress~rt",
         "f-amtrak~rt",
         "f-mta~nyc~rt~mnr",
-        "f-mta~nyc~rt~lirr"
+        "f-mta~nyc~rt~lirr",
+        "f-bus~dft~gov~uk~rt"
     ]);
 }
 
@@ -275,6 +276,9 @@ pub async fn single_fetch_time(
                         custom_rt_feeds::mta::fetch_mta_metronorth_data(&zk, feed_id, &client)
                             .await;
                     }
+                    "f-bus~dft~gov~uk~rt" => {
+                        custom_rt_feeds::uk::fetch_dft_bus_data(&zk, feed_id, &client).await;
+                    },
                     _ => {}
                 }
             }
