@@ -24,7 +24,6 @@ use gtfs_structures::Gtfs;
 
 lazy_static! {
     static ref CUSTOM_FEEDS: HashSet<&'static str> = HashSet::from_iter([
-        "f-anteaterexpress~rt",
         "f-amtrak~rt",
         "f-mta~nyc~rt~mnr",
         "f-mta~nyc~rt~lirr",
@@ -254,12 +253,6 @@ pub async fn single_fetch_time(
                 }
             } else {
                 match feed_id.as_str() {
-                    "f-anteaterexpress~rt" => {
-                        custom_rt_feeds::anteater_express::fetch_anteater_express_data(
-                            &zk, &feed_id,
-                        )
-                        .await;
-                    }
                     "f-amtrak~rt" => {
                         custom_rt_feeds::amtrak::fetch_amtrak_data(
                             &zk,
