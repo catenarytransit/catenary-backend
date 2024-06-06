@@ -625,5 +625,15 @@ mod unzip_uk_test {
         let client = Client::new();
         let x = unzip_uk::get_raw_gtfs_rt(&client).await.unwrap();
         assert!(x.len() > 0);
+
+        //attempt to decode into gtfs-rt
+
+        let x = parse_gtfs_rt_message(&x);
+
+        assert!(x.is_ok());
+
+        let x = x.unwrap();
+
+        println!("{:#?}", x);
     }
 }
