@@ -56,6 +56,6 @@ pub async fn fetch_dft_bus_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest:
             eprintln!("{:?}", uk_rt_data);
         }
     } else {
-        println!("No assigned node found for Anteater Express");
+        println!("No assigned node found for UK");
     }
 }
