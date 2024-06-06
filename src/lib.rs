@@ -51,12 +51,12 @@ pub mod schema;
 pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataZookeeper;
 use ahash::AHasher;
-use std::io::Read;
 use fasthash::MetroHasher;
 use gtfs_rt::translated_image::LocalizedImage;
 use gtfs_rt::VehicleDescriptor;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::io::Read;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 pub mod metrolink_ptc_to_stop_id;
@@ -600,12 +600,14 @@ pub fn make_feed_from_entity_vec(entities: Vec<gtfs_rt::FeedEntity>) -> gtfs_rt:
 
 pub mod unzip_uk {
     use std::io::Read;
-    pub async fn get_raw_gtfs_rt(client: &reqwest::Client) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    pub async fn get_raw_gtfs_rt(
+        client: &reqwest::Client,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let url = "https://data.bus-data.dft.gov.uk/avl/download/gtfsrt";
         let response = client.get(url).send().await?;
         let bytes = response.bytes().await?;
 
-       //unzip and return file gtfsrt.bin
+        //unzip and return file gtfsrt.bin
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
         let mut file = zip.by_name("gtfsrt.bin")?;
         let mut buf = Vec::new();

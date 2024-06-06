@@ -278,7 +278,7 @@ pub async fn single_fetch_time(
                     }
                     "f-bus~dft~gov~uk~rt" => {
                         custom_rt_feeds::uk::fetch_dft_bus_data(&zk, feed_id, &client).await;
-                    },
+                    }
                     _ => {}
                 }
             }
