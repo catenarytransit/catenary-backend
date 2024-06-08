@@ -340,3 +340,29 @@ pub struct AdminCredentials {
     pub salt: String,
     pub last_updated_ms: i64,
 }
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::direction_pattern)]
+pub struct DirectionPatternRow {
+    pub chateau: String,
+    pub direction_pattern_id: String,
+    pub stop_id: String,
+    pub stop_sequence: i32,
+    pub arrival_time_since_start: Option<i32>,
+    pub departure_time_since_start: Option<i32>,
+    pub interpolated_time_since_start: Option<i32>,
+    pub onestop_feed_id: String,
+    pub attempt_id: String,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::direction_pattern_meta)]
+pub struct DirectionPatternMeta {
+    pub chateau: String,
+    pub direction_pattern_id: String,
+    pub headsign_or_destination: String,
+    pub gtfs_shape_id: Option<String>,
+    pub fake_shape: bool,
+    pub onestop_feed_id: String,
+    pub attempt_id: String,
+}
