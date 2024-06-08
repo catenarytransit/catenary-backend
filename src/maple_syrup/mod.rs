@@ -23,6 +23,7 @@ pub struct ItineraryCover {
     pub trip_headsign: Option<String>,
     pub timezone: String,
     pub shape_id: Option<String>,
+    pub direction_pattern_id: u64,
 }
 
 #[derive(Hash, Debug, Clone, PartialEq, Eq)]
@@ -277,6 +278,16 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             }
         };
 
+        //calculate direction pattern reference
+
+        let direction_pattern_id = calculate_direction_pattern_id(
+            &trip.route_id,
+            stop_diffs
+                .iter()
+                .map(|x| x.stop_id.clone())
+                .collect::<Vec<String>>(),
+        );
+
         let itinerary_cover = ItineraryCover {
             stop_sequences: stop_diffs,
             direction_id: trip.direction_id.map(|direction| match direction {
@@ -287,6 +298,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             trip_headsign: trip_headsign_calculated,
             timezone,
             shape_id: trip.shape_id.clone(),
+            direction_pattern_id,
         };
 
         //itinerary id generated
@@ -315,8 +327,6 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             .or_insert(vec![trip_under_itinerary]);
     }
 
-    //calculate direction patterns
-
     let mut direction_patterns: AHashMap<u64, DirectionPattern> = AHashMap::new();
 
     for (itinerary_id, itinerary) in &itineraries {
@@ -343,9 +353,16 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             route_id: itinerary.route_id.clone(),
         };
 
-        let hash_of_direction_pattern = fast_hash(&direction_pattern.stop_sequence);
+        let hash_of_direction_pattern_output = calculate_direction_pattern_id(
+            &direction_pattern.route_id,
+            direction_pattern
+                .stop_sequence
+                .iter()
+                .map(|x| x.clone())
+                .collect::<Vec<String>>(),
+        );
 
-        direction_patterns.insert(hash_of_direction_pattern, direction_pattern);
+        direction_patterns.insert(hash_of_direction_pattern_output, direction_pattern);
     }
 
     ResponseFromReduce {
@@ -354,6 +371,18 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         itineraries_to_trips,
         direction_patterns,
     }
+}
+
+fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<String>) -> u64 {
+    let mut hash_of_direction_pattern_temp: Vec<String> = Vec::new();
+
+    hash_of_direction_pattern_temp.push(route_id.to_string());
+
+    for stop_id in stop_sequence {
+        hash_of_direction_pattern_temp.push(stop_id);
+    }
+
+    fast_hash(&hash_of_direction_pattern_temp)
 }
 
 #[cfg(test)]
