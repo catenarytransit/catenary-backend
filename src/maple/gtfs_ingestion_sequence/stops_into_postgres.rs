@@ -158,8 +158,5 @@ pub fn titlecase_process_new_nooption(input: &String) -> String {
 }
 
 pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
-    match input {
-        Some(s) => Some(titlecase_process_new_nooption(s)),
-        None => None,
-    }
+    input.map(|s| titlecase_process_new_nooption(s))
 }

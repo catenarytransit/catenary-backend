@@ -30,6 +30,8 @@ pub struct StopDifference {
     pub stop_id: String,
     pub arrival_time_since_start: Option<i32>,
     pub departure_time_since_start: Option<i32>,
+    pub interpolation_by_catenary: bool,
+    pub interpolated_time_since_start: Option<i32>,
     pub continuous_pickup: i16,
     pub continuous_drop_off: i16,
     pub stop_headsign: Option<String>,
@@ -38,6 +40,14 @@ pub struct StopDifference {
     //true is exact, false is approximate
     pub timepoint: bool,
     pub gtfs_stop_sequence: u16,
+}
+
+pub struct DirectionPattern {
+    pub direction_id: Option<bool>,
+    pub stop_sequence: Vec<String>,
+    pub headsign_or_destination: Option<String>,
+    pub gtfs_shape_id: Option<String>,
+    pub route_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +67,7 @@ pub struct ResponseFromReduce {
     pub itineraries: AHashMap<u64, ItineraryCover>,
     pub trips_to_itineraries: AHashMap<String, u64>,
     pub itineraries_to_trips: AHashMap<u64, Vec<TripUnderItinerary>>,
+    pub direction_patterns: AHashMap<u64, DirectionPattern>,
 }
 
 pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
@@ -103,6 +114,8 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                 continuous_drop_off: continuous_pickup_drop_off_to_i16(
                     &stop_time.continuous_drop_off,
                 ),
+                interpolation_by_catenary: false,
+                interpolated_time_since_start: None,
                 stop_headsign: stop_time.stop_headsign.clone(),
                 drop_off_type: pickup_dropoff_to_i16(&stop_time.drop_off_type),
                 pickup_type: pickup_dropoff_to_i16(&stop_time.pickup_type),
@@ -111,6 +124,95 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             };
 
             stop_diffs.push(stop_diff);
+        }
+
+        let stop_indicies_requiring_interpolation: Vec<usize> = stop_diffs
+            .iter()
+            .enumerate()
+            .filter(|(_, stop_diff)| {
+                stop_diff.arrival_time_since_start.is_none()
+                    && stop_diff.departure_time_since_start.is_none()
+            })
+            .map(|(index, _)| index)
+            .collect();
+
+            let mut ranges: Vec<Vec<usize>> = Vec::new();
+
+        if stop_indicies_requiring_interpolation.len() > 0 {
+            //group into ranges of consecutive indicies
+            
+
+            let mut current_range: Vec<usize> = Vec::new();
+
+            for stop_indice in stop_indicies_requiring_interpolation {
+                if current_range.len() == 0 {
+                    current_range.push(stop_indice);
+                } else {
+                    if current_range.last().unwrap() + 1 == stop_indice {
+                        current_range.push(stop_indice);
+                    } else {
+                        ranges.push(current_range);
+                        current_range = vec![stop_indice];
+                    }
+                }
+            }
+        }
+
+        let new_interpolated_times:AHashMap<usize, i32> = {
+            //interpolate times
+
+            let mut interpolated_times: AHashMap<usize, i32> = AHashMap::new();
+
+            for range in ranges {
+                let start_index = range[0];
+                let end_index = range[range.len() - 1];
+
+                if start_index == 0 || end_index == stop_diffs.len() - 1 {
+                    println!("Invalid range for interpolation");
+                    continue;
+                }
+
+                let start_time = match stop_diffs[start_index - 1].departure_time_since_start {
+                    Some(time) => Some(time),
+                    None => stop_diffs[start_index - 1].arrival_time_since_start
+                };
+
+                let end_time = match stop_diffs[end_index + 1].arrival_time_since_start {
+                    Some(time) => Some(time),
+                    None => stop_diffs[end_index + 1].departure_time_since_start
+                };
+
+                if start_time.is_none() || end_time.is_none() {
+                    println!("Invalid start or end time for interpolation");
+                    continue;
+                }
+
+                let start_time = start_time.unwrap();
+                let end_time = end_time.unwrap();
+
+                let time_difference = end_time - start_time;
+                let number_of_stops = end_index - start_index + 1;
+
+                let time_difference_per_stop = time_difference / number_of_stops as i32;
+
+                //assume basic time interpolation for now
+                for (index, stop_index) in range.iter().enumerate() {
+                    interpolated_times.insert(
+                        *stop_index,
+                        start_time + time_difference_per_stop * (index as i32 + 1),
+                    );
+                }
+            }
+
+            interpolated_times
+        };
+
+        //apply the interpolations back to the stop_diffs
+        for (index, stop_diff) in stop_diffs.iter_mut().enumerate() {
+            if let Some(interpolated_time) = new_interpolated_times.get(&index) {
+                stop_diff.interpolated_time_since_start = Some(*interpolated_time);
+                stop_diff.interpolation_by_catenary = true;
+            }
         }
 
         let stated_timezone = match gtfs.agencies.len() {
@@ -213,10 +315,44 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             .or_insert(vec![trip_under_itinerary]);
     }
 
+    //calculate direction patterns
+
+    let mut direction_patterns: AHashMap<u64, DirectionPattern> = AHashMap::new();
+
+    for (itinerary_id, itinerary) in &itineraries {
+        let mut stop_sequence: Vec<String> = Vec::new();
+
+        for stop_diff in &itinerary.stop_sequences {
+            stop_sequence.push(stop_diff.stop_id.clone());
+        }
+
+        let direction_pattern = DirectionPattern {
+            direction_id: itinerary.direction_id,
+            stop_sequence,
+            headsign_or_destination: match itinerary.trip_headsign.clone() {
+                Some(headsign) => Some(headsign),
+                None => match itinerary.stop_sequences.last() {
+                    Some(last_stop) => match gtfs.stops.get(&last_stop.stop_id) {
+                        Some(stop) => stop.name.clone(),
+                        None => None,
+                    },
+                    None => None,
+                },
+            },
+            gtfs_shape_id: itinerary.shape_id.clone(),
+            route_id: itinerary.route_id.clone(),
+        };
+
+        let hash_of_direction_pattern = fast_hash(&direction_pattern.stop_sequence);
+
+        direction_patterns.insert(hash_of_direction_pattern, direction_pattern);
+    }
+
     ResponseFromReduce {
         itineraries,
         trips_to_itineraries,
         itineraries_to_trips,
+        direction_patterns
     }
 }
 
