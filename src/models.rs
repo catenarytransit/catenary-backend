@@ -22,6 +22,7 @@ pub struct ItineraryPatternRow {
     pub stop_sequence: i32,
     pub arrival_time_since_start: Option<i32>,
     pub departure_time_since_start: Option<i32>,
+    pub interpolated_time_since_start: Option<i32>,
     pub stop_id: String,
     pub chateau: String,
     pub gtfs_stop_sequence: u32,
