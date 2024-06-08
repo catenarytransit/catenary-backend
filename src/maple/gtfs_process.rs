@@ -232,6 +232,7 @@ pub async fn gtfs_process_feed(
                 .collect::<Vec<Option<String>>>(),
             shape_id: itinerary.shape_id.clone(),
             route_id: itinerary.route_id.clone(),
+            direction_pattern_id: Some(itinerary.direction_pattern_id.to_string()),
         };
 
         diesel::insert_into(
@@ -256,6 +257,7 @@ pub async fn gtfs_process_feed(
                     gtfs_stop_sequence: stop_sequence.gtfs_stop_sequence as u32,
                     arrival_time_since_start: stop_sequence.arrival_time_since_start,
                     departure_time_since_start: stop_sequence.departure_time_since_start,
+                    interpolated_time_since_start: stop_sequence.interpolated_time_since_start,
                 },
             )
             .collect::<Vec<_>>();
