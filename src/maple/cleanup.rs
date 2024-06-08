@@ -165,6 +165,30 @@ pub async fn delete_attempt_objects(
     .execute(conn)
     .await?;
 
+    use catenary::schema::gtfs::direction_pattern;
+
+    let _ = diesel::delete(
+        direction_pattern::dsl::direction_pattern.filter(
+            direction_pattern::dsl::onestop_feed_id
+                .eq(&feed_id)
+                .and(direction_pattern::dsl::attempt_id.eq(&attempt_id)),
+        ),
+    )
+    .execute(conn)
+    .await?;
+
+    use catenary::schema::gtfs::direction_pattern_meta;
+
+    let _ = diesel::delete(
+        direction_pattern_meta::dsl::direction_pattern_meta.filter(
+            direction_pattern_meta::dsl::onestop_feed_id
+                .eq(&feed_id)
+                .and(direction_pattern_meta::dsl::attempt_id.eq(&attempt_id)),
+        ),
+    )
+    .execute(conn)
+    .await?;
+
     //delete ingested static_download_attempts
     /*
 
@@ -275,6 +299,24 @@ pub async fn wipe_whole_feed(
 
     let _ = diesel::delete(
         trips_compressed_table.filter(trips_compressed::dsl::onestop_feed_id.eq(&feed_id)),
+    )
+    .execute(conn)
+    .await?;
+
+    use catenary::schema::gtfs::direction_pattern;
+
+    let _ = diesel::delete(
+        direction_pattern::dsl::direction_pattern
+            .filter(direction_pattern::dsl::onestop_feed_id.eq(&feed_id)),
+    )
+    .execute(conn)
+    .await?;
+
+    use catenary::schema::gtfs::direction_pattern_meta;
+
+    let _ = diesel::delete(
+        direction_pattern_meta::dsl::direction_pattern_meta
+            .filter(direction_pattern_meta::dsl::onestop_feed_id.eq(&feed_id)),
     )
     .execute(conn)
     .await?;
