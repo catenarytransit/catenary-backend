@@ -347,7 +347,7 @@ pub struct DirectionPatternRow {
     pub chateau: String,
     pub direction_pattern_id: String,
     pub stop_id: String,
-    pub stop_sequence: i32,
+    pub stop_sequence: u32,
     pub arrival_time_since_start: Option<i32>,
     pub departure_time_since_start: Option<i32>,
     pub interpolated_time_since_start: Option<i32>,
