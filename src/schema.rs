@@ -6,19 +6,6 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
-        gtfs.admin_credentials (email) {
-            email -> Text,
-            hash -> Text,
-            salt -> Text,
-            last_updated_ms -> Int8,
-        }
-    }
-
-    diesel::table! {
-        use postgis_diesel::sql_types::*;
-        use diesel::sql_types::*;
-        use crate::custom_pg_types::*;
-
         gtfs.agencies (static_onestop_id, attempt_id, agency_id) {
             static_onestop_id -> Text,
             agency_id -> Text,
@@ -95,6 +82,40 @@ pub mod gtfs {
             realtime_feeds -> Array<Nullable<Text>>,
             languages_avaliable -> Array<Nullable<Text>>,
             hull -> Nullable<Geometry>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.direction_pattern (onestop_feed_id, attempt_id, direction_pattern_id, stop_sequence) {
+            chateau -> Text,
+            direction_pattern_id -> Text,
+            stop_id -> Text,
+            stop_sequence -> Oid,
+            arrival_time_since_start -> Nullable<Int4>,
+            departure_time_since_start -> Nullable<Int4>,
+            interpolated_time_since_start -> Nullable<Int4>,
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.direction_pattern_meta (onestop_feed_id, attempt_id, direction_pattern_id) {
+            chateau -> Text,
+            direction_pattern_id -> Text,
+            headsign_or_destination -> Text,
+            gtfs_shape_id -> Nullable<Text>,
+            fake_shape -> Bool,
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
         }
     }
 
@@ -197,6 +218,7 @@ pub mod gtfs {
             stop_id -> Text,
             chateau -> Text,
             gtfs_stop_sequence -> Oid,
+            interpolated_time_since_start -> Nullable<Int4>,
         }
     }
 
@@ -216,6 +238,7 @@ pub mod gtfs {
             trip_headsign_translations -> Nullable<Jsonb>,
             shape_id -> Nullable<Text>,
             timezone -> Text,
+            direction_pattern_id -> Nullable<Text>,
         }
     }
 
@@ -241,7 +264,6 @@ pub mod gtfs {
         gtfs.realtime_passwords (onestop_feed_id) {
             onestop_feed_id -> Text,
             passwords -> Nullable<Jsonb>,
-            last_updated_ms -> Int8,
         }
     }
 
@@ -271,6 +293,7 @@ pub mod gtfs {
             continuous_drop_off -> Int2,
             shapes_list -> Nullable<Array<Nullable<Text>>>,
             chateau -> Text,
+            stops -> Nullable<Bytea>,
         }
     }
 
@@ -357,7 +380,6 @@ pub mod gtfs {
         gtfs.static_passwords (onestop_feed_id) {
             onestop_feed_id -> Text,
             passwords -> Nullable<Jsonb>,
-            last_updated_ms -> Int8,
         }
     }
 
@@ -406,20 +428,6 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
-        gtfs.stopsforroute (onestop_feed_id, attempt_id, route_id) {
-            onestop_feed_id -> Text,
-            attempt_id -> Text,
-            route_id -> Text,
-            stops -> Nullable<Bytea>,
-            chateau -> Text,
-        }
-    }
-
-    diesel::table! {
-        use postgis_diesel::sql_types::*;
-        use diesel::sql_types::*;
-        use crate::custom_pg_types::*;
-
         gtfs.trip_frequencies (onestop_feed_id, attempt_id, trip_id, index) {
             onestop_feed_id -> Text,
             trip_id -> Text,
@@ -451,18 +459,19 @@ pub mod gtfs {
             frequencies -> Nullable<Bytea>,
             has_frequencies -> Bool,
             itinerary_pattern_id -> Text,
-            route_id -> Text,
+            compressed_trip_frequencies -> Nullable<Text>,
             start_time -> Oid,
         }
     }
 
     diesel::allow_tables_to_appear_in_same_query!(
-        admin_credentials,
         agencies,
         calendar,
         calendar_dates,
         chateau_metadata_last_updated_time,
         chateaus,
+        direction_pattern,
+        direction_pattern_meta,
         f_test,
         feed_info,
         gtfs_errors,
@@ -479,7 +488,6 @@ pub mod gtfs {
         static_feeds,
         static_passwords,
         stops,
-        stopsforroute,
         trip_frequencies,
         trips_compressed,
     );
