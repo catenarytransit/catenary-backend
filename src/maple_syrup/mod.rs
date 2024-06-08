@@ -136,11 +136,10 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             .map(|(index, _)| index)
             .collect();
 
-            let mut ranges: Vec<Vec<usize>> = Vec::new();
+        let mut ranges: Vec<Vec<usize>> = Vec::new();
 
         if stop_indicies_requiring_interpolation.len() > 0 {
             //group into ranges of consecutive indicies
-            
 
             let mut current_range: Vec<usize> = Vec::new();
 
@@ -158,7 +157,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             }
         }
 
-        let new_interpolated_times:AHashMap<usize, i32> = {
+        let new_interpolated_times: AHashMap<usize, i32> = {
             //interpolate times
 
             let mut interpolated_times: AHashMap<usize, i32> = AHashMap::new();
@@ -174,12 +173,12 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
                 let start_time = match stop_diffs[start_index - 1].departure_time_since_start {
                     Some(time) => Some(time),
-                    None => stop_diffs[start_index - 1].arrival_time_since_start
+                    None => stop_diffs[start_index - 1].arrival_time_since_start,
                 };
 
                 let end_time = match stop_diffs[end_index + 1].arrival_time_since_start {
                     Some(time) => Some(time),
-                    None => stop_diffs[end_index + 1].departure_time_since_start
+                    None => stop_diffs[end_index + 1].departure_time_since_start,
                 };
 
                 if start_time.is_none() || end_time.is_none() {
@@ -352,7 +351,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         itineraries,
         trips_to_itineraries,
         itineraries_to_trips,
-        direction_patterns
+        direction_patterns,
     }
 }
 
