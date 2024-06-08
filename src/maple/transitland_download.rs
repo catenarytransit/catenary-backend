@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 
 #[derive(Clone)]
 struct StaticFeedToDownload {
@@ -219,7 +220,11 @@ pub async fn download_return_eligible_feeds(
             
                                                         //thus, don't perform the ingest
                                                     if check_for_previous_insert_sucesses.is_some() {
-                                                        answer.ingest = false;
+                                                        if check_for_previous_insert_sucesses.unwrap().ingestion_version < MAPLE_INGESTION_VERSION {
+                                                            answer.ingest = true;
+                                                        } else {
+                                                            answer.ingest = false;
+                                                        }
                                                     } else {
                                                         //no successes have occured, reattempt this zip file
                                                         //search through zookeeper tree for current pending operations (todo!)
