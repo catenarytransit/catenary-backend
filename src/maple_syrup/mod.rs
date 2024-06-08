@@ -126,6 +126,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             stop_diffs.push(stop_diff);
         }
 
+        //interpolate times for stops that don't have times
         let stop_indicies_requiring_interpolation: Vec<usize> = stop_diffs
             .iter()
             .enumerate()
