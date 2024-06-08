@@ -1,3 +1,4 @@
+use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::CatenaryPostgresPool;
 use catenary::models::StaticDownloadAttempt;
 use catenary::postgres_tools::CatenaryConn;
@@ -14,7 +15,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 
 #[derive(Clone)]
 struct StaticFeedToDownload {
