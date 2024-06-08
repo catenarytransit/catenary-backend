@@ -6,6 +6,19 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.admin_credentials (email) {
+            email -> Text,
+            hash -> Text,
+            salt -> Text,
+            last_updated_ms -> Int8,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.agencies (static_onestop_id, attempt_id, agency_id) {
             static_onestop_id -> Text,
             agency_id -> Text,
@@ -264,6 +277,7 @@ pub mod gtfs {
         gtfs.realtime_passwords (onestop_feed_id) {
             onestop_feed_id -> Text,
             passwords -> Nullable<Jsonb>,
+            last_updated_ms -> Int8,
         }
     }
 
@@ -293,7 +307,6 @@ pub mod gtfs {
             continuous_drop_off -> Int2,
             shapes_list -> Nullable<Array<Nullable<Text>>>,
             chateau -> Text,
-            stops -> Nullable<Bytea>,
         }
     }
 
@@ -380,6 +393,7 @@ pub mod gtfs {
         gtfs.static_passwords (onestop_feed_id) {
             onestop_feed_id -> Text,
             passwords -> Nullable<Jsonb>,
+            last_updated_ms -> Int8,
         }
     }
 
@@ -428,6 +442,20 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.stopsforroute (onestop_feed_id, attempt_id, route_id) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            route_id -> Text,
+            stops -> Nullable<Bytea>,
+            chateau -> Text,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.trip_frequencies (onestop_feed_id, attempt_id, trip_id, index) {
             onestop_feed_id -> Text,
             trip_id -> Text,
@@ -459,12 +487,13 @@ pub mod gtfs {
             frequencies -> Nullable<Bytea>,
             has_frequencies -> Bool,
             itinerary_pattern_id -> Text,
-            compressed_trip_frequencies -> Nullable<Text>,
+            route_id -> Text,
             start_time -> Oid,
         }
     }
 
     diesel::allow_tables_to_appear_in_same_query!(
+        admin_credentials,
         agencies,
         calendar,
         calendar_dates,
@@ -488,6 +517,7 @@ pub mod gtfs {
         static_feeds,
         static_passwords,
         stops,
+        stopsforroute,
         trip_frequencies,
         trips_compressed,
     );
