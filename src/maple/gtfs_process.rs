@@ -238,7 +238,7 @@ pub async fn gtfs_process_feed(
 
             let linestring = postgis_diesel::types::LineString {
                 points: stop_points,
-                srid: Some(4326)
+                srid: Some(4326),
             };
 
             //TODO insert into shapes and shapes_not_bus
