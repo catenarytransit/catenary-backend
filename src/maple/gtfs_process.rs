@@ -16,6 +16,7 @@ use crate::DownloadedFeedsInformation;
 use catenary::enum_to_int::*;
 use catenary::gtfs_schedule_protobuf::frequencies_to_protobuf;
 use catenary::maple_syrup;
+use catenary::models::DirectionPatternMeta;
 use catenary::models::ItineraryPatternMeta;
 use catenary::models::Route as RoutePgModel;
 use catenary::postgres_tools::CatenaryConn;
@@ -209,6 +210,55 @@ pub async fn gtfs_process_feed(
         reduction.trips_to_itineraries.len(),
         reduction.trips_to_itineraries.len() as f64 / reduction.itineraries.len() as f64
     );
+
+    for (direction_pattern_id, direction_pattern) in &reduction.direction_patterns {
+        let gtfs_shape_id = match &direction_pattern.gtfs_shape_id {
+            Some(gtfs_shape_id) => gtfs_shape_id.clone(),
+            None => direction_pattern_id.to_string(),
+        };
+
+        if direction_pattern.gtfs_shape_id.is_none() {
+            //: postgis_diesel::types::LineString<postgis_diesel::types::Point>
+
+            let stop_points = direction_pattern
+                .stop_sequence
+                .iter()
+                .map(|stop_id| gtfs.stops.get(stop_id))
+                .flatten()
+                .map(|stop| match (stop.latitude, stop.longitude) {
+                    (Some(latitude), Some(longitude)) => Some(postgis_diesel::types::Point {
+                        y: latitude,
+                        x: longitude,
+                        srid: Some(4326),
+                    }),
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<postgis_diesel::types::Point>>();
+
+            let linestring = postgis_diesel::types::LineString {
+                points: stop_points,
+                srid: Some(4326)
+            };
+
+            //TODO insert into shapes and shapes_not_bus
+        }
+
+        let direction_pattern_meta = DirectionPatternMeta {
+            chateau: chateau_id.to_string(),
+            direction_pattern_id: direction_pattern_id.to_string(),
+            headsign_or_destination: direction_pattern
+                .headsign_or_destination
+                .clone()
+                .unwrap_or_else(|| "".to_string()),
+            gtfs_shape_id: Some(gtfs_shape_id.clone()),
+            fake_shape: direction_pattern.gtfs_shape_id.is_none(),
+            onestop_feed_id: feed_id.to_string(),
+            attempt_id: attempt_id.to_string(),
+        };
+
+        //TODO insert stop list into DirectionPatternRow
+    }
 
     for (itinerary_id, itinerary) in &reduction.itineraries {
         let itinerary_pg_meta = ItineraryPatternMeta {
