@@ -257,7 +257,13 @@ pub async fn gtfs_process_feed(
             attempt_id: attempt_id.to_string(),
         };
 
-        //TODO insert stop list into DirectionPatternRow
+        //insert stop list into DirectionPatternRow
+
+        for stop_point in direction_pattern.stop_sequence {
+            let direction_row = DirectionPatternRow {
+                
+            }
+        }
     }
 
     for (itinerary_id, itinerary) in &reduction.itineraries {
