@@ -3,6 +3,7 @@
 use crate::enum_to_int::*;
 use crate::fast_hash;
 use ahash::AHashMap;
+use ahash::AHashSet;
 use gtfs_structures::DirectionType;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -69,12 +70,14 @@ pub struct ResponseFromReduce {
     pub trips_to_itineraries: AHashMap<String, u64>,
     pub itineraries_to_trips: AHashMap<u64, Vec<TripUnderItinerary>>,
     pub direction_patterns: AHashMap<u64, DirectionPattern>,
+    pub direction_pattern_id_to_itineraries: AHashMap<u64, AHashSet<u64>>,
 }
 
 pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
     let mut itineraries: AHashMap<u64, ItineraryCover> = AHashMap::new();
     let mut trips_to_itineraries: AHashMap<String, u64> = AHashMap::new();
     let mut itineraries_to_trips: AHashMap<u64, Vec<TripUnderItinerary>> = AHashMap::new();
+    let mut direction_pattern_id_to_itineraries: AHashMap<u64, AHashSet<u64>> = AHashMap::new();
 
     for (trip_id, trip) in &gtfs.trips {
         let mut stop_diffs: Vec<StopDifference> = Vec::new();
@@ -363,6 +366,9 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         );
 
         direction_patterns.insert(hash_of_direction_pattern_output, direction_pattern);
+        direction_pattern_id_to_itineraries.entry(hash_of_direction_pattern_output)
+        .and_modify(|x| {x.insert(*itinerary_id);})
+        .or_insert(AHashSet::from_iter([*itinerary_id]));
     }
 
     ResponseFromReduce {
@@ -370,6 +376,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         trips_to_itineraries,
         itineraries_to_trips,
         direction_patterns,
+        direction_pattern_id_to_itineraries
     }
 }
 
