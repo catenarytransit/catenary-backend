@@ -246,28 +246,6 @@ pub async fn gtfs_process_feed(
             //TODO insert into shapes and shapes_not_bus
         }
 
-        let direction_pattern_meta = DirectionPatternMeta {
-            chateau: chateau_id.to_string(),
-            direction_pattern_id: direction_pattern_id.to_string(),
-            headsign_or_destination: direction_pattern
-                .headsign_or_destination
-                .clone()
-                .unwrap_or_else(|| "".to_string()),
-            gtfs_shape_id: Some(gtfs_shape_id.clone()),
-            fake_shape: direction_pattern.gtfs_shape_id.is_none(),
-            onestop_feed_id: feed_id.to_string(),
-            attempt_id: attempt_id.to_string(),
-        };
-
-        //insert stop list into DirectionPatternRow
-
-        diesel::insert_into(
-            catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta,
-        )
-        .values(direction_pattern_meta)
-        .execute(conn)
-        .await?;
-
         let first_itin_id = reduction
             .direction_pattern_id_to_itineraries
             .get(direction_pattern_id)
@@ -280,6 +258,30 @@ pub async fn gtfs_process_feed(
             .itineraries
             .get(first_itin_id)
             .expect("Did not find itin pattern, crashing....");
+
+        
+            let direction_pattern_meta = DirectionPatternMeta {
+                chateau: chateau_id.to_string(),
+                direction_pattern_id: direction_pattern_id.to_string(),
+                headsign_or_destination: direction_pattern
+                    .headsign_or_destination
+                    .clone()
+                    .unwrap_or_else(|| "".to_string()),
+                gtfs_shape_id: Some(gtfs_shape_id.clone()),
+                fake_shape: direction_pattern.gtfs_shape_id.is_none(),
+                onestop_feed_id: feed_id.to_string(),
+                attempt_id: attempt_id.to_string(),
+                route_id: Some(itin_pattern.route_id.clone())
+            };
+    
+            //insert stop list into DirectionPatternRow
+
+            diesel::insert_into(
+                catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta,
+            )
+            .values(direction_pattern_meta)
+            .execute(conn)
+            .await?;
 
         let direction_pattern_rows: Vec<DirectionPatternRow> = itin_pattern
             .stop_sequences
