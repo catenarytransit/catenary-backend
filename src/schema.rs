@@ -129,6 +129,7 @@ pub mod gtfs {
             fake_shape -> Bool,
             onestop_feed_id -> Text,
             attempt_id -> Text,
+            route_id -> Nullable<Text>,
         }
     }
 
@@ -328,6 +329,7 @@ pub mod gtfs {
             text_color -> Nullable<Text>,
             chateau -> Text,
             allowed_spatial_query -> Bool,
+            stop_to_stop_generated -> Nullable<Bool>,
         }
     }
 

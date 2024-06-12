@@ -366,4 +366,5 @@ pub struct DirectionPatternMeta {
     pub fake_shape: bool,
     pub onestop_feed_id: String,
     pub attempt_id: String,
+    pub route_id: Option<String>
 }
