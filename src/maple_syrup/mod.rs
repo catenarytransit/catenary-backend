@@ -151,13 +151,11 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             for stop_indice in stop_indicies_requiring_interpolation {
                 if current_range.len() == 0 {
                     current_range.push(stop_indice);
+                } else if current_range.last().unwrap() + 1 == stop_indice {
+                    current_range.push(stop_indice);
                 } else {
-                    if current_range.last().unwrap() + 1 == stop_indice {
-                        current_range.push(stop_indice);
-                    } else {
-                        ranges.push(current_range);
-                        current_range = vec![stop_indice];
-                    }
+                    ranges.push(current_range);
+                    current_range = vec![stop_indice];
                 }
             }
         }
@@ -358,17 +356,16 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
         let hash_of_direction_pattern_output = calculate_direction_pattern_id(
             &direction_pattern.route_id,
-            direction_pattern
-                .stop_sequence
-                .iter()
-                .map(|x| x.clone())
-                .collect::<Vec<String>>(),
+            direction_pattern.stop_sequence.to_vec(),
         );
 
         direction_patterns.insert(hash_of_direction_pattern_output, direction_pattern);
-        direction_pattern_id_to_itineraries.entry(hash_of_direction_pattern_output)
-        .and_modify(|x| {x.insert(*itinerary_id);})
-        .or_insert(AHashSet::from_iter([*itinerary_id]));
+        direction_pattern_id_to_itineraries
+            .entry(hash_of_direction_pattern_output)
+            .and_modify(|x| {
+                x.insert(*itinerary_id);
+            })
+            .or_insert(AHashSet::from_iter([*itinerary_id]));
     }
 
     ResponseFromReduce {
@@ -376,7 +373,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         trips_to_itineraries,
         itineraries_to_trips,
         direction_patterns,
-        direction_pattern_id_to_itineraries
+        direction_pattern_id_to_itineraries,
     }
 }
 

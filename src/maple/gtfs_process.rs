@@ -16,14 +16,13 @@ use crate::DownloadedFeedsInformation;
 use catenary::enum_to_int::*;
 use catenary::gtfs_schedule_protobuf::frequencies_to_protobuf;
 use catenary::maple_syrup;
-use catenary::models::DirectionPatternMeta;
-use catenary::models::ItineraryPatternMeta;
-use catenary::models::Route as RoutePgModel;
+use catenary::models::{DirectionPatternMeta, DirectionPatternRow, ItineraryPatternMeta, ItineraryPatternRow, Route as RoutePgModel};
 use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::route_id_transform;
 use catenary::schema::gtfs::calendar::onestop_feed_id;
 use catenary::schema::gtfs::chateaus::languages_avaliable;
+use catenary::schema::gtfs::direction_pattern;
 use chrono::NaiveDate;
 use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
@@ -259,10 +258,36 @@ pub async fn gtfs_process_feed(
 
         //insert stop list into DirectionPatternRow
 
-        for stop_point in direction_pattern.stop_sequence {
-            let direction_row = DirectionPatternRow {
-                
-            }
+        diesel::insert_into(catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta)
+        .values(direction_pattern_meta)
+        .execute(
+            conn
+        ).await?;
+
+        let first_itin_id = reduction.direction_pattern_id_to_itineraries.get(direction_pattern_id).unwrap().iter().nth(0).expect("Expected Itin for direction id");
+
+        let itin_pattern = reduction.itineraries.get(first_itin_id).expect("Did not find itin pattern, crashing....");
+
+        let direction_pattern_rows : Vec<DirectionPatternRow> = itin_pattern.stop_sequences.iter().enumerate().map(|(stop_idx, stop_time)|
+        DirectionPatternRow {
+            attempt_id: attempt_id.to_string(),
+            chateau: chateau_id.to_string(),
+            direction_pattern_id: direction_pattern_id.to_string(),
+            stop_id: stop_time.stop_id.clone(),
+            stop_sequence: stop_idx as u32,
+            onestop_feed_id: feed_id.to_string(),
+            arrival_time_since_start: stop_time.arrival_time_since_start,
+            departure_time_since_start: stop_time.departure_time_since_start,
+            interpolated_time_since_start: stop_time.interpolated_time_since_start,
+        }
+        )
+        .collect();
+
+        for dir_chunk in direction_pattern_rows.chunks(100) {
+            diesel::insert_into(catenary::schema::gtfs::direction_pattern::dsl::direction_pattern)
+                .values(dir_chunk)
+                .execute(conn)
+                .await?;
         }
     }
 
@@ -303,7 +328,7 @@ pub async fn gtfs_process_feed(
             .iter()
             .enumerate()
             .map(
-                |(stop_index, stop_sequence)| catenary::models::ItineraryPatternRow {
+                |(stop_index, stop_sequence)| ItineraryPatternRow {
                     onestop_feed_id: feed_id.to_string(),
                     chateau: chateau_id.to_string(),
                     attempt_id: attempt_id.to_string(),
@@ -406,10 +431,7 @@ pub async fn gtfs_process_feed(
                             .map(|x| Some(x.clone()))
                             .collect::<Vec<Option<String>>>()
                     }),
-                gtfs_order: match route.order {
-                    Some(x) => Some(x),
-                    None => None,
-                },
+                gtfs_order: route.order ,
                 continuous_drop_off: continuous_pickup_drop_off_to_i16(&route.continuous_drop_off),
                 continuous_pickup: continuous_pickup_drop_off_to_i16(&route.continuous_pickup),
             };
