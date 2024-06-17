@@ -6,7 +6,7 @@ Catenary Backend is a distributed system comprised of microservices operating in
 - **Prairie**: Routing Preprocessor and execution engine (Research and design in progress)
 - **Alpenrose**: Distributed system to ingest GTFS-rt and other realtime data (Rose des Alpes), successor to Kactus.
 - **Aspen**: Processing of realtime data and dynamic insertion into other engines
-- **Edelweiss**: Map tile geometry server, will serve line ordering optimised graph maps (LOOM) in the future.
+- **Edelweiss**: Map tile geometry server, will serve line ordering optimised graph maps (LOOM) in the future. [not started yet]
 - **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times (not started yet)
 - **Birch**: General API server
 
