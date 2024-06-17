@@ -212,12 +212,24 @@ pub async fn gtfs_process_feed(
         reduction.trips_to_itineraries.len(),
         reduction.trips_to_itineraries.len() as f64 / reduction.itineraries.len() as f64
     );
-
     for (direction_pattern_id, direction_pattern) in &reduction.direction_patterns {
         let gtfs_shape_id = match &direction_pattern.gtfs_shape_id {
             Some(gtfs_shape_id) => gtfs_shape_id.clone(),
             None => direction_pattern_id.to_string(),
         };
+
+        let first_itin_id = reduction
+            .direction_pattern_id_to_itineraries
+            .get(direction_pattern_id)
+            .unwrap()
+            .iter()
+            .nth(0)
+            .expect("Expected Itin for direction id");
+
+        let itin_pattern = reduction
+            .itineraries
+            .get(first_itin_id)
+            .expect("Did not find itin pattern, crashing....");
 
         if direction_pattern.gtfs_shape_id.is_none() {
             //: postgis_diesel::types::LineString<postgis_diesel::types::Point>
@@ -243,45 +255,31 @@ pub async fn gtfs_process_feed(
                 srid: Some(4326),
             };
 
-            //TODO insert into shapes and shapes_not_bus
+            //insert into shapes and shapes_not_bus
         }
 
-        let first_itin_id = reduction
-            .direction_pattern_id_to_itineraries
-            .get(direction_pattern_id)
-            .unwrap()
-            .iter()
-            .nth(0)
-            .expect("Expected Itin for direction id");
+        let direction_pattern_meta = DirectionPatternMeta {
+            chateau: chateau_id.to_string(),
+            direction_pattern_id: direction_pattern_id.to_string(),
+            headsign_or_destination: direction_pattern
+                .headsign_or_destination
+                .clone()
+                .unwrap_or_else(|| "".to_string()),
+            gtfs_shape_id: Some(gtfs_shape_id.clone()),
+            fake_shape: direction_pattern.gtfs_shape_id.is_none(),
+            onestop_feed_id: feed_id.to_string(),
+            attempt_id: attempt_id.to_string(),
+            route_id: Some(itin_pattern.route_id.clone()),
+        };
 
-        let itin_pattern = reduction
-            .itineraries
-            .get(first_itin_id)
-            .expect("Did not find itin pattern, crashing....");
+        //insert stop list into DirectionPatternRow
 
-        
-            let direction_pattern_meta = DirectionPatternMeta {
-                chateau: chateau_id.to_string(),
-                direction_pattern_id: direction_pattern_id.to_string(),
-                headsign_or_destination: direction_pattern
-                    .headsign_or_destination
-                    .clone()
-                    .unwrap_or_else(|| "".to_string()),
-                gtfs_shape_id: Some(gtfs_shape_id.clone()),
-                fake_shape: direction_pattern.gtfs_shape_id.is_none(),
-                onestop_feed_id: feed_id.to_string(),
-                attempt_id: attempt_id.to_string(),
-                route_id: Some(itin_pattern.route_id.clone())
-            };
-    
-            //insert stop list into DirectionPatternRow
-
-            diesel::insert_into(
-                catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta,
-            )
-            .values(direction_pattern_meta)
-            .execute(conn)
-            .await?;
+        diesel::insert_into(
+            catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta,
+        )
+        .values(direction_pattern_meta)
+        .execute(conn)
+        .await?;
 
         let direction_pattern_rows: Vec<DirectionPatternRow> = itin_pattern
             .stop_sequences

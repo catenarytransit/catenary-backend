@@ -1007,6 +1007,27 @@ pub async fn metrolinktrackproxy(req: HttpRequest) -> impl Responder {
     }
 }
 
+#[actix_web::get("/calfireproxy")]
+pub async fn calfireproxy(req: HttpRequest) -> impl Responder {
+    let raw_data = reqwest::get(
+        "https://incidents.fire.ca.gov/umbraco/api/IncidentApi/GeoJsonList?inactive=true",
+    )
+    .await;
+
+    match raw_data {
+        Ok(raw_data) => {
+            let raw_text = raw_data.text().await.unwrap();
+
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/json"))
+                .body(raw_text)
+        }
+        Err(err) => HttpResponse::InternalServerError()
+            .insert_header(("Content-Type", "text/plain"))
+            .body("could not fetch calfire"),
+    }
+}
+
 #[actix_web::get("/amtrakproxy")]
 pub async fn amtrakproxy(req: HttpRequest) -> impl Responder {
     let raw_data =
@@ -1253,6 +1274,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_vehicle_trip_information::get_trip_rt_update)
             .service(get_vehicle_trip_information::get_vehicle_information)
             .service(get_all_raw_alerts_chateau)
+            .service(calfireproxy)
     })
     .workers(16);
 
