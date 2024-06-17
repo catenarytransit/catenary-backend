@@ -1010,7 +1010,7 @@ pub async fn metrolinktrackproxy(req: HttpRequest) -> impl Responder {
 #[actix_web::get("/calfireproxy")]
 pub async fn calfireproxy(req: HttpRequest) -> impl Responder {
     let raw_data = reqwest::get(
-        "https://incidents.fire.ca.gov/umbraco/api/IncidentApi/GeoJsonList?inactive=true",
+        "https://incidents.fire.ca.gov/umbraco/api/IncidentApi/GeoJsonList?inactive=false",
     )
     .await;
 
