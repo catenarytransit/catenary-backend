@@ -10,6 +10,7 @@ use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::shape_colour_calculator::ShapeToColourResponse;
 use crate::gtfs_handlers::stops_associated_items::*;
+use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::insert_stop_to_stop_geometry;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres;
 use crate::DownloadedFeedsInformation;
@@ -250,12 +251,30 @@ pub async fn gtfs_process_feed(
                 .flatten()
                 .collect::<Vec<postgis_diesel::types::Point>>();
 
-            let linestring = postgis_diesel::types::LineString {
-                points: stop_points,
-                srid: Some(4326),
-            };
+            if stop_points.len() > 2 {
+                let linestring: postgis_diesel::types::LineString<postgis_diesel::types::Point> =
+                    postgis_diesel::types::LineString {
+                        points: stop_points,
+                        srid: Some(4326),
+                    };
 
-            //insert into shapes and shapes_not_bus
+                //insert into shapes and shapes_not_bus
+
+                let route = gtfs.routes.get(&direction_pattern.route_id);
+
+                if let Some(route) = route {
+                    let _ = insert_stop_to_stop_geometry(
+                        feed_id,
+                        attempt_id,
+                        chateau_id,
+                        route,
+                        *direction_pattern_id,
+                        &linestring,
+                        Arc::clone(&arc_conn_pool),
+                    )
+                    .await;
+                }
+            }
         }
 
         let direction_pattern_meta = DirectionPatternMeta {

@@ -351,6 +351,7 @@ pub mod gtfs {
             text_color -> Nullable<Text>,
             chateau -> Text,
             allowed_spatial_query -> Bool,
+            stop_to_stop_generated -> Nullable<Bool>,
         }
     }
 

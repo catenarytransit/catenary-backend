@@ -80,6 +80,7 @@ pub struct Shape {
     pub chateau: String,
     //insert with false, then enable after when mark for production
     pub allowed_spatial_query: bool,
+    pub stop_to_stop_generated: Option<bool>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Clone)]
@@ -98,6 +99,7 @@ pub struct ShapeNotBus {
     pub chateau: String,
     //insert with false, then enable after when mark for production
     pub allowed_spatial_query: bool,
+    pub stop_to_stop_generated: Option<bool>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]

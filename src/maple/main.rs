@@ -529,6 +529,29 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             .collect::<Vec<()>>()
             .await;
 
+            // delete static feeds that no longer exist
+
+            let inserted_feeds = catenary::schema::gtfs::static_feeds::dsl::static_feeds
+                .select(catenary::models::StaticFeed::as_select())
+                .load::<catenary::models::StaticFeed>(conn)
+                .await?;
+
+            for feed in inserted_feeds {
+                if dmfr_result
+                    .feed_hashmap
+                    .get(&feed.onestop_feed_id)
+                    .is_none()
+                {
+                    println!(
+                        "Deleting whole feed {}, no longer exists",
+                        feed.onestop_feed_id
+                    );
+                    let _ =
+                        wipe_whole_feed(&feed.onestop_feed_id, Arc::clone(&arc_conn_pool)).await;
+                    println!("Deleted whole feed {}", feed.onestop_feed_id);
+                }
+            }
+
             // Refresh the metadata tables after the ingestion is done
 
             refresh_metadata_tables::refresh_metadata_assignments(

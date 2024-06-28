@@ -159,6 +159,7 @@ pub async fn shapes_into_postgres(
                     route_label_translations: None,
                     text_color: Some(text_color.clone()),
                     allowed_spatial_query: false,
+                    stop_to_stop_generated: Some(false),
                 };
 
                 diesel::insert_into(shapes_not_bus_columns::shapes_not_bus)
@@ -189,6 +190,7 @@ pub async fn shapes_into_postgres(
                 route_label_translations: None,
                 text_color: Some(text_color),
                 allowed_spatial_query: false,
+                stop_to_stop_generated: Some(false),
             };
 
             {
