@@ -42,8 +42,8 @@ pub async fn nearby_from_coords(
 
    // let stops = sql_query("")
 
-   //Example query all stops within 1.0km of Los Angeles Union Station
-   // SELECT chateau, name FROM gtfs.stops WHERE ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT(-118.235570 34.0855904)', 1000) AND allowed_spatial_query = TRUE;
+   //Example query all stops within 0.1deg of Los Angeles Union Station
+   // SELECT chateau, name FROM gtfs.stops WHERE ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT(-118.235570 34.0855904)', 0.1) AND allowed_spatial_query = TRUE;
 
     // search through itineraries matching those stops and then put them in a hashmap of stop to itineraries
 
