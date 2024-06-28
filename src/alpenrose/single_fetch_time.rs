@@ -27,7 +27,8 @@ lazy_static! {
         "f-amtrak~rt",
         "f-mta~nyc~rt~mnr",
         "f-mta~nyc~rt~lirr",
-        "f-bus~dft~gov~uk~rt"
+        "f-bus~dft~gov~uk~rt",
+        "f-dp3-cta~rt"
     ]);
 }
 
@@ -271,6 +272,10 @@ pub async fn single_fetch_time(
                     }
                     "f-bus~dft~gov~uk~rt" => {
                         custom_rt_feeds::uk::fetch_dft_bus_data(&zk, feed_id, &client).await;
+                    }
+                    "f-dp3-cta~rt" => {
+                        custom_rt_feeds::chicagotransit::fetch_chicago_data(&zk, feed_id, &client)
+                            .await;
                     }
                     _ => {}
                 }
