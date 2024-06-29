@@ -4,15 +4,15 @@ use actix_web::HttpRequest;
 use actix_web::HttpResponse;
 use actix_web::Responder;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use diesel::dsl::sql;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
+use diesel::sql_types::Bool;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use diesel::sql_types::Bool;
-use diesel::dsl::sql;
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyFromCoords {
@@ -68,11 +68,10 @@ pub async fn nearby_from_coords(
     query.lon, query.lat);
 
     let stops = catenary::schema::gtfs::stops::dsl::stops
-    .filter(
-        sql::<Bool>(&where_query_for_stops)
-    )
-    .select(catenary::models::Stop::as_select())
-    .load::<catenary::models::Stop>(conn).await;
+        .filter(sql::<Bool>(&where_query_for_stops))
+        .select(catenary::models::Stop::as_select())
+        .load::<catenary::models::Stop>(conn)
+        .await;
 
     // search through itineraries matching those stops and then put them in a hashmap of stop to itineraries
 
