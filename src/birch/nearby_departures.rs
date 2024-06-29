@@ -42,7 +42,7 @@ struct DepartingTripsDataAnswer {
     number_of_stops_searched_through: usize,
 }
 
-#[actix_web::get("/nearbydeparturesfromcoords/")]
+#[actix_web::get("/nearbydeparturesfromcoords")]
 pub async fn nearby_from_coords(
     req: HttpRequest,
     query: Query<NearbyFromCoords>,
