@@ -11,7 +11,10 @@ use diesel::sql_types::Bool;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
+use geo::algorithm::haversine_bearing::HaversineBearing;
+use geo::HaversineDestination;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Deserialize, Clone, Debug)]
@@ -22,24 +25,26 @@ struct NearbyFromCoords {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct DepartingTrip {
-    chateau_id: String,
-    trip_id: String,
-    gtfs_frequency_start_time: Option<String>,
-    gtfs_schedule_start_day: String,
-    is_frequency: String,
-    departure_schedule_s: u64,
-    departure_realtime_s: u64,
-    arrival_schedule_s: u64,
-    arrival_realtime_s: u64,
-    stop_sequence: Option<u16>,
-    stop_id: String,
-    route_type: i16,
+pub struct DepartingTrip {
+    pub chateau_id: String,
+    pub trip_id: String,
+    pub gtfs_frequency_start_time: Option<String>,
+    pub gtfs_schedule_start_day: String,
+    pub is_frequency: String,
+    pub departure_schedule_s: Option<u64>,
+    pub departure_realtime_s: Option<u64>,
+    pub arrival_schedule_s: Option<u64>,
+    pub arrival_realtime_s: Option<u64>,
+    pub stop_sequence: Option<u16>,
+    pub stop_id: String,
+    pub route_type: i16,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct DepartingTripsDataAnswer {
-    number_of_stops_searched_through: usize,
+pub struct DepartingTripsDataAnswer {
+    pub number_of_stops_searched_through: usize,
+    pub bus_limited_metres: f64,
+    pub rail_and_other_limited_metres: f64,
 }
 
 #[actix_web::get("/nearbydeparturesfromcoords")]
@@ -64,8 +69,21 @@ pub async fn nearby_from_coords(
     //Example query all stops within 0.1deg of Los Angeles Union Station
     // SELECT chateau, name FROM gtfs.stops WHERE ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT(-118.235570 34.0855904)', 0.1) AND allowed_spatial_query = TRUE;
 
-    let where_query_for_stops = format!("ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', 0.1) AND allowed_spatial_query = TRUE",
-    query.lon, query.lat);
+    let input_point = geo::Point::new(query.lon, query.lat);
+
+    // i dont want to accidently create a point which is outside 180 or -180
+
+    let direction = match input_point.x() > 0. {
+        true => 90.,
+        false => -90.,
+    };
+
+    let distance_calc_point = input_point.haversine_destination(direction, 5000.);
+
+    let spatial_resolution_in_degs = f64::abs(distance_calc_point.x() - input_point.x());
+
+    let where_query_for_stops = format!("ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
+    query.lon, query.lat, spatial_resolution_in_degs);
 
     let stops = catenary::schema::gtfs::stops::dsl::stops
         .filter(sql::<Bool>(&where_query_for_stops))
@@ -73,18 +91,52 @@ pub async fn nearby_from_coords(
         .load::<catenary::models::Stop>(conn)
         .await;
 
-    // search through itineraries matching those stops and then put them in a hashmap of stop to itineraries
-
-    //get the start of the trip and the offset for the current stop
-
-    //look through time compressed and decompress the itineraries, using timezones and calendar calcs
-
-    //look through gtfs-rt times and `hydrate the itineraries
-
     match stops {
         Ok(stops) => {
+            let number_of_stops = stops.len();
+
+            //collect chateau list
+
+            let mut sorted_by_chateau: HashMap<String, HashMap<String, catenary::models::Stop>> =
+                HashMap::new();
+
+            // search through itineraries matching those stops and then put them in a hashmap of stop to itineraries
+
+            for stop in stops.iter() {
+                //  result
+                sorted_by_chateau
+                    .entry(stop.chateau.clone())
+                    .and_modify(|hashmap_under_chateau| {
+                        hashmap_under_chateau.insert(stop.gtfs_id.clone(), stop.clone());
+                    })
+                    .or_insert({
+                        let mut hashmap_under_chateau: HashMap<String, catenary::models::Stop> =
+                            HashMap::new();
+
+                        hashmap_under_chateau.insert(stop.gtfs_id.clone(), stop.clone());
+
+                        hashmap_under_chateau
+                    });
+            }
+
+            let sorted_by_chateau = sorted_by_chateau;
+
+            //for each chateau
+
+            for (chateau_id, hash_under_chateau) in sorted_by_chateau {
+                //  chateau_id
+            }
+
+            //get the start of the trip and the offset for the current stop
+
+            //look through time compressed and decompress the itineraries, using timezones and calendar calcs
+
+            //look through gtfs-rt times and hydrate the itineraries
+
             let answer = DepartingTripsDataAnswer {
-                number_of_stops_searched_through: stops.len(),
+                number_of_stops_searched_through: number_of_stops,
+                bus_limited_metres: 5000.,
+                rail_and_other_limited_metres: 5000.,
             };
 
             let stringified_answer = serde_json::to_string(&answer).unwrap();
