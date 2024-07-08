@@ -749,7 +749,7 @@ FROM (
     FROM
         gtfs.shapes_not_bus
     WHERE
-        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND chateau != 'amtrak'
+        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
 ) q", z = z, x = x, y= y);
 
     // println!("Performing query \n {}", query_str);

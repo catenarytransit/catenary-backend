@@ -172,17 +172,19 @@ pub async fn gtfs_process_feed(
     drop(agency_id_already_done);
 
     //shove raw geometry into postgresql
-    shapes_into_postgres(
-        &gtfs,
-        &shape_to_color_lookup,
-        &shape_to_text_color_lookup,
-        &feed_id,
-        Arc::clone(&arc_conn_pool),
-        &chateau_id,
-        &attempt_id,
-        &shape_id_to_route_ids_lookup,
-    )
-    .await?;
+    if chateau_id != "amtrak" {
+        shapes_into_postgres(
+            &gtfs,
+            &shape_to_color_lookup,
+            &shape_to_text_color_lookup,
+            &feed_id,
+            Arc::clone(&arc_conn_pool),
+            &chateau_id,
+            &attempt_id,
+            &shape_id_to_route_ids_lookup,
+        )
+        .await?;
+    }
 
     //insert stops
     stops_into_postgres(
