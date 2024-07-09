@@ -102,6 +102,8 @@ pub async fn nearby_from_coords(
 
             // search through itineraries matching those stops and then put them in a hashmap of stop to itineraries
 
+            //problem with this code: no understanding of what the current chateau list is
+            //solution, search through chateaus and get current valid attempt number to search through?
             for stop in stops.iter() {
                 //  result
                 sorted_by_chateau
