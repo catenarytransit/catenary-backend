@@ -127,7 +127,6 @@ pub async fn nearby_from_coords(
 
             for (chateau_id, hash_under_chateau) in sorted_by_chateau {
                 //  chateau_id
-                
             }
 
             //get the start of the trip and the offset for the current stop

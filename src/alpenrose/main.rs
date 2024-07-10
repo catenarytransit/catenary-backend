@@ -51,6 +51,7 @@ use diesel_async::pooled_connection::bb8::PooledConnection;
 use diesel_async::RunQueryDsl;
 use dmfr_folder_reader::read_folders;
 use futures::prelude::*;
+use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -107,6 +108,10 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     println!("Connected to zookeeper!");
 
+    let mut etcd_client = etcd_client::Client::connect(["localhost:2379"], None).await?;
+
+    println!("Connected to etcd");
+
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
@@ -132,8 +137,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .build()
         .unwrap();
 
-    //create parent node for workers
-
     let _ = zk
         .create(
             "/alpenrose_workers",
@@ -144,41 +147,54 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .await
         .unwrap();
 
-    let workers_assignments = zk
-        .create(
-            "/alpenrose_assignments",
-            vec![],
-            Acl::open_unsafe(),
-            CreateMode::Persistent,
+    let mut etcd = etcd_client::Client::connect(["localhost:2379"], None).await?;
+
+    let etcd_lease_id: i64 = rand::thread_rng().gen_range(0..i64::MAX);
+
+    let make_lease = etcd
+        .lease_grant(
+            30,
+            Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id)),
         )
-        .await
-        .unwrap();
+        .await?;
+
+    //create parent node for workers
+
+    let _ = etcd
+        .put(
+            "/alpenrose_assignments",
+            "",
+            Some(etcd_client::PutOptions::new().with_ignore_value()),
+        )
+        .await?;
 
     loop {
         let is_online = online::tokio::check(Some(5)).await.is_ok();
 
         if is_online {
+            //renew the etcd lease
+
+            let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
+
             // create this worker as an ephemeral node
-            let this_worker_assignment = zk
-                .create(
+
+            let etcd_this_worker_assignment = etcd
+                .put(
                     format!("/alpenrose_workers/{}", this_worker_id).as_str(),
-                    vec![],
-                    Acl::open_unsafe(),
-                    CreateMode::Ephemeral,
+                    bincode::serialize(&etcd_lease_id).unwrap(),
+                    Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id)),
                 )
-                .await
-                .unwrap();
+                .await?;
 
             //each feed id ephemeral id contains the last time updated, with none meaning the data has not been assigned to the node yet
-            let this_worker_assignments = zk
-                .create(
+
+                let etcd_this_worker_assignment = etcd
+                .put(
                     format!("/alpenrose_assignments/{}", this_worker_id).as_str(),
-                    bincode::serialize(&None::<u64>).unwrap(),
-                    Acl::open_unsafe(),
-                    CreateMode::Persistent,
+                    vec![],
+                    Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id)),
                 )
-                .await
-                .unwrap();
+                .await?;
 
             let leader_exists = zk.exists("/alpenrose_leader").await.unwrap();
 
@@ -554,6 +570,10 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             )
             .await?;
         } else {
+            //revoke the lease
+
+            let _ = etcd.lease_revoke(etcd_lease_id).await?;
+
             //delete the ephemeral node
             let delete_worker = zk
                 .delete(
