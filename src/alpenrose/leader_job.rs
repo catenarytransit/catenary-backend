@@ -66,6 +66,9 @@ pub async fn perform_leader_job(
     if *last_set_of_active_nodes_hash != Some(fast_hash_of_worker_nodes)
         || *last_updated_feeds_hash != Some(fast_hash_of_feeds)
     {
+        *last_updated_feeds_hash = Some(fast_hash_of_feeds);
+        *last_set_of_active_nodes_hash == Some(fast_hash_of_worker_nodes);
+
         //The state of the distributed system has changed!
 
         //Time to reassign!
