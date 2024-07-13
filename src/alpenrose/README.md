@@ -22,6 +22,13 @@ Lease: worker inserts own lease
 
 **Alpenrose Assignments**
 
+Per worker:
+```rs
+key: format!("/alpenrose_assignments/{}", this_worker_id),
+value: bincode::serialize(last_assignment_unix_time_ms).unwrap()
+```
+
+Each feed id under worker:
 ```rs
 key: format!("/alpenrose_assignments/{}/{}", this_worker_id, feed_id).as_str(),
 value: bincode::serialize(&assignment_data).unwrap()
