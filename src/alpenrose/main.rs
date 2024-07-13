@@ -214,7 +214,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 }
             }
 
-            //read from zookeeper to get the current assignments for this node
+            //read from etcd to get the current assignments for this node
 
             let last_updated_assignment_time_zk_fetch = zk
                 .get_data(format!("/alpenrose_assignments/{}", this_worker_id).as_str())
