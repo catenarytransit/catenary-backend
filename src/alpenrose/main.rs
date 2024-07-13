@@ -203,6 +203,16 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                     }
                 },
                 Err(leader_election_err) => {
+                    let attempt_to_become_leader = election_client
+                                .campaign(
+                                    "/alpenrose_leader",
+                                    bincode::serialize(this_worker_id.as_ref()).unwrap(),
+                                    etcd_lease_id,
+                                )
+                                .await;
+    
+                            println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
+
                     eprintln!("{:#?}", leader_election_err);
                 }
             }
