@@ -180,17 +180,18 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                     etcd_lease_id,
                                 )
                                 .await;
-    
+
                             println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
                         }
                         Some(leader_kv) => {
-                            let leader_id: String = bincode::deserialize(leader_kv.value()).unwrap();
-    
+                            let leader_id: String =
+                                bincode::deserialize(leader_kv.value()).unwrap();
+
                             if &leader_id == this_worker_id.as_ref() {
                                 // I AM THE LEADER!!!
-    
+
                                 println!("I AM THE LEADER!!!");
-    
+
                                 leader_job::perform_leader_job(
                                     &mut etcd,
                                     Arc::clone(&arc_conn_pool),
@@ -201,23 +202,21 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                             }
                         }
                     }
-                },
+                }
                 Err(leader_election_err) => {
                     let attempt_to_become_leader = election_client
-                                .campaign(
-                                    "/alpenrose_leader",
-                                    bincode::serialize(this_worker_id.as_ref()).unwrap(),
-                                    etcd_lease_id,
-                                )
-                                .await;
-    
-                            println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
+                        .campaign(
+                            "/alpenrose_leader",
+                            bincode::serialize(this_worker_id.as_ref()).unwrap(),
+                            etcd_lease_id,
+                        )
+                        .await;
+
+                    println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
 
                     eprintln!("{:#?}", leader_election_err);
                 }
             }
-
-            
 
             //read from etcd to get the current assignments for this node
 
@@ -263,8 +262,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                     .unwrap()
                                     .to_string()
                                     .replace(&prefix_search, ""),
-                                bincode::deserialize::<RealtimeFeedFetch>(each_kv.value())
-                                    .unwrap(),
+                                bincode::deserialize::<RealtimeFeedFetch>(each_kv.value()).unwrap(),
                             )
                         })
                         .collect::<HashMap<String, RealtimeFeedFetch>>();
