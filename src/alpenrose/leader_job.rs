@@ -38,7 +38,7 @@ pub async fn perform_leader_job(
 
     //get list of worker nodes
 
-    let fetch_workers_hashmap = etcd_client
+    let fetch_workers_hashmap = etcd
         .get(
             "/alpenrose_workers/",
             Some(etcd_client::GetOptions::new().with_prefix()),
