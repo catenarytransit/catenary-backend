@@ -10,7 +10,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 pub async fn perform_leader_job(
-    etcd_client: &mut etcd_client::Client,
+    etcd: &mut etcd_client::Client,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
     last_set_of_active_nodes_hash: &mut Option<u64>,
     last_updated_feeds_hash: &mut Option<u64>,
@@ -95,8 +95,37 @@ pub async fn perform_leader_job(
         let assignments = assignments;
 
         for (worker_id, instructions_hashmap) in assignments.iter() {
-            for (feed_id, realtime_instruction) in instructions_hashmap {}
+            let lease_option =
+                etcd_client::PutOptions::new().with_lease(fetch_workers_hashmap.get(worker_id));
+
+            for (feed_id, realtime_instruction) in instructions_hashmap {
+                let set_assignment = etcd
+                    .put(
+                        format!("/alpenrose_assignments/{}/{}", worker_id, feed_id).as_str(),
+                        bincode::serialize(&realtime_instruction).unwrap(),
+                        Some(lease_option.clone()),
+                    )
+                    .await;
+
+                match &set_assignment {
+                    Err(err) => eprintln!("{:#?}", err),
+                    _ => {}
+                }
+            }
             //update the last updated time
+
+            let set_metadata_updated_time = etcd
+                .put(
+                    format!("/alpenrose_assignments_last_updated/{}", worker_id).as_str(),
+                    bincode::serialize(&catenary::duration_since_unix_epoch().as_millis()).unwrap(),
+                    Some(lease_option),
+                )
+                .await;
+
+            match &set_metadata_updated_time {
+                Err(err) => eprintln!("{:#?}", err),
+                _ => {}
+            }
         }
     }
 
