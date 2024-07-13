@@ -87,8 +87,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     // last check time
     let last_check_time_ms: Option<u64> = None;
-    let last_set_of_active_nodes_hash: Option<u64> = None;
-    let last_updated_feeds_hash: Option<u64> = None;
+    let mut last_set_of_active_nodes_hash: Option<u64> = None;
+    let mut last_updated_feeds_hash: Option<u64> = None;
 
     //connect to postgres
     let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
@@ -163,7 +163,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
             //each feed id ephemeral id contains the last time updated, with none meaning the data has not been assigned to the node yet
 
-            /* 
+            /*
             THIS IS NOT NEEDED, there is no longer a directory structure in etcd v3, the entire thing is flattened
 
             let etcd_this_worker_assignment = etcd
@@ -202,7 +202,13 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
                             println!("I AM THE LEADER!!!");
 
-                            leader_job::perform_leader_job(Arc::clone(&arc_conn_pool)).await?;
+                            leader_job::perform_leader_job(
+                                &mut etcd,
+                                Arc::clone(&arc_conn_pool),
+                                &mut last_set_of_active_nodes_hash,
+                                &mut last_updated_feeds_hash,
+                            )
+                            .await?;
                         }
                     }
                 }

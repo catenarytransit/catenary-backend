@@ -28,6 +28,8 @@ key: format!("/alpenrose_assignments/{}", this_worker_id),
 value: bincode::serialize(last_assignment_unix_time_ms).unwrap()
 ```
 
+Unix time is milliseconds in u64
+
 Each feed id under worker:
 ```rs
 key: format!("/alpenrose_assignments/{}/{}", this_worker_id, feed_id).as_str(),
