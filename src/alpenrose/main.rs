@@ -100,10 +100,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     println!("Connected to zookeeper!");
 
-    let mut etcd_client = etcd_client::Client::connect(["localhost:2379"], None).await?;
-
-    println!("Connected to etcd");
-
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
@@ -131,6 +127,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let mut etcd = etcd_client::Client::connect(["localhost:2379"], None).await?;
 
+    println!("Connected to etcd");
+
     let etcd_lease_id: i64 = rand::thread_rng().gen_range(0..i64::MAX);
 
     let make_lease = etcd
@@ -140,6 +138,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id)),
         )
         .await?;
+
+    println!("etcd registered lease {}", etcd_lease_id);
 
     //create parent node for workers
 
@@ -165,8 +165,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
             let mut election_client = etcd.election_client();
 
-            let leader = zk.watch().get_data("/alpenrose_leader").await.unwrap();
-
             let current_leader_election = election_client.leader("/alpenrose_leader").await;
 
             if let Ok(current_leader_election) = current_leader_election {
@@ -181,6 +179,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                 etcd_lease_id,
                             )
                             .await;
+
+                        println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
                     }
                     Some(leader_kv) => {
                         let leader_id: String = bincode::deserialize(leader_kv.value()).unwrap();
