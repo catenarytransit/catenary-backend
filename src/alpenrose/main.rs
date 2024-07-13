@@ -216,56 +216,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
             //read from etcd to get the current assignments for this node
 
-            let last_updated_assignment_time_zk_fetch = zk
-                .get_data(format!("/alpenrose_assignments/{}", this_worker_id).as_str())
-                .await
-                .unwrap();
-
-            if let Some(last_updated_assignment_time) = last_updated_assignment_time_zk_fetch {
-                let last_updated_assignment_time =
-                    bincode::deserialize(&last_updated_assignment_time.0).unwrap_or(None::<u64>);
-
-                //is the time newer than the last time we updated the assignments for this worker node?
-                if last_updated_assignment_time != last_updated_ms_for_this_worker {
-                    let feed_ids = zk
-                        .get_children(format!("/alpenrose_assignments/{}", this_worker_id).as_str())
-                        .await
-                        .unwrap();
-
-                    if let Some(feed_ids) = feed_ids {
-                        let mut assignments_for_this_worker_lock =
-                            assignments_for_this_worker.write().await;
-
-                        let hashset_of_feed_ids: HashSet<String> =
-                            feed_ids.iter().map(|x| x.to_string()).collect();
-
-                        for feed_id in feed_ids.iter() {
-                            let assignment_data = zk
-                                .get_data(
-                                    format!(
-                                        "/alpenrose_assignments/{}/{}",
-                                        this_worker_id, feed_id
-                                    )
-                                    .as_str(),
-                                )
-                                .await
-                                .unwrap();
-
-                            if let Some(assignment_data) = assignment_data {
-                                let realtime_feed_fetch: RealtimeFeedFetch =
-                                    bincode::deserialize(&assignment_data.0).unwrap();
-
-                                assignments_for_this_worker_lock
-                                    .insert(feed_id.to_string(), realtime_feed_fetch);
-                            }
-                        }
-
-                        //cleanup from hashmap this worker is no longer supposed to handle
-                        assignments_for_this_worker_lock
-                            .retain(|key, _value| hashset_of_feed_ids.contains(key));
-                    }
-                }
-            }
+            //TODO!
 
             //get the feed data from the feeds assigned to this worker
 
@@ -279,46 +230,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             //revoke the lease
 
             let _ = etcd.lease_revoke(etcd_lease_id).await?;
-
-            //delete the ephemeral node
-            let delete_worker = zk
-                .delete(
-                    format!("/alpenrose_workers/{}", this_worker_id).as_str(),
-                    None,
-                )
-                .await
-                .unwrap();
-
-            if delete_worker.is_err() {
-                println!("Failed to delete worker node");
-            }
-
-            let delete_worker_assignments = zk
-                .delete(
-                    format!("/alpenrose_assignments/{}", this_worker_id).as_str(),
-                    None,
-                )
-                .await
-                .unwrap();
-
-            if delete_worker_assignments.is_err() {
-                println!("Failed to delete worker assignments node");
-            }
-
-            //delete the leader node if this node is the leader
-            let leader = zk.watch().get_data("/alpenrose_leader").await.unwrap();
-
-            if let Some((leader_str_bytes, leader_stats)) = leader {
-                let leader_id: String = bincode::deserialize(&leader_str_bytes).unwrap();
-
-                if &leader_id == this_worker_id.as_ref() {
-                    let delete_leader = zk.delete("/alpenrose_leader", None).await.unwrap();
-
-                    if delete_leader.is_err() {
-                        println!("Failed to delete leader node");
-                    }
-                }
-            }
         }
     }
 }
