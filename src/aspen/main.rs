@@ -65,6 +65,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use tokio_zookeeper::ZooKeeper;
 use tokio_zookeeper::{Acl, CreateMode};
+use rand::Rng;
 
 mod alerts_responder;
 
@@ -84,6 +85,7 @@ pub struct AspenServer {
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
     pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
+    pub etcd_addresses: Arc<Vec<String>>,
 }
 
 impl AspenRpc for AspenServer {
@@ -486,6 +488,8 @@ async fn main() -> anyhow::Result<()> {
     // Worker Id for this instance of Aspen
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
+    let etcd_addresses = Arc::new(vec![String::from("localhost:2379")]);
+
     let channel_count = std::env::var("CHANNELS")
         .expect("channels not set")
         .parse::<usize>()
@@ -494,6 +498,8 @@ async fn main() -> anyhow::Result<()> {
         .expect("alpenrosethreadcount not set")
         .parse::<usize>()
         .expect("alpenrosethreadcount not a number");
+
+    let etcd_lease_id_for_this_worker: i64 = rand::thread_rng().gen_range(0..i64::MAX);
 
     //connect to postgres
     println!("Connecting to postgres");
@@ -509,38 +515,19 @@ async fn main() -> anyhow::Result<()> {
     //tracing::info!("Listening on port {}", listener.local_addr().port());
     listener.config_mut().max_frame_length(usize::MAX);
 
-    //register the worker with the leader
+    //connect to etcd
 
-    let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
-        .await
-        .unwrap();
-
-    //if zookeeper /aspen_workers doesn't exist, create it
-
-    let get_zk_aspen_workers_parent = zk.get_data("/aspen_workers").await.unwrap();
-
-    if get_zk_aspen_workers_parent.is_none() {
-        let _ = zk
-            .create(
-                "/aspen_workers",
-                vec![],
-                Acl::open_unsafe(),
-                CreateMode::Persistent,
-            )
-            .await
-            .unwrap();
-    }
+    let mut etcd = etcd_client::Client::connect(etcd_addresses.as_slice(), None).await?;
 
     //register that the worker exists
-    let _ = zk
-        .create(
+
+    let etcd_this_worker_assignment = etcd
+        .put(
             format!("/aspen_workers/{}", this_worker_id).as_str(),
-            bincode::serialize(&tailscale_ip).unwrap(),
-            Acl::open_unsafe(),
-            CreateMode::Ephemeral,
+            bincode::serialize(&etcd_lease_id_for_this_worker).unwrap(),
+            Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id_for_this_worker)),
         )
-        .await
-        .unwrap();
+        .await?;
 
     let workers_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let chateau_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
@@ -567,6 +554,7 @@ async fn main() -> anyhow::Result<()> {
             this_worker_id_for_leader_thread,
             tailscale_ip_for_leader_thread,
             arc_conn_pool_for_leader_thread,
+            Arc::clone(&etcd_addresses)
         ));
 
     let b_alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
@@ -586,6 +574,7 @@ async fn main() -> anyhow::Result<()> {
         b_conn_pool,
         b_thread_count,
         Arc::clone(&alpenrose_to_process_queue_chateaus),
+        Arc::clone(&etcd_addresses)
     ));
 
     let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
@@ -612,6 +601,7 @@ async fn main() -> anyhow::Result<()> {
                                 &alpenrose_to_process_queue_chateaus,
                             ),
                             rough_hash_of_gtfs_rt: Arc::clone(&rough_hash_of_gtfs_rt),
+                            etcd_addresses: Arc::clone(&etcd_addresses),
                         };
                         channel.execute(server.serve()).for_each(spawn)
                     })

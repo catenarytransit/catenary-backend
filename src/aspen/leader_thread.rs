@@ -26,6 +26,7 @@ pub async fn aspen_leader_thread(
     this_worker_id: Arc<String>,
     tailscale_ip: Arc<IpAddr>,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
+    etcd_addresses: Arc<Vec<String>>
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("starting leader thread");
 
