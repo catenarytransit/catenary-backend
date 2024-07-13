@@ -167,40 +167,47 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
             let current_leader_election = election_client.leader("/alpenrose_leader").await;
 
-            if let Ok(current_leader_election) = current_leader_election {
-                let leader_kv = current_leader_election.kv();
+            match current_leader_election {
+                Ok(current_leader_election) => {
+                    let leader_kv = current_leader_election.kv();
 
-                match leader_kv {
-                    None => {
-                        let attempt_to_become_leader = election_client
-                            .campaign(
-                                "/alpenrose_leader",
-                                bincode::serialize(this_worker_id.as_ref()).unwrap(),
-                                etcd_lease_id,
-                            )
-                            .await;
-
-                        println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
-                    }
-                    Some(leader_kv) => {
-                        let leader_id: String = bincode::deserialize(leader_kv.value()).unwrap();
-
-                        if &leader_id == this_worker_id.as_ref() {
-                            // I AM THE LEADER!!!
-
-                            println!("I AM THE LEADER!!!");
-
-                            leader_job::perform_leader_job(
-                                &mut etcd,
-                                Arc::clone(&arc_conn_pool),
-                                &mut last_set_of_active_nodes_hash,
-                                &mut last_updated_feeds_hash,
-                            )
-                            .await?;
+                    match leader_kv {
+                        None => {
+                            let attempt_to_become_leader = election_client
+                                .campaign(
+                                    "/alpenrose_leader",
+                                    bincode::serialize(this_worker_id.as_ref()).unwrap(),
+                                    etcd_lease_id,
+                                )
+                                .await;
+    
+                            println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
+                        }
+                        Some(leader_kv) => {
+                            let leader_id: String = bincode::deserialize(leader_kv.value()).unwrap();
+    
+                            if &leader_id == this_worker_id.as_ref() {
+                                // I AM THE LEADER!!!
+    
+                                println!("I AM THE LEADER!!!");
+    
+                                leader_job::perform_leader_job(
+                                    &mut etcd,
+                                    Arc::clone(&arc_conn_pool),
+                                    &mut last_set_of_active_nodes_hash,
+                                    &mut last_updated_feeds_hash,
+                                )
+                                .await?;
+                            }
                         }
                     }
+                },
+                Err(leader_election_err) => {
+                    eprintln!("{:#?}", leader_election_err);
                 }
             }
+
+            
 
             //read from etcd to get the current assignments for this node
 
