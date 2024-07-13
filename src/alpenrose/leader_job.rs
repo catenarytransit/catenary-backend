@@ -95,8 +95,8 @@ pub async fn perform_leader_job(
         let assignments = assignments;
 
         for (worker_id, instructions_hashmap) in assignments.iter() {
-            let lease_option =
-                etcd_client::PutOptions::new().with_lease(fetch_workers_hashmap.get(worker_id));
+            let lease_option = etcd_client::PutOptions::new()
+                .with_lease(*fetch_workers_hashmap.get(worker_id).unwrap());
 
             for (feed_id, realtime_instruction) in instructions_hashmap {
                 let set_assignment = etcd
