@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let assignments_for_this_worker: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>> =
         Arc::new(RwLock::new(HashMap::new()));
 
-    let last_updated_ms_for_this_worker: Option<u64> = None;
+    let mut previously_known_updated_ms_for_this_worker: Option<u64> = None;
 
     let last_fetch_per_feed: Arc<DashMap<String, Instant>> = Arc::new(DashMap::new());
 
@@ -163,18 +163,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
             //each feed id ephemeral id contains the last time updated, with none meaning the data has not been assigned to the node yet
 
-            /*
-            THIS IS NOT NEEDED, there is no longer a directory structure in etcd v3, the entire thing is flattened
-
-            let etcd_this_worker_assignment = etcd
-                .put(
-                    format!("/alpenrose_assignments/{}", this_worker_id).as_str(),
-                    vec![],
-                    Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id)),
-                )
-                .await?;
-            */
-
             let mut election_client = etcd.election_client();
 
             let leader = zk.watch().get_data("/alpenrose_leader").await.unwrap();
@@ -216,7 +204,57 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
             //read from etcd to get the current assignments for this node
 
-            //TODO!
+            let fetch_last_updated_assignments_for_this_worker_resp = etcd
+                .get(
+                    format!("/alpenrose_assignments_last_updated/{}", this_worker_id),
+                    None,
+                )
+                .await?;
+
+            let last_updated_worker_time_kv =
+                fetch_last_updated_assignments_for_this_worker_resp.kvs();
+
+            if let Some(last_updated_worker_time) = last_updated_worker_time_kv.get(0) {
+                let last_updated_worker_time_value =
+                    bincode::deserialize::<u64>(last_updated_worker_time.value()).unwrap();
+
+                if Some(last_updated_worker_time_value)
+                    != previously_known_updated_ms_for_this_worker
+                {
+                    previously_known_updated_ms_for_this_worker =
+                        Some(last_updated_worker_time_value);
+
+                    let mut assignments_for_this_worker_lock =
+                        assignments_for_this_worker.write().await;
+
+                    //fetch all the assignments
+
+                    let prefix_search = format!("/alpenrose_assignments/{}/", this_worker_id);
+
+                    let assignments = etcd
+                        .get(
+                            prefix_search.clone(),
+                            Some(etcd_client::GetOptions::new().with_prefix()),
+                        )
+                        .await?
+                        .take_kvs()
+                        .into_iter()
+                        .map(|each_kv| {
+                            (
+                                each_kv
+                                    .key_str()
+                                    .unwrap()
+                                    .to_string()
+                                    .replace(&prefix_search, ""),
+                                bincode::deserialize::<RealtimeFeedFetch>(&each_kv.value())
+                                    .unwrap(),
+                            )
+                        })
+                        .collect::<HashMap<String, RealtimeFeedFetch>>();
+
+                    *assignments_for_this_worker_lock = assignments;
+                }
+            }
 
             //get the feed data from the feeds assigned to this worker
 
