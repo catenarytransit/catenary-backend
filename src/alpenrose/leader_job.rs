@@ -49,10 +49,10 @@ pub async fn perform_leader_job(
         .map(|kv| {
             (
                 kv.key_str().unwrap().replace("/alpenrose_workers/", ""),
-                bincode::deserialize::<u64>(kv.value()).unwrap(),
+                bincode::deserialize::<i64>(kv.value()).unwrap(),
             )
         })
-        .collect::<HashMap<String, u64>>();
+        .collect::<HashMap<String, i64>>();
 
     let mut workers_list = fetch_workers_hashmap
         .keys()
@@ -69,6 +69,35 @@ pub async fn perform_leader_job(
         //The state of the distributed system has changed!
 
         //Time to reassign!
+
+        // divide feeds between worker nodes
+
+        // feed id -> List of realtime fetch instructions
+        let mut assignments: BTreeMap<String, HashMap<String, RealtimeFeedFetch>> = BTreeMap::new();
+
+        for (index, (feed_id, realtime_instructions)) in feeds_map.iter().enumerate() {
+            let node_to_assign = &workers_list[index % workers_list.len()];
+
+            //append to list
+            assignments
+                .entry(node_to_assign.to_string())
+                .and_modify(|instructions| {
+                    instructions.insert(feed_id.clone(), realtime_instructions.clone());
+                })
+                .or_insert({
+                    let mut map = HashMap::new();
+                    map.insert(feed_id.clone(), realtime_instructions.clone());
+                    map
+                });
+        }
+
+        //lock it so you can't change it anymore
+        let assignments = assignments;
+
+        for (worker_id, instructions_hashmap) in assignments.iter() {
+            for (feed_id, realtime_instruction) in instructions_hashmap {}
+            //update the last updated time
+        }
     }
 
     Ok(())

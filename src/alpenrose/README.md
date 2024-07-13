@@ -19,12 +19,13 @@ key: format!("/alpenrose_workers/{}", this_worker_id).as_str(),
 value: bincode::serialize(&etcd_lease_id).unwrap(),
 ```
 Lease: worker inserts own lease
+value is i64 lease id
 
 **Alpenrose Assignments**
 
 Per worker:
 ```rs
-key: format!("/alpenrose_assignments/{}", this_worker_id),
+key: format!("/alpenrose_assignments_last_updated/{}", this_worker_id),
 value: bincode::serialize(last_assignment_unix_time_ms).unwrap()
 ```
 
