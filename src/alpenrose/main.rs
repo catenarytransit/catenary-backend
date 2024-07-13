@@ -246,7 +246,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                     .unwrap()
                                     .to_string()
                                     .replace(&prefix_search, ""),
-                                bincode::deserialize::<RealtimeFeedFetch>(&each_kv.value())
+                                bincode::deserialize::<RealtimeFeedFetch>(each_kv.value())
                                     .unwrap(),
                             )
                         })
