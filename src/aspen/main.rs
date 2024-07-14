@@ -86,6 +86,7 @@ pub struct AspenServer {
     pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     pub etcd_addresses: Arc<Vec<String>>,
+    pub worker_etcd_lease_id: i64
 }
 
 impl AspenRpc for AspenServer {
@@ -554,7 +555,8 @@ async fn main() -> anyhow::Result<()> {
             this_worker_id_for_leader_thread,
             tailscale_ip_for_leader_thread,
             arc_conn_pool_for_leader_thread,
-            Arc::clone(&etcd_addresses)
+            Arc::clone(&etcd_addresses),
+            etcd_lease_id_for_this_worker,
         ));
 
     let b_alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
@@ -574,7 +576,8 @@ async fn main() -> anyhow::Result<()> {
         b_conn_pool,
         b_thread_count,
         Arc::clone(&alpenrose_to_process_queue_chateaus),
-        Arc::clone(&etcd_addresses)
+        Arc::clone(&etcd_addresses),
+        etcd_lease_id_for_this_worker,
     ));
 
     let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
@@ -601,6 +604,7 @@ async fn main() -> anyhow::Result<()> {
                                 &alpenrose_to_process_queue_chateaus,
                             ),
                             rough_hash_of_gtfs_rt: Arc::clone(&rough_hash_of_gtfs_rt),
+                            worker_etcd_lease_id: etcd_lease_id_for_this_worker,
                             etcd_addresses: Arc::clone(&etcd_addresses),
                         };
                         channel.execute(server.serve()).for_each(spawn)
