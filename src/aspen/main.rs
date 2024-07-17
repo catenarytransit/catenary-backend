@@ -525,7 +525,7 @@ async fn main() -> anyhow::Result<()> {
     let worker_metadata = AspenWorkerMetadataEtcd {
         etcd_lease_id: etcd_lease_id_for_this_worker,
         worker_ip: server_addr.clone(),
-        worker_id: this_worker_id.clone(),
+        worker_id: this_worker_id.to_string(),
     };
 
     let etcd_this_worker_assignment = etcd

@@ -36,7 +36,6 @@
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::Data;
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
-use catenary::aspen::lib::ChateauMetadataZookeeper;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use diesel::query_dsl::methods::FilterDsl;
