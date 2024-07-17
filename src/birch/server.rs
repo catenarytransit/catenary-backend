@@ -67,7 +67,6 @@ use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Client;
 use tokio_postgres::Error as PostgresError;
-use tokio_zookeeper::ZooKeeper;
 use zstd_safe::WriteBuf;
 
 mod api_key_management;

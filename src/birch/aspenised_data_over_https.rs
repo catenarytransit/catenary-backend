@@ -1,7 +1,7 @@
 use crate::BirchGlobalDatastore;
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use ahash::{AHashMap, AHashSet};
-use catenary::aspen::lib::ChateauMetadataZookeeper;
+use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::GetVehicleLocationsResponse;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::aspen_dataset::AspenisedVehicleRouteCache;
