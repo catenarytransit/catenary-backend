@@ -46,7 +46,7 @@ pub async fn get_realtime_locations(
             .body("Could not connect to etcd");
     }
 
-    let etcd = etcd.unwrap();
+    let mut etcd = etcd.unwrap();
 
     let category_requested = match category.as_str() {
         "metro" => CategoryOfRealtimeVehicleData::Metro,
@@ -83,7 +83,7 @@ pub async fn get_realtime_locations(
     let fetch_assigned_node_for_this_realtime_feed =
         fetch_assigned_node_for_this_realtime_feed.unwrap();
 
-    if fetch_assigned_node_for_this_realtime_feed.kvs().len() = 0 {
+    if fetch_assigned_node_for_this_realtime_feed.kvs().len() == 0 {
         return HttpResponse::Ok()
             .append_header(("Cache-Control", "no-cache"))
             .body("No assigned node found for this chateau");
@@ -95,7 +95,8 @@ pub async fn get_realtime_locations(
         &fetch_assigned_node_for_this_realtime_feed
             .kvs()
             .iter()
-            .first()
+            .nth(0)
+            .unwrap()
             .value(),
     )
     .unwrap();

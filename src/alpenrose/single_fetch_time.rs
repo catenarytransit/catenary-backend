@@ -93,7 +93,9 @@ pub async fn single_fetch_time(
         async move {
             let start = Instant::now();
 
-            let mut etcd = etcd_client::Client::connect(["localhost:2379"], None).await?;
+            let mut etcd = etcd_client::Client::connect(["localhost:2379"], None)
+                .await
+                .unwrap();
 
             let fetch_interval_ms = assignment.fetch_interval_ms.unwrap_or(1_000);
 

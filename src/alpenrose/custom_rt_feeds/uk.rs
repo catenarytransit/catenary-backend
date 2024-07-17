@@ -45,7 +45,7 @@ pub async fn fetch_dft_bus_data(
                 Ok(_) => {
                     println!(
                         "Successfully sent UK data to {}, feed {} to chateau {}",
-                        data.tailscale_ip, feed_id, data.chateau_id
+                        data.ip.0, feed_id, data.chateau_id
                     );
                 }
                 Err(e) => {

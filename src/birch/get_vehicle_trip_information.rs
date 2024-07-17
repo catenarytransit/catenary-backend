@@ -36,20 +36,40 @@ pub async fn get_vehicle_information(
 ) -> impl Responder {
     let (chateau, gtfs_id) = path.into_inner();
 
-    let fetch_assigned_node_for_this_chateau = zk
-        .get_data(format!("/aspen_assigned_chateaus/{}", chateau).as_str())
+    let etcd =
+        etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+
+    if let Err(etcd_err) = &etcd {
+        eprintln!("{:#?}", etcd_err);
+
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Could not connect to etcd");
+    }
+
+    let mut etcd = etcd.unwrap();
+
+    let fetch_assigned_node_for_this_chateau = etcd
+        .get(
+            format!("/aspen_assigned_chateaus/{}", chateau).as_str(),
+            None,
+        )
         .await;
 
     if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
-        if let Some((fetch_assigned_node_for_this_chateau_data, stat)) =
-            fetch_assigned_node_for_this_chateau
+        let fetch_assigned_node_for_this_chateau_kv_first =
+            fetch_assigned_node_for_this_chateau.kvs().get(0);
+
+        if let Some(fetch_assigned_node_for_this_chateau_data) =
+            fetch_assigned_node_for_this_chateau_kv_first
         {
-            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataZookeeper>(
-                &fetch_assigned_node_for_this_chateau_data,
+            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+                &fetch_assigned_node_for_this_chateau_data.value(),
             )
             .unwrap();
 
-            let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
+            let socket_addr =
+                std::net::SocketAddr::new(assigned_chateau_data.ip.0, assigned_chateau_data.ip.1);
 
             let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
 
@@ -170,27 +190,47 @@ struct QueryTripInformationParams {
 #[actix_web::get("/get_trip_information_rt_update/{chateau}/")]
 pub async fn get_trip_rt_update(
     path: web::Path<String>,
-    query: web::Query<QueryTripInformationParams>
-    // pool: web::Data<Arc<CatenaryPostgresPool>>,
+    query: web::Query<QueryTripInformationParams>, // pool: web::Data<Arc<CatenaryPostgresPool>>,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
 ) -> impl Responder {
     let chateau = path.into_inner();
 
     let query = query.into_inner();
 
-    let fetch_assigned_node_for_this_chateau = zk
-        .get_data(format!("/aspen_assigned_chateaus/{}", chateau).as_str())
+    let etcd =
+        etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+
+    if let Err(etcd_err) = &etcd {
+        eprintln!("{:#?}", etcd_err);
+
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Could not connect to etcd");
+    }
+
+    let mut etcd = etcd.unwrap();
+
+    let fetch_assigned_node_for_this_chateau = etcd
+        .get(
+            format!("/aspen_assigned_chateaus/{}", chateau).as_str(),
+            None,
+        )
         .await;
 
     if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
-        if let Some((fetch_assigned_node_for_this_chateau_data, stat)) =
-            fetch_assigned_node_for_this_chateau
+        let fetch_assigned_node_for_this_chateau_kv_first =
+            fetch_assigned_node_for_this_chateau.kvs().get(0);
+
+        if let Some(fetch_assigned_node_for_this_chateau_data) =
+            fetch_assigned_node_for_this_chateau_kv_first
         {
-            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataZookeeper>(
-                &fetch_assigned_node_for_this_chateau_data,
+            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+                &fetch_assigned_node_for_this_chateau_data.value(),
             )
             .unwrap();
 
-            let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
+            let socket_addr =
+                std::net::SocketAddr::new(assigned_chateau_data.ip.0, assigned_chateau_data.ip.1);
 
             let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
 
@@ -294,6 +334,7 @@ pub async fn get_trip_init(
     query: web::Query<QueryTripInformationParams>,
     sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
 ) -> impl Responder {
     let chateau = path.into_inner();
 
@@ -559,23 +600,42 @@ pub async fn get_trip_init(
         stop_times_for_this_trip.push(stop_time);
     }
 
-    // find zookeeper node ip
-    let fetch_assigned_node_for_this_chateau = zk
-        .get_data(format!("/aspen_assigned_chateaus/{}", chateau).as_str())
+    let etcd =
+        etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+
+    if let Err(etcd_err) = &etcd {
+        eprintln!("{:#?}", etcd_err);
+
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Could not connect to etcd");
+    }
+
+    let mut etcd = etcd.unwrap();
+
+    let fetch_assigned_node_for_this_chateau = etcd
+        .get(
+            format!("/aspen_assigned_chateaus/{}", chateau).as_str(),
+            None,
+        )
         .await;
 
     let mut vehicle = None;
 
     if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
-        if let Some((fetch_assigned_node_for_this_chateau_data, stat)) =
-            fetch_assigned_node_for_this_chateau
+        let fetch_assigned_node_for_this_chateau_kv_first =
+            fetch_assigned_node_for_this_chateau.kvs().get(0);
+
+        if let Some(fetch_assigned_node_for_this_chateau_data) =
+            fetch_assigned_node_for_this_chateau_kv_first
         {
-            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataZookeeper>(
-                &fetch_assigned_node_for_this_chateau_data,
+            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+                &fetch_assigned_node_for_this_chateau_data.value(),
             )
             .unwrap();
 
-            let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
+            let socket_addr =
+                std::net::SocketAddr::new(assigned_chateau_data.ip.0, assigned_chateau_data.ip.1);
 
             let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
 

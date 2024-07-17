@@ -168,13 +168,13 @@ pub async fn assign_chateaus(
                             .await?;
                     }
                 }
-            }
 
-            println!(
-                "Assigned {} chateaus across {} workers",
-                chateau_list_lock.len(),
-                workers_nodes_lock.len()
-            );
+                println!(
+                    "Assigned {} chateaus across {} workers",
+                    chateau_list_lock.chateaus.len(),
+                    workers_nodes_lock.len()
+                );
+            }
 
             //compact history
 
