@@ -98,7 +98,7 @@ pub async fn aspen_leader_thread(
         }
 
         //renew the etcd lease
-        let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
+        let _ = etcd.lease_keep_alive(lease_id_for_this_worker).await?;
 
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     }
