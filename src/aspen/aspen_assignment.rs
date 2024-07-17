@@ -1,5 +1,7 @@
 use catenary::aspen::lib::AspenWorkerMetadataEtcd;
+use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::ChateausLeaderHashMap;
+use catenary::aspen::lib::RealtimeFeedMetadataEtcd;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::ChateauDataNoGeometry;
 use diesel::query_dsl::methods::FilterDsl;
@@ -150,7 +152,7 @@ pub async fn assign_chateaus(
                     for realtime_feed_id in chateau.realtime_feeds.iter() {
                         let assigned_realtime_feed_data = RealtimeFeedMetadataEtcd {
                             worker_id: selected_aspen_worker_to_assign.clone(),
-                            ip: worker_metadata.ip,
+                            ip: worker_metadata.worker_ip,
                             chateau_id: chateau_id.clone(),
                         };
 
@@ -170,7 +172,7 @@ pub async fn assign_chateaus(
 
             println!(
                 "Assigned {} chateaus across {} workers",
-                chateau_list_lock.chateaus.len(),
+                chateau_list_lock.len(),
                 workers_nodes_lock.len()
             );
 

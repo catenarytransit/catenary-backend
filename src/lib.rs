@@ -644,3 +644,7 @@ mod unzip_uk_test {
         println!("{:#?}", x);
     }
 }
+
+pub struct EtcdConnectionIps {
+    pub ip_addresses: Vec<String>,
+}

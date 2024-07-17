@@ -70,7 +70,7 @@ pub async fn single_fetch_time(
     client: reqwest::Client,
     assignments: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>>,
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
- //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
+    //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let start = Instant::now();
 
@@ -93,7 +93,7 @@ pub async fn single_fetch_time(
         async move {
             let start = Instant::now();
 
-          let mut etcd = etcd_client::Client::connect(["localhost:2379"], None).await?;
+            let mut etcd = etcd_client::Client::connect(["localhost:2379"], None).await?;
 
             let fetch_interval_ms = assignment.fetch_interval_ms.unwrap_or(1_000);
 
@@ -153,7 +153,8 @@ pub async fn single_fetch_time(
                 }
 
                 //lookup currently assigned realtime dataset in zookeeper
-                let fetch_assigned_node_meta = get_node_for_realtime_feed_id(&mut etcd, feed_id).await;
+                let fetch_assigned_node_meta =
+                    get_node_for_realtime_feed_id(&mut etcd, feed_id).await;
 
                 match fetch_assigned_node_meta {
                     Some(data) => {
@@ -260,18 +261,23 @@ pub async fn single_fetch_time(
                         .await;
                     }
                     "f-mta~nyc~rt~lirr" => {
-                        custom_rt_feeds::mta::fetch_mta_lirr_data(&mut etcd, feed_id, &client).await;
+                        custom_rt_feeds::mta::fetch_mta_lirr_data(&mut etcd, feed_id, &client)
+                            .await;
                     }
                     "f-mta~nyc~rt~mnr" => {
-                        custom_rt_feeds::mta::fetch_mta_metronorth_data(&mut etcd, feed_id, &client)
-                            .await;
+                        custom_rt_feeds::mta::fetch_mta_metronorth_data(
+                            &mut etcd, feed_id, &client,
+                        )
+                        .await;
                     }
                     "f-bus~dft~gov~uk~rt" => {
                         custom_rt_feeds::uk::fetch_dft_bus_data(&mut etcd, feed_id, &client).await;
                     }
                     "f-dp3-cta~rt" => {
-                        custom_rt_feeds::chicagotransit::fetch_chicago_data(&mut etcd, feed_id, &client)
-                            .await;
+                        custom_rt_feeds::chicagotransit::fetch_chicago_data(
+                            &mut etcd, feed_id, &client,
+                        )
+                        .await;
                     }
                     _ => {}
                 }

@@ -5,18 +5,20 @@ use prost::Message;
 
 use crate::custom_rt_feeds::uk;
 
-pub async fn fetch_dft_bus_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest::Client) {
-    let fetch_assigned_node_meta = get_node_for_realtime_feed_id(&zk, feed_id).await;
+pub async fn fetch_dft_bus_data(
+    etcd: &mut etcd_client::Client,
+    feed_id: &str,
+    client: &reqwest::Client,
+) {
+    let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
 
-    if let Some((data, stat)) = fetch_assigned_node_meta {
-        let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
+    if let Some(data) = fetch_assigned_node_meta {
+        let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
         let worker_id = data.worker_id;
 
         let uk_rt_data = get_raw_gtfs_rt(client).await;
 
         if let Ok(uk_rt_data) = uk_rt_data {
-            let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
-
             let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
                 .await
                 .unwrap();

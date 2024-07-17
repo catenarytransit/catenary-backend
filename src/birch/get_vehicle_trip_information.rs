@@ -1,5 +1,5 @@
 use actix_web::{web, HttpResponse, Responder};
-use catenary::aspen::lib::ChateauMetadataZookeeper;
+use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenStopTimeEvent;
 use catenary::aspen_dataset::AspenisedAlert;
 use catenary::aspen_dataset::AspenisedVehicleDescriptor;
@@ -10,6 +10,7 @@ use catenary::schema::gtfs::itinerary_pattern_meta as itinerary_pattern_meta_pg_
 use catenary::schema::gtfs::routes as routes_pg_schema;
 use catenary::schema::gtfs::stops as stops_pg_schema;
 use catenary::schema::gtfs::trips_compressed as trips_compressed_pg_schema;
+use catenary::EtcdConnectionIps;
 use chrono::TimeZone;
 use chrono_tz::Tz;
 use diesel::query_dsl::methods::FilterDsl;
@@ -31,7 +32,7 @@ pub async fn get_vehicle_metadata(path: web::Path<(String, String)>) -> impl Res
 #[actix_web::get("/get_vehicle_information/{chateau}/{gtfs_rt_id}")]
 pub async fn get_vehicle_information(
     path: web::Path<(String, String)>,
-    zk: web::Data<Arc<tokio_zookeeper::ZooKeeper>>,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
 ) -> impl Responder {
     let (chateau, gtfs_id) = path.into_inner();
 

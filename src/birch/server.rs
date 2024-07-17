@@ -38,6 +38,7 @@ use actix_web::web::Data;
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
+use catenary::EtcdConnectionIps;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::select_dsl::SelectDsl;
 use diesel::sql_types::{Float, Integer};
@@ -111,14 +112,10 @@ struct OperatorPostgres {
     realtime_onestop_feeds_to_gtfs_ids: HashMap<String, Option<String>>,
 }
 
-pub struct BirchGlobalDatastore {
-    pub chateau_assignment_cache: Arc<SccHashMap<String, (u64, ChateauMetadataZookeeper)>>,
-}
-
 async fn index(req: HttpRequest) -> impl Responder {
     HttpResponse::Ok()
         .insert_header(("Content-Type", "text/plain"))
-        .body("Hello world!")
+        .body("Hello World from Catenary Map Birch HTTP endpoint!")
 }
 
 async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
@@ -795,49 +792,6 @@ async fn routesofchateau(
         .body(serde_json::to_string(&routes).unwrap())
 }
 
-#[actix_web::get("/get_all_raw_alerts_chateau/{chateau}")]
-pub async fn get_all_raw_alerts_chateau(
-    path: web::Path<(String)>,
-    req: HttpRequest,
-    zk: web::Data<Arc<ZooKeeper>>,
-) -> impl Responder {
-    let (chateau_id) = path.into_inner();
-
-    let fetch_assigned_node_for_this_chateau = zk
-        .get_data(format!("/aspen_assigned_chateaus/{}", chateau_id).as_str())
-        .await;
-
-    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
-        if let Some((fetch_assigned_node_for_this_chateau_data, stat)) =
-            fetch_assigned_node_for_this_chateau
-        {
-            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataZookeeper>(
-                &fetch_assigned_node_for_this_chateau_data,
-            )
-            .unwrap();
-
-            let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
-
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
-
-            if let Ok(aspen_client) = aspen_client {
-                let raw_alerts = aspen_client
-                    .get_all_alerts(context::current(), chateau_id.clone())
-                    .await;
-
-                if let Ok(raw_alerts) = raw_alerts {
-                    return HttpResponse::Ok()
-                        .insert_header(("Content-Type", "application/json"))
-                        .insert_header(("Cache-Control", "max-age=3600"))
-                        .body(serde_json::to_string(&raw_alerts).unwrap());
-                }
-            }
-        }
-    }
-
-    HttpResponse::InternalServerError().body("Failed to fetch from aspen!")
-}
-
 #[actix_web::get("/shapes_bus/{z}/{x}/{y}")]
 pub async fn shapes_bus(
     sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
@@ -1212,14 +1166,8 @@ async fn main() -> std::io::Result<()> {
             .unwrap(),
     );
 
-    let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
-        .await
-        .unwrap();
-
-    let zk = Arc::new(zk);
-
-    let global_cache = Arc::new(BirchGlobalDatastore {
-        chateau_assignment_cache: Arc::new(SccHashMap::new()),
+    let etcd_connection_ips = Arc::new(EtcdConnectionIps {
+        ip_addresses: vec![String::from("localhost:2379")],
     });
 
     // Create a new HTTP server.
@@ -1241,8 +1189,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(actix_web::web::Data::new(Arc::new(RwLock::new(
                 None::<ChateauCache>,
             ))))
-            .app_data(Data::new(Arc::clone(&global_cache)))
-            .app_data(actix_web::web::Data::new(Arc::clone(&zk)))
+            .app_data(actix_web::web::Data::new(Arc::clone(&etcd_connection_ips)))
             .route("/", web::get().to(index))
             .route("robots.txt", web::get().to(robots))
             .service(amtrakproxy)
@@ -1271,7 +1218,6 @@ async fn main() -> std::io::Result<()> {
             .service(get_vehicle_trip_information::get_trip_init)
             .service(get_vehicle_trip_information::get_trip_rt_update)
             .service(get_vehicle_trip_information::get_vehicle_information)
-            .service(get_all_raw_alerts_chateau)
             .service(calfireproxy)
     })
     .workers(16);

@@ -1,10 +1,10 @@
-use crate::BirchGlobalDatastore;
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use ahash::{AHashMap, AHashSet};
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::GetVehicleLocationsResponse;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::aspen_dataset::AspenisedVehicleRouteCache;
+use catenary::EtcdConnectionIps;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tarpc::{client, context, tokio_serde::formats::Bincode};
@@ -29,12 +29,24 @@ fn category_to_allowed_route_ids(category: &CategoryOfRealtimeVehicleData) -> Ve
 #[actix_web::get("/get_realtime_locations/{chateau_id}/{category}/{last_updated_time_ms}/{existing_fasthash_of_routes}")]
 pub async fn get_realtime_locations(
     req: HttpRequest,
-    zk: web::Data<Arc<tokio_zookeeper::ZooKeeper>>,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     path: web::Path<(String, String, u64, u64)>,
-    global_cache: web::Data<Arc<BirchGlobalDatastore>>,
 ) -> impl Responder {
     let (chateau_id, category, client_last_updated_time_ms, existing_fasthash_of_routes) =
         path.into_inner();
+
+    let etcd =
+        etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+
+    if let Err(etcd_err) = &etcd {
+        eprintln!("{:#?}", etcd_err);
+
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Could not connect to etcd");
+    }
+
+    let etcd = etcd.unwrap();
 
     let category_requested = match category.as_str() {
         "metro" => CategoryOfRealtimeVehicleData::Metro,
@@ -51,8 +63,11 @@ pub async fn get_realtime_locations(
 
     //first identify which node to connect to
 
-    let fetch_assigned_node_for_this_realtime_feed = zk
-        .get_data(format!("/aspen_assigned_chateaus/{}", chateau_id).as_str())
+    let fetch_assigned_node_for_this_realtime_feed = etcd
+        .get(
+            format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
+            None,
+        )
         .await;
 
     if let Err(err_fetch) = &fetch_assigned_node_for_this_realtime_feed {
@@ -60,7 +75,7 @@ pub async fn get_realtime_locations(
         return HttpResponse::InternalServerError()
             .append_header(("Cache-Control", "no-cache"))
             .body(format!(
-                "Error fetching assigned node: {}, failed to connect to zookeeper",
+                "Error fetching assigned node: {}, failed to connect to etcd",
                 err_fetch
             ));
     }
@@ -68,25 +83,27 @@ pub async fn get_realtime_locations(
     let fetch_assigned_node_for_this_realtime_feed =
         fetch_assigned_node_for_this_realtime_feed.unwrap();
 
-    if fetch_assigned_node_for_this_realtime_feed.is_none() {
+    if fetch_assigned_node_for_this_realtime_feed.kvs().len() = 0 {
         return HttpResponse::Ok()
             .append_header(("Cache-Control", "no-cache"))
             .body("No assigned node found for this chateau");
     }
 
-    let (fetch_assigned_node_for_this_realtime_feed, stat) =
-        fetch_assigned_node_for_this_realtime_feed.unwrap();
-
     //deserialise into ChateauMetadataZookeeper
 
-    let assigned_chateau_data = bincode::deserialize::<ChateauMetadataZookeeper>(
-        &fetch_assigned_node_for_this_realtime_feed,
+    let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+        &fetch_assigned_node_for_this_realtime_feed
+            .kvs()
+            .iter()
+            .first()
+            .value(),
     )
     .unwrap();
 
     //then connect to the node via tarpc
 
-    let socket_addr = std::net::SocketAddr::new(assigned_chateau_data.tailscale_ip, 40427);
+    let socket_addr =
+        std::net::SocketAddr::new(assigned_chateau_data.ip.0, assigned_chateau_data.ip.1);
 
     let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
 
