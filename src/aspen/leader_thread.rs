@@ -67,6 +67,10 @@ pub async fn aspen_leader_thread(
 
                             println!("I AM THE LEADER!!!");
 
+                            
+        //if the current is the current worker id, do leader tasks
+        // Read the DMFR dataset, divide it into chunks, and assign it to workers
+
                             crate::aspen_assignment::assign_chateaus(
                                 &mut etcd,
                                 Arc::clone(&arc_conn_pool),
@@ -93,8 +97,8 @@ pub async fn aspen_leader_thread(
             }
         }
 
-        //if the current is the current worker id, do leader tasks
-        // Read the DMFR dataset, divide it into chunks, and assign it to workers
+        //renew the etcd lease
+        let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
 
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     }

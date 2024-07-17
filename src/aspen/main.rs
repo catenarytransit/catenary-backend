@@ -163,8 +163,6 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-        //renew the etcd lease
-        let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
 
         let vehicles_gtfs_rt = match vehicles_response_code {
             Some(200) => match vehicles {
