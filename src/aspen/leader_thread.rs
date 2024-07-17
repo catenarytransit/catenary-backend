@@ -67,9 +67,8 @@ pub async fn aspen_leader_thread(
 
                             println!("I AM THE LEADER!!!");
 
-                            
-        //if the current is the current worker id, do leader tasks
-        // Read the DMFR dataset, divide it into chunks, and assign it to workers
+                            //if the current is the current worker id, do leader tasks
+                            // Read the DMFR dataset, divide it into chunks, and assign it to workers
 
                             crate::aspen_assignment::assign_chateaus(
                                 &mut etcd,

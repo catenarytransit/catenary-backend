@@ -163,7 +163,6 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-
         let vehicles_gtfs_rt = match vehicles_response_code {
             Some(200) => match vehicles {
                 Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
