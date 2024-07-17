@@ -2,14 +2,13 @@ use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id;
 use catenary::unzip_uk::get_raw_gtfs_rt;
 use prost::Message;
-use tokio_zookeeper::ZooKeeper;
 
 use crate::custom_rt_feeds::uk;
 
-pub async fn fetch_chicago_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest::Client) {
-    let fetch_assigned_node_meta = get_node_for_realtime_feed_id(&zk, feed_id).await;
+pub async fn fetch_chicago_data(etcd: &mut etcd_client::Client, feed_id: &str, client: &reqwest::Client) {
+    let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
 
-    if let Some((data, stat)) = fetch_assigned_node_meta {
+    if let Some(data) = fetch_assigned_node_meta {
         let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
         let worker_id = data.worker_id;
 

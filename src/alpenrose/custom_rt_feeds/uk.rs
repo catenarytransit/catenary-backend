@@ -2,7 +2,6 @@ use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id;
 use catenary::unzip_uk::get_raw_gtfs_rt;
 use prost::Message;
-use tokio_zookeeper::ZooKeeper;
 
 use crate::custom_rt_feeds::uk;
 
