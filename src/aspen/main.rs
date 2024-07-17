@@ -64,8 +64,6 @@ use catenary::parse_gtfs_rt_message;
 use rand::Rng;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use tokio_zookeeper::ZooKeeper;
-use tokio_zookeeper::{Acl, CreateMode};
 mod alerts_responder;
 mod aspen_assignment;
 
