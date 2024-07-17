@@ -49,7 +49,7 @@ pub mod postgis_to_diesel;
 pub mod postgres_tools;
 pub mod schema;
 pub mod validate_gtfs_rt;
-use crate::aspen::lib::RealtimeFeedMetadataZookeeper;
+use crate::aspen::lib::RealtimeFeedMetadataEtcd;
 use ahash::AHasher;
 use fasthash::MetroHasher;
 use gtfs_rt::translated_image::LocalizedImage;
@@ -560,30 +560,37 @@ pub fn route_id_transform(feed_id: &str, route_id: String) -> String {
     }
 }
 
-use tokio_zookeeper::Stat;
-
 pub async fn get_node_for_realtime_feed_id(
-    zk: &tokio_zookeeper::ZooKeeper,
+    etcd: &mut etcd_client::Client,
     realtime_feed_id: &str,
-) -> Option<(RealtimeFeedMetadataZookeeper, Stat)> {
-    let node = zk
-        .get_data(format!("/aspen_assigned_realtime_feed_ids/{}", realtime_feed_id).as_str())
-        .await
-        .unwrap();
+) -> Option<RealtimeFeedMetadataEtcd> {
+    let node = etcd
+        .get(
+            format!("/aspen_assigned_realtime_feed_ids/{}", realtime_feed_id).as_str(),
+            None,
+        )
+        .await;
 
     match node {
-        Some((bytes, stat)) => {
-            let data = bincode::deserialize::<RealtimeFeedMetadataZookeeper>(&bytes);
+        Ok(resp) => {
+            let kvs = resp.kvs();
 
-            match data {
-                Ok(data) => Some((data, stat)),
-                Err(e) => {
-                    println!("Error deserializing RealtimeFeedMetadataZookeeper: {:?}", e);
-                    None
+            match kvs.len() {
+                0 => None,
+                _ => {
+                    let data = bincode::deserialize::<RealtimeFeedMetadataEtcd>(&kvs[0].value());
+
+                    match data {
+                        Ok(data) => Some(data),
+                        Err(e) => {
+                            println!("Error deserializing RealtimeFeedMetadataEtcd: {:?}", e);
+                            None
+                        }
+                    }
                 }
             }
         }
-        None => None,
+        _ => None,
     }
 }
 
