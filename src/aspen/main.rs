@@ -163,6 +163,9 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
+        //renew the etcd lease
+        let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
+
         let vehicles_gtfs_rt = match vehicles_response_code {
             Some(200) => match vehicles {
                 Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
@@ -517,6 +520,16 @@ async fn main() -> anyhow::Result<()> {
     //connect to etcd
 
     let mut etcd = etcd_client::Client::connect(etcd_addresses.as_slice(), None).await?;
+
+    //register etcd_lease_id
+
+    let make_lease = etcd
+        .lease_grant(
+            //30 seconds
+            30,
+            Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
+        )
+        .await?;
 
     //register that the worker exists
 
