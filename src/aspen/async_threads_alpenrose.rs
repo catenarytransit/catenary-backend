@@ -21,6 +21,8 @@ pub async fn alpenrose_process_threads(
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
+    etcd_addresses: Arc<Vec<String>>,
+    lease_id_for_this_worker: i64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut set: JoinSet<_> = (0usize..alpenrosethreadcount)
         .map(|i| {

@@ -28,10 +28,9 @@ sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev pos
 
 ## For Contributors
 
-For unix users, running `git config core.hooksPath .githooks` is recommended.
 Good commit messages are required to contribute to this project.
 
-No option exists for Windows users at the moment. Please try WSL Ubuntu for the moment. We're working on adding this.
+Using Generative AI to work on this project is not allowed.
 
 ### Installation of Postgres
 

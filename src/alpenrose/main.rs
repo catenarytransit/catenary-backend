@@ -62,7 +62,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
-use tokio_zookeeper::*;
 use uuid::Uuid;
 mod custom_rt_feeds;
 pub mod get_feed_metadata;
@@ -93,12 +92,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     //connect to postgres
     let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
-
-    let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
-        .await
-        .unwrap();
-
-    println!("Connected to zookeeper!");
 
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;

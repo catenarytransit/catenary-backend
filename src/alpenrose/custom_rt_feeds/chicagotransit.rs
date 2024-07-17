@@ -2,23 +2,24 @@ use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id;
 use catenary::unzip_uk::get_raw_gtfs_rt;
 use prost::Message;
-use tokio_zookeeper::ZooKeeper;
 
 use crate::custom_rt_feeds::uk;
 
-pub async fn fetch_chicago_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest::Client) {
-    let fetch_assigned_node_meta = get_node_for_realtime_feed_id(&zk, feed_id).await;
+pub async fn fetch_chicago_data(
+    etcd: &mut etcd_client::Client,
+    feed_id: &str,
+    client: &reqwest::Client,
+) {
+    let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
 
-    if let Some((data, stat)) = fetch_assigned_node_meta {
-        let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
-        let worker_id = data.worker_id;
+    if let Some(worker_metadata) = fetch_assigned_node_meta {
+        let socket_addr = std::net::SocketAddr::new(worker_metadata.ip.0, worker_metadata.ip.1);
+        let worker_id = worker_metadata.worker_id;
 
         let chicago_rt_data =
             chicago_gtfs_rt::train_feed(&client, &"13f685e4b9054545b19470556103ec73").await;
 
         if let Ok(chicago_rt_data) = chicago_rt_data {
-            let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
-
             let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
                 .await
                 .unwrap();
@@ -26,7 +27,7 @@ pub async fn fetch_chicago_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest:
             let tarpc_send_to_aspen = aspen_client
                 .from_alpenrose(
                     tarpc::context::current(),
-                    data.chateau_id.clone(),
+                    worker_metadata.chateau_id.clone(),
                     String::from(feed_id),
                     Some(chicago_rt_data.vehicle_positions.encode_to_vec()),
                     None,
@@ -45,7 +46,7 @@ pub async fn fetch_chicago_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest:
                 Ok(_) => {
                     println!(
                         "Successfully sent chicago data to {}, feed {} to chateau {}",
-                        data.tailscale_ip, feed_id, data.chateau_id
+                        worker_metadata.ip.0, feed_id, worker_metadata.chateau_id
                     );
                 }
                 Err(e) => {

@@ -1,6 +1,5 @@
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use tokio_zookeeper::ZooKeeper;
 
 const LIRR_TRIPS_FEED: &str =
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/lirr%2Fgtfs-lirr";
@@ -8,7 +7,11 @@ const LIRR_TRIPS_FEED: &str =
 const MNR_TRIPS_FEED: &str =
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr";
 
-pub async fn fetch_mta_lirr_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest::Client) {
+pub async fn fetch_mta_lirr_data(
+    etcd: &mut etcd_client::Client,
+    feed_id: &str,
+    client: &reqwest::Client,
+) {
     let fetch_url =
         "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=LIRR";
 
@@ -35,7 +38,7 @@ pub async fn fetch_mta_lirr_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest
                 let lirr_trip_updates_bytes = gtfs_rt_trips.encode_to_vec();
 
                 send_mta_rail_to_aspen(
-                    zk,
+                    etcd,
                     MtaRailroad::LIRR,
                     lirr_vehicle_position_bytes,
                     lirr_trip_updates_bytes,
@@ -47,7 +50,11 @@ pub async fn fetch_mta_lirr_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest
     }
 }
 
-pub async fn fetch_mta_metronorth_data(zk: &ZooKeeper, feed_id: &str, client: &reqwest::Client) {
+pub async fn fetch_mta_metronorth_data(
+    etcd: &mut etcd_client::Client,
+    feed_id: &str,
+    client: &reqwest::Client,
+) {
     let fetch_url = "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=MNR";
 
     let request = client
@@ -73,7 +80,7 @@ pub async fn fetch_mta_metronorth_data(zk: &ZooKeeper, feed_id: &str, client: &r
                 let mnr_trip_updates_bytes = gtfs_rt_trips.encode_to_vec();
 
                 send_mta_rail_to_aspen(
-                    zk,
+                    etcd,
                     MtaRailroad::MNR,
                     mnr_vehicle_position_bytes,
                     mnr_trip_updates_bytes,
@@ -377,16 +384,16 @@ pub enum MtaRailroad {
 }
 
 pub async fn send_mta_rail_to_aspen(
-    zk: &ZooKeeper,
+    etcd: &mut etcd_client::Client,
     railroad: MtaRailroad,
     vehicle_position: Vec<u8>,
     trip_updates: Vec<u8>,
     feed_id: &str,
 ) {
-    let fetch_assigned_node_meta = catenary::get_node_for_realtime_feed_id(&zk, feed_id).await;
+    let fetch_assigned_node_meta = catenary::get_node_for_realtime_feed_id(etcd, feed_id).await;
 
-    if let Some((data, stat)) = fetch_assigned_node_meta {
-        let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
+    if let Some(data) = fetch_assigned_node_meta {
+        let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
         let worker_id = data.worker_id;
 
         let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)

@@ -1,7 +1,7 @@
 use crate::KeyFormat;
 use crate::RealtimeFeedFetch;
 use catenary::ahash_fast_hash;
-use catenary::aspen::lib::RealtimeFeedMetadataZookeeper;
+use catenary::aspen::lib::RealtimeFeedMetadataEtcd;
 use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tarpc::{client, context, tokio_serde::formats::Bincode};
 use tokio::sync::RwLock;
-use tokio_zookeeper::ZooKeeper;
 
 use crate::custom_rt_feeds;
 use gtfs_structures::Gtfs;
@@ -71,12 +70,9 @@ pub async fn single_fetch_time(
     client: reqwest::Client,
     assignments: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>>,
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
+    //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let start = Instant::now();
-
-    let (zk, default_watcher) = ZooKeeper::connect(&"127.0.0.1:2181".parse().unwrap())
-        .await
-        .unwrap();
 
     let amtrak_gtfs = Gtfs::from_url_async("https://content.amtrak.com/content/gtfs/GTFS.zip")
         .await
@@ -84,20 +80,22 @@ pub async fn single_fetch_time(
 
     let amtrak_gtfs = Arc::new(amtrak_gtfs);
 
-    let zk = Arc::new(zk);
-
     let assignments_lock = assignments.read().await;
 
     let hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>> = Arc::new(SccHashMap::new());
 
     futures::stream::iter(assignments_lock.iter().map(|(feed_id, assignment)| {
         let client = client.clone();
-        let zk = zk.clone();
         let hashes_of_data = Arc::clone(&hashes_of_data);
         let last_fetch_per_feed = last_fetch_per_feed.clone();
         let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
+
         async move {
             let start = Instant::now();
+
+            let mut etcd = etcd_client::Client::connect(["localhost:2379"], None)
+                .await
+                .unwrap();
 
             let fetch_interval_ms = assignment.fetch_interval_ms.unwrap_or(1_000);
 
@@ -157,18 +155,19 @@ pub async fn single_fetch_time(
                 }
 
                 //lookup currently assigned realtime dataset in zookeeper
-                let fetch_assigned_node_meta = get_node_for_realtime_feed_id(&zk, feed_id).await;
+                let fetch_assigned_node_meta =
+                    get_node_for_realtime_feed_id(&mut etcd, feed_id).await;
 
                 match fetch_assigned_node_meta {
-                    Some((data, stat)) => {
+                    Some(data) => {
                         let worker_id = data.worker_id;
 
                         //send the data to the worker
                         println!(
-                            "Attempting to send {} data to {} via tarpc",
-                            feed_id, data.tailscale_ip
+                            "Attempting to send {} data to {} : {} via tarpc",
+                            feed_id, data.ip.0, data.ip.1
                         );
-                        let socket_addr = std::net::SocketAddr::new(data.tailscale_ip, 40427);
+                        let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
 
                         let aspen_client =
                             catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
@@ -256,7 +255,7 @@ pub async fn single_fetch_time(
                 match feed_id.as_str() {
                     "f-amtrak~rt" => {
                         custom_rt_feeds::amtrak::fetch_amtrak_data(
-                            &zk,
+                            &mut etcd,
                             &feed_id,
                             &amtrak_gtfs,
                             &client,
@@ -264,18 +263,23 @@ pub async fn single_fetch_time(
                         .await;
                     }
                     "f-mta~nyc~rt~lirr" => {
-                        custom_rt_feeds::mta::fetch_mta_lirr_data(&zk, feed_id, &client).await;
+                        custom_rt_feeds::mta::fetch_mta_lirr_data(&mut etcd, feed_id, &client)
+                            .await;
                     }
                     "f-mta~nyc~rt~mnr" => {
-                        custom_rt_feeds::mta::fetch_mta_metronorth_data(&zk, feed_id, &client)
-                            .await;
+                        custom_rt_feeds::mta::fetch_mta_metronorth_data(
+                            &mut etcd, feed_id, &client,
+                        )
+                        .await;
                     }
                     "f-bus~dft~gov~uk~rt" => {
-                        custom_rt_feeds::uk::fetch_dft_bus_data(&zk, feed_id, &client).await;
+                        custom_rt_feeds::uk::fetch_dft_bus_data(&mut etcd, feed_id, &client).await;
                     }
                     "f-dp3-cta~rt" => {
-                        custom_rt_feeds::chicagotransit::fetch_chicago_data(&zk, feed_id, &client)
-                            .await;
+                        custom_rt_feeds::chicagotransit::fetch_chicago_data(
+                            &mut etcd, feed_id, &client,
+                        )
+                        .await;
                     }
                     _ => {}
                 }

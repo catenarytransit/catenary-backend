@@ -73,7 +73,6 @@ seahash = "4.1.0"
 dmfr = "0.1.0"
 chateau = {git = "https://github.com/catenarytransit/chateau"}
 dmfr-folder-reader = {git = "https://github.com/catenarytransit/dmfr-folder-reader"}
-tokio-zookeeper = "0.4.0"
 uuid = {version = "1.8.0", features = ["v4", "fast-rng", "macro-diagnostics"]}
 zip = "0.6.6"
 git2 = "0.18.3"
