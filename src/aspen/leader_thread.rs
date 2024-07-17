@@ -1,6 +1,6 @@
-use catenary::aspen::lib::ChateauMetadataZookeeper;
+use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::ChateausLeaderHashMap;
-use catenary::aspen::lib::RealtimeFeedMetadataZookeeper;
+use catenary::aspen::lib::RealtimeFeedMetadataEtcd;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::ChateauDataNoGeometry;
 use diesel::query_dsl::methods::FilterDsl;
@@ -17,8 +17,6 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_threadpool::Worker;
-use tokio_zookeeper::ZooKeeper;
-use tokio_zookeeper::{Acl, CreateMode};
 
 pub async fn aspen_leader_thread(
     workers_nodes: Arc<Mutex<Vec<String>>>,
