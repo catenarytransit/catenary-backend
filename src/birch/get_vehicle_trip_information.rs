@@ -178,7 +178,7 @@ struct StopTimeIntroduction {
     pub rt_departure: Option<AspenStopTimeEvent>,
     pub schedule_relationship: Option<i32>,
     pub gtfs_stop_sequence: u16,
-    pub interpolated_stoptime_unix_seconds: Option<u64>
+    pub interpolated_stoptime_unix_seconds: Option<u64>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
