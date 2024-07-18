@@ -178,6 +178,7 @@ struct StopTimeIntroduction {
     pub rt_departure: Option<AspenStopTimeEvent>,
     pub schedule_relationship: Option<i32>,
     pub gtfs_stop_sequence: u16,
+    pub interpolated_stoptime_unix_seconds: Option<u64>
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -589,6 +590,11 @@ pub async fn get_trip_init(
             scheduled_departure_time_unix_seconds: row.departure_time_since_start.map(
                 |departure_time_since_start| {
                     start_of_trip_datetime.timestamp() as u64 + departure_time_since_start as u64
+                },
+            ),
+            interpolated_stoptime_unix_seconds: row.interpolated_time_since_start.map(
+                |interpolated_time_since_start| {
+                    start_of_trip_datetime.timestamp() as u64 + interpolated_time_since_start as u64
                 },
             ),
             gtfs_stop_sequence: row.gtfs_stop_sequence as u16,
