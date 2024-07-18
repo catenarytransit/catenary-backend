@@ -501,7 +501,7 @@ FROM (
 
             HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "max-age=1000, public"))
+                .insert_header(("Cache-Control", "max-age=10000, public"))
                 .body(mvt_bytes)
         }
         Err(err) => {
@@ -635,7 +635,7 @@ FROM (
 
             HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "max-age=86400"))
+                .insert_header(("Cache-Control", "max-age=1000, public"))
                 .body(mvt_bytes)
         }
         Err(err) => {
@@ -702,7 +702,7 @@ pub async fn other_stops_meta(req: HttpRequest) -> impl Responder {
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=100000"))
+        .insert_header(("Cache-Control", "max-age=10000, public"))
         .body(serde_json::to_string(&tile_json).unwrap())
 }
 
@@ -841,7 +841,7 @@ FROM (
 
             HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "max-age=86400"))
+                .insert_header(("Cache-Control", "max-age=10000, public"))
                 .body(mvt_bytes)
         }
         Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
