@@ -592,9 +592,27 @@ async fn main() -> anyhow::Result<()> {
         etcd_lease_id_for_this_worker,
     ));
 
+    let etcd_lease_renewer: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
+        tokio::task::spawn({
+            let etcd_addresses = etcd_addresses.clone();
+            async move {
+                loop {
+                    let mut etcd =
+                        etcd_client::Client::connect(etcd_addresses.clone().as_slice(), None)
+                            .await?;
+                    let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await?;
+
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                }
+                Ok(())
+            }
+        });
+
     let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
             println!("Listening on port {}", listener.local_addr().port());
+
+            let etcd_addresses = etcd_addresses.clone();
 
             move || async move {
                 listener
@@ -634,6 +652,7 @@ async fn main() -> anyhow::Result<()> {
         leader_thread_handler,
         async_from_alpenrose_processor_handler,
         tarpc_server,
+        etcd_lease_renewer
     );
 
     match result_series {
