@@ -43,7 +43,7 @@ pub async fn aspen_leader_thread(
         .lease_grant(
             //30 seconds
             30,
-            Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
+            Some(etcd_client::LeaseGrantOptions::new().with_id(lease_id_for_this_worker)),
         )
         .await;
 
