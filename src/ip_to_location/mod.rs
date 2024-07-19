@@ -1,5 +1,6 @@
 use crate::models::IpToGeoAddr;
 use crate::postgres_tools::CatenaryPostgresPool;
+use ahash::AHashMap;
 use csv::ReaderBuilder;
 use diesel::ExpressionMethods;
 use diesel::QueryDsl;
@@ -174,6 +175,16 @@ pub async fn insert_ip_db_into_postgres(
         })
         .collect::<Vec<IpToGeoAddr>>();
 
+    let joined_ip_to_geo_addr_vec_dedup: Vec<IpToGeoAddr> = {
+        let mut x: AHashMap<(ipnet::IpNet, ipnet::IpNet),IpToGeoAddr> = AHashMap::new();
+
+        for item in joined_ip_to_geo_addr_vec {
+            x.insert((item.range_start, item.range_end), item);
+        }
+
+        x.into_values().collect::<Vec<IpToGeoAddr>>()
+    };
+
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
@@ -184,7 +195,7 @@ pub async fn insert_ip_db_into_postgres(
                 .execute(conn)
                 .await?;
 
-            for chunk in joined_ip_to_geo_addr_vec.as_slice().chunks(50) {
+            for chunk in joined_ip_to_geo_addr_vec_dedup.as_slice().chunks(50) {
                 let _ = diesel::insert_into(crate::schema::gtfs::ip_addr_to_geo::dsl::ip_addr_to_geo)
                 .values(chunk)
                 .execute(conn)
