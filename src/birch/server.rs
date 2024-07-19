@@ -1210,8 +1210,9 @@ async fn ip_addr_to_geo_api(
                 }
                 Err(ip_destructure_err) => {
                     eprintln!(
-                        "UNABLE TO GET IP ADDRESS from user {:#?}",
-                        ip_destructure_err
+                        "UNABLE TO GET IP ADDRESS from user {:#?}, {}",
+                        ip_destructure_err,
+                        ip_addr
                     );
 
                     IpToGeoApiResp {
