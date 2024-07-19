@@ -1172,13 +1172,18 @@ async fn ip_addr_to_geo_api(
             err_msg: Some(String::from("No IP found")),
         },
         Some(ip_addr) => {
-            let ipnet_cleaned = ipnet::IpNet::from_str(ip_addr);
+            let ipaddrparse = ip_addr.parse::<std::net::IpAddr>();
 
-            match ipnet_cleaned {
-                Ok(ipnet_cleaned) => {
+            match ipaddrparse {
+                Ok(ipaddrparse ) => {
+                    let ip_net_cleaned = match ipaddrparse {
+                        core::net::IpAddr::V4(ip_addr_v4) => ipnet::IpNet::new(ipaddrparse, 32).unwrap(),
+                        core::net::IpAddr::V6(ip_addr_v6) => ipnet::IpNet::new(ipaddrparse, 128).unwrap(),
+                    };
+
                     let pg_lookup = catenary::ip_to_location::lookup_geo_from_ip_addr(
                         Arc::clone(&pool.into_inner()),
-                        ipnet_cleaned,
+                        ip_net_cleaned,
                     )
                     .await;
 
