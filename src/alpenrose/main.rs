@@ -289,6 +289,9 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 }
             }
 
+            //renew the lease
+            let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
+
             //get the feed data from the feeds assigned to this worker
 
             single_fetch_time::single_fetch_time(
