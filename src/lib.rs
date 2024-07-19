@@ -43,6 +43,7 @@ pub mod enum_to_int;
 pub mod gtfs_rt_handlers;
 pub mod gtfs_rt_rough_hash;
 pub mod id_cleanup;
+pub mod ip_to_location;
 pub mod maple_syrup;
 pub mod models;
 pub mod postgis_to_diesel;
@@ -642,7 +643,7 @@ mod unzip_uk_test {
 
         let x = x.unwrap();
 
-        println!("{:#?}", x);
+        // println!("{:#?}", x);
     }
 }
 

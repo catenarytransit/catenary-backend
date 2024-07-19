@@ -36,15 +36,17 @@
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::Data;
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use catenary::EtcdConnectionIps;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::select_dsl::SelectDsl;
 use diesel::sql_types::{Float, Integer};
-use diesel::ExpressionMethods;
 use diesel::Selectable;
 use diesel::SelectableHelper;
+use diesel::{connection, ExpressionMethods};
+use catenary::ip_to_location::insert_ip_db_into_postgres;
 use diesel_async::pooled_connection::bb8::PooledConnection;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, Geometry, JsonValue, Value};
@@ -59,6 +61,7 @@ use serde_json::{json, to_string_pretty};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{FromRow, Row};
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
@@ -1146,6 +1149,69 @@ async fn chateaus(
         .body(serialized)
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct IpToGeoApiResp {
+    pub data_found: bool,
+    pub error: bool,
+    pub geo_resp: Option<IpToGeoAddr>,
+}
+
+#[actix_web::get("/ip_addr_to_geo/")]
+async fn ip_addr_to_geo_api(
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    req: HttpRequest,
+) -> impl Responder {
+    let connection_info = req.connection_info();
+
+    let resp = match connection_info.realip_remote_addr() {
+        None => IpToGeoApiResp {
+            data_found: false,
+            error: false,
+            geo_resp: None,
+        },
+        Some(ip_addr) => {
+            let ipnet_cleaned = ipnet::IpNet::from_str(ip_addr);
+
+            match ipnet_cleaned {
+                Ok(ipnet_cleaned) => {
+                    let pg_lookup = catenary::ip_to_location::lookup_geo_from_ip_addr(
+                        Arc::clone(&pool.into_inner()),
+                        ipnet_cleaned,
+                    )
+                    .await;
+
+                    match pg_lookup {
+                        Err(_) => IpToGeoApiResp {
+                            data_found: false,
+                            error: true,
+                            geo_resp: None,
+                        },
+                        Ok(pg_lookup) => match pg_lookup.len() {
+                            0 => IpToGeoApiResp {
+                                data_found: false,
+                                error: false,
+                                geo_resp: None,
+                            },
+                            _ => IpToGeoApiResp {
+                                data_found: true,
+                                error: false,
+                                geo_resp: Some(pg_lookup[0].clone()),
+                            },
+                        },
+                    }
+                }
+                Err(_) => IpToGeoApiResp {
+                    data_found: false,
+                    error: true,
+                    geo_resp: None,
+                },
+            }
+        }
+    };
+
+    HttpResponse::Ok().json(resp)
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     // std::env::set_var("RUST_LOG", "debug");
@@ -1219,6 +1285,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_vehicle_trip_information::get_trip_rt_update)
             .service(get_vehicle_trip_information::get_vehicle_information)
             .service(calfireproxy)
+            .service(ip_addr_to_geo_api)
     })
     .workers(16);
 
