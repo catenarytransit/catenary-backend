@@ -1225,7 +1225,9 @@ async fn ip_addr_to_geo_api(
         }
     };
 
-    HttpResponse::Ok().json(resp)
+    HttpResponse::Ok()
+        .insert_header(("Cache-Control", "no-cache"))
+        .json(resp)
 }
 
 #[actix_web::main]
