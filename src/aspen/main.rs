@@ -659,6 +659,13 @@ async fn main() -> anyhow::Result<()> {
         Ok(result_series_ok) => {
             println!("All threads have exited");
 
+            match &result_series_ok.0 {
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                },
+                Ok(_) => {}
+            }
+
             match &result_series_ok.1 {
                 Err(e) => {
                     panic!("Error: {:?}", e);
@@ -674,13 +681,6 @@ async fn main() -> anyhow::Result<()> {
             }
 
             match &result_series_ok.3 {
-                Err(e) => {
-                    panic!("Error: {:?}", e);
-                },
-                Ok(_) => {}
-            }
-
-            match &result_series_ok.4 {
                 Err(e) => {
                     panic!("Error: {:?}", e);
                 },
