@@ -64,3 +64,6 @@ testing-gtfs
 
 #aspen disk
 aspen-cache/
+
+temp-ipv4/
+temp-ipv6/

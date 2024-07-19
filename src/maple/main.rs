@@ -52,6 +52,7 @@ use crate::cleanup::wipe_whole_feed;
 
 mod assign_production_tables;
 mod chateau_postprocess;
+use catenary::ip_to_location::insert_ip_db_into_postgres;
 mod cleanup;
 mod gtfs_handlers;
 mod gtfs_ingestion_sequence;
@@ -169,6 +170,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
+
+    println!("Insert Geocoding from IP address db");
+
+    insert_ip_db_into_postgres(Arc::clone(&arc_conn_pool)).await?;
 
     // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
     // See https://github.com/catenarytransit/dmfr-folder-reader

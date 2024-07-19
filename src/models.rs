@@ -370,3 +370,19 @@ pub struct DirectionPatternMeta {
     pub attempt_id: String,
     pub route_id: Option<String>,
 }
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::gtfs::ip_addr_to_geo)]
+pub struct IpToGeoAddr {
+    pub is_ipv6: bool,
+    pub range_start: ipnet::IpNet,
+    pub range_end: ipnet::IpNet,
+    pub country_code: Option<String>,
+    pub geo_state: Option<String>,
+    pub geo_state2: Option<String>,
+    pub city: Option<String>,
+    pub postcode: Option<String>,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub timezone: Option<String>,
+}

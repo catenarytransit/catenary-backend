@@ -222,6 +222,26 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.ip_addr_to_geo (range_start, range_end) {
+            is_ipv6 -> Bool,
+            range_start -> Inet,
+            range_end -> Inet,
+            country_code -> Nullable<Text>,
+            geo_state -> Nullable<Text>,
+            geo_state2 -> Nullable<Text>,
+            city -> Nullable<Text>,
+            postcode -> Nullable<Text>,
+            latitude -> Float8,
+            longitude -> Float8,
+            timezone -> Nullable<Text>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.itinerary_pattern (onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence) {
             onestop_feed_id -> Text,
             attempt_id -> Text,
@@ -509,6 +529,7 @@ pub mod gtfs {
         gtfs_errors,
         in_progress_static_ingests,
         ingested_static,
+        ip_addr_to_geo,
         itinerary_pattern,
         itinerary_pattern_meta,
         realtime_feeds,
