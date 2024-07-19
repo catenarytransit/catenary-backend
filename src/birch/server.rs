@@ -36,6 +36,7 @@
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::Data;
 use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use catenary::ip_to_location::insert_ip_db_into_postgres;
 use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
@@ -46,7 +47,6 @@ use diesel::sql_types::{Float, Integer};
 use diesel::Selectable;
 use diesel::SelectableHelper;
 use diesel::{connection, ExpressionMethods};
-use catenary::ip_to_location::insert_ip_db_into_postgres;
 use diesel_async::pooled_connection::bb8::PooledConnection;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, Geometry, JsonValue, Value};
@@ -1154,6 +1154,7 @@ pub struct IpToGeoApiResp {
     pub data_found: bool,
     pub error: bool,
     pub geo_resp: Option<IpToGeoAddr>,
+    pub err_msg: Option<String>,
 }
 
 #[actix_web::get("/ip_addr_to_geo/")]
@@ -1168,6 +1169,7 @@ async fn ip_addr_to_geo_api(
             data_found: false,
             error: false,
             geo_resp: None,
+            err_msg: Some(String::from("No IP found")),
         },
         Some(ip_addr) => {
             let ipnet_cleaned = ipnet::IpNet::from_str(ip_addr);
@@ -1181,30 +1183,44 @@ async fn ip_addr_to_geo_api(
                     .await;
 
                     match pg_lookup {
-                        Err(_) => IpToGeoApiResp {
-                            data_found: false,
-                            error: true,
-                            geo_resp: None,
-                        },
+                        Err(err_a) => {
+                            eprintln!("{:#?}", err_a);
+                            IpToGeoApiResp {
+                                data_found: false,
+                                error: true,
+                                geo_resp: None,
+                                err_msg: Some(String::from("Lookup error")),
+                            }
+                        }
                         Ok(pg_lookup) => match pg_lookup.len() {
                             0 => IpToGeoApiResp {
                                 data_found: false,
                                 error: false,
                                 geo_resp: None,
+                                err_msg: Some(String::from("no rows found")),
                             },
                             _ => IpToGeoApiResp {
                                 data_found: true,
                                 error: false,
                                 geo_resp: Some(pg_lookup[0].clone()),
+                                err_msg: None,
                             },
                         },
                     }
                 }
-                Err(_) => IpToGeoApiResp {
-                    data_found: false,
-                    error: true,
-                    geo_resp: None,
-                },
+                Err(ip_destructure_err) => {
+                    eprintln!(
+                        "UNABLE TO GET IP ADDRESS from user {:#?}",
+                        ip_destructure_err
+                    );
+
+                    IpToGeoApiResp {
+                        data_found: false,
+                        error: true,
+                        geo_resp: None,
+                        err_msg: Some(String::from("UNABLE TO GET IP ADDRESS from user")),
+                    }
+                }
             }
         }
     };
