@@ -522,8 +522,8 @@ async fn main() -> anyhow::Result<()> {
 
     let make_lease = etcd
         .lease_grant(
-            //30 seconds
-            30,
+            //10 seconds
+            5,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
         )
         .await?;
@@ -602,7 +602,7 @@ async fn main() -> anyhow::Result<()> {
                             .await?;
                     let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await?;
 
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
                 Ok(())
             }
@@ -657,7 +657,7 @@ async fn main() -> anyhow::Result<()> {
 
     match result_series {
         Ok(result_series_ok) => {
-            println!("All threads have exited");
+            println!("All threads have exited"); 
 
             match &result_series_ok.0 {
                 Err(e) => {

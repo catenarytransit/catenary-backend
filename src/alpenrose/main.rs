@@ -126,8 +126,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let make_lease = etcd
         .lease_grant(
-            //30 seconds
-            30,
+            //20 seconds
+            20,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id)),
         )
         .await?;
@@ -208,6 +208,31 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                     println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
 
                     eprintln!("{:#?}", leader_election_err);
+
+                    //fetch again and see if leader
+
+                    let current_leader_election = election_client.leader("/alpenrose_leader").await;
+
+                    if let Ok(current_leader_resp) = current_leader_election {
+                        if let Some(leader_kv) = current_leader_resp.kv() {
+                            let leader_id: String =
+                                bincode::deserialize(leader_kv.value()).unwrap();
+
+                            if &leader_id == this_worker_id.as_ref() {
+                                // I AM THE LEADER!!!
+
+                                println!("I AM THE LEADER on first try!!!");
+
+                                leader_job::perform_leader_job(
+                                    &mut etcd,
+                                    Arc::clone(&arc_conn_pool),
+                                    &mut last_set_of_active_nodes_hash,
+                                    &mut last_updated_feeds_hash,
+                                )
+                                .await?;
+                            }
+                        }
+                    }
                 }
             }
 
