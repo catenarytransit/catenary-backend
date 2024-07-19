@@ -61,3 +61,6 @@ rustc-ice-*
 
 .env
 testing-gtfs
+
+#aspen disk
+aspen-cache/

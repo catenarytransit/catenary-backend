@@ -176,6 +176,7 @@ pub mod aspen_dataset {
     use gtfs_rt::TripUpdate;
     use std::{collections::BTreeMap, collections::HashMap, hash::Hash};
 
+    #[derive(Clone, Serialize, Deserialize)]
     pub struct AspenisedData {
         pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
         pub vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache>,
