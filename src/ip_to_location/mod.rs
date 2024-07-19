@@ -176,7 +176,7 @@ pub async fn insert_ip_db_into_postgres(
         .collect::<Vec<IpToGeoAddr>>();
 
     let joined_ip_to_geo_addr_vec_dedup: Vec<IpToGeoAddr> = {
-        let mut x: AHashMap<(ipnet::IpNet, ipnet::IpNet),IpToGeoAddr> = AHashMap::new();
+        let mut x: AHashMap<(ipnet::IpNet, ipnet::IpNet), IpToGeoAddr> = AHashMap::new();
 
         for item in joined_ip_to_geo_addr_vec {
             x.insert((item.range_start, item.range_end), item);
@@ -196,10 +196,11 @@ pub async fn insert_ip_db_into_postgres(
                 .await?;
 
             for chunk in joined_ip_to_geo_addr_vec_dedup.as_slice().chunks(50) {
-                let _ = diesel::insert_into(crate::schema::gtfs::ip_addr_to_geo::dsl::ip_addr_to_geo)
-                .values(chunk)
-                .execute(conn)
-                .await?;
+                let _ =
+                    diesel::insert_into(crate::schema::gtfs::ip_addr_to_geo::dsl::ip_addr_to_geo)
+                        .values(chunk)
+                        .execute(conn)
+                        .await?;
             }
 
             Ok(())
