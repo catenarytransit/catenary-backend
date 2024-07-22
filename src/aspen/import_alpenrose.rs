@@ -328,6 +328,7 @@ pub async fn new_rt_data(
                                 route_type: match realtime_feed_id.as_str() {
                                     "f-mta~nyc~rt~lirr" => 2,
                                     "f-mta~nyc~rt~mnr" => 2,
+                                    "f-amtrak~rt" => 2,
                                     _ => match &vehicle_pos.trip {
                                         Some(trip) => match &trip.route_id {
                                             Some(route_id) => {
