@@ -58,8 +58,7 @@ use gtfs_rt::VehicleDescriptor;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::io::Read;
-use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, Duration, Instant, UNIX_EPOCH};
 pub mod metrolink_ptc_to_stop_id;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
