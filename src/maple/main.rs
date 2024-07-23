@@ -171,14 +171,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
-    println!("Insert Geocoding from IP address db");
-
-    let status_ip_db_insert = insert_ip_db_into_postgres(Arc::clone(&arc_conn_pool)).await;
-
-    if let Err(err) = &status_ip_db_insert {
-        eprintln!("{:#?}", err);
-    }
-
     // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
     // See https://github.com/catenarytransit/dmfr-folder-reader
     println!("Reading transitland directory");
