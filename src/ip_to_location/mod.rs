@@ -195,7 +195,7 @@ pub async fn insert_ip_db_into_postgres(
                 .execute(conn)
                 .await?;
 
-            for chunk in joined_ip_to_geo_addr_vec_dedup.as_slice().chunks(50) {
+            for chunk in joined_ip_to_geo_addr_vec_dedup.as_slice().chunks(100) {
                 let _ =
                     diesel::insert_into(crate::schema::gtfs::ip_addr_to_geo::dsl::ip_addr_to_geo)
                         .values(chunk)
