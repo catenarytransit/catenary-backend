@@ -509,8 +509,8 @@ pub async fn gtfs_process_feed(
     }
     //submit hull
 
-    let hull_pg: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>> = match hull {
-        Some(polygon_geo) => Some(postgis_diesel::types::Polygon {
+    let hull_pg: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>> =
+        hull.map(|polygon_geo| postgis_diesel::types::Polygon {
             rings: vec![polygon_geo
                 .into_inner()
                 .0
@@ -520,9 +520,7 @@ pub async fn gtfs_process_feed(
                 })
                 .collect()],
             srid: Some(catenary::WGS_84_SRID),
-        }),
-        None => None,
-    };
+        });
 
     let languages_avaliable_pg = gtfs_summary
         .languages_avaliable
