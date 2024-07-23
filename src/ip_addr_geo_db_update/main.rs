@@ -5,7 +5,7 @@ use std::sync::Arc;
 use catenary::ip_to_location::insert_ip_db_into_postgres;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // get connection pool from database pool
     let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
