@@ -450,14 +450,11 @@ pub async fn get_trip_init(
                 .filter(catenary::schema::gtfs::shapes::dsl::shape_id.eq(shape_id_to_lookup))
                 .filter(catenary::schema::gtfs::shapes::dsl::chateau.eq(&chateau))
                 .select(catenary::models::Shape::as_select())
-                .load(conn)
+                .first(conn)
                 .await;
 
             match shape_query {
-                Ok(shape_query) => match shape_query.len() {
-                    0 => None,
-                    _ => Some(shape_query[0].clone()),
-                },
+                Ok(shape_query) => Some(shape_query.clone()),
                 Err(err) => None,
             }
         }
@@ -480,7 +477,7 @@ pub async fn get_trip_init(
                     })
                     .collect::<Vec<_>>(),
             ),
-            5,
+            4,
         )
         .unwrap()
     });
