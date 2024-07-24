@@ -889,6 +889,9 @@ pub async fn get_trip_init(
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
         .insert_header(("Cache-Control", "no-cache"))
-        .insert_header((timer.header_key(), timer.header_value()))
+        .insert_header((
+            simple_server_timing_header::Timer::header_key(),
+            timer.header_value(),
+        ))
         .body(text)
 }
