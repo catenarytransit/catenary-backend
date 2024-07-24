@@ -1,8 +1,8 @@
+use catenary::ip_to_location::insert_ip_db_into_postgres;
 use catenary::postgres_tools::make_async_pool;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use std::error::Error;
 use std::sync::Arc;
-use catenary::ip_to_location::insert_ip_db_into_postgres;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {

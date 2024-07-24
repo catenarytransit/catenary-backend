@@ -127,6 +127,7 @@ ipnet = { version = "2.9.0", features = ["serde"] }
 flate2 = "1.0.30"
 tar = "0.4.41"
 bytes = "1.6.1"
+polyline = "0.11.0"
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"

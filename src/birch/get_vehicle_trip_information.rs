@@ -18,6 +18,7 @@ use diesel::query_dsl::methods::SelectDsl;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
+use geo::coord;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -161,6 +162,7 @@ struct TripIntroductionInformation {
     pub alert_id_to_alert: BTreeMap<String, AspenisedAlert>,
     pub alert_ids_for_this_route: Vec<String>,
     pub alert_ids_for_this_trip: Vec<String>,
+    pub shape_polyline: Option<String>,
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -440,6 +442,44 @@ pub async fn get_trip_init(
     itin_rows_to_use.sort_by_key(|x| x.stop_sequence);
 
     let itin_rows_to_use = itin_rows_to_use;
+
+    //fetch shape from dataset
+    let shape_lookup: Option<catenary::models::Shape> = match itin_meta.shape_id {
+        Some(shape_id_to_lookup) => {
+            let shape_query = catenary::schema::gtfs::shapes::dsl::shapes
+                .filter(catenary::schema::gtfs::shapes::dsl::shape_id.eq(shape_id_to_lookup))
+                .filter(catenary::schema::gtfs::shapes::dsl::chateau.eq(&chateau))
+                .select(catenary::models::Shape::as_select())
+                .load(conn)
+                .await;
+
+            match shape_query {
+                Ok(shape_query) => match shape_query.len() {
+                    0 => None,
+                    _ => Some(shape_query[0].clone()),
+                },
+                Err(err) => None,
+            }
+        }
+        None => None,
+    };
+
+    //convert shape data into polyline
+    let shape_polyline = shape_lookup.map(|shape_info| {
+        polyline::encode_coordinates(geo::LineString::new(
+            shape_info
+                .linestring
+                .points
+                .iter()
+                .map(|point| {
+                    coord! {
+                        x: point.x,
+                        y: point.y
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ), 5).unwrap()
+    });
 
     let tz = chrono_tz::Tz::from_str_insensitive(itin_meta.timezone.as_str());
 
@@ -805,6 +845,7 @@ pub async fn get_trip_init(
         alert_ids_for_this_route: alert_ids_for_this_route,
         alert_ids_for_this_trip: alert_ids_for_this_trip,
         alert_id_to_alert: alert_id_to_alert,
+        shape_polyline: shape_polyline,
     };
 
     let text = serde_json::to_string(&response).unwrap();
