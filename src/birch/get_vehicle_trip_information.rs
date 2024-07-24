@@ -443,25 +443,44 @@ pub async fn get_trip_init(
 
     let itin_rows_to_use = itin_rows_to_use;
 
-    //fetch shape from dataset
-    let shape_lookup: Option<catenary::models::Shape> = match itin_meta.shape_id {
-        Some(shape_id_to_lookup) => {
-            let shape_query = catenary::schema::gtfs::shapes::dsl::shapes
-                .filter(catenary::schema::gtfs::shapes::dsl::shape_id.eq(shape_id_to_lookup))
-                .filter(catenary::schema::gtfs::shapes::dsl::chateau.eq(&chateau))
-                .select(catenary::models::Shape::as_select())
-                .first(conn)
-                .await;
+    //query both at the same time
 
-            match shape_query {
-                Ok(shape_query) => Some(shape_query.clone()),
-                Err(err) => None,
-            }
-        }
-        None => None,
-    };
+    //fetch shape from dataset
 
     //convert shape data into polyline
+
+    let stop_ids_to_lookup: Vec<String> =
+        itin_rows_to_use.iter().map(|x| x.stop_id.clone()).collect();
+
+    let (stops_data, shape_lookup): (
+        Result<Vec<catenary::models::Stop>, diesel::result::Error>,
+        Option<catenary::models::Shape>,
+    ) = futures::join!(
+        stops_pg_schema::dsl::stops
+            .filter(stops_pg_schema::dsl::chateau.eq(&chateau))
+            .filter(stops_pg_schema::dsl::gtfs_id.eq_any(stop_ids_to_lookup))
+            .select(catenary::models::Stop::as_select())
+            .load(conn),
+        async {
+            match itin_meta.shape_id {
+                Some(shape_id_to_lookup) => {
+                    let shape_query = catenary::schema::gtfs::shapes::dsl::shapes
+                        .filter(catenary::schema::gtfs::shapes::dsl::shape_id.eq(shape_id_to_lookup))
+                        .filter(catenary::schema::gtfs::shapes::dsl::chateau.eq(&chateau))
+                        .select(catenary::models::Shape::as_select())
+                        .first(conn)
+                        .await;
+    
+                    match shape_query {
+                        Ok(shape_query) => Some(shape_query.clone()),
+                        Err(err) => None,
+                    }
+                }
+                None => None,
+            }
+        }
+    );
+
     let shape_polyline = shape_lookup.map(|shape_info| {
         polyline::encode_coordinates(
             geo::LineString::new(
@@ -493,16 +512,6 @@ pub async fn get_trip_init(
     }
 
     let timezone = tz.unwrap();
-
-    let stop_ids_to_lookup: Vec<String> =
-        itin_rows_to_use.iter().map(|x| x.stop_id.clone()).collect();
-
-    let stops_data = stops_pg_schema::dsl::stops
-        .filter(stops_pg_schema::dsl::chateau.eq(&chateau))
-        .filter(stops_pg_schema::dsl::gtfs_id.eq_any(stop_ids_to_lookup))
-        .select(catenary::models::Stop::as_select())
-        .load(conn)
-        .await;
 
     if let Err(stops_data_err) = &stops_data {
         eprintln!("{}", stops_data_err);
