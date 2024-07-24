@@ -128,6 +128,7 @@ flate2 = "1.0.30"
 tar = "0.4.41"
 bytes = "1.6.1"
 polyline = "0.11.0"
+simple-server-timing-header = "0.1.1"
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"
