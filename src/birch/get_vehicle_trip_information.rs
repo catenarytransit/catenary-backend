@@ -339,6 +339,7 @@ pub async fn get_trip_init(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
 ) -> impl Responder {
+    let mut timer = simple_server_timing_header::Timer::new();
     let chateau = path.into_inner();
 
     let query = query.into_inner();
@@ -354,6 +355,8 @@ pub async fn get_trip_init(
 
     let conn = &mut conn_pre.unwrap();
 
+    timer.add("open_pg_connection");
+
     //ask postgres first
     let trip_compressed = trips_compressed_pg_schema::dsl::trips_compressed
         .filter(trips_compressed_pg_schema::dsl::chateau.eq(&chateau))
@@ -361,6 +364,8 @@ pub async fn get_trip_init(
         .select(catenary::models::CompressedTrip::as_select())
         .load(conn)
         .await;
+
+    timer.add("query_compressed_trip");
 
     if let Err(trip_compressed_err) = &trip_compressed {
         eprintln!("{}", trip_compressed_err);
@@ -399,6 +404,8 @@ pub async fn get_trip_init(
             .select(catenary::models::Route::as_select())
             .load(conn)
     );
+
+    timer.add("query_itin_route_and_itin_rows");
 
     if let Err(route_err) = &route {
         eprintln!("{}", route_err);
@@ -465,12 +472,14 @@ pub async fn get_trip_init(
             match itin_meta.shape_id {
                 Some(shape_id_to_lookup) => {
                     let shape_query = catenary::schema::gtfs::shapes::dsl::shapes
-                        .filter(catenary::schema::gtfs::shapes::dsl::shape_id.eq(shape_id_to_lookup))
+                        .filter(
+                            catenary::schema::gtfs::shapes::dsl::shape_id.eq(shape_id_to_lookup),
+                        )
                         .filter(catenary::schema::gtfs::shapes::dsl::chateau.eq(&chateau))
                         .select(catenary::models::Shape::as_select())
                         .first(conn)
                         .await;
-    
+
                     match shape_query {
                         Ok(shape_query) => Some(shape_query.clone()),
                         Err(err) => None,
@@ -480,6 +489,8 @@ pub async fn get_trip_init(
             }
         }
     );
+
+    timer.add("query_stops_and_shape");
 
     let shape_polyline = shape_lookup.map(|shape_info| {
         polyline::encode_coordinates(
@@ -500,6 +511,8 @@ pub async fn get_trip_init(
         )
         .unwrap()
     });
+
+    timer.add("convert_polyline");
 
     let tz = chrono_tz::Tz::from_str_insensitive(itin_meta.timezone.as_str());
 
@@ -656,8 +669,12 @@ pub async fn get_trip_init(
         stop_times_for_this_trip.push(stop_time);
     }
 
+    timer.add("stop_time_calculation");
+
     let etcd =
         etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+
+    timer.add("connect_to_etcd");
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);
@@ -675,6 +692,8 @@ pub async fn get_trip_init(
             None,
         )
         .await;
+
+    timer.add("fetch_assigned_aspen_chateau_data_from_etcd");
 
     let mut vehicle = None;
 
@@ -695,6 +714,8 @@ pub async fn get_trip_init(
 
             let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
 
+            timer.add("open_aspen_connection");
+
             if let Ok(aspen_client) = aspen_client {
                 let get_trip = aspen_client
                     .get_trip_updates_from_trip_id(
@@ -703,6 +724,8 @@ pub async fn get_trip_init(
                         query.trip_id.clone(),
                     )
                     .await;
+
+                timer.add("get_trip_rt_from_aspen");
 
                 if let Ok(get_trip) = get_trip {
                     if let Some(get_trip) = get_trip {
@@ -801,6 +824,7 @@ pub async fn get_trip_init(
                         route.route_id.clone(),
                     )
                     .await;
+                timer.add("query_alerts_for_route");
 
                 let alerts_for_trip = aspen_client
                     .get_alert_from_trip_id(
@@ -809,6 +833,8 @@ pub async fn get_trip_init(
                         query.trip_id.clone(),
                     )
                     .await;
+
+                timer.add("query_alerts_for_trip");
 
                 if let Ok(alerts_for_route) = alerts_for_route {
                     if let Some(alerts_for_route) = alerts_for_route {
@@ -863,5 +889,6 @@ pub async fn get_trip_init(
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
         .insert_header(("Cache-Control", "no-cache"))
+        .insert_header((timer.header_key(), timer.header_value()))
         .body(text)
 }
