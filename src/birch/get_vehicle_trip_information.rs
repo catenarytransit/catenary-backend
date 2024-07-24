@@ -466,19 +466,23 @@ pub async fn get_trip_init(
 
     //convert shape data into polyline
     let shape_polyline = shape_lookup.map(|shape_info| {
-        polyline::encode_coordinates(geo::LineString::new(
-            shape_info
-                .linestring
-                .points
-                .iter()
-                .map(|point| {
-                    coord! {
-                        x: point.x,
-                        y: point.y
-                    }
-                })
-                .collect::<Vec<_>>(),
-        ), 5).unwrap()
+        polyline::encode_coordinates(
+            geo::LineString::new(
+                shape_info
+                    .linestring
+                    .points
+                    .iter()
+                    .map(|point| {
+                        coord! {
+                            x: point.x,
+                            y: point.y
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            5,
+        )
+        .unwrap()
     });
 
     let tz = chrono_tz::Tz::from_str_insensitive(itin_meta.timezone.as_str());
