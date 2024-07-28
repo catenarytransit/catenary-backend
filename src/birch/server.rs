@@ -1314,6 +1314,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_vehicle_trip_information::get_vehicle_information)
             .service(calfireproxy)
             .service(ip_addr_to_geo_api)
+            .service(route_info::route_info)
     })
     .workers(16);
 
