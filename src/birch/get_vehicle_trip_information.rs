@@ -335,7 +335,7 @@ pub async fn get_trip_rt_update(
 pub async fn get_trip_init(
     path: web::Path<String>,
     query: web::Query<QueryTripInformationParams>,
-    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+   // sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
 ) -> impl Responder {

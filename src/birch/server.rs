@@ -78,6 +78,7 @@ mod aspenised_data_over_https;
 mod chicago_proxy;
 mod get_vehicle_trip_information;
 mod nearby_departures;
+mod route_info;
 
 #[derive(Clone, Debug)]
 struct ChateauCache {
