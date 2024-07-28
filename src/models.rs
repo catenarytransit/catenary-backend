@@ -369,6 +369,7 @@ pub struct DirectionPatternMeta {
     pub onestop_feed_id: String,
     pub attempt_id: String,
     pub route_id: Option<String>,
+    pub route_type: Option<i16>
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
