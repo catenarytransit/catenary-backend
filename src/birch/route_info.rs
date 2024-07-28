@@ -6,14 +6,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use crate::CatenaryPostgresPool;
-use diesel::QueryDsl;
 use diesel_async::RunQueryDsl;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::AsyncConnection;
+use catenary::aspen_dataset::AspenisedAlert;
+
+use diesel::query_dsl::methods::FilterDsl;
+use diesel::query_dsl::methods::SelectDsl;
 
 pub struct RouteInfoResponse {
     pub agency_name: String,
+    pub agency_id: String,
     pub short_name: Option<String>,
     pub long_name: Option<String>,
     pub url: Option<String>,
@@ -24,6 +28,8 @@ pub struct RouteInfoResponse {
     pub stops: BTreeMap<String, catenary::models::Stop>,
     pub direction_patterns: BTreeMap<String, DirectionsSummary>,
     pub shapes_polyline: BTreeMap<String, String>,
+    pub alert_ids_for_this_route: Vec<String>,
+    pub alert_id_to_alert: BTreeMap<String, AspenisedAlert>,
 }
 
 pub struct DirectionsSummary {
@@ -68,21 +74,76 @@ pub async fn route_info(
 
     if let Err(conn_pre) = &conn_pre {
         eprintln!("{}", conn_pre);
-        return HttpResponse::InternalServerError().body("Error connecting to database");
+        return HttpResponse::InternalServerError().body("Error connecting to postgres");
     }
 
     let conn = &mut conn_pre.unwrap();
 
     // fetch route information
 
-    let route_information = catenary::schema::gtfs::routes::dsl::routes
+    let route_information_pg: Result<Vec<catenary::models::Route>, _> = catenary::schema::gtfs::routes::dsl::routes
     .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(&query.chateau))
     .filter(catenary::schema::gtfs::routes::dsl::route_id.eq(&query.route_id))
     .select(catenary::models::Route::as_select())
     .load(conn)
     .await;
 
+    if let Err(route_information_pg) = &route_information_pg {
+        eprintln!("{}", route_information_pg);
+        return HttpResponse::InternalServerError().body("Could not fetch route information");
+    }
+
+    let route_information_pg = route_information_pg.unwrap();
+
+    if route_information_pg.is_empty() {
+        return HttpResponse::InternalServerError().body("Error finding route");
+    }
+
+    let route = route_information_pg[0].clone();
+
     // fetch agency name
+
+    let mut agency: Option<catenary::models::Agency> = None;
+
+    match route.agency_id {
+        Some(agency_id) => {
+            let agency_pg: Result<Vec<catenary::models::Agency>, _> = catenary::schema::gtfs::agencies::dsl::agency
+                .filter(catenary::schema::gtfs::agencies::dsl::chateau.eq(&query.chateau))
+                .filter(catenary::schema::gtfs::agencies::dsl::agency_id.eq(agency_id))
+                .select(catenary::models::Agency::as_select())
+                .load(conn)
+                .await;
+
+            if let Err(agency_pg) = &agency_pg {
+                eprintln!("{}", agency_pg);
+                return HttpResponse::InternalServerError().body("Could not fetch agency information");
+            }
+
+            let agency_pg = agency_pg.unwrap();
+
+            if !agency_pg.is_empty() {
+                agency = Some(agency_pg[0].clone());
+            }
+        },
+        None => {
+            let agency_pg: Result<Vec<catenary::models::Agency>, _> = catenary::schema::gtfs::agencies::dsl::agency
+                .filter(catenary::schema::gtfs::agencies::dsl::static_onestop_id.eq(&route.onestop_feed_id))
+                .select(catenary::models::Agency::as_select())
+                .load(conn)
+                .await;
+
+                if let Err(agency_pg) = &agency_pg {
+                    eprintln!("{}", agency_pg);
+                    return HttpResponse::InternalServerError().body("Could not fetch agency information");
+                }
+    
+                let agency_pg = agency_pg.unwrap();
+    
+                if !agency_pg.is_empty() {
+                    agency = Some(agency_pg[0].clone());
+                }
+        }
+    };
 
     // fetch directions
 
