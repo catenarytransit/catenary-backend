@@ -25,6 +25,7 @@ pub struct ItineraryCover {
     pub timezone: String,
     pub shape_id: Option<String>,
     pub direction_pattern_id: u64,
+    pub route_type: i16,
 }
 
 #[derive(Hash, Debug, Clone, PartialEq, Eq)]
@@ -50,6 +51,7 @@ pub struct DirectionPattern {
     pub headsign_or_destination: Option<String>,
     pub gtfs_shape_id: Option<String>,
     pub route_id: String,
+    pub route_type: i16
 }
 
 #[derive(Clone, Debug)]
@@ -300,6 +302,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             timezone,
             shape_id: trip.shape_id.clone(),
             direction_pattern_id,
+            route_type: crate::enum_to_int::route_type_to_int(&gtfs.routes.get(&trip.route_id).map(|route| route.route_type).unwrap_or(gtfs_structures::RouteType::Bus)),
         };
 
         //itinerary id generated
@@ -352,6 +355,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             },
             gtfs_shape_id: itinerary.shape_id.clone(),
             route_id: itinerary.route_id.clone(),
+            route_type: itinerary.route_type,
         };
 
         let hash_of_direction_pattern_output = calculate_direction_pattern_id(
