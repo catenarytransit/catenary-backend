@@ -144,9 +144,19 @@ pub async fn route_info(
                 }
         }
     };
+    
+    //get current attempt ids for onestop_feed_id
+
+    
 
     // fetch directions
 
+    let direction_patterns_pg: Result<Vec<catenary::models::DirectionPatternMeta>, _> = catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+        .filter(catenary::schema::gtfs::direction_pattern_meta::dsl::chateau.eq(&query.chateau))
+        .filter(catenary::schema::gtfs::direction_pattern_meta::dsl::route_id.eq(&query.route_id))
+        .select(catenary::models::DirectionPatternMeta::as_select())
+        .load(conn)
+        .await;
     // fetch stops
 
     // fetch shapes
