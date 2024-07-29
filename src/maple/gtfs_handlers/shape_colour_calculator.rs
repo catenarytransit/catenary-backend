@@ -16,7 +16,7 @@ pub fn shape_to_colour(feed_id: &str, gtfs: &gtfs_structures::Gtfs) -> ShapeToCo
     let mut route_ids_to_shape_ids: HashMap<String, HashSet<String>> = HashMap::new();
 
     //metrolink colours are all bonked because trips don't have shape ids in them
-    if (feed_id == "f-9qh-metrolinktrains") {
+   /*  if (feed_id == "f-9qh-metrolinktrains") {
         for (shape_id, shape) in &gtfs.shapes {
             let cleanedline = shape_id.to_owned().replace("in", "").replace("out", "");
 
@@ -62,7 +62,7 @@ pub fn shape_to_colour(feed_id: &str, gtfs: &gtfs_structures::Gtfs) -> ShapeToCo
                 );
             }
         }
-    }
+    }*/
 
     for (trip_id, trip) in &gtfs.trips {
         if let Some(shape_id) = &trip.shape_id {
