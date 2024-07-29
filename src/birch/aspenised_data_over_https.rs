@@ -92,10 +92,9 @@ pub async fn get_realtime_locations(
     //deserialise into ChateauMetadataZookeeper
 
     let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
-        &fetch_assigned_node_for_this_realtime_feed
+        fetch_assigned_node_for_this_realtime_feed
             .kvs()
-            .iter()
-            .nth(0)
+            .get(0)
             .unwrap()
             .value(),
     )
