@@ -31,6 +31,13 @@ pub async fn shapes_into_postgres(
     let conn = &mut conn_pre?;
 
     for (shape_id, shape) in gtfs.shapes.iter() {
+        if (feed_id == "f-9qh-metrolinktrains") {
+            //skip metrolink's poorly drawn shapes
+            if shape_id.contains("in") || shape_id.contains("out") {
+                continue;
+            }
+        }
+
         let mut route_type_number = 3;
 
         let route_ids = shape_id_to_route_ids_lookup.get(shape_id);
