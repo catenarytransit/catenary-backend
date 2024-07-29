@@ -107,7 +107,7 @@ pub async fn route_info(
 
     match route.agency_id {
         Some(agency_id) => {
-            let agency_pg: Result<Vec<catenary::models::Agency>, _> = catenary::schema::gtfs::agencies::dsl::agency
+            let agency_pg: Result<Vec<catenary::models::Agency>, _> = catenary::schema::gtfs::agencies::dsl::agencies
                 .filter(catenary::schema::gtfs::agencies::dsl::chateau.eq(&query.chateau))
                 .filter(catenary::schema::gtfs::agencies::dsl::agency_id.eq(agency_id))
                 .select(catenary::models::Agency::as_select())
@@ -126,7 +126,7 @@ pub async fn route_info(
             }
         },
         None => {
-            let agency_pg: Result<Vec<catenary::models::Agency>, _> = catenary::schema::gtfs::agencies::dsl::agency
+            let agency_pg: Result<Vec<catenary::models::Agency>, _> = catenary::schema::gtfs::agencies::dsl::agencies
                 .filter(catenary::schema::gtfs::agencies::dsl::static_onestop_id.eq(&route.onestop_feed_id))
                 .select(catenary::models::Agency::as_select())
                 .load(conn)
@@ -147,7 +147,7 @@ pub async fn route_info(
     
     //get current attempt ids for onestop_feed_id
 
-    
+
 
     // fetch directions
 
