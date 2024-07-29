@@ -13,7 +13,7 @@ use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;
 
-#[derive(Queryable, Selectable, Insertable, Clone)]
+#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::gtfs::itinerary_pattern)]
 pub struct ItineraryPatternRow {
     pub onestop_feed_id: String,
@@ -28,7 +28,7 @@ pub struct ItineraryPatternRow {
     pub gtfs_stop_sequence: u32,
 }
 
-#[derive(Queryable, Selectable, Insertable, Clone)]
+#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::gtfs::itinerary_pattern_meta)]
 pub struct ItineraryPatternMeta {
     pub onestop_feed_id: String,
@@ -44,7 +44,7 @@ pub struct ItineraryPatternMeta {
     pub direction_pattern_id: Option<String>,
 }
 
-#[derive(Queryable, Selectable, Insertable, Clone)]
+#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::gtfs::trips_compressed)]
 pub struct CompressedTrip {
     pub onestop_feed_id: String,
@@ -344,8 +344,10 @@ pub struct AdminCredentials {
     pub last_updated_ms: i64,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::gtfs::direction_pattern)]
+#[derive(Associations)]
+#[diesel(belongs_to(DirectionPatternMeta, foreign_key = direction_pattern_id))]
 pub struct DirectionPatternRow {
     pub chateau: String,
     pub direction_pattern_id: String,
@@ -358,7 +360,7 @@ pub struct DirectionPatternRow {
     pub attempt_id: String,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::gtfs::direction_pattern_meta)]
 pub struct DirectionPatternMeta {
     pub chateau: String,
@@ -369,7 +371,7 @@ pub struct DirectionPatternMeta {
     pub onestop_feed_id: String,
     pub attempt_id: String,
     pub route_id: Option<String>,
-    pub route_type: Option<i16>
+    pub route_type: Option<i16>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]

@@ -55,6 +55,7 @@ use ahash::AHasher;
 use fasthash::MetroHasher;
 use gtfs_rt::translated_image::LocalizedImage;
 use gtfs_rt::VehicleDescriptor;
+use gtfs_structures::LocationType;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::io::Read;
@@ -648,4 +649,18 @@ mod unzip_uk_test {
 
 pub struct EtcdConnectionIps {
     pub ip_addresses: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SerializableStop {
+    pub id: String,
+    pub code: Option<String>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub location_type: i16,
+    pub parent_station: Option<String>,
+    pub zone_id: Option<String>,
+    pub longitude: Option<f64>,
+    pub latitude: Option<f64>,
+    pub timezone: Option<String>,
 }
