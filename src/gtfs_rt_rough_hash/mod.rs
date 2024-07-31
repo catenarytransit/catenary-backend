@@ -368,10 +368,10 @@ pub struct RoughModifiedTripSelector {
 pub fn rough_hash_of_gtfs_rt(input: &gtfs_rt::FeedMessage) -> u64 {
     let mut hashed_entries: BTreeMap<String, u64> = BTreeMap::new();
 
-    for entity in input.entity.clone() {
+    for entity in &input.entity {
         let rough_entity = RoughFeedEntity {
             is_deleted: entity.is_deleted,
-            trip_update: match entity.trip_update {
+            trip_update: match entity.trip_update.clone() {
                 Some(trip_update) => {
                     let trip_update_entity: RoughTripUpdate = trip_update.into();
                     let trip_update_hash = ahash_fast_hash(&trip_update_entity);
@@ -379,7 +379,7 @@ pub fn rough_hash_of_gtfs_rt(input: &gtfs_rt::FeedMessage) -> u64 {
                 }
                 None => None,
             },
-            vehicle: match entity.vehicle {
+            vehicle: match entity.vehicle.clone() {
                 Some(vehicle) => {
                     let vehicle_entity: RoughVehicleEntity = vehicle.into();
                     let vehicle_hash = ahash_fast_hash(&vehicle_entity);
@@ -387,7 +387,7 @@ pub fn rough_hash_of_gtfs_rt(input: &gtfs_rt::FeedMessage) -> u64 {
                 }
                 None => None,
             },
-            alert: match entity.alert {
+            alert: match entity.alert.clone() {
                 Some(alert) => {
                     let alert_entity: HashAlert = alert.into();
                     let alert_hash = ahash_fast_hash(&alert_entity);
@@ -398,7 +398,7 @@ pub fn rough_hash_of_gtfs_rt(input: &gtfs_rt::FeedMessage) -> u64 {
         };
 
         let hash_of_entry = ahash_fast_hash(&rough_entity);
-        let id = entity.id;
+        let id = entity.id.clone();
         hashed_entries.insert(id, hash_of_entry);
     }
 
