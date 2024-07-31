@@ -1,4 +1,4 @@
-use crate::gx_fast_hash;
+use crate::ahash_fast_hash;
 use ahash::AHashMap;
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
@@ -369,12 +369,12 @@ pub fn rough_hash_of_gtfs_rt(input: &gtfs_rt::FeedMessage) -> u64 {
     let mut hashed_entries: BTreeMap<String, u64> = BTreeMap::new();
 
     for entity in input.entity.clone() {
-        let mut rough_entity = RoughFeedEntity {
+        let rough_entity = RoughFeedEntity {
             is_deleted: entity.is_deleted,
             trip_update: match entity.trip_update {
                 Some(trip_update) => {
                     let trip_update_entity: RoughTripUpdate = trip_update.into();
-                    let trip_update_hash = gx_fast_hash(&trip_update_entity);
+                    let trip_update_hash = ahash_fast_hash(&trip_update_entity);
                     Some(trip_update_hash)
                 }
                 None => None,
@@ -382,7 +382,7 @@ pub fn rough_hash_of_gtfs_rt(input: &gtfs_rt::FeedMessage) -> u64 {
             vehicle: match entity.vehicle {
                 Some(vehicle) => {
                     let vehicle_entity: RoughVehicleEntity = vehicle.into();
-                    let vehicle_hash = gx_fast_hash(&vehicle_entity);
+                    let vehicle_hash = ahash_fast_hash(&vehicle_entity);
                     Some(vehicle_hash)
                 }
                 None => None,
@@ -390,17 +390,17 @@ pub fn rough_hash_of_gtfs_rt(input: &gtfs_rt::FeedMessage) -> u64 {
             alert: match entity.alert {
                 Some(alert) => {
                     let alert_entity: HashAlert = alert.into();
-                    let alert_hash = gx_fast_hash(&alert_entity);
+                    let alert_hash = ahash_fast_hash(&alert_entity);
                     Some(alert_hash)
                 }
                 None => None,
             },
         };
 
-        let hash_of_entry = gx_fast_hash(&rough_entity);
+        let hash_of_entry = ahash_fast_hash(&rough_entity);
         let id = entity.id;
         hashed_entries.insert(id, hash_of_entry);
     }
 
-    gx_fast_hash(&hashed_entries)
+    ahash_fast_hash(&hashed_entries)
 }

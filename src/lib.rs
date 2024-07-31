@@ -139,11 +139,12 @@ pub fn ahash_fast_hash<T: Hash>(t: &T) -> u64 {
     hasher.finish()
 }
 
+/*
 pub fn gx_fast_hash<T: Hash>(t: &T) -> u64 {
     let mut hasher = gxhasher::GxBuildHasher::default();
     t.hash(&mut hasher);
     hasher.finish()
-}
+}*/
 
 pub fn duration_since_unix_epoch() -> Duration {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap()

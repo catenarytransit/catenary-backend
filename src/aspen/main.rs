@@ -230,7 +230,9 @@ impl AspenRpc for AspenServer {
 
         if !new_data {
             if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
-                let hash = rough_hash_of_gtfs_rt(&vehicles_gtfs_rt);
+               // let start_hash = Instant::now();
+                let hash = rough_hash_of_gtfs_rt(vehicles_gtfs_rt);
+             //  let end_hash = Instant::now();
 
                 let key = (realtime_feed_id.clone(), GtfsRtType::VehiclePositions);
 
@@ -254,7 +256,7 @@ impl AspenRpc for AspenServer {
 
         if !new_data {
             if let Some(trips_gtfs_rt) = &trips_gtfs_rt {
-                let hash = rough_hash_of_gtfs_rt(&trips_gtfs_rt);
+                let hash = rough_hash_of_gtfs_rt(trips_gtfs_rt);
 
                 let key = (realtime_feed_id.clone(), GtfsRtType::TripUpdates);
 
@@ -278,7 +280,7 @@ impl AspenRpc for AspenServer {
 
         if !new_data {
             if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
-                let hash = rough_hash_of_gtfs_rt(&alerts_gtfs_rt);
+                let hash = rough_hash_of_gtfs_rt(alerts_gtfs_rt);
 
                 let key = (realtime_feed_id.clone(), GtfsRtType::Alerts);
 
