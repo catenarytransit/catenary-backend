@@ -30,7 +30,8 @@
     clippy::match_result_ok,
     clippy::cmp_owned,
     clippy::cmp_null,
-    clippy::op_ref
+    clippy::op_ref,
+    clippy::useless_vec
 )]
 
 use actix_web::middleware::DefaultHeaders;

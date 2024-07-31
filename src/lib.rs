@@ -28,7 +28,8 @@
     clippy::match_result_ok,
     clippy::cmp_owned,
     clippy::cmp_null,
-    clippy::op_ref
+    clippy::op_ref,
+    clippy::useless_vec
 )]
 
 #[macro_use]
@@ -56,6 +57,7 @@ use fasthash::MetroHasher;
 use gtfs_rt::translated_image::LocalizedImage;
 use gtfs_rt::VehicleDescriptor;
 use gtfs_structures::LocationType;
+use gtfs_structures::RouteType;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::io::Read;
@@ -663,4 +665,30 @@ pub struct SerializableStop {
     pub longitude: Option<f64>,
     pub latitude: Option<f64>,
     pub timezone: Option<String>,
+}
+
+pub fn is_null_island(x: f64, y: f64) -> bool {
+    x.abs() < 0.1 && y.abs() < 0.1
+}
+
+pub fn contains_rail_or_metro_lines(gtfs: &gtfs_structures::Gtfs) -> bool {
+    let mut answer = false;
+
+    for (_, route) in gtfs.routes.iter() {
+        let is_rail_line = matches!(
+            route.route_type,
+            RouteType::Tramway
+                | RouteType::Subway
+                | RouteType::Rail
+                | RouteType::CableCar
+                | RouteType::Funicular
+        );
+
+        if is_rail_line {
+            answer = true;
+            break;
+        }
+    }
+
+    answer
 }

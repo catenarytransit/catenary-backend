@@ -96,6 +96,7 @@ The following `cargo clippy` rules are enforced.
     clippy::match_result_ok,
     clippy::cmp_owned,
     clippy::cmp_null,
-    clippy::op_ref
+    clippy::op_ref,
+    clippy::useless_vec
 )]
 ```

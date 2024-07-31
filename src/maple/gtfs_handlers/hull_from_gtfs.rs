@@ -1,3 +1,4 @@
+use catenary::is_null_island;
 use geo::algorithm::concave_hull::ConcaveHull;
 use geo::{MultiPoint, Point, Polygon};
 
@@ -12,11 +13,7 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
                 .map(|(id, points)| {
                     points
                         .iter()
-                        .filter(|point| {
-                            let is_null_island = f64::abs(0. - point.latitude) < 0.01
-                                && f64::abs(0. - point.latitude) < 0.01;
-                            !is_null_island
-                        })
+                        .filter(|point| !is_null_island(point.longitude, point.latitude))
                         .map(|point| Point::new(point.longitude, point.latitude))
                 })
                 .flatten()
@@ -33,9 +30,7 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
                         .iter()
                         .filter(|(_, stop)| stop.longitude.is_some() && stop.latitude.is_some())
                         .filter(|(_, stop)| {
-                            let is_null_island = f64::abs(0. - stop.latitude.unwrap()) < 0.000001
-                                && f64::abs(0. - stop.latitude.unwrap()) < 0.000001;
-                            !is_null_island
+                            !is_null_island(stop.latitude.unwrap(), stop.longitude.unwrap())
                         })
                         .map(|(_, stop)| {
                             Point::new(stop.longitude.unwrap(), stop.latitude.unwrap())
