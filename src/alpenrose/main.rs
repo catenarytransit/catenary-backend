@@ -49,7 +49,7 @@ use diesel::Selectable;
 use diesel::SelectableHelper;
 use diesel_async::pooled_connection::bb8::PooledConnection;
 use diesel_async::RunQueryDsl;
-use dmfr_folder_reader::read_folders;
+use dmfr_dataset_reader::read_folders;
 use futures::prelude::*;
 use rand::Rng;
 use serde::Deserialize;

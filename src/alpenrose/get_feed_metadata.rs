@@ -12,7 +12,7 @@ use diesel::Selectable;
 use diesel::SelectableHelper;
 use diesel_async::pooled_connection::bb8::PooledConnection;
 use diesel_async::RunQueryDsl;
-use dmfr_folder_reader::read_folders;
+use dmfr_dataset_reader::read_folders;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;

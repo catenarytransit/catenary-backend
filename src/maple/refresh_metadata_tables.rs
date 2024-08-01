@@ -12,7 +12,7 @@ use diesel::query_dsl::methods::SelectDsl;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use dmfr_folder_reader::ReturnDmfrAnalysis;
+use dmfr_dataset_reader::ReturnDmfrAnalysis;
 use geo::Polygon;
 use geo::{polygon, MultiPolygon};
 use geo_clipper::Clipper;

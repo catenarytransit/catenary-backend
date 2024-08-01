@@ -64,7 +64,7 @@ mod update_schedules_with_new_chateau_id;
 use gtfs_process::gtfs_process_feed;
 
 use chateau::chateau;
-use dmfr_folder_reader::read_folders;
+use dmfr_dataset_reader::read_folders;
 
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::transitland_download::DownloadedFeedsInformation;
@@ -175,6 +175,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     // See https://github.com/catenarytransit/dmfr-folder-reader
     println!("Reading transitland directory");
     let dmfr_result = read_folders("./transitland-atlas/")?;
+
+    println!("Broken feeds: {:?}", dmfr_result.list_of_bad_files);
+
     println!(
         "Transitland directory read with {} feeds and {} operators",
         dmfr_result.feed_hashmap.len(),

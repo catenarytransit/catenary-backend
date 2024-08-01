@@ -3,7 +3,7 @@ use crate::RealtimeFeedFetch;
 use catenary::fast_hash;
 use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
-use dmfr_folder_reader::read_folders;
+use dmfr_dataset_reader::read_folders;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::error::Error;

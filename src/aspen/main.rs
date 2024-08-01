@@ -230,9 +230,9 @@ impl AspenRpc for AspenServer {
 
         if !new_data {
             if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
-               // let start_hash = Instant::now();
+                // let start_hash = Instant::now();
                 let hash = rough_hash_of_gtfs_rt(vehicles_gtfs_rt);
-             //  let end_hash = Instant::now();
+                //  let end_hash = Instant::now();
 
                 let key = (realtime_feed_id.clone(), GtfsRtType::VehiclePositions);
 
