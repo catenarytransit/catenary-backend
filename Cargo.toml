@@ -178,3 +178,7 @@ path = "src/sage/main.rs"
 [[bin]]
 name = "setup_ip_db"
 path = "src/ip_addr_geo_db_update/main.rs"
+
+[[bin]]
+name = "test_dmfr"
+path = "src/test_dmfr.rs"
