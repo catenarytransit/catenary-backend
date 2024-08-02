@@ -86,10 +86,19 @@ async fn gtfs_rt(
                                         .body(data.encode_to_vec()),
                                     ConvertedFormat::Ron => HttpResponse::Ok()
                                         .append_header(("Cache-Control", "no-cache"))
-                                        .body(ron::to_string(&data).unwrap()),
+                                        .body(
+                                            ron::ser::to_string_pretty(
+                                                &data,
+                                                ron::ser::PrettyConfig::default(),
+                                            )
+                                            .unwrap(),
+                                        ),
                                     ConvertedFormat::Json => HttpResponse::Ok()
                                         .append_header(("Cache-Control", "no-cache"))
-                                        .json(data),
+                                        .append_header(actix_web::http::header::ContentType(
+                                            mime::APPLICATION_JSON,
+                                        ))
+                                        .body(serde_json::to_string_pretty(&data).unwrap()),
                                 },
                                 Err(_) => HttpResponse::InternalServerError()
                                     .append_header(("Cache-Control", "no-cache"))
