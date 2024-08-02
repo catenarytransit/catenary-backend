@@ -211,8 +211,5 @@ pub async fn shapes_into_postgres(
         }
     }
 
-    std::mem::drop(conn);
-    std::mem::drop(conn_pool);
-
     Ok(())
 }
