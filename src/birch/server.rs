@@ -78,6 +78,7 @@ mod api_key_management;
 mod aspenised_data_over_https;
 mod chicago_proxy;
 mod get_vehicle_trip_information;
+mod gtfs_rt_api;
 mod nearby_departures;
 mod route_info;
 
@@ -1316,6 +1317,7 @@ async fn main() -> std::io::Result<()> {
             .service(calfireproxy)
             .service(ip_addr_to_geo_api)
             .service(route_info::route_info)
+            .service(gtfs_rt_api::gtfs_rt)
     })
     .workers(16);
 

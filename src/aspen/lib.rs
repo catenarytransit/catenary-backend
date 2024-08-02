@@ -47,6 +47,11 @@ pub trait AspenRpc {
         existing_fasthash_of_routes: Option<u64>,
     ) -> (Option<GetVehicleLocationsResponse>);
 
+    async fn get_gtfs_rt(
+        realtime_feed_id: String,
+        feed_type: crate::aspen_dataset::GtfsRtType,
+    ) -> Option<Vec<u8>>;
+
     async fn get_trip_updates_from_trip_id(
         chateau_id: String,
         trip_id: String,

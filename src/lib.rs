@@ -519,7 +519,7 @@ pub mod aspen_dataset {
         pub route_desc: Option<String>,
     }
 
-    #[derive(Copy, Eq, Hash, PartialEq, Clone)]
+    #[derive(Copy, Eq, Hash, PartialEq, Clone, Deserialize, Serialize, Debug)]
     pub enum GtfsRtType {
         VehiclePositions,
         TripUpdates,

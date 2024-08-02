@@ -66,6 +66,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 mod alerts_responder;
 mod aspen_assignment;
+use prost::Message;
 
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
@@ -93,6 +94,26 @@ impl AspenRpc for AspenServer {
             Duration::from_millis(Uniform::new_inclusive(1, 10).sample(&mut thread_rng()));
         time::sleep(sleep_time).await;
         format!("Hello, {name}! You are connected from {}", self.addr)
+    }
+
+    async fn get_gtfs_rt(
+        self,
+        _: context::Context,
+        realtime_feed_id: String,
+        feed_type: catenary::aspen_dataset::GtfsRtType,
+    ) -> Option<Vec<u8>> {
+        let pair = self
+            .authoritative_gtfs_rt_store
+            .get(&(realtime_feed_id, feed_type));
+
+        match pair {
+            Some(pair) => {
+                let message: &FeedMessage = pair.get();
+
+                Some(message.encode_to_vec())
+            }
+            None => None,
+        }
     }
 
     async fn get_alerts_from_route_id(
