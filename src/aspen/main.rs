@@ -732,39 +732,37 @@ fn is_new_data_for_feed_type(
                             .entry(key.clone())
                             .and_modify(|mut_time| *mut_time = timestamp)
                             .or_insert(timestamp);
-                        
-                           // let start_hash = std::time::Instant::now();
-                            let hash = rough_hash_of_gtfs_rt(data);
-                          //  let end_hash = std::time::Instant::now();
 
-                            match server.rough_hash_of_gtfs_rt.get(&key) {
-                                Some(existing_hash) => {
-                                    let existing_hash = existing_hash.get();
+                        // let start_hash = std::time::Instant::now();
+                        let hash = rough_hash_of_gtfs_rt(data);
+                        //  let end_hash = std::time::Instant::now();
 
-                                    if *existing_hash != hash {
-                                        let _ = server
-                            .rough_hash_of_gtfs_rt
-                            .entry(key.clone())
-                            .and_modify(|mut_hash| *mut_hash = hash)
-                            .or_insert(hash);
+                        match server.rough_hash_of_gtfs_rt.get(&key) {
+                            Some(existing_hash) => {
+                                let existing_hash = existing_hash.get();
 
-                                        NewDataStatus::New
-                                    } else {
-                                        NewDataStatus::Old
-                                    }
-                                },
-                                None => {
-
+                                if *existing_hash != hash {
                                     let _ = server
-                            .rough_hash_of_gtfs_rt
-                            .entry(key.clone())
-                            .and_modify(|mut_hash| *mut_hash = hash)
-                            .or_insert(hash);
+                                        .rough_hash_of_gtfs_rt
+                                        .entry(key.clone())
+                                        .and_modify(|mut_hash| *mut_hash = hash)
+                                        .or_insert(hash);
 
                                     NewDataStatus::New
+                                } else {
+                                    NewDataStatus::Old
                                 }
                             }
+                            None => {
+                                let _ = server
+                                    .rough_hash_of_gtfs_rt
+                                    .entry(key.clone())
+                                    .and_modify(|mut_hash| *mut_hash = hash)
+                                    .or_insert(hash);
 
+                                NewDataStatus::New
+                            }
+                        }
                     } else {
                         NewDataStatus::Old
                     }
