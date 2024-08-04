@@ -392,7 +392,7 @@ pub async fn send_mta_rail_to_aspen(
 ) {
     let fetch_assigned_node_meta = catenary::get_node_for_realtime_feed_id(etcd, feed_id).await;
 
-    if let Ok(Some(data)) = fetch_assigned_node_meta {
+    if let Some(data) = fetch_assigned_node_meta {
         let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
         let worker_id = data.worker_id;
 

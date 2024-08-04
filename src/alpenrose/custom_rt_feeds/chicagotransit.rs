@@ -12,7 +12,7 @@ pub async fn fetch_chicago_data(
 ) {
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
 
-    if let Ok(Some(worker_metadata)) = fetch_assigned_node_meta {
+    if let Some(worker_metadata) = fetch_assigned_node_meta {
         let socket_addr = std::net::SocketAddr::new(worker_metadata.ip.0, worker_metadata.ip.1);
         let worker_id = worker_metadata.worker_id;
 
