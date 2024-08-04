@@ -511,8 +511,8 @@ async fn main() -> anyhow::Result<()> {
 
     let make_lease = etcd
         .lease_grant(
-            //10 seconds
-            10,
+            //30 seconds
+            30,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
         )
         .await?;
@@ -608,7 +608,7 @@ async fn main() -> anyhow::Result<()> {
 
                     println!("Etcd lease id {} renewed", etcd_lease_id_for_this_worker);
 
-                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
                 Ok(())
             }
