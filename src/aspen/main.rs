@@ -511,8 +511,8 @@ async fn main() -> anyhow::Result<()> {
 
     let make_lease = etcd
         .lease_grant(
-            //30 seconds
-            30,
+            //10 seconds
+            10,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
         )
         .await?;
@@ -598,13 +598,7 @@ async fn main() -> anyhow::Result<()> {
                         .unwrap();
 
                 loop {
-                    etcd.lease_keep_alive(etcd_lease_id_for_this_worker)
-                        .await
-                        .unwrap()
-                        .0
-                        .keep_alive()
-                        .await
-                        .unwrap();
+                    let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await?;
 
                     println!("Etcd lease id {} renewed", etcd_lease_id_for_this_worker);
 
