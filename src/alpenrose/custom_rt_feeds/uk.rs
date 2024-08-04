@@ -12,7 +12,7 @@ pub async fn fetch_dft_bus_data(
 ) {
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
 
-    if let Ok(Some(data)) = fetch_assigned_node_meta {
+    if let Some(data) = fetch_assigned_node_meta {
         let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
         let worker_id = data.worker_id;
 

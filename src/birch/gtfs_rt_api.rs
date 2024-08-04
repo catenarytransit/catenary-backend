@@ -42,7 +42,7 @@ async fn gtfs_rt(
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id(&mut etcd, &query.feed_id).await;
 
     match fetch_assigned_node_meta {
-        Ok(Some(data)) => {
+        Some(data) => {
             let worker_id = data.worker_id;
 
             let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
@@ -115,16 +115,10 @@ async fn gtfs_rt(
                     .body("Bad Feed Type, either vehicle trip or alert accepted"),
             }
         }
-        Ok(None) => {
+        None => {
             return HttpResponse::InternalServerError()
                 .append_header(("Cache-Control", "no-cache"))
                 .body("Could not find Assigned Node");
-        }
-        Err(e) => {
-            eprintln!("{:#?}", e);
-            return HttpResponse::InternalServerError()
-                .append_header(("Cache-Control", "no-cache"))
-                .body("etcd failed");
         }
     }
 }

@@ -82,7 +82,6 @@ pub struct AspenServer {
     pub alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
     pub alpenrose_to_process_queue_chateaus: Arc<Mutex<HashSet<String>>>,
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
-    pub timestamp_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
     pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     pub etcd_addresses: Arc<Vec<String>>,
@@ -250,42 +249,77 @@ impl AspenRpc for AspenServer {
 
         let mut new_data = false;
 
-        if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
-            let is_new_data_v = is_new_data_for_feed_type(
-                &self,
-                &realtime_feed_id,
-                GtfsRtType::VehiclePositions,
-                &vehicles_gtfs_rt,
-            );
+        if !new_data {
+            if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
+                // let start_hash = Instant::now();
+                let hash = rough_hash_of_gtfs_rt(vehicles_gtfs_rt);
+                //  let end_hash = Instant::now();
 
-            if is_new_data_v == NewDataStatus::New {
-                new_data = true;
+                let key = (realtime_feed_id.clone(), GtfsRtType::VehiclePositions);
+
+                match self.rough_hash_of_gtfs_rt.get(&key) {
+                    Some(existing_hash) => {
+                        if existing_hash.get() != &hash {
+                            new_data = true;
+                        }
+                    }
+                    None => {
+                        new_data = true;
+                    }
+                }
+
+                self.rough_hash_of_gtfs_rt
+                    .entry(key)
+                    .and_modify(|gtfs_data| *gtfs_data = hash)
+                    .or_insert(hash);
             }
         }
 
-        if let Some(trips_gtfs_rt) = &trips_gtfs_rt {
-            let is_new_data_t = is_new_data_for_feed_type(
-                &self,
-                &realtime_feed_id,
-                GtfsRtType::TripUpdates,
-                &trips_gtfs_rt,
-            );
+        if !new_data {
+            if let Some(trips_gtfs_rt) = &trips_gtfs_rt {
+                let hash = rough_hash_of_gtfs_rt(trips_gtfs_rt);
 
-            if is_new_data_t == NewDataStatus::New {
-                new_data = true;
+                let key = (realtime_feed_id.clone(), GtfsRtType::TripUpdates);
+
+                match self.rough_hash_of_gtfs_rt.get(&key) {
+                    Some(existing_hash) => {
+                        if existing_hash.get() != &hash {
+                            new_data = true;
+                        }
+                    }
+                    None => {
+                        new_data = true;
+                    }
+                }
+
+                self.rough_hash_of_gtfs_rt
+                    .entry(key)
+                    .and_modify(|gtfs_data| *gtfs_data = hash)
+                    .or_insert(hash);
             }
         }
 
-        if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
-            let is_new_data_a = is_new_data_for_feed_type(
-                &self,
-                &realtime_feed_id,
-                GtfsRtType::TripUpdates,
-                &alerts_gtfs_rt,
-            );
+        if !new_data {
+            if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
+                let hash = rough_hash_of_gtfs_rt(alerts_gtfs_rt);
 
-            if is_new_data_a == NewDataStatus::New {
-                new_data = true;
+                let key = (realtime_feed_id.clone(), GtfsRtType::Alerts);
+
+                match self.rough_hash_of_gtfs_rt.get(&key) {
+                    Some(existing_hash) => {
+                        if existing_hash.get() != &hash {
+                            new_data = true;
+                        }
+                    }
+                    None => {
+                        new_data = true;
+                    }
+                }
+
+                self.rough_hash_of_gtfs_rt
+                    .entry(key)
+                    .and_modify(|gtfs_data| *gtfs_data = hash)
+                    .or_insert(hash);
             }
         }
 
@@ -512,14 +546,10 @@ async fn main() -> anyhow::Result<()> {
     let make_lease = etcd
         .lease_grant(
             //10 seconds
-            10,
+            5,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
         )
         .await?;
-
-    if !make_lease.error().is_empty() {
-        eprintln!("Make lease had an error: {}", make_lease.error());
-    }
 
     //register that the worker exists
 
@@ -547,9 +577,6 @@ async fn main() -> anyhow::Result<()> {
     let backup_raw_gtfs = Arc::new(SccHashMap::new());
     let alpenrose_to_process_queue_chateaus = Arc::new(Mutex::new(HashSet::new()));
     let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
-        Arc::new(SccHashMap::new());
-
-    let timestamp_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
     //run both the leader and the listener simultaniously
 
@@ -592,15 +619,11 @@ async fn main() -> anyhow::Result<()> {
         tokio::task::spawn({
             let etcd_addresses = etcd_addresses.clone();
             async move {
-                let mut etcd =
-                    etcd_client::Client::connect(etcd_addresses.clone().as_slice(), None)
-                        .await
-                        .unwrap();
-
                 loop {
+                    let mut etcd =
+                        etcd_client::Client::connect(etcd_addresses.clone().as_slice(), None)
+                            .await?;
                     let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await?;
-
-                    println!("Etcd lease id {} renewed", etcd_lease_id_for_this_worker);
 
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
@@ -633,7 +656,6 @@ async fn main() -> anyhow::Result<()> {
                             alpenrose_to_process_queue_chateaus: Arc::clone(
                                 &alpenrose_to_process_queue_chateaus,
                             ),
-                            timestamp_of_gtfs_rt: Arc::clone(&timestamp_of_gtfs_rt),
                             rough_hash_of_gtfs_rt: Arc::clone(&rough_hash_of_gtfs_rt),
                             worker_etcd_lease_id: etcd_lease_id_for_this_worker,
                             etcd_addresses: Arc::clone(&etcd_addresses),
@@ -650,10 +672,10 @@ async fn main() -> anyhow::Result<()> {
         }());
 
     let result_series = tokio::try_join!(
-        etcd_lease_renewer,
         leader_thread_handler,
         async_from_alpenrose_processor_handler,
-        tarpc_server
+        tarpc_server,
+        etcd_lease_renewer
     );
 
     match result_series {
@@ -695,82 +717,5 @@ async fn main() -> anyhow::Result<()> {
             panic!("{:#?}", e);
             Err(anyhow::Error::new(e))
         }
-    }
-}
-
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-enum NewDataStatus {
-    New,
-    Old,
-}
-
-fn is_new_data_for_feed_type(
-    server: &AspenServer,
-    feed_id: &str,
-    gtfs_type: GtfsRtType,
-    data: &gtfs_rt::FeedMessage,
-) -> NewDataStatus {
-    let key = (feed_id.to_string(), gtfs_type);
-
-    let timestamp = data.header.timestamp;
-
-    match timestamp {
-        Some(timestamp) => {
-            match server.timestamp_of_gtfs_rt.get(&key) {
-                Some(existing_timestamp) => {
-                    //let hash = rough_hash_of_gtfs_rt(data);
-
-                    if existing_timestamp.get() != &timestamp {
-                        let _ = server
-                            .timestamp_of_gtfs_rt
-                            .entry(key.clone())
-                            .and_modify(|mut_time| *mut_time = timestamp)
-                            .or_insert(timestamp);
-
-                        // let start_hash = std::time::Instant::now();
-                        let hash = rough_hash_of_gtfs_rt(data);
-                        //  let end_hash = std::time::Instant::now();
-
-                        match server.rough_hash_of_gtfs_rt.get(&key) {
-                            Some(existing_hash) => {
-                                let existing_hash = existing_hash.get();
-
-                                if *existing_hash != hash {
-                                    let _ = server
-                                        .rough_hash_of_gtfs_rt
-                                        .entry(key.clone())
-                                        .and_modify(|mut_hash| *mut_hash = hash)
-                                        .or_insert(hash);
-
-                                    NewDataStatus::New
-                                } else {
-                                    NewDataStatus::Old
-                                }
-                            }
-                            None => {
-                                let _ = server
-                                    .rough_hash_of_gtfs_rt
-                                    .entry(key.clone())
-                                    .and_modify(|mut_hash| *mut_hash = hash)
-                                    .or_insert(hash);
-
-                                NewDataStatus::New
-                            }
-                        }
-                    } else {
-                        NewDataStatus::Old
-                    }
-                }
-                None => {
-                    let _ = server
-                        .timestamp_of_gtfs_rt
-                        .entry(key.clone())
-                        .and_modify(|mut_time| *mut_time = timestamp)
-                        .or_insert(timestamp);
-                    NewDataStatus::New
-                }
-            }
-        }
-        None => NewDataStatus::New,
     }
 }

@@ -126,8 +126,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let make_lease = etcd
         .lease_grant(
-            //10 seconds
-            10,
+            //60 seconds
+            60,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id)),
         )
         .await?;
@@ -142,13 +142,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         if is_online {
             //renew the etcd lease
 
-            etcd.lease_keep_alive(etcd_lease_id)
-                .await
-                .unwrap()
-                .0
-                .keep_alive()
-                .await
-                .unwrap();
+            let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
 
             // create this worker as an ephemeral node
 
@@ -304,7 +298,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 client.clone(),
                 Arc::clone(&assignments_for_this_worker),
                 Arc::clone(&last_fetch_per_feed),
-                etcd_lease_id,
             )
             .await?;
         } else {
