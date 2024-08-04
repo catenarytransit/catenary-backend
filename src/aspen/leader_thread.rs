@@ -33,8 +33,8 @@ pub async fn aspen_leader_thread(
 
     println!("Connected to etcd!");
 
-    // let worker_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
-    //  let feeds_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
+    let worker_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
+    let feeds_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
 
     loop {
         //attempt to become leader
