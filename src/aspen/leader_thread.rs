@@ -40,13 +40,8 @@ pub async fn aspen_leader_thread(
         //attempt to become leader
 
         //renew the etcd lease
-        etcd.lease_keep_alive(lease_id_for_this_worker)
-            .await
-            .unwrap()
-            .0
-            .keep_alive()
-            .await
-            .unwrap();
+        let _ = etcd.lease_keep_alive(lease_id_for_this_worker)
+            .await?;
 
         let mut election_client = etcd.election_client();
 
@@ -108,13 +103,8 @@ pub async fn aspen_leader_thread(
         }
 
         //renew the etcd lease
-        etcd.lease_keep_alive(lease_id_for_this_worker)
-            .await
-            .unwrap()
-            .0
-            .keep_alive()
-            .await
-            .unwrap();
+        let _ = etcd.lease_keep_alive(lease_id_for_this_worker)
+            .await?;
 
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
