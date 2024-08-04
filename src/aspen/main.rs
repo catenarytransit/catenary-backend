@@ -86,6 +86,7 @@ pub struct AspenServer {
     pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     pub etcd_addresses: Arc<Vec<String>>,
     pub worker_etcd_lease_id: i64,
+    pub timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
 }
 
 impl AspenRpc for AspenServer {
@@ -578,6 +579,8 @@ async fn main() -> anyhow::Result<()> {
     let alpenrose_to_process_queue_chateaus = Arc::new(Mutex::new(HashSet::new()));
     let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
+    let timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
+        Arc::new(SccHashMap::new());
     //run both the leader and the listener simultaniously
 
     let workers_nodes_for_leader_thread = Arc::clone(&workers_nodes);
@@ -659,6 +662,7 @@ async fn main() -> anyhow::Result<()> {
                             rough_hash_of_gtfs_rt: Arc::clone(&rough_hash_of_gtfs_rt),
                             worker_etcd_lease_id: etcd_lease_id_for_this_worker,
                             etcd_addresses: Arc::clone(&etcd_addresses),
+                            timestamps_of_gtfs_rt: Arc::clone(&timestamps_of_gtfs_rt),
                         };
                         channel.execute(server.serve()).for_each(spawn)
                     })
