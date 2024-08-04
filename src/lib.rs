@@ -574,7 +574,7 @@ pub fn route_id_transform(feed_id: &str, route_id: String) -> String {
 pub async fn get_node_for_realtime_feed_id(
     etcd: &mut etcd_client::Client,
     realtime_feed_id: &str,
-) -> Option<RealtimeFeedMetadataEtcd> {
+) -> Result<Option<RealtimeFeedMetadataEtcd>, Box<dyn std::error::Error + Sync + Send>> {
     let node = etcd
         .get(
             format!("/aspen_assigned_realtime_feed_ids/{}", realtime_feed_id).as_str(),
@@ -587,21 +587,21 @@ pub async fn get_node_for_realtime_feed_id(
             let kvs = resp.kvs();
 
             match kvs.len() {
-                0 => None,
+                0 => Ok(None),
                 _ => {
                     let data = bincode::deserialize::<RealtimeFeedMetadataEtcd>(kvs[0].value());
 
                     match data {
-                        Ok(data) => Some(data),
+                        Ok(data) => Ok(Some(data)),
                         Err(e) => {
                             println!("Error deserializing RealtimeFeedMetadataEtcd: {:?}", e);
-                            None
+                            Err(e)
                         }
                     }
                 }
             }
         }
-        _ => None,
+        Err(e) => Err(Box::new(e)),
     }
 }
 
