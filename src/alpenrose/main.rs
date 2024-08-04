@@ -298,6 +298,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 client.clone(),
                 Arc::clone(&assignments_for_this_worker),
                 Arc::clone(&last_fetch_per_feed),
+                etcd_lease_id
             )
             .await?;
         } else {
