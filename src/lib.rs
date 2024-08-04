@@ -589,7 +589,7 @@ pub async fn get_node_for_realtime_feed_id(
             match kvs.len() {
                 0 => None,
                 _ => {
-                    let data = bincode::deserialize::<RealtimeFeedMetadataEtcd>(&kvs[0].value());
+                    let data = bincode::deserialize::<RealtimeFeedMetadataEtcd>(kvs[0].value());
 
                     match data {
                         Ok(data) => Some(data),
