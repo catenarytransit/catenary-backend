@@ -549,8 +549,7 @@ async fn main() -> anyhow::Result<()> {
     let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
 
-    let timestamp_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
-        Arc::new(SccHashMap::new());
+    let timestamp_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> = Arc::new(SccHashMap::new());
     //run both the leader and the listener simultaniously
 
     let workers_nodes_for_leader_thread = Arc::clone(&workers_nodes);
@@ -595,8 +594,8 @@ async fn main() -> anyhow::Result<()> {
                 loop {
                     let mut etcd =
                         etcd_client::Client::connect(etcd_addresses.clone().as_slice(), None)
-                            .await?;
-                    let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await?;
+                            .await.unwrap();
+                    etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await.unwrap().0.keep_alive().await.unwrap();
 
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
