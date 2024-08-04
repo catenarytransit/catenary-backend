@@ -677,14 +677,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Ok(_) => {}
             }
-
-            match &result_series_ok.3 {
-                Err(e) => {
-                    panic!("Error: {:?}", e);
-                }
-                Ok(_) => {}
-            }
-
+            
             Ok(())
         }
         Err(e) => {
