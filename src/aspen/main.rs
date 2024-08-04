@@ -595,9 +595,11 @@ async fn main() -> anyhow::Result<()> {
                     let mut etcd =
                         etcd_client::Client::connect(etcd_addresses.clone().as_slice(), None)
                             .await.unwrap();
-                    etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await.unwrap().0.keep_alive().await.unwrap();
 
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    
+                            etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await.unwrap().0.keep_alive().await.unwrap();
+
+                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
                 }
                 Ok(())
             }
