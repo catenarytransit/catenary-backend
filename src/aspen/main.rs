@@ -549,7 +549,8 @@ async fn main() -> anyhow::Result<()> {
     let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
 
-    let timestamp_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> = Arc::new(SccHashMap::new());
+    let timestamp_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
+        Arc::new(SccHashMap::new());
     //run both the leader and the listener simultaniously
 
     let workers_nodes_for_leader_thread = Arc::clone(&workers_nodes);
@@ -587,7 +588,7 @@ async fn main() -> anyhow::Result<()> {
         etcd_lease_id_for_this_worker,
     ));
 
-    /* 
+    
     let etcd_lease_renewer: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
             let etcd_addresses = etcd_addresses.clone();
@@ -597,14 +598,14 @@ async fn main() -> anyhow::Result<()> {
                         etcd_client::Client::connect(etcd_addresses.clone().as_slice(), None)
                             .await.unwrap();
 
-                    
+
                             etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await.unwrap().0.keep_alive().await.unwrap();
 
                     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
                 }
                 Ok(())
             }
-        });*/
+        });
 
     let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
@@ -648,6 +649,7 @@ async fn main() -> anyhow::Result<()> {
         }());
 
     let result_series = tokio::try_join!(
+        etcd_lease_renewer,
         leader_thread_handler,
         async_from_alpenrose_processor_handler,
         tarpc_server
@@ -677,7 +679,14 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Ok(_) => {}
             }
-            
+
+            match &result_series_ok.3 {
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                }
+                Ok(_) => {}
+            }
+
             Ok(())
         }
         Err(e) => {

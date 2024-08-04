@@ -70,8 +70,7 @@ pub async fn single_fetch_time(
     client: reqwest::Client,
     assignments: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>>,
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
-    etcd_lease_id: i64
-    //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
+    etcd_lease_id: i64, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let start = Instant::now();
 
@@ -157,7 +156,13 @@ pub async fn single_fetch_time(
 
                 //renew this lease
 
-                etcd.lease_keep_alive(etcd_lease_id).await.unwrap().0.keep_alive().await.unwrap();
+                etcd.lease_keep_alive(etcd_lease_id)
+                    .await
+                    .unwrap()
+                    .0
+                    .keep_alive()
+                    .await
+                    .unwrap();
 
                 //lookup currently assigned realtime dataset in zookeeper
                 let fetch_assigned_node_meta =

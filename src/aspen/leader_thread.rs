@@ -33,14 +33,20 @@ pub async fn aspen_leader_thread(
 
     println!("Connected to etcd!");
 
-  //  let worker_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
-   // let feeds_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
+    //  let worker_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
+    // let feeds_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
 
     loop {
         //attempt to become leader
-        
+
         //renew the etcd lease
-        etcd.lease_keep_alive(lease_id_for_this_worker).await.unwrap().0.keep_alive().await.unwrap();
+        etcd.lease_keep_alive(lease_id_for_this_worker)
+            .await
+            .unwrap()
+            .0
+            .keep_alive()
+            .await
+            .unwrap();
 
         let mut election_client = etcd.election_client();
 
@@ -102,7 +108,13 @@ pub async fn aspen_leader_thread(
         }
 
         //renew the etcd lease
-        etcd.lease_keep_alive(lease_id_for_this_worker).await.unwrap().0.keep_alive().await.unwrap();
+        etcd.lease_keep_alive(lease_id_for_this_worker)
+            .await
+            .unwrap()
+            .0
+            .keep_alive()
+            .await
+            .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }

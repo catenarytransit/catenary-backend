@@ -31,6 +31,7 @@ pub async fn alpenrose_process_threads(
             let authoritative_data_store = Arc::clone(&authoritative_data_store);
             let conn_pool = Arc::clone(&conn_pool);
             let chateau_queue_list = Arc::clone(&chateau_queue_list);
+            let etcd_addresses = Arc::clone(&etcd_addresses);
             async move {
                 alpenrose_loop_process_thread(
                     alpenrose_to_process_queue,
@@ -38,6 +39,8 @@ pub async fn alpenrose_process_threads(
                     authoritative_data_store,
                     conn_pool,
                     chateau_queue_list,
+                    etcd_addresses,
+                    lease_id_for_this_worker,
                 )
                 .await
             }
@@ -57,6 +60,8 @@ pub async fn alpenrose_loop_process_thread(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
+    etcd_addresses: Arc<Vec<String>>,
+    lease_id_for_this_worker: i64,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         // println!("From-Alpenrose process thread");

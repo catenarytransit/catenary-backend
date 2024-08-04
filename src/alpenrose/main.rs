@@ -142,7 +142,13 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         if is_online {
             //renew the etcd lease
 
-            etcd.lease_keep_alive(etcd_lease_id).await.unwrap().0.keep_alive().await.unwrap();
+            etcd.lease_keep_alive(etcd_lease_id)
+                .await
+                .unwrap()
+                .0
+                .keep_alive()
+                .await
+                .unwrap();
 
             // create this worker as an ephemeral node
 
@@ -298,7 +304,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 client.clone(),
                 Arc::clone(&assignments_for_this_worker),
                 Arc::clone(&last_fetch_per_feed),
-                etcd_lease_id
+                etcd_lease_id,
             )
             .await?;
         } else {
