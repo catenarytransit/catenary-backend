@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         if is_online {
             //renew the etcd lease
 
-            let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
+            etcd.lease_keep_alive(etcd_lease_id).await.unwrap().0.keep_alive().await.unwrap();
 
             // create this worker as an ephemeral node
 
