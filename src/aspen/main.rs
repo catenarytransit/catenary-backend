@@ -587,6 +587,7 @@ async fn main() -> anyhow::Result<()> {
         etcd_lease_id_for_this_worker,
     ));
 
+    /* 
     let etcd_lease_renewer: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
             let etcd_addresses = etcd_addresses.clone();
@@ -603,7 +604,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Ok(())
             }
-        });
+        });*/
 
     let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
@@ -649,8 +650,7 @@ async fn main() -> anyhow::Result<()> {
     let result_series = tokio::try_join!(
         leader_thread_handler,
         async_from_alpenrose_processor_handler,
-        tarpc_server,
-        etcd_lease_renewer
+        tarpc_server
     );
 
     match result_series {
