@@ -159,7 +159,7 @@ pub async fn single_fetch_time(
                     get_node_for_realtime_feed_id(&mut etcd, feed_id).await;
 
                 match fetch_assigned_node_meta {
-                   Ok( Some(data)) => {
+                    Ok(Some(data)) => {
                         let worker_id = data.worker_id;
 
                         //send the data to the worker
@@ -249,7 +249,7 @@ pub async fn single_fetch_time(
                     }
                     Ok(None) => {
                         eprintln!("{} was not assigned to a worker", feed_id);
-                    },
+                    }
                     Err(e) => {
                         eprintln!("etcd failed when looking up feed {} : {:#?}", feed_id, e);
                     }

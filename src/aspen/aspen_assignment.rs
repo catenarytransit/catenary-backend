@@ -118,7 +118,7 @@ pub async fn assign_chateaus(
         } else {
             println!("Assigning tasks to workers....");
 
-            let mut rt_feeds_assigned:usize = 0;
+            let mut rt_feeds_assigned: usize = 0;
 
             if let Some(chateau_list_lock) = chateau_list_lock.as_ref() {
                 for (index, (chateau_id, chateau)) in chateau_list_lock.chateaus.iter().enumerate()
@@ -169,7 +169,7 @@ pub async fn assign_chateaus(
                             )
                             .await?;
 
-                            rt_feeds_assigned = rt_feeds_assigned + 1;
+                        rt_feeds_assigned = rt_feeds_assigned + 1;
                     }
                 }
 

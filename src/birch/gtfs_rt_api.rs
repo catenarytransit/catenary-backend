@@ -119,7 +119,7 @@ async fn gtfs_rt(
             return HttpResponse::InternalServerError()
                 .append_header(("Cache-Control", "no-cache"))
                 .body("Could not find Assigned Node");
-        },
+        }
         Err(e) => {
             eprintln!("{:#?}", e);
             return HttpResponse::InternalServerError()
