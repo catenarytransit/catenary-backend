@@ -209,7 +209,7 @@ pub async fn download_return_eligible_feeds(
                                                     answer.ingest = true;
                                                 } else {
                                                      // this zip file has never been seen before! Insert it!
-                                                if download_attempts_postgres_lookup.len() == 0 {
+                                                if download_attempts_postgres_lookup.is_empty() {
                                                     answer.ingest = true;
                                                 } else {
             
