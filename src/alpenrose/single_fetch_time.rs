@@ -74,7 +74,9 @@ pub async fn single_fetch_time(
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let start = Instant::now();
 
-    let amtrak_gtfs = Gtfs::from_url_async("https://content.amtrak.com/content/gtfs/GTFS.zip")
+    let amtrak_gtfs = gtfs_structures::GtfsReader::default()
+        .read_shapes(false)
+        .read_from_url_async("https://content.amtrak.com/content/gtfs/GTFS.zip")
         .await
         .unwrap();
 
