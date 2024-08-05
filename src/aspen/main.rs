@@ -364,11 +364,6 @@ impl AspenRpc for AspenServer {
                     time_of_submission_ms,
                 });
             }
-        } else {
-            println!(
-                "No new data for {} under chateau {}, rough hash is the same",
-                realtime_feed_id, chateau_id
-            );
         }
 
         true
