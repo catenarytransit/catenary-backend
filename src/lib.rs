@@ -567,6 +567,13 @@ pub fn route_id_transform(feed_id: &str, route_id: String) -> String {
                 route_id.to_owned() // Return unmodified route_id if it contains "mnr"
             }
         }
+        "f-dp3-pace~rt" => {
+            if !route_id.contains("-367") {
+                format!("{}-367", route_id)
+            } else {
+                route_id.to_owned()
+            }
+        }
         _ => route_id,
     }
 }
