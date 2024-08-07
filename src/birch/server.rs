@@ -712,6 +712,10 @@ pub async fn other_stops_meta(req: HttpRequest) -> impl Responder {
         .body(serde_json::to_string(&tile_json).unwrap())
 }
 
+fn tile_width_degrees_from_z(z: u8) -> f32 {
+    360.0 / (z as f32 + 1.0)
+}
+
 #[actix_web::get("/shapes_not_bus/{z}/{x}/{y}")]
 pub async fn shapes_not_bus(
     sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
@@ -724,6 +728,10 @@ pub async fn shapes_not_bus(
     if (z < 2) {
         return HttpResponse::BadRequest().body("Zoom level too low");
     }
+
+    let tile_width_degrees = tile_width_degrees_from_z(z);
+
+    let simplification_threshold = tile_width_degrees * 0.01;
 
     // let grid = tile_grid::Grid::wgs84();
 
@@ -738,19 +746,18 @@ FROM (
     SELECT
         onestop_feed_id,
         shape_id,
-        attempt_id,
         color,
         routes,
         route_type,
         route_label,
         text_color,
         chateau,
-        ST_AsMVTGeom(ST_Transform(linestring, 3857), 
+        ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857), 
         ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
-        gtfs.shapes_not_bus
+        gtfs.shapes
     WHERE
-        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
+        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND route_type IN (0,1,2,4,5,7,11,12)
 ) q", z = z, x = x, y= y);
 
     // println!("Performing query \n {}", query_str);
@@ -764,7 +771,7 @@ FROM (
 
             HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "max-age=5000, public"))
+                .insert_header(("Cache-Control", "max-age=1000, public"))
                 .body(mvt_bytes)
         }
         Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
@@ -811,6 +818,10 @@ pub async fn shapes_bus(
         return HttpResponse::BadRequest().body("Zoom level too low");
     }
 
+    let tile_width_degrees = tile_width_degrees_from_z(z);
+
+    let simplification_threshold = tile_width_degrees * 0.01;
+
     // let grid = tile_grid::Grid::wgs84();
     // let bbox = grid.tile_extent(x, y, z);
 
@@ -823,14 +834,13 @@ FROM (
     SELECT
         onestop_feed_id,
         shape_id,
-        attempt_id,
         color,
         routes,
         route_type,
         route_label,
         text_color,
         chateau,
-        ST_AsMVTGeom(ST_Transform(linestring, 3857), 
+        ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857), 
         ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
         gtfs.shapes
@@ -847,7 +857,7 @@ FROM (
 
             HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "max-age=10000, public"))
+                .insert_header(("Cache-Control", "max-age=1000, public"))
                 .body(mvt_bytes)
         }
         Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
@@ -860,7 +870,6 @@ pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
     fields.insert(String::from("color"), String::from("text"));
     fields.insert(String::from("text_color"), String::from("text"));
     fields.insert(String::from("shape_id"), String::from("text"));
-    fields.insert(String::from("attempt_id"), String::from("text"));
     fields.insert(String::from("onestop_feed_id"), String::from("text"));
     fields.insert(String::from("routes"), String::from("text[]"));
     fields.insert(String::from("route_type"), String::from("smallint"));
@@ -894,7 +903,7 @@ pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=86400"))
+        .insert_header(("Cache-Control", "max-age=1000"))
         .body(serde_json::to_string(&tile_json).unwrap())
 }
 
@@ -904,7 +913,6 @@ pub async fn shapes_bus_meta(req: HttpRequest) -> impl Responder {
     fields.insert(String::from("color"), String::from("text"));
     fields.insert(String::from("text_color"), String::from("text"));
     fields.insert(String::from("shape_id"), String::from("text"));
-    fields.insert(String::from("attempt_id"), String::from("text"));
     fields.insert(String::from("onestop_feed_id"), String::from("text"));
     fields.insert(String::from("routes"), String::from("text[]"));
     fields.insert(String::from("route_type"), String::from("smallint"));

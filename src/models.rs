@@ -83,25 +83,6 @@ pub struct Shape {
     pub stop_to_stop_generated: Option<bool>,
 }
 
-#[derive(Queryable, Selectable, Insertable, Clone)]
-#[diesel(table_name = crate::schema::gtfs::shapes_not_bus)]
-pub struct ShapeNotBus {
-    pub onestop_feed_id: String,
-    pub attempt_id: String,
-    pub shape_id: String,
-    pub linestring: postgis_diesel::types::LineString<postgis_diesel::types::Point>,
-    pub color: Option<String>,
-    pub routes: Option<Vec<Option<String>>>,
-    pub route_type: i16,
-    pub route_label: Option<String>,
-    pub route_label_translations: Option<serde_json::Value>,
-    pub text_color: Option<String>,
-    pub chateau: String,
-    //insert with false, then enable after when mark for production
-    pub allowed_spatial_query: bool,
-    pub stop_to_stop_generated: Option<bool>,
-}
-
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
 #[diesel(table_name = crate::schema::gtfs::static_download_attempts)]
 pub struct StaticDownloadAttempt {

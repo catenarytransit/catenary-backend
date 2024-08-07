@@ -359,28 +359,6 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
-        gtfs.shapes_not_bus (onestop_feed_id, attempt_id, shape_id) {
-            onestop_feed_id -> Text,
-            attempt_id -> Text,
-            shape_id -> Text,
-            linestring -> Geometry,
-            color -> Nullable<Text>,
-            routes -> Nullable<Array<Nullable<Text>>>,
-            route_type -> Int2,
-            route_label -> Nullable<Text>,
-            route_label_translations -> Nullable<Jsonb>,
-            text_color -> Nullable<Text>,
-            chateau -> Text,
-            allowed_spatial_query -> Bool,
-            stop_to_stop_generated -> Nullable<Bool>,
-        }
-    }
-
-    diesel::table! {
-        use postgis_diesel::sql_types::*;
-        use diesel::sql_types::*;
-        use crate::custom_pg_types::*;
-
         gtfs.static_download_attempts (onestop_feed_id, downloaded_unix_time_ms) {
             onestop_feed_id -> Text,
             file_hash -> Nullable<Text>,
@@ -537,7 +515,6 @@ pub mod gtfs {
         realtime_passwords,
         routes,
         shapes,
-        shapes_not_bus,
         static_download_attempts,
         static_feeds,
         static_passwords,
