@@ -77,8 +77,8 @@ pub fn fix_background_colour_rgb_feed_route(
             "227" => RGB::new(123, 194, 77),
             "510" => RGB::new(0, 112, 191),
             "520" => RGB::new(255, 143, 0),
-            "530" => RGB::new(0, 171, 70)
-            _ => fix_background_colour_rgb(background.clone()),
+            "530" => RGB::new(0, 171, 70),
+            _ => RGB::new(233, 128, 130),
         },
         "f-c23-metrokingcounty" =>  match route.id.as_str() {
             // RapidRide Red
