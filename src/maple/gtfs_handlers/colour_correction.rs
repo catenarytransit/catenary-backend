@@ -89,7 +89,7 @@ pub fn fix_background_colour_rgb_feed_route(
             // Override default region-wide blue to separate from ST Express
             _ => RGB::new(41, 133, 107),
         },
-        _ => fix_background_colour_rgb(background.clone()),
+        _ => fix_background_colour_rgb(background),
     }
 }
 
