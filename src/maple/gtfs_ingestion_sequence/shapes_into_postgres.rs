@@ -101,6 +101,10 @@ pub async fn shapes_into_postgres(
                 }
             }
 
+            if is_line_too_stupidly_broken {
+                println!("Deleted feed id {} shape id {} for being too long", &feed_id, &shape_id);
+            }
+
             if !is_line_too_stupidly_broken {
                 let linestring: postgis_diesel::types::LineString<postgis_diesel::types::Point> =
                     postgis_diesel::types::LineString {
