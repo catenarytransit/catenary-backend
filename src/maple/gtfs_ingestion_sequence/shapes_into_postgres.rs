@@ -88,90 +88,103 @@ pub async fn shapes_into_postgres(
             _ => shape.clone(),
         };
 
+        let mut is_line_too_stupidly_broken = false;
+
         //Lines are only valid in postgres if they contain 2 or more points
         if preshape.len() >= 2 {
-            let linestring: postgis_diesel::types::LineString<postgis_diesel::types::Point> =
-                postgis_diesel::types::LineString {
-                    srid: Some(4326),
-                    points: preshape
-                        .iter()
-                        .map(|point| postgis_diesel::types::Point {
-                            x: point.longitude,
-                            y: point.latitude,
-                            srid: Some(4326),
-                        })
-                        .collect(),
+            for (idx, point) in preshape.iter().enumerate().skip(1) {
+                if (preshape[idx - 1].longitude - point.longitude).abs() > 10.
+                    || (preshape[idx - 1].latitude - point.latitude).abs() > 10.
+                {
+                    is_line_too_stupidly_broken = true;
+                    break;
+                }
+            }
+
+            if !is_line_too_stupidly_broken {
+                let linestring: postgis_diesel::types::LineString<postgis_diesel::types::Point> =
+                    postgis_diesel::types::LineString {
+                        srid: Some(4326),
+                        points: preshape
+                            .iter()
+                            .map(|point| postgis_diesel::types::Point {
+                                x: point.longitude,
+                                y: point.latitude,
+                                srid: Some(4326),
+                            })
+                            .collect(),
+                    };
+
+                let text_color = match shape_to_text_color_lookup.get(shape_id) {
+                    Some(color) => format!("{:02x}{:02x}{:02x}", color.r, color.g, color.b),
+                    None => String::from("000000"),
                 };
 
-            let text_color = match shape_to_text_color_lookup.get(shape_id) {
-                Some(color) => format!("{:02x}{:02x}{:02x}", color.r, color.g, color.b),
-                None => String::from("000000"),
-            };
-
-            //creates a text label for the shape to be displayed with on the map
-            //todo! change this with i18n
-            let route_label: String = match route_ids {
-                Some(route_ids) => route_ids
-                    .iter()
-                    .map(|route_id| {
-                        let route = gtfs.routes.get(route_id);
-                        match route {
-                            Some(route) => match route.short_name.is_some() {
-                                true => route.short_name.to_owned(),
-                                false => match route.long_name.is_some() {
-                                    true => route.long_name.to_owned(),
-                                    false => None,
+                //creates a text label for the shape to be displayed with on the map
+                //todo! change this with i18n
+                let route_label: String = match route_ids {
+                    Some(route_ids) => route_ids
+                        .iter()
+                        .map(|route_id| {
+                            let route = gtfs.routes.get(route_id);
+                            match route {
+                                Some(route) => match route.short_name.is_some() {
+                                    true => route.short_name.to_owned(),
+                                    false => match route.long_name.is_some() {
+                                        true => route.long_name.to_owned(),
+                                        false => None,
+                                    },
                                 },
-                            },
-                            _ => None,
-                        }
-                    })
-                    .filter(|route_label| route_label.is_some())
-                    .map(|route_label| {
-                        rename_route_string(route_label.as_ref().unwrap().to_owned())
-                    })
-                    .collect::<Vec<String>>()
-                    .join(",")
-                    .as_str()
-                    .replace("Orange County", "OC")
-                    .replace("Inland Empire", "IE")
-                    .to_string(),
-                None => String::from(""),
-            };
-            //run insertion
+                                _ => None,
+                            }
+                        })
+                        .filter(|route_label| route_label.is_some())
+                        .map(|route_label| {
+                            rename_route_string(route_label.as_ref().unwrap().to_owned())
+                        })
+                        .collect::<Vec<String>>()
+                        .join(",")
+                        .as_str()
+                        .replace("Orange County", "OC")
+                        .replace("Inland Empire", "IE")
+                        .to_string(),
+                    None => String::from(""),
+                };
+                //run insertion
 
-            //Create structure to insert
-            let shape_value: catenary::models::Shape = catenary::models::Shape {
-                onestop_feed_id: feed_id.to_string(),
-                attempt_id: attempt_id.to_string(),
-                shape_id: shape_id.clone(),
-                chateau: chateau_id.to_string(),
-                linestring: linestring,
-                color: Some(bg_color_string),
-                routes: match route_ids {
-                    Some(route_ids) => Some(
-                        route_ids
-                            .iter()
-                            .map(|route_id| Some(route_id.to_string()))
-                            .collect(),
-                    ),
-                    None => None,
-                },
-                route_type: route_type_number,
-                route_label: Some(route_label),
-                route_label_translations: None,
-                text_color: Some(text_color),
-                allowed_spatial_query: false,
-                stop_to_stop_generated: Some(false),
-            };
+                //Create structure to insert
+                let shape_value: catenary::models::Shape = catenary::models::Shape {
+                    onestop_feed_id: feed_id.to_string(),
+                    attempt_id: attempt_id.to_string(),
+                    shape_id: shape_id.clone(),
+                    chateau: chateau_id.to_string(),
+                    linestring: linestring,
+                    color: Some(bg_color_string),
+                    routes: match route_ids {
+                        Some(route_ids) => Some(
+                            route_ids
+                                .iter()
+                                .map(|route_id| Some(route_id.to_string()))
+                                .collect(),
+                        ),
+                        None => None,
+                    },
+                    route_type: route_type_number,
+                    route_label: Some(route_label),
+                    route_label_translations: None,
+                    text_color: Some(text_color),
+                    allowed_spatial_query: false,
+                    stop_to_stop_generated: Some(false),
+                };
 
-            {
-                use catenary::schema::gtfs::shapes::dsl::*;
+                {
+                    use catenary::schema::gtfs::shapes::dsl::*;
 
-                diesel::insert_into(shapes)
-                    .values(shape_value)
-                    .execute(conn)
-                    .await?;
+                    diesel::insert_into(shapes)
+                        .values(shape_value)
+                        .execute(conn)
+                        .await?;
+                }
             }
         }
     }

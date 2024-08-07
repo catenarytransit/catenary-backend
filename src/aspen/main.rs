@@ -317,14 +317,14 @@ impl AspenRpc for AspenServer {
                     .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
                     .or_insert(vehicles_gtfs_rt.clone());
             }
-    
+
             if let Some(trip_gtfs_rt) = trips_gtfs_rt {
                 self.authoritative_gtfs_rt_store
                     .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
                     .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
                     .or_insert(trip_gtfs_rt.clone());
             }
-    
+
             if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
                 self.authoritative_gtfs_rt_store
                     .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
@@ -777,7 +777,7 @@ fn contains_new_data(
         }
     }
 
-/* 
+    /*
     if (need_to_evaluate_using_hash || need_to_insert_hash) {
         let hash = rough_hash_of_gtfs_rt(pb_data);
 
