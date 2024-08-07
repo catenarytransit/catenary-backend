@@ -763,6 +763,12 @@ FROM (
 
     // println!("Performing query \n {}", query_str);
 
+    let max_age = match z {
+        5 => 10000,
+        6 => 2000,
+        _ => 1000,
+    };
+
     match sqlx::query(query_str.as_str())
         .fetch_one(sqlx_pool_ref)
         .await
@@ -772,7 +778,7 @@ FROM (
 
             HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "max-age=1000, public"))
+                .insert_header(("Cache-Control", format!("max-age={}, public", max_age)))
                 .body(mvt_bytes)
         }
         Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
