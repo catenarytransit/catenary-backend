@@ -35,45 +35,26 @@
 )]
 
 use actix_web::middleware::DefaultHeaders;
-use actix_web::web::Data;
-use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
-use catenary::ip_to_location::insert_ip_db_into_postgres;
+use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use catenary::EtcdConnectionIps;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::select_dsl::SelectDsl;
-use diesel::sql_types::{Float, Integer};
-use diesel::Selectable;
 use diesel::SelectableHelper;
-use diesel::{connection, ExpressionMethods};
-use diesel_async::pooled_connection::bb8::PooledConnection;
+use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
-use geojson::{Feature, GeoJson, Geometry, JsonValue, Value};
+use geojson::{Feature, GeoJson, JsonValue};
 use ordered_float::Pow;
-use qstring::QString;
-use rand::Rng;
-use rstar::RTree;
-use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde_derive::Serialize;
-use serde_json::to_string;
-use serde_json::{json, to_string_pretty};
-use sqlx::postgres::{PgPoolOptions, PgRow};
-use sqlx::{FromRow, Row};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::Row;
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::{Arc, RwLock};
-use std::time::UNIX_EPOCH;
-use std::time::{Duration, SystemTime};
-use tarpc::{client, context, tokio_serde::formats::Bincode};
+use std::time::SystemTime;
 use tilejson::TileJSON;
-use tokio_postgres::types::private::BytesMut;
-use tokio_postgres::types::ToSql;
-use tokio_postgres::Client;
-use tokio_postgres::Error as PostgresError;
-use zstd_safe::WriteBuf;
 
 mod api_key_management;
 mod aspenised_data_over_https;
@@ -454,7 +435,7 @@ pub async fn rail_stops(
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
 
-    if (z < 4) {
+    if z < 4 {
         return HttpResponse::BadRequest().body("Zoom level too low");
     }
 
@@ -588,7 +569,7 @@ pub async fn other_stops(
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
 
-    if (z < 4) {
+    if z < 4 {
         return HttpResponse::BadRequest().body("Zoom level too low");
     }
 
@@ -995,14 +976,14 @@ FROM (
 #[actix_web::get("/getroutesofchateau/{chateau}")]
 async fn routesofchateau(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
-    path: web::Path<(String)>,
+    path: web::Path<String>,
     req: HttpRequest,
 ) -> impl Responder {
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
 
-    let (chateau_id) = path.into_inner();
+    let chateau_id = path.into_inner();
 
     use catenary::schema::gtfs::routes as routes_pg_schema;
 
@@ -1028,7 +1009,7 @@ pub async fn shapes_bus(
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
 
-    if (z < 4) {
+    if z < 4 {
         return HttpResponse::BadRequest().body("Zoom level too low");
     }
 
@@ -1378,10 +1359,7 @@ async fn chateaus(
     let chateau_lock = chateau_cache.read().unwrap();
     let chateau_as_ref = chateau_lock.as_ref();
 
-    let cloned_chateau_data =  {
-        Some(chateau_as_ref) => Some(chateau_as_ref.clone()),
-        None => None,
-    };
+    let cloned_chateau_data = chateau_as_ref.cloned();
 
     drop(chateau_lock);
 
@@ -1443,7 +1421,7 @@ async fn chateaus(
                         .realtime_feeds
                         .clone()
                         .into_iter()
-                        .map(|x| serde_json::Value::String(x))
+                        .map(serde_json::Value::String)
                         .collect(),
                 ),
             );
@@ -1454,7 +1432,7 @@ async fn chateaus(
                         .schedule_feeds
                         .clone()
                         .into_iter()
-                        .map(|x| serde_json::Value::String(x))
+                        .map(serde_json::Value::String)
                         .collect(),
                 ),
             );
@@ -1463,7 +1441,7 @@ async fn chateaus(
                 bbox: None,
                 geometry: Some(geojson::Geometry {
                     bbox: None,
-                    value: value,
+                    value,
                     foreign_members: None,
                 }),
                 id: Some(geojson::feature::Id::String(chateau.chateau.clone())),
@@ -1476,7 +1454,7 @@ async fn chateaus(
     // formation of final object
     let feature_collection = geojson::FeatureCollection {
         bbox: None,
-        features: features,
+        features,
         foreign_members: None,
     };
 

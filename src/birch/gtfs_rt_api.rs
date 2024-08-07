@@ -1,5 +1,5 @@
 use crate::EtcdConnectionIps;
-use actix_web::{get, web, HttpResponse, Responder};
+use actix_web::{web, HttpResponse, Responder};
 use catenary::aspen_dataset::GtfsRtType;
 use catenary::get_node_for_realtime_feed_id;
 use prost::Message;
