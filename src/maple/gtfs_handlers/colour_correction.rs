@@ -71,14 +71,15 @@ pub fn fix_background_colour_rgb_feed_route(
             "201" => RGB::new(232, 93, 152),
             "202" => RGB::new(232, 93, 152),
             "204" => RGB::new(232, 93, 152),
-            "235" => RGB::new(238, 45, 36),
+            "235" => RGB::new(242, 0, 16),
             "215" => RGB::new(59, 192, 225),
             "225" => RGB::new(41, 52, 144),
             "227" => RGB::new(123, 194, 77),
             "510" => RGB::new(0, 112, 191),
             "520" => RGB::new(255, 143, 0),
             "530" => RGB::new(0, 171, 70),
-            _ => RGB::new(233, 128, 130),
+            Some("888" | "891" | "892" | "894") => RGB::new(98, 54, 27),
+            _ => RGB::new(220, 38, 38),
         },
         "f-c23-metrokingcounty" =>  match route.short_name.as_deref() {
             // RapidRide Red
