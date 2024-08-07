@@ -732,7 +732,7 @@ pub async fn shapes_not_bus(
 
     let tile_width_degrees = tile_width_degrees_from_z(z);
 
-    let simplification_threshold = tile_width_degrees * 0.01;
+    let simplification_threshold = tile_width_degrees * 0.006;
 
     // let grid = tile_grid::Grid::wgs84();
 
@@ -821,7 +821,7 @@ pub async fn shapes_bus(
 
     let tile_width_degrees = tile_width_degrees_from_z(z);
 
-    let simplification_threshold = tile_width_degrees * 0.01;
+    let simplification_threshold = tile_width_degrees * 0.005;
 
     // let grid = tile_grid::Grid::wgs84();
     // let bbox = grid.tile_extent(x, y, z);
