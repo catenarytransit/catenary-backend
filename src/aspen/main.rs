@@ -775,6 +775,7 @@ fn contains_new_data(
         }
     }
 
+/* 
     if (need_to_evaluate_using_hash || need_to_insert_hash) {
         let hash = rough_hash_of_gtfs_rt(pb_data);
 
@@ -797,7 +798,7 @@ fn contains_new_data(
             .entry(key.clone())
             .and_modify(|gtfs_data| *gtfs_data = hash)
             .or_insert(hash);
-    }
+    }*/
 
     new_data
 }
