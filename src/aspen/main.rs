@@ -310,25 +310,27 @@ impl AspenRpc for AspenServer {
             let _ = save_timestamps(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
         }
 
-        if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
-            self.authoritative_gtfs_rt_store
-                .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
-                .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
-                .or_insert(vehicles_gtfs_rt.clone());
-        }
-
-        if let Some(trip_gtfs_rt) = trips_gtfs_rt {
-            self.authoritative_gtfs_rt_store
-                .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
-                .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
-                .or_insert(trip_gtfs_rt.clone());
-        }
-
-        if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
-            self.authoritative_gtfs_rt_store
-                .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
-                .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
-                .or_insert(alerts_gtfs_rt.clone());
+        if new_data {
+            if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
+                self.authoritative_gtfs_rt_store
+                    .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+                    .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
+                    .or_insert(vehicles_gtfs_rt.clone());
+            }
+    
+            if let Some(trip_gtfs_rt) = trips_gtfs_rt {
+                self.authoritative_gtfs_rt_store
+                    .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+                    .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
+                    .or_insert(trip_gtfs_rt.clone());
+            }
+    
+            if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
+                self.authoritative_gtfs_rt_store
+                    .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
+                    .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
+                    .or_insert(alerts_gtfs_rt.clone());
+            }
         }
 
         let hash_data_duration = hash_data_start.elapsed();
