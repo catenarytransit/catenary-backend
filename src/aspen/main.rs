@@ -250,6 +250,8 @@ impl AspenRpc for AspenServer {
 
         let mut new_data = false;
 
+        let hash_data_start = Instant::now();
+
         if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
             if !new_data {
                 let new_data_v = contains_new_data(
@@ -327,6 +329,10 @@ impl AspenRpc for AspenServer {
                 .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
                 .or_insert(alerts_gtfs_rt.clone());
         }
+
+        let hash_data_duration = hash_data_start.elapsed();
+
+        println!("wrote {realtime_feed_id}, took {hash_data_duration} ms, is new data: {new_data}");
 
         //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
