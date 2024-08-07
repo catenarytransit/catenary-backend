@@ -80,16 +80,9 @@ pub fn fix_background_colour_rgb_feed_route(
             "530" => RGB::new(0, 171, 70),
             _ => RGB::new(233, 128, 130),
         },
-        "f-c23-metrokingcounty" =>  match route.id.as_str() {
+        "f-c23-metrokingcounty" =>  match route.route_short_name.as_str() {
             // RapidRide Red
-            "100512" => RGB::new(150, 23, 46),
-            "102548" => RGB::new(150, 23, 46),
-            "102576" => RGB::new(150, 23, 46),
-            "102581" => RGB::new(150, 23, 46),
-            "102615" => RGB::new(150, 23, 46),
-            "102619" => RGB::new(150, 23, 46),
-            "102736" => RGB::new(150, 23, 46),
-            "102745" => RGB::new(150, 23, 46),
+            "A Line" | "B Line" | "C Line" | "D Line" | "E Line" | "F Line" | "H Line" => RGB::new(180, 10, 54),
             // Override default region-wide blue to separate from ST Express
             _ => RGB::new(41, 133, 107),
         },
