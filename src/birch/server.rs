@@ -1078,7 +1078,6 @@ FROM (
     }
 }
 
-
 #[actix_web::get("/shapes_ferry")]
 pub async fn shapes_ferry_meta(req: HttpRequest) -> impl Responder {
     let mut fields = std::collections::BTreeMap::new();
@@ -1164,7 +1163,6 @@ pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
         .insert_header(("Cache-Control", "max-age=1000"))
         .body(serde_json::to_string(&tile_json).unwrap())
 }
-
 
 #[actix_web::get("/shapes_intercity_rail")]
 pub async fn shapes_intercity_rail_meta(req: HttpRequest) -> impl Responder {
