@@ -854,6 +854,75 @@ FROM (
     }
 }
 
+#[actix_web::get("/shapes_ferry/{z}/{x}/{y}")]
+pub async fn shapes_ferry(
+    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    path: web::Path<(u8, u32, u32)>,
+    req: HttpRequest,
+) -> impl Responder {
+    let (z, x, y) = path.into_inner();
+
+    if z < 4 {
+        return HttpResponse::BadRequest().body("Zoom level too low");
+    }
+
+    let tile_width_degrees = tile_width_degrees_from_z(z);
+
+    let simplification_threshold = tile_width_degrees * 0.005;
+
+    // let grid = tile_grid::Grid::wgs84();
+
+    //let bbox = grid.tile_extent(x, y, z);
+
+    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+
+    let query_str = format!("
+    SELECT
+    ST_AsMVT(q, 'data', 4096, 'geom')
+FROM (
+    SELECT
+        onestop_feed_id,
+        shape_id,
+        color,
+        routes,
+        route_type,
+        route_label,
+        text_color,
+        chateau,
+        ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857), 
+        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
+    FROM
+        gtfs.shapes
+    WHERE
+        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND route_type = 4
+) q", z = z, x = x, y= y);
+
+    // println!("Performing query \n {}", query_str);
+
+    let max_age = match z {
+        4 => 36000,
+        5 => 10000,
+        6 => 2000,
+        _ => 1000,
+    };
+
+    match sqlx::query(query_str.as_str())
+        .fetch_one(sqlx_pool_ref)
+        .await
+    {
+        Ok(mvt_result) => {
+            let mvt_bytes: Vec<u8> = mvt_result.get(0);
+
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/x-protobuf"))
+                .insert_header(("Cache-Control", format!("max-age={}, public", max_age)))
+                .body(mvt_bytes)
+        }
+        Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
+    }
+}
+
 #[actix_web::get("/shapes_local_rail/{z}/{x}/{y}")]
 pub async fn shapes_local_rail(
     sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
@@ -1007,6 +1076,50 @@ FROM (
         }
         Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
     }
+}
+
+
+#[actix_web::get("/shapes_ferry")]
+pub async fn shapes_ferry_meta(req: HttpRequest) -> impl Responder {
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(String::from("color"), String::from("text"));
+    fields.insert(String::from("text_color"), String::from("text"));
+    fields.insert(String::from("shape_id"), String::from("text"));
+    fields.insert(String::from("onestop_feed_id"), String::from("text"));
+    fields.insert(String::from("routes"), String::from("text[]"));
+    fields.insert(String::from("route_type"), String::from("smallint"));
+    fields.insert(String::from("route_label"), String::from("text"));
+    fields.insert(String::from("chateau"), String::from("text"));
+
+    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
+
+    let tile_json = TileJSON {
+        vector_layers: Some(vec![fields]),
+        tilejson: String::from("3.0.0"),
+        bounds: None,
+        center: None,
+        data: None,
+        description: None,
+        fillzoom: None,
+        grids: None,
+        legend: None,
+        maxzoom: Some(15),
+        minzoom: None,
+        name: Some(String::from("shapes_not_bus")),
+        scheme: None,
+        template: None,
+        version: None,
+        other: std::collections::BTreeMap::new(),
+        tiles: vec![String::from(
+            "https://birch.catenarymaps.org/shapes_ferry/{z}/{x}/{y}",
+        )],
+        attribution: None,
+    };
+
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "application/json"))
+        .insert_header(("Cache-Control", "max-age=1000"))
+        .body(serde_json::to_string(&tile_json).unwrap())
 }
 
 #[actix_web::get("/shapes_not_bus")]
@@ -1562,6 +1675,8 @@ async fn main() -> std::io::Result<()> {
             .service(shapes_local_rail_meta)
             .service(shapes_intercity_rail)
             .service(shapes_intercity_rail_meta)
+            .service(shapes_ferry)
+            .service(shapes_ferry_meta)
     })
     .workers(16);
 
