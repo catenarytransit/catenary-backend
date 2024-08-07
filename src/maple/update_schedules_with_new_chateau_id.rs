@@ -54,17 +54,6 @@ pub async fn update_schedules_with_new_chateau_id(
         .execute(conn)
         .await?;
 
-    //shapes_not_bus
-
-    use catenary::schema::gtfs::shapes_not_bus;
-    use catenary::schema::gtfs::shapes_not_bus::dsl::shapes_not_bus as shapes_not_bus_table;
-
-    let _ = diesel::update(shapes_not_bus_table)
-        .filter(shapes_not_bus::dsl::onestop_feed_id.eq(feed_id))
-        .set(shapes_not_bus::dsl::chateau.eq(new_chateau_id))
-        .execute(conn)
-        .await?;
-
     //stops
 
     use catenary::schema::gtfs::stops;

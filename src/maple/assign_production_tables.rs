@@ -192,9 +192,6 @@ pub async fn assign_production_tables(
                 use catenary::schema::gtfs::shapes::dsl as shapes_columns;
                 use catenary::schema::gtfs::shapes::dsl::shapes;
 
-                use catenary::schema::gtfs::shapes_not_bus::dsl as shapes_not_bus_columns;
-                use catenary::schema::gtfs::shapes_not_bus::dsl::shapes_not_bus;
-
                 use catenary::schema::gtfs::stops::dsl as stops_columns;
                 use catenary::schema::gtfs::stops::dsl::stops;
 
@@ -212,19 +209,6 @@ pub async fn assign_production_tables(
                         )
                         .set(
                             (shapes_columns::allowed_spatial_query
-                                .eq(is_this_feed_spatial_queriable)),
-                        )
-                        .execute(conn)
-                        .await?;
-
-                        // also update shapes_not_bus table
-                        let _ = diesel::update(
-                            shapes_not_bus
-                                .filter(shapes_not_bus_columns::onestop_feed_id.eq(&feed_id))
-                                .filter(shapes_not_bus_columns::attempt_id.eq(&production_list_id)),
-                        )
-                        .set(
-                            (shapes_not_bus_columns::allowed_spatial_query
                                 .eq(is_this_feed_spatial_queriable)),
                         )
                         .execute(conn)
@@ -277,14 +261,6 @@ pub async fn assign_production_tables(
                         shapes
                             .filter(shapes_columns::onestop_feed_id.eq(&feed_id))
                             .filter(shapes_columns::attempt_id.eq(&drop_id)),
-                    )
-                    .execute(conn)
-                    .await?;
-
-                    let _ = diesel::delete(
-                        shapes_not_bus
-                            .filter(shapes_not_bus_columns::onestop_feed_id.eq(&feed_id))
-                            .filter(shapes_not_bus_columns::attempt_id.eq(&drop_id)),
                     )
                     .execute(conn)
                     .await?;

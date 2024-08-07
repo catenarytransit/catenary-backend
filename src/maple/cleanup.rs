@@ -84,19 +84,6 @@ pub async fn delete_attempt_objects(
     .execute(conn)
     .await?;
 
-    use catenary::schema::gtfs::shapes_not_bus;
-    use catenary::schema::gtfs::shapes_not_bus::dsl::shapes_not_bus as shapes_not_bus_table;
-
-    let _ = diesel::delete(
-        shapes_not_bus_table.filter(
-            shapes_not_bus::dsl::onestop_feed_id
-                .eq(&feed_id)
-                .and(shapes_not_bus::dsl::attempt_id.eq(&attempt_id)),
-        ),
-    )
-    .execute(conn)
-    .await?;
-
     use catenary::schema::gtfs::stops;
     use catenary::schema::gtfs::stops::dsl::stops as stops_table;
 
@@ -248,15 +235,6 @@ pub async fn wipe_whole_feed(
     let _ = diesel::delete(shapes_table.filter(shapes::dsl::onestop_feed_id.eq(&feed_id)))
         .execute(conn)
         .await?;
-
-    use catenary::schema::gtfs::shapes_not_bus;
-    use catenary::schema::gtfs::shapes_not_bus::dsl::shapes_not_bus as shapes_not_bus_table;
-
-    let _ = diesel::delete(
-        shapes_not_bus_table.filter(shapes_not_bus::dsl::onestop_feed_id.eq(&feed_id)),
-    )
-    .execute(conn)
-    .await?;
 
     use catenary::schema::gtfs::stops;
     use catenary::schema::gtfs::stops::dsl::stops as stops_table;
