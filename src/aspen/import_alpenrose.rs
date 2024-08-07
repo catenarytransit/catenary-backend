@@ -21,6 +21,7 @@ use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::time::Instant;
 use std::sync::Arc;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
@@ -115,18 +116,23 @@ pub async fn new_rt_data(
     use catenary::schema::gtfs::routes as routes_pg_schema;
 
     //get this chateau
+    let start_chateau_query = Instant::now();
     let this_chateau = chateaus_pg_schema::dsl::chateaus
         .filter(chateaus_pg_schema::dsl::chateau.eq(&chateau_id))
         .first::<catenary::models::Chateau>(conn)
         .await?;
+    let chateau_elapsed = start_chateau_query.elapsed();
 
     //get all routes inside chateau from postgres db
     //: Vec<catenary::models::Route>
+
+    let start_routes_query = Instant::now();
     let routes: Vec<catenary::models::Route> = routes_pg_schema::dsl::routes
         .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
         .select(catenary::models::Route::as_select())
         .load::<catenary::models::Route>(conn)
         .await?;
+    let routes_query_elapsed = start_routes_query.elapsed();
 
     //let (this_chateau, routes) = tokio::try_join!(this_chateau, routes)?;
 
@@ -519,10 +525,12 @@ pub async fn new_rt_data(
             });
 
         println!(
-            "Updated Chateau {} with realtime data from {}, took {} ms, with {} ms trips and {} ms itin lookup",
+            "Updated Chateau {} with realtime data from {}, took {} ms, with {} ms chateau lookup, {} ms route lookup, {} ms trips and {} ms itin lookup",
             chateau_id,
             realtime_feed_id,
             start.elapsed().as_millis(),
+            chateau_elapsed.as_millis(),
+            routes_query_elapsed.as_millis(),
             trip_duration.as_millis(),
             itin_lookup_duration.as_millis()
         );
