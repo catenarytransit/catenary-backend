@@ -51,6 +51,7 @@ use diesel::{connection, ExpressionMethods};
 use diesel_async::pooled_connection::bb8::PooledConnection;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, Geometry, JsonValue, Value};
+use ordered_float::Pow;
 use qstring::QString;
 use rand::Rng;
 use rstar::RTree;
@@ -713,7 +714,7 @@ pub async fn other_stops_meta(req: HttpRequest) -> impl Responder {
 }
 
 fn tile_width_degrees_from_z(z: u8) -> f32 {
-    360.0 / (z as f32 + 1.0)
+    360.0 / (2.pow(z + 1) as f32)
 }
 
 #[actix_web::get("/shapes_not_bus/{z}/{x}/{y}")]
