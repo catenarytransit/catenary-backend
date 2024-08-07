@@ -1,10 +1,8 @@
 use crate::KeyFormat;
 use crate::RealtimeFeedFetch;
 use catenary::ahash_fast_hash;
-use catenary::aspen::lib::RealtimeFeedMetadataEtcd;
 use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id;
-use catenary::postgres_tools::CatenaryPostgresPool;
 use dashmap::DashMap;
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -14,12 +12,10 @@ use scc::HashMap as SccHashMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tarpc::{client, context, tokio_serde::formats::Bincode};
+use std::time::Instant;
 use tokio::sync::RwLock;
 
 use crate::custom_rt_feeds;
-use gtfs_structures::Gtfs;
 
 lazy_static! {
     static ref CUSTOM_FEEDS: HashSet<&'static str> = HashSet::from_iter([
@@ -258,7 +254,7 @@ pub async fn single_fetch_time(
                     "f-amtrak~rt" => {
                         custom_rt_feeds::amtrak::fetch_amtrak_data(
                             &mut etcd,
-                            &feed_id,
+                            feed_id,
                             &amtrak_gtfs,
                             &client,
                         )

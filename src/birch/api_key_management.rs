@@ -1,11 +1,9 @@
-use actix_web::dev::Service;
-use actix_web::middleware::DefaultHeaders;
-use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{PasswordHasher, SaltString},
     Argon2,
 };
-use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
+use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::ExpressionMethods;
 use diesel::QueryDsl;
 use diesel::SelectableHelper;
@@ -238,7 +236,7 @@ pub async fn get_realtime_keys(
                     HttpResponse::Ok()
                         .append_header(("Cache-Control", "no-cache"))
                         .json(KeyResponse {
-                            passwords: passwords,
+                            passwords,
                         })
                 }
                 Err(e) => {

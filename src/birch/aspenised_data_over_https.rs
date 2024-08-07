@@ -1,5 +1,5 @@
-use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
-use ahash::{AHashMap, AHashSet};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use ahash::AHashMap;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::GetVehicleLocationsResponse;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
@@ -7,7 +7,7 @@ use catenary::aspen_dataset::AspenisedVehicleRouteCache;
 use catenary::EtcdConnectionIps;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tarpc::{client, context, tokio_serde::formats::Bincode};
+use tarpc::context;
 
 #[derive(Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum CategoryOfRealtimeVehicleData {
@@ -83,7 +83,7 @@ pub async fn get_realtime_locations(
     let fetch_assigned_node_for_this_realtime_feed =
         fetch_assigned_node_for_this_realtime_feed.unwrap();
 
-    if fetch_assigned_node_for_this_realtime_feed.kvs().len() == 0 {
+    if fetch_assigned_node_for_this_realtime_feed.kvs().is_empty() {
         return HttpResponse::Ok()
             .append_header(("Cache-Control", "no-cache"))
             .body("No assigned node found for this chateau");
@@ -93,8 +93,7 @@ pub async fn get_realtime_locations(
 
     let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
         fetch_assigned_node_for_this_realtime_feed
-            .kvs()
-            .get(0)
+            .kvs().first()
             .unwrap()
             .value(),
     )
@@ -107,7 +106,7 @@ pub async fn get_realtime_locations(
 
     let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
 
-    if (aspen_client.is_err()) {
+    if aspen_client.is_err() {
         return HttpResponse::InternalServerError()
             .append_header(("Cache-Control", "no-cache"))
             .body("Error connecting to assigned node. Failed to connect to tarpc");

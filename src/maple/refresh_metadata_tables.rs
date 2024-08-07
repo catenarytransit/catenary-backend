@@ -11,12 +11,9 @@ use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
-use geo::Polygon;
-use geo::{polygon, MultiPolygon};
 use geo_clipper::Clipper;
-use geo_repair_polygon::join::Join;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
@@ -28,7 +25,7 @@ pub async fn refresh_metadata_assignments(
     pool: Arc<catenary::postgres_tools::CatenaryPostgresPool>,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     //create a reverse table
-    let feed_id_to_chateau_id_lookup_table = feed_id_to_chateau_id_pivot_table(&chateau_result);
+    let feed_id_to_chateau_id_lookup_table = feed_id_to_chateau_id_pivot_table(chateau_result);
 
     //update or create realtime tables and static tables
 
@@ -82,8 +79,7 @@ pub async fn refresh_metadata_assignments(
                             static_feed
                                 .languages_avaliable
                                 .iter()
-                                .filter(|x| x.is_some())
-                                .map(|x| x.clone().unwrap()),
+                                .filter_map(|x| x.clone()),
                         );
                     }
                 }
@@ -108,7 +104,7 @@ pub async fn refresh_metadata_assignments(
             //conversion to geo_types
             let hulls_from_static_geo_types: Vec<geo::Polygon<f64>> = hulls_from_static
                 .iter()
-                .filter(|x| x.rings.len() > 0)
+                .filter(|x| !x.rings.is_empty())
                 .filter(|x| x.rings[0].len() >= 4)
                 .map(|x| {
                     let mut points = vec![];
@@ -134,12 +130,7 @@ pub async fn refresh_metadata_assignments(
             };
 
             let hull_pg: Option<postgis_diesel::types::MultiPolygon<postgis_diesel::types::Point>> =
-                match hull {
-                    Some(hull) => Some(catenary::postgis_to_diesel::multi_polygon_geo_to_diesel(
-                        hull,
-                    )),
-                    None => None,
-                };
+                hull.map(catenary::postgis_to_diesel::multi_polygon_geo_to_diesel);
 
             catenary::models::Chateau {
                 chateau: k.to_string(),
@@ -153,7 +144,7 @@ pub async fn refresh_metadata_assignments(
                 languages_avaliable: languages_avaliable_pg
                     .clone()
                     .into_iter()
-                    .map(|x| Some(x))
+                    .map(Some)
                     .collect::<Vec<Option<String>>>(),
             }
         })
@@ -196,9 +187,10 @@ pub async fn refresh_metadata_assignments(
             dmfr::FeedSpec::GtfsRt => true,
             _ => false,
         })
-        .map(
-            |(feed_id, feed)| match feed_id_to_chateau_id_lookup_table.get(&feed_id.clone()) {
-                Some(chateau_id) => Some(catenary::models::RealtimeFeed {
+        .filter_map(|(feed_id, feed)| {
+            feed_id_to_chateau_id_lookup_table
+                .get(&feed_id.clone())
+                .map(|chateau_id| catenary::models::RealtimeFeed {
                     onestop_feed_id: feed_id.clone(),
                     chateau: chateau_id.clone(),
                     previous_chateau_name: chateau_id.clone(),
@@ -206,12 +198,8 @@ pub async fn refresh_metadata_assignments(
                         Some(existing_realtime_feed) => existing_realtime_feed.fetch_interval_ms,
                         None => None,
                     },
-                }),
-                None => None,
-            },
-        )
-        .filter(|x| x.is_some())
-        .map(|x| x.unwrap())
+                })
+        })
         .collect::<Vec<catenary::models::RealtimeFeed>>();
 
     for new_realtime in new_realtime_dataset {

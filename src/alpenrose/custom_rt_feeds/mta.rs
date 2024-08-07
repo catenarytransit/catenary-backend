@@ -342,15 +342,16 @@ fn convert(
                     longitude: mta.location.longitude,
                     bearing: mta.location.heading,
                     odometer: None,
-                    speed: Some(mta.location.speed.unwrap_or(0.0) as f32 * 0.44704),
+                    speed: Some(mta.location.speed.unwrap_or(0.0) * 0.44704),
                 }),
                 current_stop_sequence: match &supporting_gtfs {
-                    Some(supporting_gtfs) => supporting_gtfs
-                        .clone()
-                        .vehicle
-                        .unwrap()
-                        .current_stop_sequence
-                        .clone(),
+                    Some(supporting_gtfs) => {
+                        supporting_gtfs
+                            .clone()
+                            .vehicle
+                            .unwrap()
+                            .current_stop_sequence
+                    }
                     None => None,
                 },
                 stop_id: match &supporting_gtfs {
@@ -360,12 +361,9 @@ fn convert(
                     None => None,
                 },
                 current_status: match &supporting_gtfs {
-                    Some(supporting_gtfs) => supporting_gtfs
-                        .clone()
-                        .vehicle
-                        .unwrap()
-                        .current_status
-                        .clone(),
+                    Some(supporting_gtfs) => {
+                        supporting_gtfs.clone().vehicle.unwrap().current_status
+                    }
                     None => None,
                 },
                 timestamp: Some(mta.location.timestamp as u64),

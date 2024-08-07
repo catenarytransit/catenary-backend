@@ -6,7 +6,7 @@ use geo::LineString;
 //graham scan
 pub fn convex_hull(input: &Vec<(f64, f64)>) -> geo::Polygon {
     let pnts = input
-        .into_iter()
+        .iter()
         .filter(|coords| {
             let (x, y) = coords;
             x.is_finite() && y.is_finite()

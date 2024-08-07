@@ -10,13 +10,12 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
             let points: MultiPoint = gtfs
                 .shapes
                 .iter()
-                .map(|(id, points)| {
+                .flat_map(|(id, points)| {
                     points
                         .iter()
                         .filter(|point| !is_null_island(point.longitude, point.latitude))
                         .map(|point| Point::new(point.longitude, point.latitude))
                 })
-                .flatten()
                 .collect::<MultiPoint>();
             Some(points.concave_hull(4.0))
         }

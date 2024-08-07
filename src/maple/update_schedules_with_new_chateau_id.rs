@@ -5,10 +5,8 @@
 
 use crate::CatenaryPostgresPool;
 use diesel::query_dsl::methods::FilterDsl;
-use diesel::BoolExpressionMethods;
 use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
-use diesel_async::{pooled_connection::bb8::PooledConnection, AsyncPgConnection};
 use std::error::Error;
 use std::sync::Arc;
 

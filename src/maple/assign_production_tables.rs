@@ -208,8 +208,8 @@ pub async fn assign_production_tables(
                                 .filter(shapes_columns::attempt_id.eq(&production_list_id)),
                         )
                         .set(
-                            (shapes_columns::allowed_spatial_query
-                                .eq(is_this_feed_spatial_queriable)),
+                            shapes_columns::allowed_spatial_query
+                                .eq(is_this_feed_spatial_queriable),
                         )
                         .execute(conn)
                         .await?;
@@ -221,8 +221,7 @@ pub async fn assign_production_tables(
                                 .filter(stops_columns::attempt_id.eq(&production_list_id)),
                         )
                         .set(
-                            (stops_columns::allowed_spatial_query
-                                .eq(is_this_feed_spatial_queriable)),
+                            stops_columns::allowed_spatial_query.eq(is_this_feed_spatial_queriable),
                         )
                         .execute(conn)
                         .await?;
@@ -291,8 +290,7 @@ pub async fn assign_production_tables(
             "Deleting old data {} in feed {}",
             &drop_attempt_id, &feed_id
         );
-        let _ =
-            delete_attempt_objects(&feed_id, &drop_attempt_id, Arc::clone(&arc_conn_pool)).await;
+        let _ = delete_attempt_objects(feed_id, drop_attempt_id, Arc::clone(&arc_conn_pool)).await;
     }
 
     Ok(())

@@ -5,7 +5,6 @@
 /// This is the service definition. It looks a lot like a trait definition.
 /// It defines one RPC, hello, which takes one arg, name, and returns a String.
 use crate::aspen_dataset::*;
-use crate::id_cleanup;
 use crate::ChateauDataNoGeometry;
 use ahash::AHashMap;
 use ahash::AHashSet;
@@ -14,7 +13,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::net::SocketAddr;
-use tarpc::{client, context, tokio_serde::formats::Bincode};
+use tarpc::{client, tokio_serde::formats::Bincode};
 
 #[tarpc::service]
 pub trait AspenRpc {
@@ -45,7 +44,7 @@ pub trait AspenRpc {
     async fn get_vehicle_locations(
         chateau_id: String,
         existing_fasthash_of_routes: Option<u64>,
-    ) -> (Option<GetVehicleLocationsResponse>);
+    ) -> Option<GetVehicleLocationsResponse>;
 
     async fn get_gtfs_rt(
         realtime_feed_id: String,

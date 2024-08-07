@@ -14,7 +14,7 @@ pub async fn fetch_amtrak_data(
         let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
         let worker_id = data.worker_id;
 
-        let amtrak_gtfs_rt = amtrak_gtfs_rt::fetch_amtrak_gtfs_rt(&gtfs, client).await;
+        let amtrak_gtfs_rt = amtrak_gtfs_rt::fetch_amtrak_gtfs_rt(gtfs, client).await;
 
         if let Ok(amtrak_gtfs_rt) = amtrak_gtfs_rt {
             //extract the binary data

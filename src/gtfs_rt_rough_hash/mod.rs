@@ -1,5 +1,4 @@
 use crate::ahash_fast_hash;
-use ahash::AHashMap;
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -175,9 +174,9 @@ impl From<gtfs_rt::Position> for HashPosition {
         HashPosition {
             latitude: OrderedFloat(input.latitude),
             longitude: OrderedFloat(input.longitude),
-            bearing: input.bearing.map(|x| OrderedFloat(x)),
-            odometer: input.odometer.map(|x| OrderedFloat(x)),
-            speed: input.speed.map(|x| OrderedFloat(x)),
+            bearing: input.bearing.map(OrderedFloat),
+            odometer: input.odometer.map(OrderedFloat),
+            speed: input.speed.map(OrderedFloat),
         }
     }
 }

@@ -73,7 +73,7 @@ pub async fn route_info(
             .body("Could not connect to etcd");
     }
 
-    let mut etcd = etcd.unwrap();
+    let etcd = etcd.unwrap();
 
     //connect to postgres
     let conn_pool = pool.as_ref();
@@ -188,9 +188,7 @@ pub async fn route_info(
 
     let mut list_of_shape_ids = direction_patterns_pg
         .iter()
-        .map(|x| x.gtfs_shape_id.clone())
-        .filter(|x| x.is_some())
-        .map(|x| x.unwrap())
+        .filter_map(|x| x.gtfs_shape_id.clone())
         .collect::<Vec<String>>();
 
     list_of_shape_ids.sort();
@@ -258,7 +256,7 @@ pub async fn route_info(
     };
 
     // fetch stops
-    let mut list_of_stop_ids = direction_rows
+    let list_of_stop_ids = direction_rows
         .iter()
         .map(|x| x.stop_id.clone())
         .collect::<HashSet<String>>();
@@ -314,7 +312,7 @@ pub async fn route_info(
     let response = RouteInfoResponse {
         agency_name: agency
             .map(|x| x.agency_name.clone())
-            .unwrap_or_else(|| "".to_string()),
+            .unwrap_or_default(),
         agency_id: match route.agency_id.clone() {
             Some(agency_id) => agency_id,
             None => "".to_string(),

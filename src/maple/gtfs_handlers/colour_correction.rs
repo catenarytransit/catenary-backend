@@ -6,7 +6,7 @@ pub fn fix_background_colour_rgb(background: RGB<u8>) -> RGB<u8> {
     if background == RGB::new(255, 255, 255) || background == RGB::new(0, 0, 0) {
         RGB::new(14, 165, 233)
     } else {
-        background.clone()
+        background
     }
 }
 
@@ -49,7 +49,7 @@ pub fn fix_background_colour_rgb_feed_route(
                 "191" => RGB::new(139, 157, 208),
                 "192" => RGB::new(237, 72, 154),
                 "405" => RGB::new(0, 181, 236),
-                _ => fix_background_colour_rgb(background.clone()),
+                _ => fix_background_colour_rgb(background),
             }
         }
         "f-9q5-metro~losangeles" => match background == WHITE_RGB {
@@ -57,9 +57,9 @@ pub fn fix_background_colour_rgb_feed_route(
             false => {
                 let metroid = &route.id.split('-').collect::<Vec<&str>>()[0];
 
-                match metroid.len() == 3 && metroid.chars().nth(0).unwrap() == '7' {
+                match metroid.len() == 3 && metroid.starts_with('7') {
                     true => RGB::new(209, 18, 66),
-                    false => fix_background_colour_rgb(background.clone()),
+                    false => fix_background_colour_rgb(background),
                 }
             }
         },
@@ -97,7 +97,7 @@ pub fn fix_foreground_colour_rgb(background: RGB<u8>, foreground: RGB<u8>) -> RG
     if background == foreground {
         RGB::new(0, 0, 0)
     } else {
-        foreground.clone()
+        foreground
     }
 }
 

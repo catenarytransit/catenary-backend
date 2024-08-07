@@ -22,7 +22,7 @@ use geo::coord;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use tarpc::{client, context, tokio_serde::formats::Bincode};
+use tarpc::context;
 
 #[actix_web::get("/get_vehicle_metadata/{chateau}/{vehicle_id}")]
 pub async fn get_vehicle_metadata(path: web::Path<(String, String)>) -> impl Responder {
@@ -59,13 +59,13 @@ pub async fn get_vehicle_information(
 
     if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
         let fetch_assigned_node_for_this_chateau_kv_first =
-            fetch_assigned_node_for_this_chateau.kvs().get(0);
+            fetch_assigned_node_for_this_chateau.kvs().first();
 
         if let Some(fetch_assigned_node_for_this_chateau_data) =
             fetch_assigned_node_for_this_chateau_kv_first
         {
             let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
-                &fetch_assigned_node_for_this_chateau_data.value(),
+                fetch_assigned_node_for_this_chateau_data.value(),
             )
             .unwrap();
 
@@ -222,13 +222,13 @@ pub async fn get_trip_rt_update(
 
     if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
         let fetch_assigned_node_for_this_chateau_kv_first =
-            fetch_assigned_node_for_this_chateau.kvs().get(0);
+            fetch_assigned_node_for_this_chateau.kvs().first();
 
         if let Some(fetch_assigned_node_for_this_chateau_data) =
             fetch_assigned_node_for_this_chateau_kv_first
         {
             let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
-                &fetch_assigned_node_for_this_chateau_data.value(),
+                fetch_assigned_node_for_this_chateau_data.value(),
             )
             .unwrap();
 
@@ -547,7 +547,7 @@ pub async fn get_trip_init(
     let mut alert_ids_for_this_route: Vec<String> = vec![];
     let mut alert_ids_for_this_trip: Vec<String> = vec![];
 
-    let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     //map start date to a YYYY, MM, DD format
     let start_naive_date = if let Some(start_date) = query.start_date {
@@ -623,7 +623,7 @@ pub async fn get_trip_init(
     for row in itin_rows_to_use {
         let stop = stops_data_map.get(&row.stop_id);
 
-        if let None = stop {
+        if stop.is_none() {
             eprintln!("Stop {} not found", row.stop_id);
             continue;
         }
@@ -699,13 +699,13 @@ pub async fn get_trip_init(
 
     if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
         let fetch_assigned_node_for_this_chateau_kv_first =
-            fetch_assigned_node_for_this_chateau.kvs().get(0);
+            fetch_assigned_node_for_this_chateau.kvs().first();
 
         if let Some(fetch_assigned_node_for_this_chateau_data) =
             fetch_assigned_node_for_this_chateau_kv_first
         {
             let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
-                &fetch_assigned_node_for_this_chateau_data.value(),
+                fetch_assigned_node_for_this_chateau_data.value(),
             )
             .unwrap();
 
@@ -878,10 +878,10 @@ pub async fn get_trip_init(
         vehicle,
         route_type: route.route_type,
         stop_id_to_alert_ids,
-        alert_ids_for_this_route: alert_ids_for_this_route,
-        alert_ids_for_this_trip: alert_ids_for_this_trip,
-        alert_id_to_alert: alert_id_to_alert,
-        shape_polyline: shape_polyline,
+        alert_ids_for_this_route,
+        alert_ids_for_this_trip,
+        alert_id_to_alert,
+        shape_polyline,
     };
 
     let text = serde_json::to_string(&response).unwrap();

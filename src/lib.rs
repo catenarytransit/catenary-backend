@@ -54,14 +54,10 @@ pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataEtcd;
 use ahash::AHasher;
 use fasthash::MetroHasher;
-use gtfs_rt::translated_image::LocalizedImage;
-use gtfs_rt::VehicleDescriptor;
-use gtfs_structures::LocationType;
 use gtfs_structures::RouteType;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::io::Read;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub mod metrolink_ptc_to_stop_id;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -111,9 +107,7 @@ pub mod gtfs_schedule_protobuf {
         let frequencies: Vec<GtfsFrequencyProto> =
             frequencies.iter().map(frequency_to_protobuf).collect();
 
-        GtfsFrequenciesProto {
-            frequencies: frequencies,
-        }
+        GtfsFrequenciesProto { frequencies }
     }
 
     pub fn protobuf_to_frequencies(
@@ -156,7 +150,6 @@ pub mod tailscale {
     extern crate ipnetwork;
     extern crate pnet;
 
-    use ipnetwork::IpNetwork;
     use pnet::datalink;
     use std::net::IpAddr;
 
@@ -183,8 +176,8 @@ pub mod tailscale {
 
 pub mod aspen_dataset {
     use ahash::AHashMap;
-    use gtfs_rt::TripUpdate;
-    use std::{collections::BTreeMap, collections::HashMap, hash::Hash};
+
+    use std::hash::Hash;
 
     #[derive(Clone, Serialize, Deserialize)]
     pub struct AspenisedData {
@@ -596,7 +589,7 @@ pub async fn get_node_for_realtime_feed_id(
             match kvs.len() {
                 0 => None,
                 _ => {
-                    let data = bincode::deserialize::<RealtimeFeedMetadataEtcd>(&kvs[0].value());
+                    let data = bincode::deserialize::<RealtimeFeedMetadataEtcd>(kvs[0].value());
 
                     match data {
                         Ok(data) => Some(data),
@@ -649,7 +642,7 @@ mod unzip_uk_test {
     async fn test_get_raw_gtfs_rt() {
         let client = Client::new();
         let x = unzip_uk::get_raw_gtfs_rt(&client).await.unwrap();
-        assert!(x.len() > 0);
+        assert!(!x.is_empty());
 
         //attempt to decode into gtfs-rt
 

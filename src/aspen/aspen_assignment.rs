@@ -4,12 +4,8 @@ use catenary::aspen::lib::ChateausLeaderHashMap;
 use catenary::aspen::lib::RealtimeFeedMetadataEtcd;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::ChateauDataNoGeometry;
-use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::select_dsl::SelectDsl;
-use diesel::ExpressionMethods;
-use diesel::Selectable;
 use diesel::SelectableHelper;
-use diesel_async::pooled_connection::bb8::PooledConnection;
 use diesel_async::RunQueryDsl;
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -113,7 +109,7 @@ pub async fn assign_chateaus(
 
         // assignment section
 
-        if (workers_nodes_lock.len() == 0) {
+        if workers_nodes_lock.len() == 0 {
             println!("No workers available to assign chateaus to");
         } else {
             println!("Assigning tasks to workers....");

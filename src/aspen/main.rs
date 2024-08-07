@@ -33,9 +33,8 @@ use rand::{
     thread_rng,
 };
 use std::sync::Arc;
-use std::thread;
 use std::{
-    net::{IpAddr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     time::Duration,
 };
 use tarpc::{
@@ -43,23 +42,21 @@ use tarpc::{
     server::{self, incoming::Incoming, Channel},
     tokio_serde::formats::Bincode,
 };
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use tokio::time;
 use uuid::Uuid;
 mod leader_thread;
 use leader_thread::aspen_leader_thread;
 mod import_alpenrose;
 use catenary::aspen_dataset::GtfsRtType;
+use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
-use catenary::{aspen_dataset::*, gtfs_rt_rough_hash};
-use crossbeam::deque::{Injector, Steal};
-use futures::join;
+use crossbeam::deque::Injector;
 use gtfs_rt::FeedMessage;
 use scc::HashMap as SccHashMap;
 use std::error::Error;
 mod async_threads_alpenrose;
 use crate::id_cleanup::gtfs_rt_correct_route_id_string;
-use catenary::gtfs_rt_rough_hash::rough_hash_of_gtfs_rt;
 use catenary::parse_gtfs_rt_message;
 use rand::Rng;
 use std::collections::HashMap;
@@ -262,7 +259,7 @@ impl AspenRpc for AspenServer {
                     vehicles_gtfs_rt,
                 );
 
-                if (new_data_v) {
+                if new_data_v {
                     new_data = new_data_v;
                 }
             }
@@ -284,7 +281,7 @@ impl AspenRpc for AspenServer {
                     trips_gtfs_rt,
                 );
 
-                if (new_data_t) {
+                if new_data_t {
                     new_data = new_data_t;
                 }
             }
@@ -302,7 +299,7 @@ impl AspenRpc for AspenServer {
                 let new_data_a =
                     contains_new_data(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
 
-                if (new_data_a) {
+                if new_data_a {
                     new_data = new_data_a;
                 }
             }
@@ -342,7 +339,7 @@ impl AspenRpc for AspenServer {
 
         //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
-        if (new_data) {
+        if new_data {
             let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
 
             if !lock_chateau_queue.contains(&chateau_id) {
@@ -546,7 +543,7 @@ async fn main() -> anyhow::Result<()> {
 
     let worker_metadata = AspenWorkerMetadataEtcd {
         etcd_lease_id: etcd_lease_id_for_this_worker,
-        worker_ip: server_addr.clone(),
+        worker_ip: server_addr,
         worker_id: this_worker_id.to_string(),
     };
 
@@ -753,7 +750,7 @@ fn contains_new_data(
     let mut need_to_evaluate_using_hash = false;
     let mut need_to_insert_hash = false;
 
-    let mut hash: Option<u64> = None;
+    let hash: Option<u64> = None;
 
     match pb_data.header.timestamp {
         Some(0) | None => {

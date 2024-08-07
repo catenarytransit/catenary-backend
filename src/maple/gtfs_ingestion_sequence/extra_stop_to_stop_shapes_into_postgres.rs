@@ -17,7 +17,7 @@ pub async fn insert_stop_to_stop_geometry(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
-    let mut route_type_number = route_type_to_int(&route.route_type);
+    let route_type_number = route_type_to_int(&route.route_type);
 
     let route_label: String = match &route.short_name {
         Some(short_name) => short_name.to_owned(),

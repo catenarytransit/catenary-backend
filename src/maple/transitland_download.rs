@@ -1,11 +1,9 @@
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::CatenaryPostgresPool;
 use catenary::models::StaticDownloadAttempt;
-use catenary::postgres_tools::CatenaryConn;
 use diesel::prelude::*;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
-use futures;
 use reqwest::RequestBuilder;
 use std::collections::HashSet;
 use std::fs;
@@ -88,9 +86,9 @@ pub async fn download_return_eligible_feeds(
             })
             .filter(|(_, feed)| {
                 if let Some(restrict_to_feed_id) = restrict_to_feed_id {
-                    return feed.id == *restrict_to_feed_id;
+                    feed.id == *restrict_to_feed_id
                 } else {
-                    return true;
+                    true
                 }
             })
             .map(|(string, feed)| StaticFeedToDownload {
@@ -277,7 +275,7 @@ pub async fn download_return_eligible_feeds(
 
         Ok(static_fetches.await)
     } else {
-        return Err(());
+        Err(())
     }
 }
 
@@ -289,9 +287,9 @@ fn transform_for_bay_area(x: String) -> String {
 
         a.push_str("&api_key=094f6bc5-9d6a-4529-bfb3-6f1bc4d809d9");
 
-        return a;
+        a
     } else {
-        return x;
+        x
     }
 }
 

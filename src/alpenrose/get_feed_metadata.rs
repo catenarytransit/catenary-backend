@@ -1,16 +1,10 @@
 use catenary::agency_secret::KeyFormat;
 use catenary::agency_secret::PasswordFormat;
 use catenary::agency_secret::PasswordInfo;
-use catenary::postgres_tools::CatenaryConn;
-use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
-use diesel::dsl::exists;
+use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::select_dsl::SelectDsl;
-use diesel::sql_types::{Float, Integer};
-use diesel::ExpressionMethods;
-use diesel::Selectable;
 use diesel::SelectableHelper;
-use diesel_async::pooled_connection::bb8::PooledConnection;
 use diesel_async::RunQueryDsl;
 use dmfr_dataset_reader::read_folders;
 use serde::{Deserialize, Serialize};
