@@ -78,7 +78,7 @@ pub fn fix_background_colour_rgb_feed_route(
             "510" => RGB::new(0, 112, 191),
             "520" => RGB::new(255, 143, 0),
             "530" => RGB::new(0, 171, 70),
-            Some("888" | "891" | "892" | "894") => RGB::new(98, 54, 27),
+            "888" | "891" | "892" | "894" => RGB::new(98, 54, 27),
             _ => RGB::new(220, 38, 38),
         },
         "f-c23-metrokingcounty" =>  match route.short_name.as_deref() {
