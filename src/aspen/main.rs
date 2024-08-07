@@ -250,78 +250,61 @@ impl AspenRpc for AspenServer {
 
         let mut new_data = false;
 
-        if !new_data {
-            if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
-                // let start_hash = Instant::now();
-                let hash = rough_hash_of_gtfs_rt(vehicles_gtfs_rt);
-                //  let end_hash = Instant::now();
+        if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
+            if !new_data {
+                let new_data_v = contains_new_data(
+                    &self,
+                    &realtime_feed_id,
+                    GtfsRtType::VehiclePositions,
+                    vehicles_gtfs_rt,
+                );
 
-                let key = (realtime_feed_id.clone(), GtfsRtType::VehiclePositions);
-
-                match self.rough_hash_of_gtfs_rt.get(&key) {
-                    Some(existing_hash) => {
-                        if existing_hash.get() != &hash {
-                            new_data = true;
-                        }
-                    }
-                    None => {
-                        new_data = true;
-                    }
+                if (new_data_v) {
+                    new_data = new_data_v;
                 }
-
-                self.rough_hash_of_gtfs_rt
-                    .entry(key)
-                    .and_modify(|gtfs_data| *gtfs_data = hash)
-                    .or_insert(hash);
             }
+
+            let _ = save_timestamps(
+                &self,
+                &realtime_feed_id,
+                GtfsRtType::VehiclePositions,
+                vehicles_gtfs_rt,
+            );
         }
 
-        if !new_data {
-            if let Some(trips_gtfs_rt) = &trips_gtfs_rt {
-                let hash = rough_hash_of_gtfs_rt(trips_gtfs_rt);
+        if let Some(trips_gtfs_rt) = &trips_gtfs_rt {
+            if !new_data {
+                let new_data_t = contains_new_data(
+                    &self,
+                    &realtime_feed_id,
+                    GtfsRtType::TripUpdates,
+                    trips_gtfs_rt,
+                );
 
-                let key = (realtime_feed_id.clone(), GtfsRtType::TripUpdates);
-
-                match self.rough_hash_of_gtfs_rt.get(&key) {
-                    Some(existing_hash) => {
-                        if existing_hash.get() != &hash {
-                            new_data = true;
-                        }
-                    }
-                    None => {
-                        new_data = true;
-                    }
+                if (new_data_t) {
+                    new_data = new_data_t;
                 }
-
-                self.rough_hash_of_gtfs_rt
-                    .entry(key)
-                    .and_modify(|gtfs_data| *gtfs_data = hash)
-                    .or_insert(hash);
             }
+
+            let _ = save_timestamps(
+                &self,
+                &realtime_feed_id,
+                GtfsRtType::TripUpdates,
+                trips_gtfs_rt,
+            );
         }
 
-        if !new_data {
-            if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
-                let hash = rough_hash_of_gtfs_rt(alerts_gtfs_rt);
+        if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
+            if !new_data {
+                let new_data_a =
+                    contains_new_data(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
 
-                let key = (realtime_feed_id.clone(), GtfsRtType::Alerts);
-
-                match self.rough_hash_of_gtfs_rt.get(&key) {
-                    Some(existing_hash) => {
-                        if existing_hash.get() != &hash {
-                            new_data = true;
-                        }
-                    }
-                    None => {
-                        new_data = true;
-                    }
+                if (new_data_a) {
+                    new_data = new_data_a;
                 }
-
-                self.rough_hash_of_gtfs_rt
-                    .entry(key)
-                    .and_modify(|gtfs_data| *gtfs_data = hash)
-                    .or_insert(hash);
             }
+
+            let _ = save_timestamps(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
         }
 
         if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
@@ -717,4 +700,94 @@ async fn main() -> anyhow::Result<()> {
             Err(anyhow::Error::new(e))
         }
     }
+}
+
+enum SaveTimestamp {
+    Saved,
+}
+
+fn save_timestamps(
+    server: &AspenServer,
+    realtime_feed_id: &str,
+    gtfs_rt_type: GtfsRtType,
+    pb_data: &FeedMessage,
+) -> SaveTimestamp {
+    let key = (realtime_feed_id.to_string(), gtfs_rt_type);
+
+    match pb_data.header.timestamp {
+        Some(0) | None => {}
+        Some(new_timestamp) => {
+            server
+                .timestamps_of_gtfs_rt
+                .entry(key.clone())
+                .and_modify(|mut_timestamp| *mut_timestamp = new_timestamp)
+                .or_insert(new_timestamp);
+        }
+    }
+
+    SaveTimestamp::Saved
+}
+
+fn contains_new_data(
+    server: &AspenServer,
+    realtime_feed_id: &str,
+    gtfs_rt_type: GtfsRtType,
+    pb_data: &FeedMessage,
+) -> bool {
+    let mut new_data = false;
+
+    let key = (realtime_feed_id.to_string(), gtfs_rt_type);
+
+    let mut need_to_evaluate_using_hash = false;
+    let mut need_to_insert_hash = false;
+
+    let mut hash: Option<u64> = None;
+
+    match pb_data.header.timestamp {
+        Some(0) | None => {
+            need_to_evaluate_using_hash = true;
+        }
+        Some(new_timestamp) => {
+            match server.timestamps_of_gtfs_rt.get(&key) {
+                Some(existing_timestamp) => {
+                    if *(existing_timestamp.get()) == new_timestamp {
+                        need_to_evaluate_using_hash = true;
+                    } else {
+                        //the timestamp is different, no need to calculate the hash
+                        new_data = true;
+                    }
+                }
+                None => {
+                    new_data = true;
+                    need_to_insert_hash = true;
+                }
+            }
+        }
+    }
+
+    if (need_to_evaluate_using_hash || need_to_insert_hash) {
+        let hash = rough_hash_of_gtfs_rt(pb_data);
+
+        if (need_to_evaluate_using_hash) {
+            match server.rough_hash_of_gtfs_rt.get(&key) {
+                Some(existing_hash) => {
+                    if *(existing_hash.get()) == hash {
+                    } else {
+                        new_data = true;
+                    }
+                }
+                None => {
+                    new_data = true;
+                }
+            }
+        }
+
+        server
+            .rough_hash_of_gtfs_rt
+            .entry(key.clone())
+            .and_modify(|gtfs_data| *gtfs_data = hash)
+            .or_insert(hash);
+    }
+
+    new_data
 }
