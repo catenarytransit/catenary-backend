@@ -66,8 +66,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 mod alerts_responder;
 mod aspen_assignment;
-use std::time::Instant;
 use prost::Message;
+use std::time::Instant;
 
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
@@ -333,7 +333,10 @@ impl AspenRpc for AspenServer {
 
         let hash_data_duration = hash_data_start.elapsed();
 
-        println!("wrote {realtime_feed_id}, took {} ms, is new data: {new_data}", hash_data_duration.as_millis());
+        println!(
+            "wrote {realtime_feed_id}, took {} ms, is new data: {new_data}",
+            hash_data_duration.as_millis()
+        );
 
         //   println!("Saved FeedMessages for {}", realtime_feed_id);
 

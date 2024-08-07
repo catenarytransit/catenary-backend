@@ -185,13 +185,15 @@ pub async fn download_return_eligible_feeds(
                                         let hash_str = hash.to_string();
 
             
-                                        use catenary::schema::gtfs::static_download_attempts::dsl::*;
+                                        use catenary::schema::gtfs::static_download_attempts::dsl as sda_dsl;
 
                                         //query the SQL database for any ingests that have the same zip
                                         
                             let conn  = &mut pool.get().await.unwrap();
-                                        let download_attempts_postgres_lookup = static_download_attempts
-                                            .filter(file_hash.eq(hash_str))
+                                        let download_attempts_postgres_lookup = sda_dsl::static_download_attempts
+                                            .filter(sda_dsl::file_hash.eq(hash_str))
+                                            .filter(sda_dsl::ingestion_version.eq(MAPLE_INGESTION_VERSION))
+                                            .filter(sda_dsl::onestop_feed_id.eq(&staticfeed.feed_id))
                                             .load::<StaticDownloadAttempt>(conn)
                                             .await;
             
@@ -211,6 +213,7 @@ pub async fn download_return_eligible_feeds(
                                                      // this zip file has never been seen before! Insert it!
                                                 if download_attempts_postgres_lookup.is_empty() {
                                                     answer.ingest = true;
+                                                    println!("Never seen this zip file + maple version together: {}", &staticfeed.feed_id);
                                                 } else {
             
                                                     // a previous succcessful ingest has happened
@@ -220,14 +223,12 @@ pub async fn download_return_eligible_feeds(
             
                                                         //thus, don't perform the ingest
                                                     if check_for_previous_insert_sucesses.is_some() {
-                                                        if check_for_previous_insert_sucesses.unwrap().ingestion_version < MAPLE_INGESTION_VERSION {
-                                                            answer.ingest = true;
-                                                        } else {
-                                                            answer.ingest = false;
-                                                        }
+                                                        println!("Don't need to insert: {}, already inserted", &staticfeed.feed_id);
+                                                        answer.ingest = false;
                                                     } else {
                                                         //no successes have occured, reattempt this zip file
                                                         //search through zookeeper tree for current pending operations (todo!)
+                                                        println!("Insert: {}, tried but failed or mark for redo", &staticfeed.feed_id);
                                                         answer.ingest = true;
                                                     }
                                                 }
