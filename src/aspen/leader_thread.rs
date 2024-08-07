@@ -1,22 +1,9 @@
-use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::ChateausLeaderHashMap;
-use catenary::aspen::lib::RealtimeFeedMetadataEtcd;
 use catenary::postgres_tools::CatenaryPostgresPool;
-use catenary::ChateauDataNoGeometry;
-use diesel::query_dsl::methods::FilterDsl;
-use diesel::query_dsl::select_dsl::SelectDsl;
-use diesel::sql_types::{Float, Integer};
-use diesel::ExpressionMethods;
-use diesel::Selectable;
-use diesel::SelectableHelper;
-use diesel_async::pooled_connection::bb8::PooledConnection;
-use diesel_async::RunQueryDsl;
-use std::collections::BTreeMap;
 use std::error::Error;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_threadpool::Worker;
 
 pub async fn aspen_leader_thread(
     workers_nodes: Arc<Mutex<Vec<String>>>,

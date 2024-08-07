@@ -7,8 +7,7 @@ use ahash::AHashSet;
 use gtfs_structures::DirectionType;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use tzf_rs::DefaultFinder;
 
 lazy_static! {
@@ -145,13 +144,13 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
         let mut ranges: Vec<Vec<usize>> = Vec::new();
 
-        if stop_indicies_requiring_interpolation.len() > 0 {
+        if !stop_indicies_requiring_interpolation.is_empty() {
             //group into ranges of consecutive indicies
 
             let mut current_range: Vec<usize> = Vec::new();
 
             for stop_indice in stop_indicies_requiring_interpolation {
-                if current_range.len() == 0 {
+                if current_range.is_empty() {
                     current_range.push(stop_indice);
                 } else if current_range.last().unwrap() + 1 == stop_indice {
                     current_range.push(stop_indice);
@@ -400,6 +399,4 @@ fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<String>) ->
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-}
+mod tests {}

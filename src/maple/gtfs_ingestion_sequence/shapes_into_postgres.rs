@@ -12,7 +12,6 @@ use std::sync::Arc;
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::rename_route_labels::*;
 use catenary::enum_to_int::route_type_to_int;
-use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::CatenaryPostgresPool;
 
 pub async fn shapes_into_postgres(
@@ -31,7 +30,7 @@ pub async fn shapes_into_postgres(
     let conn = &mut conn_pre?;
 
     for (shape_id, shape) in gtfs.shapes.iter() {
-        if (feed_id == "f-9qh-metrolinktrains") {
+        if feed_id == "f-9qh-metrolinktrains" {
             //skip metrolink's poorly drawn shapes
             if shape_id.contains("in") || shape_id.contains("out") {
                 continue;
@@ -43,7 +42,7 @@ pub async fn shapes_into_postgres(
         let route_ids = shape_id_to_route_ids_lookup.get(shape_id);
 
         if let Some(route_ids) = route_ids {
-            let route = gtfs.routes.get(route_ids.iter().nth(0).unwrap());
+            let route = gtfs.routes.get(route_ids.iter().next().unwrap());
 
             if route.is_some() {
                 route_type_number = route_type_to_int(&route.unwrap().route_type);
@@ -52,7 +51,7 @@ pub async fn shapes_into_postgres(
 
         //backround colour to use
         let route = match route_ids {
-            Some(route_ids) => match route_ids.iter().nth(0) {
+            Some(route_ids) => match route_ids.iter().next() {
                 Some(route_id) => gtfs.routes.get(route_id),
                 None => None,
             },
@@ -165,17 +164,14 @@ pub async fn shapes_into_postgres(
                     attempt_id: attempt_id.to_string(),
                     shape_id: shape_id.clone(),
                     chateau: chateau_id.to_string(),
-                    linestring: linestring,
+                    linestring,
                     color: Some(bg_color_string),
-                    routes: match route_ids {
-                        Some(route_ids) => Some(
-                            route_ids
-                                .iter()
-                                .map(|route_id| Some(route_id.to_string()))
-                                .collect(),
-                        ),
-                        None => None,
-                    },
+                    routes: route_ids.map(|route_ids| {
+                        route_ids
+                            .iter()
+                            .map(|route_id| Some(route_id.to_string()))
+                            .collect()
+                    }),
                     route_type: route_type_number,
                     route_label: Some(route_label),
                     route_label_translations: None,

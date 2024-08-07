@@ -5,18 +5,12 @@
 extern crate catenary;
 use ahash::{AHashMap, AHashSet};
 use catenary::aspen_dataset::*;
-use catenary::metrolink_ptc_to_stop_id::METROLINK_STOP_LIST;
-use catenary::parse_gtfs_rt_message;
 use catenary::postgres_tools::CatenaryPostgresPool;
-use catenary::route_id_transform;
-use dashmap::DashMap;
 use diesel::ExpressionMethods;
 use diesel::QueryDsl;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use gtfs_rt::FeedMessage;
-use gtfs_rt::TripUpdate;
-use prost::Message;
 use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde::Serialize;
@@ -108,9 +102,9 @@ pub async fn new_rt_data(
     let mut alerts: AHashMap<String, AspenisedAlert> = AHashMap::new();
 
     let mut impacted_route_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
-    let mut impacted_stop_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
+    let impacted_stop_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
     let mut impact_trip_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
-    let mut general_alerts: AHashMap<String, Vec<String>> = AHashMap::new();
+    let general_alerts: AHashMap<String, Vec<String>> = AHashMap::new();
 
     use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
@@ -384,7 +378,7 @@ pub async fn new_rt_data(
                     if let Some(trip_update) = &trip_update_entity.trip_update {
                         let trip_id = trip_update.trip.trip_id.clone();
 
-                        let mut trip_update = AspenisedTripUpdate {
+                        let trip_update = AspenisedTripUpdate {
                             trip: trip_update.trip.clone().into(),
                             vehicle: trip_update.vehicle.clone().map(|x| x.into()),
                             stop_time_update: trip_update

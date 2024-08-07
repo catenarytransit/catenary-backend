@@ -35,32 +35,15 @@
 
 // https://en.wikipedia.org/wiki/Rhododendron_ferrugineum
 use catenary::agency_secret::*;
-use catenary::fast_hash;
-use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
-use catenary::schema::gtfs::admin_credentials::last_updated_ms;
 use dashmap::DashMap;
-use diesel::dsl::exists;
-use diesel::query_dsl::methods::FilterDsl;
-use diesel::query_dsl::select_dsl::SelectDsl;
-use diesel::sql_types::{Float, Integer};
-use diesel::ExpressionMethods;
-use diesel::Selectable;
-use diesel::SelectableHelper;
-use diesel_async::pooled_connection::bb8::PooledConnection;
-use diesel_async::RunQueryDsl;
-use dmfr_dataset_reader::read_folders;
 use futures::prelude::*;
 use rand::Rng;
-use serde::Deserialize;
-use serde::Serialize;
-use std::collections::HashSet;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
-use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 mod custom_rt_feeds;
@@ -248,7 +231,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             let last_updated_worker_time_kv =
                 fetch_last_updated_assignments_for_this_worker_resp.kvs();
 
-            if let Some(last_updated_worker_time) = last_updated_worker_time_kv.get(0) {
+            if let Some(last_updated_worker_time) = last_updated_worker_time_kv.first() {
                 let last_updated_worker_time_value =
                     bincode::deserialize::<u64>(last_updated_worker_time.value()).unwrap();
 

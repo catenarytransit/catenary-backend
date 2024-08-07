@@ -9,10 +9,9 @@ struct Flags {
 }
 
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2,
 };
-use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
@@ -23,7 +22,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let flags: Flags = Flags::parse();
 
     let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
-    let mut conn = &mut conn_pool.get().await?;
+    let conn = &mut conn_pool.get().await?;
 
     println!("Connected to postgres");
 
@@ -56,7 +55,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let unix_time = catenary::duration_since_unix_epoch().as_millis() as i64;
 
     let new_admin = AdminCredentials {
-        email: email,
+        email,
         hash: serialised_hash,
         salt: serialised_salt,
         last_updated_ms: unix_time,

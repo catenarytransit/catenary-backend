@@ -1,5 +1,5 @@
 use lazy_static::lazy_static;
-use regex::{Captures, Regex};
+use regex::Regex;
 
 use crate::route_id_transform;
 

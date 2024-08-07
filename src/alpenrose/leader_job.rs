@@ -1,8 +1,7 @@
 use crate::get_feed_metadata::get_feed_metadata;
 use crate::RealtimeFeedFetch;
 use catenary::fast_hash;
-use catenary::postgres_tools::CatenaryConn;
-use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
+use catenary::postgres_tools::CatenaryPostgresPool;
 use dmfr_dataset_reader::read_folders;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -110,9 +109,8 @@ pub async fn perform_leader_job(
                     )
                     .await;
 
-                match &set_assignment {
-                    Err(err) => eprintln!("{:#?}", err),
-                    _ => {}
+                if let Err(err) = &set_assignment {
+                    eprintln!("{:#?}", err)
                 }
             }
             //update the last updated time
@@ -125,9 +123,8 @@ pub async fn perform_leader_job(
                 )
                 .await;
 
-            match &set_metadata_updated_time {
-                Err(err) => eprintln!("{:#?}", err),
-                _ => {}
+            if let Err(err) = &set_metadata_updated_time {
+                eprintln!("{:#?}", err)
             }
         }
     }

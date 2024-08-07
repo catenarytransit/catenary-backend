@@ -2,13 +2,7 @@
 // Catenary Transit Initiatives
 // Attribution cannot be removed
 
-use crate::custom_pg_types::TripFrequency;
-use diesel::deserialize::FromSql;
-use diesel::pg::Pg;
 use diesel::prelude::*;
-use diesel::serialize::ToSql;
-use diesel::sql_types::*;
-use diesel::AsExpression;
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;

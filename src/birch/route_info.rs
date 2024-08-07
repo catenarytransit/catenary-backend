@@ -189,8 +189,7 @@ pub async fn route_info(
     let mut list_of_shape_ids = direction_patterns_pg
         .iter()
         .map(|x| x.gtfs_shape_id.clone())
-        .filter(|x| x.is_some())
-        .map(|x| x.unwrap())
+        .flatten()
         .collect::<Vec<String>>();
 
     list_of_shape_ids.sort();

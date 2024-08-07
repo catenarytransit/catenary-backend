@@ -10,16 +10,13 @@ pub fn validate_gtfs_rt(input: &gtfs_rt::FeedMessage) -> GtfsRtQualityCheckResul
     let mut vehicles_at_null_island: usize = 0;
 
     let global_timestamp = input.header.timestamp;
-    let global_timestamp_string = match global_timestamp {
-        Some(global_timestamp) => Some(global_timestamp.to_string()),
-        None => None,
-    };
+    let global_timestamp_string =
+        global_timestamp.map(|global_timestamp| global_timestamp.to_string());
 
     for entity in &input.entity {
         if let Some(global_timestamp_string) = &global_timestamp_string {
             if entity.id.contains(global_timestamp_string) {
-                entities_id_using_timestamp_from_global =
-                    entities_id_using_timestamp_from_global + 1;
+                entities_id_using_timestamp_from_global += 1;
             }
         }
 
@@ -28,7 +25,7 @@ pub fn validate_gtfs_rt(input: &gtfs_rt::FeedMessage) -> GtfsRtQualityCheckResul
                 if f32::abs(0.0 - position.latitude) < 0.01
                     && f32::abs(0.0 - position.longitude) < 0.01
                 {
-                    vehicles_at_null_island = vehicles_at_null_island + 1;
+                    vehicles_at_null_island += 1;
                 }
             }
         }

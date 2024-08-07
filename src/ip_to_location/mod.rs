@@ -9,11 +9,9 @@ use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::AsyncConnection;
 use diesel_async::RunQueryDsl;
 use flate2::read::GzDecoder;
-use ipnet::IpNet;
 use serde::Deserialize;
 use serde::Serialize;
 use std::error::Error;
-use std::fs;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -160,9 +158,9 @@ pub async fn insert_ip_db_into_postgres(
             };
 
             IpToGeoAddr {
-                is_ipv6: is_ipv6,
-                range_start: range_start,
-                range_end: range_end,
+                is_ipv6,
+                range_start,
+                range_end,
                 country_code: geo_entry.country_code,
                 geo_state: geo_entry.state,
                 geo_state2: geo_entry.state2,

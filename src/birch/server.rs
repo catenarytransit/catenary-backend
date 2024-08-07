@@ -1378,7 +1378,7 @@ async fn chateaus(
     let chateau_lock = chateau_cache.read().unwrap();
     let chateau_as_ref = chateau_lock.as_ref();
 
-    let cloned_chateau_data = match chateau_as_ref {
+    let cloned_chateau_data =  {
         Some(chateau_as_ref) => Some(chateau_as_ref.clone()),
         None => None,
     };

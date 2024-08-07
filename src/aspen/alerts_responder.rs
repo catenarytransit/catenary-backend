@@ -2,7 +2,6 @@ use catenary::aspen::lib::AlertsforManyStops;
 
 use catenary::aspen_dataset::AspenisedAlert;
 use scc::HashMap as SccHashMap;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub fn get_alerts_from_route_id(

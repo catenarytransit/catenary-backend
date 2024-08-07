@@ -12,25 +12,22 @@ pub fn make_hashmap_stops_to_route_types_and_ids(
 
     for (trip_id, trip) in &gtfs.trips {
         for stoptime in &trip.stop_times {
-            match gtfs.get_route(&trip.route_id) {
-                Ok(route) => {
-                    let route_type_num = route_type_to_int(&route.route_type);
+            if let Ok(route) = gtfs.get_route(&trip.route_id) {
+                let route_type_num = route_type_to_int(&route.route_type);
 
-                    stop_to_route_types
-                        .entry(stoptime.stop.id.to_owned())
-                        .and_modify(|types| {
-                            types.insert(route_type_num);
-                        })
-                        .or_insert(HashSet::from([route_type_num]));
+                stop_to_route_types
+                    .entry(stoptime.stop.id.to_owned())
+                    .and_modify(|types| {
+                        types.insert(route_type_num);
+                    })
+                    .or_insert(HashSet::from([route_type_num]));
 
-                    stop_to_route_ids
-                        .entry(stoptime.stop.id.to_owned())
-                        .and_modify(|ids| {
-                            ids.insert(route.id.to_owned());
-                        })
-                        .or_insert(HashSet::from([route.id.to_owned()]));
-                }
-                _ => {}
+                stop_to_route_ids
+                    .entry(stoptime.stop.id.to_owned())
+                    .and_modify(|ids| {
+                        ids.insert(route.id.to_owned());
+                    })
+                    .or_insert(HashSet::from([route.id.to_owned()]));
             }
         }
     }

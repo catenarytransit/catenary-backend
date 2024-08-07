@@ -3,7 +3,6 @@
 // Attribution cannot be removed
 
 use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
-use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb;
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
@@ -21,28 +20,20 @@ use catenary::models::{
     DirectionPatternMeta, DirectionPatternRow, ItineraryPatternMeta, ItineraryPatternRow,
     Route as RoutePgModel,
 };
-use catenary::postgres_tools::CatenaryConn;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::route_id_transform;
-use catenary::schema::gtfs::calendar::onestop_feed_id;
-use catenary::schema::gtfs::chateaus::languages_avaliable;
-use catenary::schema::gtfs::direction_pattern;
 use chrono::NaiveDate;
 use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
-use geo::polygon;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::FeedInfo;
-use gtfs_structures::{BikesAllowedType, ExactTimes};
 use gtfs_translations::translation_csv_text_to_translations;
 use gtfs_translations::TranslationResult;
 use prost::Message;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use titlecase::titlecase;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -94,7 +85,7 @@ pub async fn gtfs_process_feed(
         },
     };
 
-    let feed_info: Option<FeedInfo> = match gtfs.feed_info.len() >= 1 {
+    let feed_info: Option<FeedInfo> = match !gtfs.feed_info.is_empty() {
         true => Some(gtfs.feed_info[0].clone()),
         false => None,
     };
@@ -133,7 +124,7 @@ pub async fn gtfs_process_feed(
         shape_to_text_color_lookup,
         shape_id_to_route_ids_lookup,
         route_ids_to_shape_ids,
-    } = shape_to_colour(&feed_id, &gtfs);
+    } = shape_to_colour(feed_id, &gtfs);
 
     //insert agencies
     let mut agency_id_already_done: HashSet<Option<&String>> = HashSet::new();
@@ -177,10 +168,10 @@ pub async fn gtfs_process_feed(
             &gtfs,
             &shape_to_color_lookup,
             &shape_to_text_color_lookup,
-            &feed_id,
+            feed_id,
             Arc::clone(&arc_conn_pool),
-            &chateau_id,
-            &attempt_id,
+            chateau_id,
+            attempt_id,
             &shape_id_to_route_ids_lookup,
         )
         .await?;
@@ -189,10 +180,10 @@ pub async fn gtfs_process_feed(
     //insert stops
     stops_into_postgres(
         &gtfs,
-        &feed_id,
+        feed_id,
         Arc::clone(&arc_conn_pool),
-        &chateau_id,
-        &attempt_id,
+        chateau_id,
+        attempt_id,
         &stop_ids_to_route_types,
         &stop_ids_to_route_ids,
         &stop_id_to_children_ids,
@@ -226,7 +217,7 @@ pub async fn gtfs_process_feed(
             .get(direction_pattern_id)
             .unwrap()
             .iter()
-            .nth(0)
+            .next()
             .expect("Expected Itin for direction id");
 
         let itin_pattern = reduction
@@ -240,9 +231,8 @@ pub async fn gtfs_process_feed(
             let stop_points = direction_pattern
                 .stop_sequence
                 .iter()
-                .map(|stop_id| gtfs.stops.get(stop_id))
-                .flatten()
-                .map(|stop| match (stop.latitude, stop.longitude) {
+                .filter_map(|stop_id| gtfs.stops.get(stop_id))
+                .filter_map(|stop| match (stop.latitude, stop.longitude) {
                     (Some(latitude), Some(longitude)) => Some(postgis_diesel::types::Point {
                         y: latitude,
                         x: longitude,
@@ -250,7 +240,6 @@ pub async fn gtfs_process_feed(
                     }),
                     _ => None,
                 })
-                .flatten()
                 .collect::<Vec<postgis_diesel::types::Point>>();
 
             if stop_points.len() > 2 {
@@ -549,10 +538,8 @@ pub async fn gtfs_process_feed(
         .set((
             catenary::schema::gtfs::static_feeds::dsl::languages_avaliable
                 .eq(languages_avaliable_pg),
-            catenary::schema::gtfs::static_feeds::dsl::hull.eq(match hull_pg {
-                Some(hull_pg) => Some(postgis_diesel::types::GeometryContainer::Polygon(hull_pg)),
-                None => None,
-            }),
+            catenary::schema::gtfs::static_feeds::dsl::hull
+                .eq(hull_pg.map(postgis_diesel::types::GeometryContainer::Polygon)),
         ))
         .execute(conn)
         .await?;

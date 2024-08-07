@@ -7,7 +7,6 @@ use scc::HashMap as SccHashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;

@@ -5,7 +5,6 @@
 use catenary::enum_to_int::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::stops::dsl::stops as stops_table;
-use diesel_async::AsyncConnection;
 use diesel_async::RunQueryDsl;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -24,28 +23,25 @@ pub async fn stops_into_postgres(
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     for (stop_id, stop) in &gtfs.stops {
         let name: Option<String> = titlecase_process_new(stop.name.as_ref());
-        let display_name: Option<String> = match &name {
-            Some(name) => Some(
-                name.clone()
-                    .replace(" Station", "")
-                    .replace(", Bahnhof", "")
-                    .replace(" Banhhof", "")
-                    .replace("Estación de tren ", "")
-                    .replace(" Metrolink", "")
-                    .replace("Northbound", "N.B.")
-                    .replace("Eastbound", "E.B.")
-                    .replace("Southbound", "S.B.")
-                    .replace("Westbound", "W.B."),
-            ),
-            None => None,
-        };
+        let display_name: Option<String> = name.as_ref().map(|name| {
+            name.clone()
+                .replace(" Station", "")
+                .replace(", Bahnhof", "")
+                .replace(" Banhhof", "")
+                .replace("Estación de tren ", "")
+                .replace(" Metrolink", "")
+                .replace("Northbound", "N.B.")
+                .replace("Eastbound", "E.B.")
+                .replace("Southbound", "S.B.")
+                .replace("Westbound", "W.B.")
+        });
 
         let stop_pg = catenary::models::Stop {
             onestop_feed_id: feed_id.to_string(),
             chateau: chateau_id.to_string(),
             attempt_id: attempt_id.to_string(),
             gtfs_id: stop_id.clone(),
-            name: name,
+            name,
             name_translations: None,
             displayname: display_name,
             code: stop.code.clone(),
@@ -96,7 +92,7 @@ pub async fn stops_into_postgres(
             wheelchair_boarding: availability_to_int(&stop.wheelchair_boarding),
             primary_route_type: match stop_ids_to_route_types.get(&stop.id) {
                 Some(route_types) => {
-                    let mut route_types = route_types.iter().map(|x| *x).collect::<Vec<i16>>();
+                    let route_types = route_types.iter().copied().collect::<Vec<i16>>();
                     Some(route_types[0])
                 }
                 None => None,
@@ -157,5 +153,5 @@ pub fn titlecase_process_new_nooption(input: &String) -> String {
 }
 
 pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
-    input.map(|s| titlecase_process_new_nooption(s))
+    input.map(titlecase_process_new_nooption)
 }

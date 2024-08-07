@@ -38,21 +38,15 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use futures::StreamExt;
 use git2::Repository;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
-use tokio::runtime;
 
 use crate::cleanup::delete_attempt_objects;
 use crate::cleanup::wipe_whole_feed;
 
 mod assign_production_tables;
 mod chateau_postprocess;
-use catenary::ip_to_location::insert_ip_db_into_postgres;
 mod cleanup;
 mod gtfs_handlers;
 mod gtfs_ingestion_sequence;
@@ -95,13 +89,13 @@ fn update_transitland_submodule() -> Result<(), Box<dyn Error + std::marker::Sen
                 }
                 Err(find_submodule) => {
                     eprintln!("Can't find submodule!");
-                    return Err(Box::new(find_submodule));
+                    Err(Box::new(find_submodule))
                 }
             }
         }
         Err(repo_err) => {
             eprintln!("Can't find own repo!");
-            return Err(Box::new(repo_err));
+            Err(Box::new(repo_err))
         }
     }
 }
@@ -110,10 +104,7 @@ fn get_threads_gtfs() -> usize {
     let thread_env = std::env::var("THREADS_GTFS");
 
     match thread_env {
-        Ok(thread_env) => match thread_env.parse::<usize>() {
-            Ok(thread_count) => thread_count,
-            Err(_) => 4,
-        },
+        Ok(thread_env) => thread_env.parse::<usize>().unwrap_or(4),
         Err(_) => 4,
     }
 }
@@ -402,12 +393,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .into_iter()
                 .filter(|unzipped_feed| unzipped_feed.1)
                 .map(|(feed_id, _)| (feed_id.clone(), attempt_ids.get(&feed_id).unwrap().clone()))
-                .filter_map(
-                    |(feed_id, attempt_id)| match feed_id_to_chateau_lookup.get(&feed_id) {
-                        Some(chateau_id) => Some((feed_id, attempt_id, chateau_id.clone())),
-                        None => None,
-                    },
-                )
+                .filter_map(|(feed_id, attempt_id)| {
+                    feed_id_to_chateau_lookup
+                        .get(&feed_id)
+                        .map(|chateau_id| (feed_id, attempt_id, chateau_id.clone()))
+                })
                 .collect();
 
             let total_feeds_to_process = feeds_to_process.len() as u16;
@@ -441,7 +431,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                     )
                                     .await;
 
-                                    let mut ingest_progress  = ingest_progress.lock().unwrap();
+                                    let mut ingest_progress = ingest_progress.lock().unwrap();
                                     *ingest_progress += 1;
             
                                     println!(
