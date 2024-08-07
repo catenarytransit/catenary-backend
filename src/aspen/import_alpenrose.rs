@@ -21,8 +21,8 @@ use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::time::Instant;
 use std::sync::Arc;
+use std::time::Instant;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-mta~nyc~rt~subway~1~2~3~4~5~6~7",
