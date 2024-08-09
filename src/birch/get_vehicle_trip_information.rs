@@ -584,7 +584,7 @@ pub async fn get_trip_init(
 
     //calculate start of the trip time
 
-    let start_of_trip_datetime = match query.start_time {
+    let start_of_trip_datetime = match &query.start_time {
         Some(start_time) => {
             //  let start_time = chrono::NaiveTime::parse_from_str(&start_time, "%H:%M:%S");
 
