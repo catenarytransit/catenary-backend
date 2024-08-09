@@ -93,7 +93,8 @@ pub async fn get_realtime_locations(
 
     let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
         fetch_assigned_node_for_this_realtime_feed
-            .kvs().first()
+            .kvs()
+            .first()
             .unwrap()
             .value(),
     )

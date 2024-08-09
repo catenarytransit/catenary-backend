@@ -310,9 +310,7 @@ pub async fn route_info(
     //pdf is none for now
 
     let response = RouteInfoResponse {
-        agency_name: agency
-            .map(|x| x.agency_name.clone())
-            .unwrap_or_default(),
+        agency_name: agency.map(|x| x.agency_name.clone()).unwrap_or_default(),
         agency_id: match route.agency_id.clone() {
             Some(agency_id) => agency_id,
             None => "".to_string(),

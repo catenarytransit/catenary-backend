@@ -235,9 +235,7 @@ pub async fn get_realtime_keys(
 
                     HttpResponse::Ok()
                         .append_header(("Cache-Control", "no-cache"))
-                        .json(KeyResponse {
-                            passwords,
-                        })
+                        .json(KeyResponse { passwords })
                 }
                 Err(e) => {
                     println!("Error: {:?}", e);
