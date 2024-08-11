@@ -10,7 +10,7 @@ use diesel::ExpressionMethods;
 use diesel::QueryDsl;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
-use gtfs_rt::FeedMessage;
+use gtfs_realtime::FeedMessage;
 use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde::Serialize;

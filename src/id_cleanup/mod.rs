@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 use regex::Regex;
-
+use gtfs_realtime::{FeedEntity, FeedMessage};
 use crate::route_id_transform;
 
 lazy_static! {
@@ -25,7 +25,7 @@ pub fn gtfs_rt_id_cleanup(global_timestamp: Option<u64>, id: String) -> String {
         .to_string()
 }
 
-pub fn gtfs_rt_cleanup(x: gtfs_rt::FeedMessage) -> gtfs_rt::FeedMessage {
+pub fn gtfs_rt_cleanup(x: gtfs_realtime::FeedMessage) -> gtfs_realtime::FeedMessage {
     let global_timestamp = x.header.timestamp;
 
     let new_entities = x
@@ -33,24 +33,24 @@ pub fn gtfs_rt_cleanup(x: gtfs_rt::FeedMessage) -> gtfs_rt::FeedMessage {
         .into_iter()
         .map(|entity| {
             let new_id = gtfs_rt_id_cleanup(global_timestamp, entity.id);
-            gtfs_rt::FeedEntity {
+            gtfs_realtime::FeedEntity {
                 id: new_id,
                 ..entity
             }
         })
         .collect();
 
-    gtfs_rt::FeedMessage {
+    gtfs_realtime::FeedMessage {
         entity: new_entities,
         ..x
     }
 }
 
 pub fn gtfs_rt_correct_route_id_string(
-    x: gtfs_rt::FeedMessage,
+    x: gtfs_realtime::FeedMessage,
     realtime_feed_id: &str,
-) -> gtfs_rt::FeedMessage {
-    let new_entities: Vec<gtfs_rt::FeedEntity> = x
+) -> gtfs_realtime::FeedMessage {
+    let new_entities: Vec<gtfs_realtime::FeedEntity> = x
         .entity
         .into_iter()
         .map(|entity| {
@@ -74,9 +74,9 @@ pub fn gtfs_rt_correct_route_id_string(
 
             entity
         })
-        .collect::<Vec<gtfs_rt::FeedEntity>>();
+        .collect::<Vec<gtfs_realtime::FeedEntity>>();
 
-    gtfs_rt::FeedMessage {
+    gtfs_realtime::FeedMessage {
         entity: new_entities,
         ..x
     }

@@ -29,8 +29,8 @@ pub struct HashAlert {
     pub effect_detail: Option<HashTranslatedString>,
 }
 
-impl From<gtfs_rt::Alert> for HashAlert {
-    fn from(input: gtfs_rt::Alert) -> Self {
+impl From<gtfs_realtime::Alert> for HashAlert {
+    fn from(input: gtfs_realtime::Alert) -> Self {
         HashAlert {
             active_period: input.active_period.into_iter().map(|x| x.into()).collect(),
             informed_entity: input
@@ -54,15 +54,15 @@ impl From<gtfs_rt::Alert> for HashAlert {
     }
 }
 
-impl From<gtfs_rt::TranslatedString> for HashTranslatedString {
-    fn from(input: gtfs_rt::TranslatedString) -> Self {
+impl From<gtfs_realtime::TranslatedString> for HashTranslatedString {
+    fn from(input: gtfs_realtime::TranslatedString) -> Self {
         HashTranslatedString {
             translation: input.translation.into_iter().map(|x| x.into()).collect(),
         }
     }
 }
 
-use gtfs_rt::translated_string::Translation;
+use gtfs_realtime::translated_string::Translation;
 
 impl From<Translation> for HashTranslation {
     fn from(input: Translation) -> Self {
@@ -78,8 +78,8 @@ pub struct HashTranslatedImage {
     pub localized_image: Vec<HashLocalizedImage>,
 }
 
-impl From<gtfs_rt::TranslatedImage> for HashTranslatedImage {
-    fn from(input: gtfs_rt::TranslatedImage) -> Self {
+impl From<gtfs_realtime::TranslatedImage> for HashTranslatedImage {
+    fn from(input: gtfs_realtime::TranslatedImage) -> Self {
         HashTranslatedImage {
             localized_image: input
                 .localized_image
@@ -97,7 +97,7 @@ pub struct HashLocalizedImage {
     pub language: Option<String>,
 }
 
-use gtfs_rt::translated_image::LocalizedImage;
+use gtfs_realtime::translated_image::LocalizedImage;
 
 impl From<LocalizedImage> for HashLocalizedImage {
     fn from(input: LocalizedImage) -> Self {
@@ -135,8 +135,8 @@ pub struct RoughTimeRange {
     pub end: Option<u64>,
 }
 
-impl From<gtfs_rt::TimeRange> for RoughTimeRange {
-    fn from(input: gtfs_rt::TimeRange) -> Self {
+impl From<gtfs_realtime::TimeRange> for RoughTimeRange {
+    fn from(input: gtfs_realtime::TimeRange) -> Self {
         RoughTimeRange {
             start: input.start,
             end: input.end,
@@ -144,8 +144,8 @@ impl From<gtfs_rt::TimeRange> for RoughTimeRange {
     }
 }
 
-impl From<gtfs_rt::EntitySelector> for RoughEntitySelector {
-    fn from(input: gtfs_rt::EntitySelector) -> Self {
+impl From<gtfs_realtime::EntitySelector> for RoughEntitySelector {
+    fn from(input: gtfs_realtime::EntitySelector) -> Self {
         RoughEntitySelector {
             agency_id: input.agency_id,
             route_id: input.route_id,
@@ -169,8 +169,8 @@ pub struct RoughVehicleEntity {
     pub occupancy_percentage: Option<u32>,
 }
 
-impl From<gtfs_rt::Position> for HashPosition {
-    fn from(input: gtfs_rt::Position) -> Self {
+impl From<gtfs_realtime::Position> for HashPosition {
+    fn from(input: gtfs_realtime::Position) -> Self {
         HashPosition {
             latitude: OrderedFloat(input.latitude),
             longitude: OrderedFloat(input.longitude),
@@ -181,8 +181,8 @@ impl From<gtfs_rt::Position> for HashPosition {
     }
 }
 
-impl From<gtfs_rt::VehiclePosition> for RoughVehicleEntity {
-    fn from(input: gtfs_rt::VehiclePosition) -> Self {
+impl From<gtfs_realtime::VehiclePosition> for RoughVehicleEntity {
+    fn from(input: gtfs_realtime::VehiclePosition) -> Self {
         RoughVehicleEntity {
             trip: input.trip.map(|x| x.into()),
             vehicle: input.vehicle.map(|x| x.into()),
@@ -197,8 +197,8 @@ impl From<gtfs_rt::VehiclePosition> for RoughVehicleEntity {
     }
 }
 
-impl From<gtfs_rt::VehicleDescriptor> for RoughVehicleDescriptor {
-    fn from(input: gtfs_rt::VehicleDescriptor) -> Self {
+impl From<gtfs_realtime::VehicleDescriptor> for RoughVehicleDescriptor {
+    fn from(input: gtfs_realtime::VehicleDescriptor) -> Self {
         RoughVehicleDescriptor {
             id: input.id,
             label: input.label,
@@ -208,8 +208,8 @@ impl From<gtfs_rt::VehicleDescriptor> for RoughVehicleDescriptor {
     }
 }
 
-impl From<gtfs_rt::trip_descriptor::ModifiedTripSelector> for RoughModifiedTripSelector {
-    fn from(input: gtfs_rt::trip_descriptor::ModifiedTripSelector) -> Self {
+impl From<gtfs_realtime::trip_descriptor::ModifiedTripSelector> for RoughModifiedTripSelector {
+    fn from(input: gtfs_realtime::trip_descriptor::ModifiedTripSelector) -> Self {
         RoughModifiedTripSelector {
             modifications_id: input.modifications_id,
             affected_trip_id: input.affected_trip_id,
@@ -217,8 +217,8 @@ impl From<gtfs_rt::trip_descriptor::ModifiedTripSelector> for RoughModifiedTripS
     }
 }
 
-impl From<gtfs_rt::TripDescriptor> for RoughTripDescriptor {
-    fn from(input: gtfs_rt::TripDescriptor) -> Self {
+impl From<gtfs_realtime::TripDescriptor> for RoughTripDescriptor {
+    fn from(input: gtfs_realtime::TripDescriptor) -> Self {
         RoughTripDescriptor {
             trip_id: input.trip_id,
             route_id: input.route_id,
@@ -249,8 +249,8 @@ pub struct RoughTripUpdate {
     pub trip_properties: Option<HashTripProperties>,
 }
 
-impl From<gtfs_rt::TripUpdate> for RoughTripUpdate {
-    fn from(input: gtfs_rt::TripUpdate) -> Self {
+impl From<gtfs_realtime::TripUpdate> for RoughTripUpdate {
+    fn from(input: gtfs_realtime::TripUpdate) -> Self {
         RoughTripUpdate {
             trip: input.trip.into(),
             vehicle: input.vehicle.map(|x| x.into()),
@@ -265,8 +265,8 @@ impl From<gtfs_rt::TripUpdate> for RoughTripUpdate {
     }
 }
 
-impl From<gtfs_rt::trip_update::TripProperties> for HashTripProperties {
-    fn from(input: gtfs_rt::trip_update::TripProperties) -> Self {
+impl From<gtfs_realtime::trip_update::TripProperties> for HashTripProperties {
+    fn from(input: gtfs_realtime::trip_update::TripProperties) -> Self {
         HashTripProperties {
             trip_id: input.trip_id,
             start_date: input.start_date,
@@ -276,8 +276,8 @@ impl From<gtfs_rt::trip_update::TripProperties> for HashTripProperties {
     }
 }
 
-impl From<gtfs_rt::trip_update::StopTimeUpdate> for HashStopTimeUpdate {
-    fn from(input: gtfs_rt::trip_update::StopTimeUpdate) -> Self {
+impl From<gtfs_realtime::trip_update::StopTimeUpdate> for HashStopTimeUpdate {
+    fn from(input: gtfs_realtime::trip_update::StopTimeUpdate) -> Self {
         HashStopTimeUpdate {
             stop_sequence: input.stop_sequence,
             stop_id: input.stop_id,
@@ -290,16 +290,16 @@ impl From<gtfs_rt::trip_update::StopTimeUpdate> for HashStopTimeUpdate {
     }
 }
 
-impl From<gtfs_rt::trip_update::stop_time_update::StopTimeProperties> for HashStopTimeProperties {
-    fn from(input: gtfs_rt::trip_update::stop_time_update::StopTimeProperties) -> Self {
+impl From<gtfs_realtime::trip_update::stop_time_update::StopTimeProperties> for HashStopTimeProperties {
+    fn from(input: gtfs_realtime::trip_update::stop_time_update::StopTimeProperties) -> Self {
         HashStopTimeProperties {
             assigned_stop_id: input.assigned_stop_id,
         }
     }
 }
 
-impl From<gtfs_rt::trip_update::StopTimeEvent> for HashStopTimeEvent {
-    fn from(input: gtfs_rt::trip_update::StopTimeEvent) -> Self {
+impl From<gtfs_realtime::trip_update::StopTimeEvent> for HashStopTimeEvent {
+    fn from(input: gtfs_realtime::trip_update::StopTimeEvent) -> Self {
         HashStopTimeEvent {
             delay: input.delay,
             time: input.time,
@@ -364,7 +364,7 @@ pub struct RoughModifiedTripSelector {
     pub affected_trip_id: Option<String>,
 }
 
-pub fn rough_hash_of_gtfs_rt(input: &gtfs_rt::FeedMessage) -> u64 {
+pub fn rough_hash_of_gtfs_rt(input: &gtfs_realtime::FeedMessage) -> u64 {
     let mut hashed_entries: BTreeMap<String, u64> = BTreeMap::new();
 
     for entity in &input.entity {

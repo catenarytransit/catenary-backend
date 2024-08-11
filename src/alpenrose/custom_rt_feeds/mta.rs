@@ -92,7 +92,7 @@ pub async fn fetch_mta_metronorth_data(
     }
 }
 
-fn get_lirr_train_id(entity: &gtfs_rt::FeedEntity) -> String {
+fn get_lirr_train_id(entity: &gtfs_realtime::FeedEntity) -> String {
     let mut train_id = String::from("");
 
     if entity.vehicle.is_some() {
@@ -121,7 +121,7 @@ fn get_lirr_train_id(entity: &gtfs_rt::FeedEntity) -> String {
 async fn get_mta_trips(
     client: &reqwest::Client,
     url: &str,
-) -> Result<gtfs_rt::FeedMessage, Box<dyn std::error::Error>> {
+) -> Result<gtfs_realtime::FeedMessage, Box<dyn std::error::Error>> {
     let bytes = client
         .get(url)
         //exposed on purpose. Not my key, this is from the MTA
@@ -132,7 +132,7 @@ async fn get_mta_trips(
         .await?
         .to_vec();
 
-    let decoded: gtfs_rt::FeedMessage = gtfs_rt::FeedMessage::decode(bytes.as_slice())?;
+    let decoded: gtfs_realtime::FeedMessage = gtfs_realtime::FeedMessage::decode(bytes.as_slice())?;
 
     Ok(decoded)
 }
@@ -231,8 +231,8 @@ pub struct MtaTrain {
 fn convert(
     mta: &Vec<MtaTrain>,
     railroad: MtaRailroad,
-    input_gtfs_trips: &gtfs_rt::FeedMessage,
-) -> Vec<gtfs_rt::FeedEntity> {
+    input_gtfs_trips: &gtfs_realtime::FeedMessage,
+) -> Vec<gtfs_realtime::FeedEntity> {
     let railroad_str = match railroad {
         MtaRailroad::LIRR => "LIRR",
         MtaRailroad::MNR => "MNR",
@@ -241,9 +241,9 @@ fn convert(
     mta.iter()
         .filter(|mta| mta.railroad.as_str() == railroad_str)
         .map(|mta| {
-            let mut supporting_gtfs: Option<gtfs_rt::FeedEntity> = None;
+            let mut supporting_gtfs: Option<gtfs_realtime::FeedEntity> = None;
 
-            let candidates_for_id: Vec<gtfs_rt::FeedEntity> = input_gtfs_trips
+            let candidates_for_id: Vec<gtfs_realtime::FeedEntity> = input_gtfs_trips
                 .entity
                 .clone()
                 .into_iter()
@@ -256,7 +256,7 @@ fn convert(
 
                     status
                 })
-                .collect::<Vec<gtfs_rt::FeedEntity>>();
+                .collect::<Vec<gtfs_realtime::FeedEntity>>();
 
             if !candidates_for_id.is_empty() {
                 supporting_gtfs = Some(candidates_for_id[0].clone());
@@ -267,7 +267,7 @@ fn convert(
                 let candidates_for_id = candidates_for_id
                     .into_iter()
                     .filter(|mta_entity| mta_entity.vehicle.is_some())
-                    .collect::<Vec<gtfs_rt::FeedEntity>>();
+                    .collect::<Vec<gtfs_realtime::FeedEntity>>();
 
                 if !candidates_for_id.is_empty() {
                     supporting_gtfs = Some(candidates_for_id[0].clone());
@@ -276,7 +276,7 @@ fn convert(
 
             (mta, supporting_gtfs)
         })
-        .map(|(mta, supporting_gtfs)| gtfs_rt::FeedEntity {
+        .map(|(mta, supporting_gtfs)| gtfs_realtime::FeedEntity {
             id: mta.train_id.clone(),
             is_deleted: None,
             trip_update: None,
@@ -284,7 +284,7 @@ fn convert(
             shape: None,
             stop: None,
             trip_modifications: None,
-            vehicle: Some(gtfs_rt::VehiclePosition {
+            vehicle: Some(gtfs_realtime::VehiclePosition {
                 vehicle: match &supporting_gtfs {
                     Some(supporting_gtfs) => {
                         supporting_gtfs.clone().vehicle.unwrap().vehicle.clone()
@@ -337,7 +337,7 @@ fn convert(
                     }
                     _ => panic!("Not MNR or LIRR"),
                 },
-                position: Some(gtfs_rt::Position {
+                position: Some(gtfs_realtime::Position {
                     latitude: mta.location.latitude,
                     longitude: mta.location.longitude,
                     bearing: mta.location.heading,
@@ -373,7 +373,7 @@ fn convert(
                 occupancy_percentage: None,
             }),
         })
-        .collect::<Vec<gtfs_rt::FeedEntity>>()
+        .collect::<Vec<gtfs_realtime::FeedEntity>>()
 }
 
 pub enum MtaRailroad {

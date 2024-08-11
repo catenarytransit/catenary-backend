@@ -52,7 +52,7 @@ use catenary::aspen_dataset::GtfsRtType;
 use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::Injector;
-use gtfs_rt::FeedMessage;
+use gtfs_realtime::FeedMessage;
 use scc::HashMap as SccHashMap;
 use std::error::Error;
 mod async_threads_alpenrose;

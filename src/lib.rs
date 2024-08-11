@@ -58,6 +58,7 @@ use gtfs_structures::RouteType;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use gtfs_realtime::{FeedMessage, FeedEntity};
 pub mod metrolink_ptc_to_stop_id;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -186,7 +187,7 @@ pub mod aspen_dataset {
         //id to trip update
         pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
         pub trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
-        //        pub raw_alerts: AHashMap<String, gtfs_rt::Alert>,
+        //        pub raw_alerts: AHashMap<String, gtfs_realtime::Alert>,
         pub aspenised_alerts: AHashMap<String, AspenisedAlert>,
         pub impacted_routes_alerts: AHashMap<String, Vec<String>>,
         pub impacted_stops_alerts: AHashMap<String, Vec<String>>,
@@ -233,8 +234,8 @@ pub mod aspen_dataset {
         pub language: Option<String>,
     }
 
-    impl From<gtfs_rt::TranslatedString> for AspenTranslatedString {
-        fn from(translated_string: gtfs_rt::TranslatedString) -> Self {
+    impl From<gtfs_realtime::TranslatedString> for AspenTranslatedString {
+        fn from(translated_string: gtfs_realtime::TranslatedString) -> Self {
             AspenTranslatedString {
                 translation: translated_string
                     .translation
@@ -245,8 +246,8 @@ pub mod aspen_dataset {
         }
     }
 
-    impl From<gtfs_rt::translated_image::LocalizedImage> for AspenLocalisedImage {
-        fn from(localised_image: gtfs_rt::translated_image::LocalizedImage) -> Self {
+    impl From<gtfs_realtime::translated_image::LocalizedImage> for AspenLocalisedImage {
+        fn from(localised_image: gtfs_realtime::translated_image::LocalizedImage) -> Self {
             AspenLocalisedImage {
                 url: localised_image.url,
                 media_type: localised_image.media_type,
@@ -255,8 +256,8 @@ pub mod aspen_dataset {
         }
     }
 
-    impl From<gtfs_rt::translated_string::Translation> for AspenTranslation {
-        fn from(translation: gtfs_rt::translated_string::Translation) -> Self {
+    impl From<gtfs_realtime::translated_string::Translation> for AspenTranslation {
+        fn from(translation: gtfs_realtime::translated_string::Translation) -> Self {
             AspenTranslation {
                 text: translation.text,
                 language: translation.language,
@@ -264,8 +265,8 @@ pub mod aspen_dataset {
         }
     }
 
-    impl From<gtfs_rt::TranslatedImage> for AspenTranslatedImage {
-        fn from(translated_image: gtfs_rt::TranslatedImage) -> Self {
+    impl From<gtfs_realtime::TranslatedImage> for AspenTranslatedImage {
+        fn from(translated_image: gtfs_realtime::TranslatedImage) -> Self {
             AspenTranslatedImage {
                 localised_image: translated_image
                     .localized_image
@@ -276,8 +277,8 @@ pub mod aspen_dataset {
         }
     }
 
-    impl From<gtfs_rt::TimeRange> for AspenTimeRange {
-        fn from(time_range: gtfs_rt::TimeRange) -> Self {
+    impl From<gtfs_realtime::TimeRange> for AspenTimeRange {
+        fn from(time_range: gtfs_realtime::TimeRange) -> Self {
             AspenTimeRange {
                 start: time_range.start,
                 end: time_range.end,
@@ -285,8 +286,8 @@ pub mod aspen_dataset {
         }
     }
 
-    impl From<gtfs_rt::EntitySelector> for AspenEntitySelector {
-        fn from(entity_selector: gtfs_rt::EntitySelector) -> Self {
+    impl From<gtfs_realtime::EntitySelector> for AspenEntitySelector {
+        fn from(entity_selector: gtfs_realtime::EntitySelector) -> Self {
             AspenEntitySelector {
                 agency_id: entity_selector.agency_id,
                 route_id: entity_selector.route_id,
@@ -298,8 +299,8 @@ pub mod aspen_dataset {
         }
     }
 
-    impl From<gtfs_rt::Alert> for AspenisedAlert {
-        fn from(alert: gtfs_rt::Alert) -> Self {
+    impl From<gtfs_realtime::Alert> for AspenisedAlert {
+        fn from(alert: gtfs_realtime::Alert) -> Self {
             AspenisedAlert {
                 active_period: alert.active_period.into_iter().map(|x| x.into()).collect(),
                 informed_entity: alert
@@ -376,8 +377,8 @@ pub mod aspen_dataset {
         pub affected_trip_id: Option<String>,
     }
 
-    impl From<gtfs_rt::trip_descriptor::ModifiedTripSelector> for ModifiedTripSelector {
-        fn from(modified_trip_selector: gtfs_rt::trip_descriptor::ModifiedTripSelector) -> Self {
+    impl From<gtfs_realtime::trip_descriptor::ModifiedTripSelector> for ModifiedTripSelector {
+        fn from(modified_trip_selector: gtfs_realtime::trip_descriptor::ModifiedTripSelector) -> Self {
             ModifiedTripSelector {
                 modifications_id: modified_trip_selector.modifications_id,
                 affected_trip_id: modified_trip_selector.affected_trip_id,
@@ -385,8 +386,8 @@ pub mod aspen_dataset {
         }
     }
 
-    impl From<gtfs_rt::TripDescriptor> for AspenRawTripInfo {
-        fn from(trip_descriptor: gtfs_rt::TripDescriptor) -> Self {
+    impl From<gtfs_realtime::TripDescriptor> for AspenRawTripInfo {
+        fn from(trip_descriptor: gtfs_realtime::TripDescriptor) -> Self {
             AspenRawTripInfo {
                 trip_id: trip_descriptor.trip_id,
                 route_id: trip_descriptor.route_id,
@@ -416,8 +417,8 @@ pub mod aspen_dataset {
         pub assigned_stop_id: Option<String>,
     }
 
-    use gtfs_rt::trip_update::stop_time_update::StopTimeProperties;
-    use gtfs_rt::trip_update::StopTimeEvent;
+    use gtfs_realtime::trip_update::stop_time_update::StopTimeProperties;
+    use gtfs_realtime::trip_update::StopTimeEvent;
 
     impl From<StopTimeProperties> for AspenisedStopTimeProperties {
         fn from(stop_time_properties: StopTimeProperties) -> Self {
@@ -475,7 +476,7 @@ pub mod aspen_dataset {
         pub wheelchair_accessible: Option<i32>,
     }
 
-    use gtfs_rt::VehicleDescriptor;
+    use gtfs_realtime::VehicleDescriptor;
 
     impl From<VehicleDescriptor> for AspenisedVehicleDescriptor {
         fn from(vehicle_descriptor: VehicleDescriptor) -> Self {
@@ -519,7 +520,7 @@ pub mod aspen_dataset {
         Alerts,
     }
 
-    use gtfs_rt::trip_update::TripProperties;
+    use gtfs_realtime::trip_update::TripProperties;
 
     impl From<TripProperties> for AspenTripProperties {
         fn from(trip_properties: TripProperties) -> Self {
@@ -535,7 +536,7 @@ pub mod aspen_dataset {
 
 pub fn parse_gtfs_rt_message(
     bytes: &[u8],
-) -> Result<gtfs_rt::FeedMessage, Box<dyn std::error::Error>> {
+) -> Result<gtfs_realtime::FeedMessage, Box<dyn std::error::Error>> {
     let x = prost::Message::decode(bytes);
 
     match x {
@@ -605,11 +606,11 @@ pub async fn get_node_for_realtime_feed_id(
     }
 }
 
-pub fn make_feed_from_entity_vec(entities: Vec<gtfs_rt::FeedEntity>) -> gtfs_rt::FeedMessage {
-    gtfs_rt::FeedMessage {
-        header: gtfs_rt::FeedHeader {
+pub fn make_feed_from_entity_vec(entities: Vec<FeedEntity>) -> FeedMessage {
+    FeedMessage {
+        header: gtfs_realtime::FeedHeader {
             gtfs_realtime_version: "2.0".to_string(),
-            incrementality: Some(gtfs_rt::feed_header::Incrementality::FullDataset as i32),
+            incrementality: Some(gtfs_realtime::feed_header::Incrementality::FullDataset as i32),
             timestamp: Some(duration_since_unix_epoch().as_secs() as u64),
         },
         entity: entities,

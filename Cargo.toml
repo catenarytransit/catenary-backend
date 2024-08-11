@@ -1,7 +1,8 @@
 [package]
 name = "catenary-backend"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
+authors = ["Kyler Chin <kyler@catenarymaps.org>"]
 
 [library]
 name = "catenary"
@@ -21,7 +22,6 @@ crossbeam-utils = "0.8.16"
 memoffset = "0.9.0"
 time = "0.3.30"
 rouille = "3.0"
-gtfs-rt = "0.5.0"
 reqwest = {version = "0.12", features = ["gzip","brotli","rustls-tls","deflate","cookies"]}
 protobuf = "3.3"
 csv = "1.3"
@@ -74,11 +74,11 @@ dmfr = "0.1.0"
 chateau = {git = "https://github.com/catenarytransit/chateau"}
 dmfr-dataset-reader = "0.2.0"
 uuid = {version = "1.8.0", features = ["v4", "fast-rng", "macro-diagnostics"]}
-zip = "0.6.6"
+zip = "2.1.6"
 git2 = "0.19"
 zip-extract = "0.1.3"
 serde_derive = "1.0.197"
-prost = "0.11.9"
+prost = "0.13"
 geozero = "0.13.0"
 diesel = {version = "2.2.2", features = ["ipnet-address","network-address","extras", "numeric", "r2d2"]}
 postgis_diesel = "2.3.0"
@@ -89,12 +89,12 @@ geo-repair-polygon = "0.1.2"
 gtfs-translations = "0.1.0"
 geojson = { version = "0.24.1", features = ["geo-types"] }
 rstar = "0.12.0"
-sqlx = {version = "0.7.4", features = ["postgres","runtime-tokio", "macros"]}
+sqlx = {version = "0.8", features = ["postgres","runtime-tokio", "macros"]}
 tilejson = "0.4.1"
 tile-grid = "0.6"
 zstd-safe = "7.1.0"
 hitbox = "0.1.1"
-cached = { version = "0.49.2", features = ["async_tokio_rt_multi_thread", "disk_store"] }
+cached = { version = "0.53", features = ["async_tokio_rt_multi_thread", "disk_store"] }
 geo-booleanop = "0.3.2"
 geo-clipper = "0.8.0"
 random-string = "1.1.0"
@@ -117,11 +117,11 @@ fasthash = "0.4.0"
 clap = "4.5.4"
 rgb = "0.8.37"
 zotgtfs = "0.3.4"
-amtrak-gtfs-rt = "0.2.6"
+amtrak-gtfs-rt = "0.3"
 chrono-tz = { version = "0.9.0", features = ["case-insensitive", "serde"] }
 ping = "0.5.2"
 online = { version = "4.0.2", features = ["tokio-runtime"] }
-chicago-gtfs-rt = "0.1.5-alpha"
+chicago-gtfs-rt = "0.2.0"
 etcd-client = "0.14.0"
 ipnet = { version = "2.9.0", features = ["serde"] }
 flate2 = "1.0.30"
@@ -131,6 +131,7 @@ polyline = "0.11.0"
 simple-server-timing-header = "0.1.1"
 osmpbfreader = "0.16.1"
 mime = "0.3.17"
+gtfs-realtime = "0.1.0"
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"

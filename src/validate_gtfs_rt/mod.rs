@@ -4,7 +4,7 @@ pub struct GtfsRtQualityCheckResults {
     pub vehicles_at_null_island: usize,
 }
 
-pub fn validate_gtfs_rt(input: &gtfs_rt::FeedMessage) -> GtfsRtQualityCheckResults {
+pub fn validate_gtfs_rt(input: &gtfs_realtime::FeedMessage) -> GtfsRtQualityCheckResults {
     let total_entity_count = input.entity.len();
     let mut entities_id_using_timestamp_from_global: usize = 0;
     let mut vehicles_at_null_island: usize = 0;
