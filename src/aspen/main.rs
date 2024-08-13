@@ -61,13 +61,11 @@ mod async_threads_alpenrose;
 use crate::id_cleanup::gtfs_rt_correct_route_id_string;
 use catenary::gtfs_rt_rough_hash::rough_hash_of_gtfs_rt;
 use catenary::parse_gtfs_rt_message;
+use rand::Rng;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use tokio_zookeeper::ZooKeeper;
-use tokio_zookeeper::{Acl, CreateMode};
-use rand::Rng;
-
 mod alerts_responder;
+mod aspen_assignment;
 
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
@@ -86,7 +84,7 @@ pub struct AspenServer {
     pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     pub etcd_addresses: Arc<Vec<String>>,
-    pub worker_etcd_lease_id: i64
+    pub worker_etcd_lease_id: i64,
 }
 
 impl AspenRpc for AspenServer {
@@ -520,12 +518,28 @@ async fn main() -> anyhow::Result<()> {
 
     let mut etcd = etcd_client::Client::connect(etcd_addresses.as_slice(), None).await?;
 
+    //register etcd_lease_id
+
+    let make_lease = etcd
+        .lease_grant(
+            //30 seconds
+            30,
+            Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
+        )
+        .await?;
+
     //register that the worker exists
+
+    let worker_metadata = AspenWorkerMetadataEtcd {
+        etcd_lease_id: etcd_lease_id_for_this_worker,
+        worker_ip: server_addr.clone(),
+        worker_id: this_worker_id.to_string(),
+    };
 
     let etcd_this_worker_assignment = etcd
         .put(
             format!("/aspen_workers/{}", this_worker_id).as_str(),
-            bincode::serialize(&etcd_lease_id_for_this_worker).unwrap(),
+            bincode::serialize(&worker_metadata).unwrap(),
             Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id_for_this_worker)),
         )
         .await?;
@@ -564,8 +578,6 @@ async fn main() -> anyhow::Result<()> {
     let b_authoritative_data_store = Arc::clone(&authoritative_data_store);
     let b_conn_pool = Arc::clone(&arc_conn_pool);
     let b_thread_count = alpenrosethreadcount;
-    let b_backup_data_store = Arc::clone(&backup_data_store);
-    let b_backup_gtfs_rt_store = Arc::clone(&backup_raw_gtfs);
 
     let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
         Result<(), Box<dyn Error + Sync + Send>>,
