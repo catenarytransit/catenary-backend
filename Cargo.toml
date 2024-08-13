@@ -132,7 +132,7 @@ simple-server-timing-header = "0.1.1"
 osmpbfreader = "0.16.1"
 mime = "0.3.17"
 gtfs-realtime = "0.1.0"
-via-rail-gtfsrt = "0.1.0"
+via-rail-gtfsrt = "0.1.1"
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"
