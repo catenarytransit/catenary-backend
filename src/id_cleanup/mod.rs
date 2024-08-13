@@ -1,7 +1,7 @@
+use crate::route_id_transform;
+use gtfs_realtime::{FeedEntity, FeedMessage};
 use lazy_static::lazy_static;
 use regex::Regex;
-use gtfs_realtime::{FeedEntity, FeedMessage};
-use crate::route_id_transform;
 
 lazy_static! {
     static ref STARTING_DASHES_REGEX: Regex = Regex::new("^(-|_)").unwrap();

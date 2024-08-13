@@ -67,17 +67,13 @@ pub async fn single_fetch_time(
     client: reqwest::Client,
     assignments: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>>,
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
+    amtrak_gtfs: Arc<gtfs_structures::Gtfs>
     //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
+
+    
     let start = Instant::now();
 
-    let amtrak_gtfs = gtfs_structures::GtfsReader::default()
-        .read_shapes(false)
-        .read_from_url_async("https://content.amtrak.com/content/gtfs/GTFS.zip")
-        .await
-        .unwrap();
-
-    let amtrak_gtfs = Arc::new(amtrak_gtfs);
 
     let assignments_lock = assignments.read().await;
 

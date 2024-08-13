@@ -47,7 +47,10 @@ pub async fn fetch_via_data(
                     println!("Successfully sent Via Rail data sent to {}", feed_id);
                 }
                 Err(e) => {
-                    eprintln!("{}: Error sending Via Rail data to {}: {}", feed_id, worker_id, e);
+                    eprintln!(
+                        "{}: Error sending Via Rail data to {}: {}",
+                        feed_id, worker_id, e
+                    );
                 }
             }
         } else {

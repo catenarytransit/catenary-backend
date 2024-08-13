@@ -56,6 +56,16 @@ use get_feed_metadata::RealtimeFeedFetch;
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
+    let start = Instant::now();
+
+    let amtrak_gtfs = gtfs_structures::GtfsReader::default()
+        .read_shapes(false)
+        .read_from_url_async("https://content.amtrak.com/content/gtfs/GTFS.zip")
+        .await
+        .unwrap();
+
+    let amtrak_gtfs = Arc::new(amtrak_gtfs);
+
     println!("Worker id {}", this_worker_id);
 
     // if a node drops out, ingestion will be automatically reassigned to the other nodes
@@ -281,6 +291,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 client.clone(),
                 Arc::clone(&assignments_for_this_worker),
                 Arc::clone(&last_fetch_per_feed),
+                Arc::clone(&amtrak_gtfs)
             )
             .await?;
         } else {

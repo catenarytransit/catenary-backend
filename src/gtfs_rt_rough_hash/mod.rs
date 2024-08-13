@@ -290,7 +290,9 @@ impl From<gtfs_realtime::trip_update::StopTimeUpdate> for HashStopTimeUpdate {
     }
 }
 
-impl From<gtfs_realtime::trip_update::stop_time_update::StopTimeProperties> for HashStopTimeProperties {
+impl From<gtfs_realtime::trip_update::stop_time_update::StopTimeProperties>
+    for HashStopTimeProperties
+{
     fn from(input: gtfs_realtime::trip_update::stop_time_update::StopTimeProperties) -> Self {
         HashStopTimeProperties {
             assigned_stop_id: input.assigned_stop_id,

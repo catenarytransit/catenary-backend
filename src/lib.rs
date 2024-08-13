@@ -54,11 +54,11 @@ pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataEtcd;
 use ahash::AHasher;
 use fasthash::MetroHasher;
+use gtfs_realtime::{FeedEntity, FeedMessage};
 use gtfs_structures::RouteType;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use gtfs_realtime::{FeedMessage, FeedEntity};
 pub mod metrolink_ptc_to_stop_id;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -378,7 +378,9 @@ pub mod aspen_dataset {
     }
 
     impl From<gtfs_realtime::trip_descriptor::ModifiedTripSelector> for ModifiedTripSelector {
-        fn from(modified_trip_selector: gtfs_realtime::trip_descriptor::ModifiedTripSelector) -> Self {
+        fn from(
+            modified_trip_selector: gtfs_realtime::trip_descriptor::ModifiedTripSelector,
+        ) -> Self {
             ModifiedTripSelector {
                 modifications_id: modified_trip_selector.modifications_id,
                 affected_trip_id: modified_trip_selector.affected_trip_id,
