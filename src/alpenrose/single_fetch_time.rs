@@ -23,7 +23,8 @@ lazy_static! {
         "f-mta~nyc~rt~mnr",
         "f-mta~nyc~rt~lirr",
         "f-bus~dft~gov~uk~rt",
-        "f-dp3-cta~rt"
+        "f-dp3-cta~rt",
+        "f-viarail~rt"
     ]);
 }
 
@@ -259,6 +260,9 @@ pub async fn single_fetch_time(
                             &client,
                         )
                         .await;
+                    }
+                    "f-viarail~rt" => {
+                        custom_rt_feeds::viarail::fetch_via_data(&mut etcd, feed_id, &client).await;
                     }
                     "f-mta~nyc~rt~lirr" => {
                         custom_rt_feeds::mta::fetch_mta_lirr_data(&mut etcd, feed_id, &client)
