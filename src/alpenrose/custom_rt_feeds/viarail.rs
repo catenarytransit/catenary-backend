@@ -44,17 +44,17 @@ pub async fn fetch_via_data(
 
             match tarpc_send_to_aspen {
                 Ok(_) => {
-                    println!("Successfully sent Via data sent to {}", feed_id);
+                    println!("Successfully sent Via Rail data sent to {}", feed_id);
                 }
                 Err(e) => {
-                    eprintln!("{}: Error sending data to {}: {}", feed_id, worker_id, e);
+                    eprintln!("{}: Error sending Via Rail data to {}: {}", feed_id, worker_id, e);
                 }
             }
         } else {
-            eprintln!("Failed to fetch Amtrak data");
-            eprintln!("{:?}", via_gtfs_rt.unwrap_err());
+            eprintln!("Failed to fetch Via Rail data");
+            eprintln!("{:?}", via_gtfs_rt_data.unwrap_err());
         }
     } else {
-        println!("No assigned node found for Via");
+        println!("No assigned node found for Via Rail");
     }
 }
