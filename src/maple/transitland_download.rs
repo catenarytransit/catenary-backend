@@ -239,7 +239,10 @@ pub async fn download_return_eligible_feeds(
                                             }
                                         }
                                        
-                                        let _ = out.write(&(bytes_result));
+                                        if answer.ingest {
+                                            let _ = out.write(&(bytes_result));
+                                        }
+                                        
                                         let mut download_progress  = download_progress.lock().unwrap();
                                         *download_progress += 1;
             
