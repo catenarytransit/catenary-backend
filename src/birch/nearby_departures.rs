@@ -76,7 +76,7 @@ pub async fn nearby_from_coords(
         false => -90.,
     };
 
-    let distance_calc_point = input_point.haversine_destination(direction, 5000.);
+    let distance_calc_point = input_point.haversine_destination(direction, 2000.);
 
     let spatial_resolution_in_degs = f64::abs(distance_calc_point.x() - input_point.x());
 
@@ -124,7 +124,9 @@ pub async fn nearby_from_coords(
             //for each chateau
 
             for (chateau_id, hash_under_chateau) in sorted_by_chateau {
-                //  chateau_id
+                // query for all the itinerary times, look at the closest stops for all of them,
+
+                // get the closest stop for each itinerary
             }
 
             //get the start of the trip and the offset for the current stop
@@ -135,8 +137,8 @@ pub async fn nearby_from_coords(
 
             let answer = DepartingTripsDataAnswer {
                 number_of_stops_searched_through: number_of_stops,
-                bus_limited_metres: 5000.,
-                rail_and_other_limited_metres: 5000.,
+                bus_limited_metres: 2000.,
+                rail_and_other_limited_metres: 2000.,
             };
 
             let stringified_answer = serde_json::to_string(&answer).unwrap();
