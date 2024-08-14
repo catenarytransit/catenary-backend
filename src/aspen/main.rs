@@ -208,12 +208,11 @@ impl AspenRpc for AspenServer {
             Some(existing_hashes) => *(existing_hashes.get()) != new_hashes
         };
 
+    if new_data_status_from_pure_hash {
         self.hash_of_raw_gtfs_rt_protobuf.entry(realtime_feed_id.clone())
         .and_modify(|existing_hash_mut| *existing_hash_mut = new_hashes)
         .or_insert(new_hashes);
 
-    if new_data_status_from_pure_hash {
-        
         let vehicles_gtfs_rt = match vehicles_response_code {
             Some(200) => match vehicles {
                 Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
