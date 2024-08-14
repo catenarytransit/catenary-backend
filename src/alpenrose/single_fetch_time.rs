@@ -67,13 +67,9 @@ pub async fn single_fetch_time(
     client: reqwest::Client,
     assignments: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>>,
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
-    amtrak_gtfs: Arc<gtfs_structures::Gtfs>
-    //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
+    amtrak_gtfs: Arc<gtfs_structures::Gtfs>, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
-
-    
     let start = Instant::now();
-
 
     let assignments_lock = assignments.read().await;
 

@@ -66,6 +66,13 @@ mod aspen_assignment;
 use prost::Message;
 use std::time::Instant;
 
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub struct GtfsRealtimeHashStore {
+    vehicles: Option<u64>,
+    trips: Option<u64>,
+    alerts: Option<u64>
+}
+
 // This is the type that implements the generated World trait. It is the business logic
 // and is used to start the server.
 #[derive(Clone)]
@@ -80,6 +87,7 @@ pub struct AspenServer {
     pub alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
     pub alpenrose_to_process_queue_chateaus: Arc<Mutex<HashSet<String>>>,
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
+    pub hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>>,
     pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     pub etcd_addresses: Arc<Vec<String>>,
@@ -183,6 +191,29 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
+        let v_purehash = vehicles.as_ref().map(|data| catenary::ahash_fast_hash(&data.as_slice()));
+        let t_purehash = trips.as_ref().map(|data| catenary::ahash_fast_hash(&data.as_slice()));
+        let a_purehash = alerts.as_ref().map(|data| catenary::ahash_fast_hash(&data.as_slice()));
+
+        let existing_hashes = self.hash_of_raw_gtfs_rt_protobuf.get(&realtime_feed_id);
+
+        let new_hashes = GtfsRealtimeHashStore {
+            vehicles: v_purehash,
+            trips: t_purehash,
+            alerts: a_purehash,
+        };
+
+        let new_data_status_from_pure_hash = match existing_hashes {
+            None => true,
+            Some(existing_hashes) => *(existing_hashes.get()) != new_hashes
+        };
+
+        self.hash_of_raw_gtfs_rt_protobuf.entry(realtime_feed_id.clone())
+        .and_modify(|existing_hash_mut| *existing_hash_mut = new_hashes)
+        .or_insert(new_hashes);
+
+    if new_data_status_from_pure_hash {
+        
         let vehicles_gtfs_rt = match vehicles_response_code {
             Some(200) => match vehicles {
                 Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
@@ -357,6 +388,7 @@ impl AspenRpc for AspenServer {
                 });
             }
         }
+    }
 
         true
     }
@@ -566,6 +598,8 @@ async fn main() -> anyhow::Result<()> {
     let alpenrose_to_process_queue_chateaus = Arc::new(Mutex::new(HashSet::new()));
     let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
+    let hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>> =
+        Arc::new(SccHashMap::new());
     let timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
     //run both the leader and the listener simultaniously
@@ -647,6 +681,7 @@ async fn main() -> anyhow::Result<()> {
                                 &alpenrose_to_process_queue_chateaus,
                             ),
                             rough_hash_of_gtfs_rt: Arc::clone(&rough_hash_of_gtfs_rt),
+                            hash_of_raw_gtfs_rt_protobuf: Arc::clone(&hash_of_raw_gtfs_rt_protobuf),
                             worker_etcd_lease_id: etcd_lease_id_for_this_worker,
                             etcd_addresses: Arc::clone(&etcd_addresses),
                             timestamps_of_gtfs_rt: Arc::clone(&timestamps_of_gtfs_rt),
