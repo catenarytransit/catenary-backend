@@ -133,6 +133,7 @@ osmpbfreader = "0.16.1"
 mime = "0.3.17"
 gtfs-realtime = "0.1.2"
 via-rail-gtfsrt = "0.1.1"
+wyhash2 = "0.2.1"
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"

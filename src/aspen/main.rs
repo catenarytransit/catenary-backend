@@ -701,9 +701,16 @@ async fn main() -> anyhow::Result<()> {
             async move {
                 loop {
                     let mut etcd =
-                        etcd_client::Client::connect(etcd_addresses.clone().as_slice(), None)
-                            .await?;
-                    let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await?;
+                        etcd_client::Client::connect(etcd_addresses.clone().as_slice(), None).await;
+
+                    match etcd {
+                        Ok(mut etcd) => {
+                            let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await;
+                        }
+                        Err(err) => {
+                            eprintln!("could not connect to etcd to renew a lease: {:?}", err);
+                        }
+                    }
 
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
