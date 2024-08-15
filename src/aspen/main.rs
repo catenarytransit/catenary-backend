@@ -217,6 +217,7 @@ impl AspenRpc for AspenServer {
             Some(existing_hashes) => *(existing_hashes.get()) != new_hashes,
         };
 
+        /* 
         let new_vehicles = match &existing_hashes {
             None => true,
             Some(existing_hashes) => (existing_hashes.get()).vehicles != new_hashes.vehicles,
@@ -230,7 +231,7 @@ impl AspenRpc for AspenServer {
         let new_alerts = match &existing_hashes {
             None => true,
             Some(existing_hashes) => (existing_hashes.get()).alerts != new_hashes.alerts,
-        };
+        };*/
 
         if new_data_status_from_pure_hash {
             self.hash_of_raw_gtfs_rt_protobuf
@@ -301,71 +302,6 @@ impl AspenRpc for AspenServer {
 
             //  println!("Parsed FeedMessages for {}", realtime_feed_id);
 
-            let mut new_data = false;
-
-            if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
-                if !new_data {
-                    let new_data_v = contains_new_data(
-                        &self,
-                        &realtime_feed_id,
-                        GtfsRtType::VehiclePositions,
-                        vehicles_gtfs_rt,
-                    );
-
-                    if new_data_v {
-                        new_data = new_data_v;
-                    }
-                }
-
-                let _ = save_timestamps(
-                    &self,
-                    &realtime_feed_id,
-                    GtfsRtType::VehiclePositions,
-                    vehicles_gtfs_rt,
-                );
-            }
-
-            if let Some(trips_gtfs_rt) = &trips_gtfs_rt {
-                if !new_data {
-                    let new_data_t = contains_new_data(
-                        &self,
-                        &realtime_feed_id,
-                        GtfsRtType::TripUpdates,
-                        trips_gtfs_rt,
-                    );
-
-                    if new_data_t {
-                        new_data = new_data_t;
-                    }
-                }
-
-                let _ = save_timestamps(
-                    &self,
-                    &realtime_feed_id,
-                    GtfsRtType::TripUpdates,
-                    trips_gtfs_rt,
-                );
-            }
-
-            if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
-                if !new_data {
-                    let new_data_a = contains_new_data(
-                        &self,
-                        &realtime_feed_id,
-                        GtfsRtType::Alerts,
-                        alerts_gtfs_rt,
-                    );
-
-                    if new_data_a {
-                        new_data = new_data_a;
-                    }
-                }
-
-                let _ =
-                    save_timestamps(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
-            }
-
-            if new_data {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
                     match self
                         .authoritative_gtfs_rt_store
@@ -407,18 +343,17 @@ impl AspenRpc for AspenServer {
                         }
                     };
                 }
-            }
+            
 
             let hash_data_duration = hash_data_start.elapsed();
 
             println!(
-                "wrote {realtime_feed_id}, took {} ms, is new data: {new_data}",
-                hash_data_duration.as_millis()
+                "wrote {realtime_feed_id}, took {:?}",
+                hash_data_duration
             );
 
             //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
-            if new_data {
                 self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
                     chateau_id,
                     realtime_feed_id,
@@ -430,7 +365,7 @@ impl AspenRpc for AspenServer {
                     alerts_response_code,
                     time_of_submission_ms,
                 });
-            }
+            
         }
         }
 
