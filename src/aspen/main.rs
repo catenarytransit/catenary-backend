@@ -681,7 +681,7 @@ async fn main() -> anyhow::Result<()> {
                         channel
                             .execute(server.serve())
                             .for_each(|response| async move {
-                                tokio::spawn(response);
+                                let _ = tokio::spawn(response).await;
                             })
                     })
                     // Max n channels.
