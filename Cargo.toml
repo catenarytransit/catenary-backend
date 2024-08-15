@@ -7,9 +7,6 @@ authors = ["Kyler Chin <kyler@catenarymaps.org>"]
 [library]
 name = "catenary"
 
-[build]
-rustflags = ["-Z", "threads=8", "--cfg", "tokio_unstable"]
-
 [lints.rust]
 unused_must_use = "deny"
 non_ascii_idents = "deny"
