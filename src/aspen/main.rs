@@ -418,22 +418,17 @@ impl AspenRpc for AspenServer {
             //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
             if new_data {
-                let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
-
-                if !lock_chateau_queue.contains(&chateau_id) {
-                    lock_chateau_queue.insert(chateau_id.clone());
-                    self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
-                        chateau_id,
-                        realtime_feed_id,
-                        has_vehicles,
-                        has_trips,
-                        has_alerts,
-                        vehicles_response_code,
-                        trips_response_code,
-                        alerts_response_code,
-                        time_of_submission_ms,
-                    });
-                }
+                self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
+                    chateau_id,
+                    realtime_feed_id,
+                    has_vehicles,
+                    has_trips,
+                    has_alerts,
+                    vehicles_response_code,
+                    trips_response_code,
+                    alerts_response_code,
+                    time_of_submission_ms,
+                });
             }
         }
 
@@ -748,9 +743,11 @@ async fn main() -> anyhow::Result<()> {
                             etcd_addresses: Arc::clone(&etcd_addresses),
                             timestamps_of_gtfs_rt: Arc::clone(&timestamps_of_gtfs_rt),
                         };
-                        channel.execute(server.serve()).for_each(|response| async move {
-                            tokio::spawn(response);
-                        })
+                        channel
+                            .execute(server.serve())
+                            .for_each(|response| async move {
+                                tokio::spawn(response);
+                            })
                     })
                     // Max n channels.
                     .buffer_unordered(channel_count)
