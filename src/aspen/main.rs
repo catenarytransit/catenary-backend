@@ -568,10 +568,6 @@ impl AspenRpc for AspenServer {
     }
 }
 
-async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
-    tokio::spawn(fut);
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     console_subscriber::init();
@@ -752,7 +748,9 @@ async fn main() -> anyhow::Result<()> {
                             etcd_addresses: Arc::clone(&etcd_addresses),
                             timestamps_of_gtfs_rt: Arc::clone(&timestamps_of_gtfs_rt),
                         };
-                        channel.execute(server.serve()).for_each(spawn)
+                        channel.execute(server.serve()).for_each(|response| async move {
+                            tokio::spawn(response);
+                        })
                     })
                     // Max n channels.
                     .buffer_unordered(channel_count)
