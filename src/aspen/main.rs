@@ -191,7 +191,8 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-        let hash_data_start = Instant::now();
+        if false {
+            let hash_data_start = Instant::now();
 
         let v_purehash = vehicles
             .as_ref()
@@ -431,6 +432,7 @@ impl AspenRpc for AspenServer {
                 });
             }
         }
+        }
 
         true
     }
@@ -563,7 +565,7 @@ impl AspenRpc for AspenServer {
     }
 }
 
-#[tokio::main(flavor = "current_thread", unhandled_panic = "shutdown_runtime")]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     console_subscriber::init();
 
