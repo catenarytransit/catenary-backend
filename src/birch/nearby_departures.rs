@@ -76,7 +76,9 @@ pub async fn nearby_from_coords(
         false => -90.,
     };
 
-    let distance_calc_point = input_point.haversine_destination(direction, 2000.);
+    let mut bus_distance_limit = 5000;
+
+    let distance_calc_point = input_point.haversine_destination(direction, 4000.);
 
     let spatial_resolution_in_degs = f64::abs(distance_calc_point.x() - input_point.x());
 
@@ -92,6 +94,10 @@ pub async fn nearby_from_coords(
     match stops {
         Ok(stops) => {
             let number_of_stops = stops.len();
+
+            if number_of_stops > 1000 {
+                bus_distance_limit = 2000;
+            }
 
             //collect chateau list
 
