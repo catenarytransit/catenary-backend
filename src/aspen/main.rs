@@ -191,6 +191,8 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
+        let hash_data_start = Instant::now();
+
         let v_purehash = vehicles
             .as_ref()
             .map(|data| catenary::ahash_fast_hash(&data.as_slice()));
@@ -309,7 +311,6 @@ impl AspenRpc for AspenServer {
 
             let mut new_data = false;
 
-            let hash_data_start = Instant::now();
 
             if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
                 if !new_data {

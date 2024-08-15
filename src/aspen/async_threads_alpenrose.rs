@@ -60,11 +60,6 @@ pub async fn alpenrose_loop_process_thread(
     loop {
         // println!("From-Alpenrose process thread");
         if let Steal::Success(new_ingest_task) = alpenrose_to_process_queue.steal() {
-            println!(
-                "Task stolen from queue, processing {}",
-                new_ingest_task.realtime_feed_id
-            );
-
             let feed_id = new_ingest_task.realtime_feed_id.clone();
 
             let mut chateau_queue_list = chateau_queue_list.lock().await;
@@ -86,16 +81,7 @@ pub async fn alpenrose_loop_process_thread(
                 new_ingest_task.alerts_response_code,
                 Arc::clone(&conn_pool),
             )
-            .await;
-
-            match rt_processed_status {
-                Ok(_) => {
-                    println!("Processed RT data for {}", feed_id);
-                }
-                Err(e) => {
-                    println!("Error processing RT data for {}: {}", feed_id, e);
-                }
-            }
+            .await?;
         } else {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

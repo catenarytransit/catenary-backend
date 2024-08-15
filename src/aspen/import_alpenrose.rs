@@ -85,9 +85,9 @@ pub async fn new_rt_data(
 
     let fetched_track_data: TrackData = fetch_track_data(&chateau_id).await;
 
-    println!("Forming pg connection");
+    //println!("Forming pg connection");
     let conn = &mut conn_pre?;
-    println!("Connected to postges");
+    //println!("Connected to postges");
 
     // take all the gtfs rt data and merge it together
 
