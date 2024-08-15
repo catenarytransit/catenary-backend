@@ -177,7 +177,7 @@ impl AspenRpc for AspenServer {
 
     async fn from_alpenrose(
         self,
-        _: context::Context,
+        context: context::Context,
         chateau_id: String,
         realtime_feed_id: String,
         vehicles: Option<Vec<u8>>,
@@ -563,7 +563,7 @@ impl AspenRpc for AspenServer {
     }
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread", unhandled_panic = "shutdown_runtime")]
 async fn main() -> anyhow::Result<()> {
     console_subscriber::init();
 
