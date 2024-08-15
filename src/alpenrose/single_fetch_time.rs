@@ -161,82 +161,87 @@ pub async fn single_fetch_time(
                         let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
 
                         let aspen_client =
-                            catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
-                                .await
-                                .unwrap();
+                            catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
 
-                        if vehicle_positions_http_status == Some(200)
-                            || trip_updates_http_status == Some(200)
-                            || alerts_http_status == Some(200)
-                        {
-                            let tarpc_send_to_aspen = aspen_client
-                                .from_alpenrose(
-                                    tarpc::context::current(),
-                                    data.chateau_id.clone(),
-                                    feed_id.clone(),
-                                    match vehicle_positions_data {
-                                        Some(Ok(response)) => {
-                                            cleanup_response(
-                                                response,
-                                                UrlType::VehiclePositions,
-                                                feed_id,
-                                                Arc::clone(&hashes_of_data),
-                                            )
-                                            .await
-                                        }
-                                        _ => None,
-                                    },
-                                    match trip_updates_data {
-                                        Some(Ok(response)) => {
-                                            cleanup_response(
-                                                response,
-                                                UrlType::TripUpdates,
-                                                feed_id,
-                                                Arc::clone(&hashes_of_data),
-                                            )
-                                            .await
-                                        }
-                                        _ => None,
-                                    },
-                                    match alerts_data {
-                                        Some(Ok(response)) => {
-                                            cleanup_response(
-                                                response,
-                                                UrlType::Alerts,
-                                                feed_id,
-                                                Arc::clone(&hashes_of_data),
-                                            )
-                                            .await
-                                        }
-                                        _ => None,
-                                    },
-                                    assignment.realtime_vehicle_positions.is_some(),
-                                    assignment.realtime_trip_updates.is_some(),
-                                    assignment.realtime_alerts.is_some(),
-                                    vehicle_positions_http_status,
-                                    trip_updates_http_status,
-                                    alerts_http_status,
-                                    duration_since_unix_epoch().as_millis() as u64,
-                                )
-                                .await;
+                        match aspen_client {
+                            Ok(aspen_client) => {
+                                if vehicle_positions_http_status == Some(200)
+                                    || trip_updates_http_status == Some(200)
+                                    || alerts_http_status == Some(200)
+                                {
+                                    let tarpc_send_to_aspen = aspen_client
+                                        .from_alpenrose(
+                                            tarpc::context::current(),
+                                            data.chateau_id.clone(),
+                                            feed_id.clone(),
+                                            match vehicle_positions_data {
+                                                Some(Ok(response)) => {
+                                                    cleanup_response(
+                                                        response,
+                                                        UrlType::VehiclePositions,
+                                                        feed_id,
+                                                        Arc::clone(&hashes_of_data),
+                                                    )
+                                                    .await
+                                                }
+                                                _ => None,
+                                            },
+                                            match trip_updates_data {
+                                                Some(Ok(response)) => {
+                                                    cleanup_response(
+                                                        response,
+                                                        UrlType::TripUpdates,
+                                                        feed_id,
+                                                        Arc::clone(&hashes_of_data),
+                                                    )
+                                                    .await
+                                                }
+                                                _ => None,
+                                            },
+                                            match alerts_data {
+                                                Some(Ok(response)) => {
+                                                    cleanup_response(
+                                                        response,
+                                                        UrlType::Alerts,
+                                                        feed_id,
+                                                        Arc::clone(&hashes_of_data),
+                                                    )
+                                                    .await
+                                                }
+                                                _ => None,
+                                            },
+                                            assignment.realtime_vehicle_positions.is_some(),
+                                            assignment.realtime_trip_updates.is_some(),
+                                            assignment.realtime_alerts.is_some(),
+                                            vehicle_positions_http_status,
+                                            trip_updates_http_status,
+                                            alerts_http_status,
+                                            duration_since_unix_epoch().as_millis() as u64,
+                                        )
+                                        .await;
 
-                            match tarpc_send_to_aspen {
-                                Ok(_) => {
-                                    println!(
+                                    match tarpc_send_to_aspen {
+                                        Ok(_) => {
+                                            println!(
                                         "feed {}|chateau {}: Successfully sent data sent to {}",
                                         feed_id, data.chateau_id, worker_id
                                     );
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "{}: Error sending data to {}: {}",
-                                        feed_id, worker_id, e
-                                    );
+                                        }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "{}: Error sending data to {}: {}",
+                                                feed_id, worker_id, e
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    println!("{}: No data to send", feed_id);
                                 }
                             }
-                        } else {
-                            println!("{}: No data to send", feed_id);
-                        }
+                            Err(aspen_connection_error) => {
+                                eprintln!("aspen connection error: {:#?}", aspen_connection_error);
+                            }
+                        };
                     }
                     None => {
                         eprintln!("{} was not assigned to a worker", feed_id);
