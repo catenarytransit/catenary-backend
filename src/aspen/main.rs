@@ -791,7 +791,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Err(e) => {
-            println!("Error: {:?}", e);
+            //println!("Error: {:?}", e);
             panic!("{:#?}", e);
         }
     }
