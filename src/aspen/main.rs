@@ -615,7 +615,7 @@ async fn main() -> anyhow::Result<()> {
     let make_lease = etcd
         .lease_grant(
             //10 seconds
-            5,
+            10,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
         )
         .await?;

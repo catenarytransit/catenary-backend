@@ -26,6 +26,14 @@ pub async fn aspen_leader_thread(
     loop {
         //attempt to become leader
 
+        let make_lease = etcd
+        .lease_grant(
+            //10 seconds
+            10,
+            Some(etcd_client::LeaseGrantOptions::new().with_id(lease_id_for_this_worker)),
+        )
+        .await;
+
         let mut election_client = etcd.election_client();
 
         let current_leader_election = election_client.leader("/aspen_leader").await;
