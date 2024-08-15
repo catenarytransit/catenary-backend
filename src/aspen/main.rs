@@ -237,24 +237,22 @@ impl AspenRpc for AspenServer {
                 .and_modify(|existing_hash_mut| *existing_hash_mut = new_hashes)
                 .or_insert(new_hashes);
 
-            let vehicles_gtfs_rt = 
-                true => match vehicles_response_code {
-                    Some(200) => match vehicles {
-                        Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
-                            Ok(v) => Some(gtfs_rt_correct_route_id_string(
-                                id_cleanup::gtfs_rt_cleanup(v),
-                                realtime_feed_id.as_str(),
-                            )),
-                            Err(e) => {
-                                println!("Error decoding vehicles: {}", e);
-                                None
-                            }
-                        },
-                        None => None,
+            let vehicles_gtfs_rt = match vehicles_response_code {
+                Some(200) => match vehicles {
+                    Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
+                        Ok(v) => Some(gtfs_rt_correct_route_id_string(
+                            id_cleanup::gtfs_rt_cleanup(v),
+                            realtime_feed_id.as_str(),
+                        )),
+                        Err(e) => {
+                            println!("Error decoding vehicles: {}", e);
+                            None
+                        }
                     },
-                    _ => None,
-                }
-            ;
+                    None => None,
+                },
+                _ => None,
+            };
 
             let vehicles_gtfs_rt =
                 vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
@@ -263,21 +261,21 @@ impl AspenRpc for AspenServer {
                 });
 
             let trips_gtfs_rt = match trips_response_code {
-                    Some(200) => match trips {
-                        Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
-                            Ok(t) => Some(gtfs_rt_correct_route_id_string(
-                                id_cleanup::gtfs_rt_cleanup(t),
-                                realtime_feed_id.as_str(),
-                            )),
-                            Err(e) => {
-                                println!("Error decoding trips: {}", e);
-                                None
-                            }
-                        },
-                        None => None,
+                Some(200) => match trips {
+                    Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
+                        Ok(t) => Some(gtfs_rt_correct_route_id_string(
+                            id_cleanup::gtfs_rt_cleanup(t),
+                            realtime_feed_id.as_str(),
+                        )),
+                        Err(e) => {
+                            println!("Error decoding trips: {}", e);
+                            None
+                        }
                     },
-                    _ => None,
-                };
+                    None => None,
+                },
+                _ => None,
+            };
 
             let trips_gtfs_rt = trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
                 "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
@@ -285,25 +283,24 @@ impl AspenRpc for AspenServer {
             });
 
             let alerts_gtfs_rt = match alerts_response_code {
-                    Some(200) => match alerts {
-                        Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
-                            Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
-                            Err(e) => {
-                                println!("Error decoding alerts: {}", e);
-                                None
-                            }
-                        },
-                        None => None,
+                Some(200) => match alerts {
+                    Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
+                        Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
+                        Err(e) => {
+                            println!("Error decoding alerts: {}", e);
+                            None
+                        }
                     },
-                    _ => None,
-                };
+                    None => None,
+                },
+                _ => None,
+            };
 
             //get and update raw gtfs_rt data
 
             //  println!("Parsed FeedMessages for {}", realtime_feed_id);
 
             let mut new_data = false;
-
 
             if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
                 if !new_data {
@@ -699,12 +696,13 @@ async fn main() -> anyhow::Result<()> {
 
                     match etcd {
                         Ok(mut etcd) => {
-                            let renewed = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await;
+                            let renewed =
+                                etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await;
 
                             match renewed {
                                 Ok(_) => {
                                     eprintln!("etcd Lease renewed");
-                                },
+                                }
                                 Err(lease_err) => {
                                     eprintln!("Could not renew etcd lease {}", lease_err);
                                 }
@@ -763,13 +761,15 @@ async fn main() -> anyhow::Result<()> {
             }
         }());
 
-        async fn flatten<T>(handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>) -> Result<T, Box<dyn Error + Sync + Send>> {
-            match handle.await {
-                Ok(Ok(result)) => Ok(result),
-                Ok(Err(err)) => Err(err),
-                Err(err) => Err(Box::new(err)),
-            }
+    async fn flatten<T>(
+        handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
+    ) -> Result<T, Box<dyn Error + Sync + Send>> {
+        match handle.await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(err)) => Err(err),
+            Err(err) => Err(Box::new(err)),
         }
+    }
 
     let result_series = tokio::try_join!(
         flatten(leader_thread_handler),
@@ -781,7 +781,7 @@ async fn main() -> anyhow::Result<()> {
     match result_series {
         Ok(result_series_ok) => {
             println!("All threads have exited");
-           
+
             Ok(())
         }
         Err(e) => {

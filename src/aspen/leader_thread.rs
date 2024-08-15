@@ -65,7 +65,6 @@ pub async fn aspen_leader_thread(
                             )
                             .await?;
 
-                                            
                             //renew the etcd lease
                             let _ = etcd.lease_keep_alive(lease_id_for_this_worker).await?;
 
