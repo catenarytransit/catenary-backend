@@ -209,9 +209,24 @@ impl AspenRpc for AspenServer {
             alerts: a_purehash,
         };
 
-        let new_data_status_from_pure_hash = match existing_hashes {
+        let new_data_status_from_pure_hash = match &existing_hashes {
             None => true,
             Some(existing_hashes) => *(existing_hashes.get()) != new_hashes,
+        };
+
+        let new_vehicles = match &existing_hashes {
+            None => true,
+            Some(existing_hashes) => (existing_hashes.get()).vehicles != new_hashes.vehicles
+        };
+
+        let new_trips = match &existing_hashes {
+            None => true,
+            Some(existing_hashes) => (existing_hashes.get()).trips != new_hashes.trips
+        };
+
+        let new_alerts = match &existing_hashes {
+            None => true,
+            Some(existing_hashes) => (existing_hashes.get()).alerts != new_hashes.alerts
         };
 
         if new_data_status_from_pure_hash {
@@ -220,21 +235,24 @@ impl AspenRpc for AspenServer {
                 .and_modify(|existing_hash_mut| *existing_hash_mut = new_hashes)
                 .or_insert(new_hashes);
 
-            let vehicles_gtfs_rt = match vehicles_response_code {
-                Some(200) => match vehicles {
-                    Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
-                        Ok(v) => Some(gtfs_rt_correct_route_id_string(
-                            id_cleanup::gtfs_rt_cleanup(v),
-                            realtime_feed_id.as_str(),
-                        )),
-                        Err(e) => {
-                            println!("Error decoding vehicles: {}", e);
-                            None
-                        }
+            let vehicles_gtfs_rt = match new_vehicles {
+                true => match vehicles_response_code {
+                    Some(200) => match vehicles {
+                        Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
+                            Ok(v) => Some(gtfs_rt_correct_route_id_string(
+                                id_cleanup::gtfs_rt_cleanup(v),
+                                realtime_feed_id.as_str(),
+                            )),
+                            Err(e) => {
+                                println!("Error decoding vehicles: {}", e);
+                                None
+                            }
+                        },
+                        None => None,
                     },
-                    None => None,
+                    _ => None,
                 },
-                _ => None,
+                false => None
             };
 
             let vehicles_gtfs_rt =
@@ -243,21 +261,26 @@ impl AspenRpc for AspenServer {
                     _ => gtfs_rt_feed,
                 });
 
-            let trips_gtfs_rt = match trips_response_code {
-                Some(200) => match trips {
-                    Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
-                        Ok(t) => Some(gtfs_rt_correct_route_id_string(
-                            id_cleanup::gtfs_rt_cleanup(t),
-                            realtime_feed_id.as_str(),
-                        )),
-                        Err(e) => {
-                            println!("Error decoding trips: {}", e);
-                            None
-                        }
-                    },
-                    None => None,
+            let trips_gtfs_rt = match new_trips {
+                true => {
+                    match trips_response_code {
+                        Some(200) => match trips {
+                            Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
+                                Ok(t) => Some(gtfs_rt_correct_route_id_string(
+                                    id_cleanup::gtfs_rt_cleanup(t),
+                                    realtime_feed_id.as_str(),
+                                )),
+                                Err(e) => {
+                                    println!("Error decoding trips: {}", e);
+                                    None
+                                }
+                            },
+                            None => None,
+                        },
+                        _ => None,
+                    }
                 },
-                _ => None,
+                false => None
             };
 
             let trips_gtfs_rt = trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
@@ -265,18 +288,21 @@ impl AspenRpc for AspenServer {
                 _ => gtfs_rt_feed,
             });
 
-            let alerts_gtfs_rt = match alerts_response_code {
-                Some(200) => match alerts {
-                    Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
-                        Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
-                        Err(e) => {
-                            println!("Error decoding alerts: {}", e);
-                            None
-                        }
+            let alerts_gtfs_rt = match new_alerts {
+                true => match alerts_response_code {
+                    Some(200) => match alerts {
+                        Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
+                            Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
+                            Err(e) => {
+                                println!("Error decoding alerts: {}", e);
+                                None
+                            }
+                        },
+                        None => None,
                     },
-                    None => None,
+                    _ => None,
                 },
-                _ => None,
+                false => None
             };
 
             //get and update raw gtfs_rt data
