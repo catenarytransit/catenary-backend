@@ -191,7 +191,7 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-        if false {
+        
             let hash_data_start = Instant::now();
 
         let v_purehash = vehicles
@@ -367,8 +367,6 @@ impl AspenRpc for AspenServer {
                 });
             
         }
-        }
-
         true
     }
 
