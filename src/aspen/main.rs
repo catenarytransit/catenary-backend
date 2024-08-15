@@ -70,7 +70,7 @@ use std::time::Instant;
 pub struct GtfsRealtimeHashStore {
     vehicles: Option<u64>,
     trips: Option<u64>,
-    alerts: Option<u64>,
+    alerts: Option<u64>
 }
 
 // This is the type that implements the generated World trait. It is the business logic
@@ -177,7 +177,7 @@ impl AspenRpc for AspenServer {
 
     async fn from_alpenrose(
         self,
-        context: context::Context,
+        _: context::Context,
         chateau_id: String,
         realtime_feed_id: String,
         vehicles: Option<Vec<u8>>,
@@ -191,18 +191,9 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-        
-            let hash_data_start = Instant::now();
-
-        let v_purehash = vehicles
-            .as_ref()
-            .map(|data| catenary::ahash_fast_hash(&data.as_slice()));
-        let t_purehash = trips
-            .as_ref()
-            .map(|data| catenary::ahash_fast_hash(&data.as_slice()));
-        let a_purehash = alerts
-            .as_ref()
-            .map(|data| catenary::ahash_fast_hash(&data.as_slice()));
+        let v_purehash = vehicles.as_ref().map(|data| catenary::ahash_fast_hash(&data.as_slice()));
+        let t_purehash = trips.as_ref().map(|data| catenary::ahash_fast_hash(&data.as_slice()));
+        let a_purehash = alerts.as_ref().map(|data| catenary::ahash_fast_hash(&data.as_slice()));
 
         let existing_hashes = self.hash_of_raw_gtfs_rt_protobuf.get(&realtime_feed_id);
 
@@ -212,148 +203,177 @@ impl AspenRpc for AspenServer {
             alerts: a_purehash,
         };
 
-        let new_data_status_from_pure_hash = match &existing_hashes {
+        let new_data_status_from_pure_hash = match existing_hashes {
             None => true,
-            Some(existing_hashes) => *(existing_hashes.get()) != new_hashes,
+            Some(existing_hashes) => *(existing_hashes.get()) != new_hashes
         };
 
-        /* 
-        let new_vehicles = match &existing_hashes {
-            None => true,
-            Some(existing_hashes) => (existing_hashes.get()).vehicles != new_hashes.vehicles,
-        };
+    if new_data_status_from_pure_hash {
+        self.hash_of_raw_gtfs_rt_protobuf.entry(realtime_feed_id.clone())
+        .and_modify(|existing_hash_mut| *existing_hash_mut = new_hashes)
+        .or_insert(new_hashes);
 
-        let new_trips = match &existing_hashes {
-            None => true,
-            Some(existing_hashes) => (existing_hashes.get()).trips != new_hashes.trips,
-        };
-
-        let new_alerts = match &existing_hashes {
-            None => true,
-            Some(existing_hashes) => (existing_hashes.get()).alerts != new_hashes.alerts,
-        };*/
-
-        if new_data_status_from_pure_hash {
-            self.hash_of_raw_gtfs_rt_protobuf
-                .entry(realtime_feed_id.clone())
-                .and_modify(|existing_hash_mut| *existing_hash_mut = new_hashes)
-                .or_insert(new_hashes);
-
-            let vehicles_gtfs_rt = match vehicles_response_code {
-                Some(200) => match vehicles {
-                    Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
-                        Ok(v) => Some(gtfs_rt_correct_route_id_string(
-                            id_cleanup::gtfs_rt_cleanup(v),
-                            realtime_feed_id.as_str(),
-                        )),
-                        Err(e) => {
-                            println!("Error decoding vehicles: {}", e);
-                            None
-                        }
-                    },
-                    None => None,
+        let vehicles_gtfs_rt = match vehicles_response_code {
+            Some(200) => match vehicles {
+                Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
+                    Ok(v) => Some(gtfs_rt_correct_route_id_string(
+                        id_cleanup::gtfs_rt_cleanup(v),
+                        realtime_feed_id.as_str(),
+                    )),
+                    Err(e) => {
+                        println!("Error decoding vehicles: {}", e);
+                        None
+                    }
                 },
-                _ => None,
-            };
+                None => None,
+            },
+            _ => None,
+        };
 
-            let vehicles_gtfs_rt =
-                vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
-                    "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
-                    _ => gtfs_rt_feed,
-                });
-
-            let trips_gtfs_rt = match trips_response_code {
-                Some(200) => match trips {
-                    Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
-                        Ok(t) => Some(gtfs_rt_correct_route_id_string(
-                            id_cleanup::gtfs_rt_cleanup(t),
-                            realtime_feed_id.as_str(),
-                        )),
-                        Err(e) => {
-                            println!("Error decoding trips: {}", e);
-                            None
-                        }
-                    },
-                    None => None,
-                },
-                _ => None,
-            };
-
-            let trips_gtfs_rt = trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
+        let vehicles_gtfs_rt =
+            vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
                 "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
                 _ => gtfs_rt_feed,
             });
 
-            let alerts_gtfs_rt = match alerts_response_code {
-                Some(200) => match alerts {
-                    Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
-                        Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
-                        Err(e) => {
-                            println!("Error decoding alerts: {}", e);
-                            None
-                        }
-                    },
-                    None => None,
+        let trips_gtfs_rt = match trips_response_code {
+            Some(200) => match trips {
+                Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
+                    Ok(t) => Some(gtfs_rt_correct_route_id_string(
+                        id_cleanup::gtfs_rt_cleanup(t),
+                        realtime_feed_id.as_str(),
+                    )),
+                    Err(e) => {
+                        println!("Error decoding trips: {}", e);
+                        None
+                    }
                 },
-                _ => None,
-            };
+                None => None,
+            },
+            _ => None,
+        };
 
-            //get and update raw gtfs_rt data
+        let trips_gtfs_rt = trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
+            "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
+            _ => gtfs_rt_feed,
+        });
 
-            //  println!("Parsed FeedMessages for {}", realtime_feed_id);
+        let alerts_gtfs_rt = match alerts_response_code {
+            Some(200) => match alerts {
+                Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
+                    Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
+                    Err(e) => {
+                        println!("Error decoding alerts: {}", e);
+                        None
+                    }
+                },
+                None => None,
+            },
+            _ => None,
+        };
 
-                if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
-                    match self
-                        .authoritative_gtfs_rt_store
-                        .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
-                    {
-                        scc::hash_map::Entry::Occupied(mut oe) => {
-                            oe.insert(vehicles_gtfs_rt);
-                        }
-                        scc::hash_map::Entry::Vacant(ve) => {
-                            ve.insert_entry(vehicles_gtfs_rt);
-                        }
-                    };
+        //get and update raw gtfs_rt data
+
+        //  println!("Parsed FeedMessages for {}", realtime_feed_id);
+
+        let mut new_data = false;
+
+        let hash_data_start = Instant::now();
+
+        if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
+            if !new_data {
+                let new_data_v = contains_new_data(
+                    &self,
+                    &realtime_feed_id,
+                    GtfsRtType::VehiclePositions,
+                    vehicles_gtfs_rt,
+                );
+
+                if new_data_v {
+                    new_data = new_data_v;
                 }
+            }
 
-                if let Some(trip_gtfs_rt) = trips_gtfs_rt {
-                    match self
-                        .authoritative_gtfs_rt_store
-                        .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
-                    {
-                        scc::hash_map::Entry::Occupied(mut oe) => {
-                            oe.insert(trip_gtfs_rt);
-                        }
-                        scc::hash_map::Entry::Vacant(ve) => {
-                            ve.insert_entry(trip_gtfs_rt);
-                        }
-                    };
-                }
-
-                if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
-                    match self
-                        .authoritative_gtfs_rt_store
-                        .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
-                    {
-                        scc::hash_map::Entry::Occupied(mut oe) => {
-                            oe.insert(alerts_gtfs_rt);
-                        }
-                        scc::hash_map::Entry::Vacant(ve) => {
-                            ve.insert_entry(alerts_gtfs_rt);
-                        }
-                    };
-                }
-            
-
-            let hash_data_duration = hash_data_start.elapsed();
-
-            println!(
-                "wrote {realtime_feed_id}, took {:?}",
-                hash_data_duration
+            let _ = save_timestamps(
+                &self,
+                &realtime_feed_id,
+                GtfsRtType::VehiclePositions,
+                vehicles_gtfs_rt,
             );
+        }
 
-            //   println!("Saved FeedMessages for {}", realtime_feed_id);
+        if let Some(trips_gtfs_rt) = &trips_gtfs_rt {
+            if !new_data {
+                let new_data_t = contains_new_data(
+                    &self,
+                    &realtime_feed_id,
+                    GtfsRtType::TripUpdates,
+                    trips_gtfs_rt,
+                );
 
+                if new_data_t {
+                    new_data = new_data_t;
+                }
+            }
+
+            let _ = save_timestamps(
+                &self,
+                &realtime_feed_id,
+                GtfsRtType::TripUpdates,
+                trips_gtfs_rt,
+            );
+        }
+
+        if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
+            if !new_data {
+                let new_data_a =
+                    contains_new_data(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
+
+                if new_data_a {
+                    new_data = new_data_a;
+                }
+            }
+
+            let _ = save_timestamps(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
+        }
+
+        if new_data {
+            if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
+                self.authoritative_gtfs_rt_store
+                    .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+                    .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
+                    .or_insert(vehicles_gtfs_rt.clone());
+            }
+
+            if let Some(trip_gtfs_rt) = trips_gtfs_rt {
+                self.authoritative_gtfs_rt_store
+                    .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+                    .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
+                    .or_insert(trip_gtfs_rt.clone());
+            }
+
+            if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
+                self.authoritative_gtfs_rt_store
+                    .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
+                    .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
+                    .or_insert(alerts_gtfs_rt.clone());
+            }
+        }
+
+        let hash_data_duration = hash_data_start.elapsed();
+
+        println!(
+            "wrote {realtime_feed_id}, took {} ms, is new data: {new_data}",
+            hash_data_duration.as_millis()
+        );
+
+        //   println!("Saved FeedMessages for {}", realtime_feed_id);
+
+        if new_data {
+            let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
+
+            if !lock_chateau_queue.contains(&chateau_id) {
+                lock_chateau_queue.insert(chateau_id.clone());
                 self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
                     chateau_id,
                     realtime_feed_id,
@@ -365,8 +385,10 @@ impl AspenRpc for AspenServer {
                     alerts_response_code,
                     time_of_submission_ms,
                 });
-            
+            }
         }
+    }
+
         true
     }
 
@@ -498,10 +520,12 @@ impl AspenRpc for AspenServer {
     }
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> anyhow::Result<()> {
-    console_subscriber::init();
+async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
+    tokio::spawn(fut);
+}
 
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     // Worker Id for this instance of Aspen
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
@@ -541,7 +565,7 @@ async fn main() -> anyhow::Result<()> {
     let make_lease = etcd
         .lease_grant(
             //10 seconds
-            10,
+            5,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
         )
         .await?;
@@ -620,26 +644,9 @@ async fn main() -> anyhow::Result<()> {
             async move {
                 loop {
                     let mut etcd =
-                        etcd_client::Client::connect(etcd_addresses.clone().as_slice(), None).await;
-
-                    match etcd {
-                        Ok(mut etcd) => {
-                            let renewed =
-                                etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await;
-
-                            match renewed {
-                                Ok(_) => {
-                                    eprintln!("etcd Lease renewed");
-                                }
-                                Err(lease_err) => {
-                                    eprintln!("Could not renew etcd lease {}", lease_err);
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            eprintln!("could not connect to etcd to renew a lease: {:?}", err);
-                        }
-                    }
+                        etcd_client::Client::connect(etcd_addresses.clone().as_slice(), None)
+                            .await?;
+                    let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await?;
 
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
@@ -678,11 +685,7 @@ async fn main() -> anyhow::Result<()> {
                             etcd_addresses: Arc::clone(&etcd_addresses),
                             timestamps_of_gtfs_rt: Arc::clone(&timestamps_of_gtfs_rt),
                         };
-                        channel
-                            .execute(server.serve())
-                            .for_each(|response| async move {
-                                let _ = tokio::spawn(response).await;
-                            })
+                        channel.execute(server.serve()).for_each(spawn)
                     })
                     // Max n channels.
                     .buffer_unordered(channel_count)
@@ -693,32 +696,51 @@ async fn main() -> anyhow::Result<()> {
             }
         }());
 
-    async fn flatten<T>(
-        handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
-    ) -> Result<T, Box<dyn Error + Sync + Send>> {
-        match handle.await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(err)) => Err(err),
-            Err(err) => Err(Box::new(err)),
-        }
-    }
-
     let result_series = tokio::try_join!(
-        flatten(leader_thread_handler),
-        flatten(async_from_alpenrose_processor_handler),
-        flatten(tarpc_server),
-        flatten(etcd_lease_renewer)
+        leader_thread_handler,
+        async_from_alpenrose_processor_handler,
+        tarpc_server,
+        etcd_lease_renewer
     );
 
     match result_series {
         Ok(result_series_ok) => {
             println!("All threads have exited");
 
+            match &result_series_ok.0 {
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                }
+                Ok(_) => {}
+            }
+
+            match &result_series_ok.1 {
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                }
+                Ok(_) => {}
+            }
+
+            match &result_series_ok.2 {
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                }
+                Ok(_) => {}
+            }
+
+            match &result_series_ok.3 {
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                }
+                Ok(_) => {}
+            }
+
             Ok(())
         }
         Err(e) => {
-            //println!("Error: {:?}", e);
+            println!("Error: {:?}", e);
             panic!("{:#?}", e);
+            Err(anyhow::Error::new(e))
         }
     }
 }
