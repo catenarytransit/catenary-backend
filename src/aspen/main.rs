@@ -237,7 +237,7 @@ impl AspenRpc for AspenServer {
                 .and_modify(|existing_hash_mut| *existing_hash_mut = new_hashes)
                 .or_insert(new_hashes);
 
-            let vehicles_gtfs_rt = match new_vehicles {
+            let vehicles_gtfs_rt = 
                 true => match vehicles_response_code {
                     Some(200) => match vehicles {
                         Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
@@ -253,9 +253,8 @@ impl AspenRpc for AspenServer {
                         None => None,
                     },
                     _ => None,
-                },
-                false => None,
-            };
+                }
+            ;
 
             let vehicles_gtfs_rt =
                 vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
@@ -263,8 +262,7 @@ impl AspenRpc for AspenServer {
                     _ => gtfs_rt_feed,
                 });
 
-            let trips_gtfs_rt = match new_trips {
-                true => match trips_response_code {
+            let trips_gtfs_rt = match trips_response_code {
                     Some(200) => match trips {
                         Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
                             Ok(t) => Some(gtfs_rt_correct_route_id_string(
@@ -279,17 +277,14 @@ impl AspenRpc for AspenServer {
                         None => None,
                     },
                     _ => None,
-                },
-                false => None,
-            };
+                };
 
             let trips_gtfs_rt = trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
                 "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
                 _ => gtfs_rt_feed,
             });
 
-            let alerts_gtfs_rt = match new_alerts {
-                true => match alerts_response_code {
+            let alerts_gtfs_rt = match alerts_response_code {
                     Some(200) => match alerts {
                         Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
                             Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
@@ -301,9 +296,7 @@ impl AspenRpc for AspenServer {
                         None => None,
                     },
                     _ => None,
-                },
-                false => None,
-            };
+                };
 
             //get and update raw gtfs_rt data
 
