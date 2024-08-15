@@ -705,7 +705,16 @@ async fn main() -> anyhow::Result<()> {
 
                     match etcd {
                         Ok(mut etcd) => {
-                            let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await;
+                            let renewed = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await;
+
+                            match renewed {
+                                Ok(_) => {
+                                    eprintln!("etcd Lease renewed");
+                                },
+                                Err(lease_err) => {
+                                    eprintln!("Could not renew etcd lease {}", lease_err);
+                                }
+                            }
                         }
                         Err(err) => {
                             eprintln!("could not connect to etcd to renew a lease: {:?}", err);
