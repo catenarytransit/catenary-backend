@@ -769,51 +769,30 @@ async fn main() -> anyhow::Result<()> {
             }
         }());
 
+        async fn flatten<T>(handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>) -> Result<T, Box<dyn Error + Sync + Send>> {
+            match handle.await {
+                Ok(Ok(result)) => Ok(result),
+                Ok(Err(err)) => Err(err),
+                Err(err) => Err(Box::new(err)),
+            }
+        }
+
     let result_series = tokio::try_join!(
-        leader_thread_handler,
-        async_from_alpenrose_processor_handler,
-        tarpc_server,
-        etcd_lease_renewer
+        flatten(leader_thread_handler),
+        flatten(async_from_alpenrose_processor_handler),
+        flatten(tarpc_server),
+        flatten(etcd_lease_renewer)
     );
 
     match result_series {
         Ok(result_series_ok) => {
             println!("All threads have exited");
-
-            match &result_series_ok.0 {
-                Err(e) => {
-                    panic!("Error: {:?}", e);
-                }
-                Ok(_) => {}
-            }
-
-            match &result_series_ok.1 {
-                Err(e) => {
-                    panic!("Error: {:?}", e);
-                }
-                Ok(_) => {}
-            }
-
-            match &result_series_ok.2 {
-                Err(e) => {
-                    panic!("Error: {:?}", e);
-                }
-                Ok(_) => {}
-            }
-
-            match &result_series_ok.3 {
-                Err(e) => {
-                    panic!("Error: {:?}", e);
-                }
-                Ok(_) => {}
-            }
-
+           
             Ok(())
         }
         Err(e) => {
             println!("Error: {:?}", e);
             panic!("{:#?}", e);
-            Err(anyhow::Error::new(e))
         }
     }
 }
