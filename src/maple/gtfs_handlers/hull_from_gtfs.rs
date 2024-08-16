@@ -35,7 +35,7 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
                             Point::new(stop.longitude.unwrap(), stop.latitude.unwrap())
                         })
                         .collect::<MultiPoint>();
-                    Some(points.concave_hull(4.0))
+                    Some(points.concave_hull(1.5))
                 }
                 false => None,
             }

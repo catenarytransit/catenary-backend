@@ -9,15 +9,15 @@ use diesel::dsl::sql;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::sql_types::Bool;
+use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use geo::HaversineDestination;
 use geo::HaversineDistance;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
-use diesel::ExpressionMethods;
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyFromCoords {
@@ -181,21 +181,26 @@ pub async fn nearby_from_coords(
             //for each chateau
 
             for (chateau_id, hash_under_chateau) in sorted_by_chateau {
-
-                let stop_id_vec = hash_under_chateau.keys().map(|key| key.to_string()).collect::<Vec<String>>();
+                let stop_id_vec = hash_under_chateau
+                    .keys()
+                    .map(|key| key.to_string())
+                    .collect::<Vec<String>>();
 
                 // query for all the itinerary times, look at the closest stops for all of them,
 
-                let itineraries_searched = catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_id))
-                .filter(catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(stop_id_vec))
-                .select(catenary::models::ItineraryPatternRow::as_select())
-                .load(conn).await;
+                let itineraries_searched =
+                    catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                        .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_id))
+                        .filter(
+                            catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(stop_id_vec),
+                        )
+                        .select(catenary::models::ItineraryPatternRow::as_select())
+                        .load(conn)
+                        .await;
 
                 // get the closest stop for each itinerary by greedy search
-                
-                let itins_found:HashSet<String> =  HashSet::new();
 
+                let itins_found: HashSet<String> = HashSet::new();
             }
 
             //get the start of the trip and the offset for the current stop
