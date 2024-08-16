@@ -417,7 +417,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 feeds_to_process
                 .into_iter()
                 .map(|(feed_id, attempt_id, chateau_id)| {
-                        
+                            let gtfs_uncompressed_temp_storage = gtfs_uncompressed_temp_storage.clone();
                             //clone the smart reference to the connection pool
                             let arc_conn_pool = Arc::clone(&arc_conn_pool);
                             let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
@@ -434,6 +434,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                 
                                     // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
                                     let gtfs_process_result = gtfs_process_feed(
+                                        &gtfs_uncompressed_temp_storage,
                                         &feed_id,
                                         Arc::clone(&arc_conn_pool),
                                         &chateau_id,

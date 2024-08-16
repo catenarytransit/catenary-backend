@@ -47,6 +47,7 @@ pub struct GtfsSummary {
 
 // take a feed id and throw it into postgres
 pub async fn gtfs_process_feed(
+    gtfs_unzipped_path: &str, 
     feed_id: &str,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
     chateau_id: &str,
@@ -60,12 +61,12 @@ pub async fn gtfs_process_feed(
     let conn = &mut conn_pre?;
 
     //read the GTFS zip file
-    let path = format!("gtfs_uncompressed/{}", feed_id);
+    let path = format!("{}/{}", gtfs_unzipped_path, feed_id);
 
     let gtfs = gtfs_structures::Gtfs::new(path.as_str())?;
 
     // Read Translations.txt, don't fail if it doesn't exist
-    let translation_path = format!("gtfs_uncompressed/{}/translations.txt", feed_id);
+    let translation_path = format!("{}/{}/translations.txt", gtfs_unzipped_path, feed_id);
     let translation_data = std::fs::read_to_string(translation_path);
 
     let gtfs_translations: Option<TranslationResult> = match translation_data {
