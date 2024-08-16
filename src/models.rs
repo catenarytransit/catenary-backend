@@ -257,6 +257,7 @@ pub struct Calendar {
     pub gtfs_start_date: chrono::NaiveDate,
     pub gtfs_end_date: chrono::NaiveDate,
     pub chateau: String,
+    pub attempt_id: String
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
@@ -266,6 +267,8 @@ pub struct CalendarDate {
     pub attempt_id: String,
     pub service_id: String,
     pub gtfs_date: chrono::NaiveDate,
+    /// 1 = added
+    /// 2 = removed
     pub exception_type: i16,
     pub chateau: String,
 }
