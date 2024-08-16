@@ -69,7 +69,9 @@ pub async fn download_return_eligible_feeds(
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
 
-    let _ = fs::create_dir(gtfs_temp_storage);
+    if !std::path::Path::new(gtfs_temp_storage).exists() {
+        fs::create_dir(gtfs_temp_storage).expect("zip directory doesn't exist but could not create it");
+    }
 
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
         println!("Downloading zip files now");
