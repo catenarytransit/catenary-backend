@@ -40,8 +40,8 @@ use futures::StreamExt;
 use git2::Repository;
 use std::collections::HashSet;
 use std::error::Error;
-use std::sync::Arc;
 use std::fs;
+use std::sync::Arc;
 
 use crate::cleanup::delete_attempt_objects;
 use crate::cleanup::wipe_whole_feed;

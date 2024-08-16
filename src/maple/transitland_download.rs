@@ -70,7 +70,8 @@ pub async fn download_return_eligible_feeds(
     let threads: usize = 32;
 
     if !std::path::Path::new(gtfs_temp_storage).exists() {
-        fs::create_dir(gtfs_temp_storage).expect("zip directory doesn't exist but could not create it");
+        fs::create_dir(gtfs_temp_storage)
+            .expect("zip directory doesn't exist but could not create it");
     }
 
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
@@ -137,6 +138,13 @@ pub async fn download_return_eligible_feeds(
                                 .duration_since(UNIX_EPOCH)
                                 .expect("Time went backwards")
                                 .as_millis();
+
+                            let mut out = File::create(format!(
+                                    "{}/{}.zip",
+                                    gtfs_temp_storage,
+                                    staticfeed.feed_id.clone()
+                                ))
+                                .expect("failed to create file");
             
                             let response = request.send().await;
             
@@ -163,12 +171,6 @@ pub async fn download_return_eligible_feeds(
                                 // The download request did return a response and the connection did not drop
                                 Ok(response) => {
                                     answer.http_response_code = Some(response.status().as_str().to_string());
-                                    let mut out = File::create(format!(
-                                        "{}/{}.zip",
-                                        gtfs_temp_storage,
-                                        staticfeed.feed_id.clone()
-                                    ))
-                                    .expect("failed to create file");
 
                                     if response.status().is_success() {
                                     // get raw bytes
