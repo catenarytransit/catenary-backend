@@ -19,9 +19,14 @@ fn delete_zip_files(dir_path: &str) -> std::io::Result<()> {
 }
 
 // Extracts a sub zip file and uses it as the parent folder
-pub fn extract_sub_zip(feed_id: &str, sub_folder: &str) -> Result<(), Box<dyn Error>> {
-    let source_path = format!("gtfs_uncompressed/{}/{}.zip", feed_id, sub_folder);
-    let target_path = format!("gtfs_uncompressed/{}", feed_id);
+pub fn extract_sub_zip(
+    gtfs_temp_storage: &str,
+    gtfs_uncompressed_temp_storage: &str,
+    feed_id: &str,
+    sub_folder: &str,
+) -> Result<(), Box<dyn Error>> {
+    let source_path = format!("{}/{}.zip", gtfs_temp_storage, feed_id);
+    let target_path = format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id);
 
     // Attempt to open file and pass back error if failed
     let mut file = File::open(source_path)?;
@@ -39,11 +44,15 @@ pub fn extract_sub_zip(feed_id: &str, sub_folder: &str) -> Result<(), Box<dyn Er
     Ok(())
 }
 
-pub fn flatten_feed(feed_id: &str) -> Result<(), Box<dyn Error>> {
-    let _ = fs::create_dir("gtfs_uncompressed");
+pub fn flatten_feed(
+    gtfs_temp_storage: &str,
+    gtfs_uncompressed_temp_storage: &str,
+    feed_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let _ = fs::create_dir(gtfs_uncompressed_temp_storage);
 
-    let source_path = format!("gtfs_static_zips/{}.zip", feed_id);
-    let target_path = format!("gtfs_uncompressed/{}", feed_id);
+    let source_path = format!("{}/{}.zip", gtfs_temp_storage, feed_id);
+    let target_path = format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id);
 
     // Attempt to open file and pass back error if failed
     let mut file = File::open(source_path)?;
@@ -58,11 +67,21 @@ pub fn flatten_feed(feed_id: &str) -> Result<(), Box<dyn Error>> {
 
     // go into folder and unnest folders
     if feed_id == "f-dr4-septa~rail" {
-        extract_sub_zip("f-dr4-septa~rail", "google_rail")?;
+        extract_sub_zip(
+            gtfs_temp_storage,
+            gtfs_uncompressed_temp_storage,
+            "f-dr4-septa~rail",
+            "google_rail",
+        )?;
     }
 
     if feed_id == "f-dr4-septa~bus" {
-        extract_sub_zip("f-dr4-septa~bus", "google_bus")?;
+        extract_sub_zip(
+            gtfs_temp_storage,
+            gtfs_uncompressed_temp_storage,
+            "f-dr4-septa~bus",
+            "google_bus",
+        )?;
     }
 
     Ok(())

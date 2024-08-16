@@ -41,6 +41,7 @@ use git2::Repository;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
+use std::fs;
 
 use crate::cleanup::delete_attempt_objects;
 use crate::cleanup::wipe_whole_feed;
@@ -154,6 +155,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         Err(_) => None,
     };
 
+    let gtfs_temp_storage = std::env::var("GTFS_ZIP_TEMP")
+        .expect("Missing GTFS_ZIP_TEMP env variable. Please give a path to store gtfs zip files.");
+    let gtfs_uncompressed_temp_storage = std::env::var("GTFS_UNCOMPRESSED_TEMP").expect("Missing GTFS_UNCOMPRESSED_TEMP env variable. Please give a path to store gtfs uncompressed files.");
+
     // get connection pool from database pool
     let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
@@ -178,6 +183,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     // The DMFR result dataset looks genuine, with over 200 pieces of data!
     if dmfr_result.feed_hashmap.len() > 200 && dmfr_result.operator_hashmap.len() > 100 {
         let eligible_feeds = transitland_download::download_return_eligible_feeds(
+            &gtfs_temp_storage,
             &dmfr_result,
             &arc_conn_pool,
             &feeds_to_discard,
@@ -312,14 +318,19 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             // 4. Unzip folders
             println!("Unzipping all gtfs folders");
             let unzip_feeds: Vec<(String, bool)> =
-                futures::stream::iter(to_ingest_feeds.into_iter().map(
-                    |to_ingest_feed| async move {
-                        let flatten_feed_result =
-                            gtfs_handlers::flatten::flatten_feed(to_ingest_feed.feed_id.as_str());
+                futures::stream::iter(to_ingest_feeds.into_iter().map(|to_ingest_feed| {
+                    let gtfs_temp_storage = gtfs_temp_storage.clone();
+                    let gtfs_uncompressed_temp_storage = gtfs_uncompressed_temp_storage.clone();
+                    async move {
+                        let flatten_feed_result = gtfs_handlers::flatten::flatten_feed(
+                            gtfs_temp_storage.as_str(),
+                            gtfs_uncompressed_temp_storage.as_str(),
+                            to_ingest_feed.feed_id.as_str(),
+                        );
 
                         (to_ingest_feed.feed_id.clone(), flatten_feed_result.is_ok())
-                    },
-                ))
+                    }
+                }))
                 .buffer_unordered(8)
                 .collect::<Vec<(String, bool)>>()
                 .await;
@@ -560,6 +571,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     }
 
     println!("Maple ingest completed");
+
+    println!("Deleting temp data");
+
+    fs::remove_dir_all(gtfs_temp_storage).unwrap();
+    fs::remove_dir_all(gtfs_uncompressed_temp_storage).unwrap();
 
     Ok(())
 }

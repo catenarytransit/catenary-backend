@@ -61,6 +61,7 @@ pub struct StaticPassword {
 // the parent task in import.rs is in charge of assigning it to other threads + task scheduling, this portion is only for downloading and seeing what is eligible for download
 
 pub async fn download_return_eligible_feeds(
+    gtfs_temp_storage: &str,
     transitland_meta: &ReturnDmfrAnalysis,
     pool: &Arc<CatenaryPostgresPool>,
     feeds_to_discard: &HashSet<String>,
@@ -68,7 +69,7 @@ pub async fn download_return_eligible_feeds(
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
 
-    let _ = fs::create_dir("gtfs_static_zips");
+    let _ = fs::create_dir(gtfs_temp_storage);
 
     if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
         println!("Downloading zip files now");
@@ -161,7 +162,8 @@ pub async fn download_return_eligible_feeds(
                                 Ok(response) => {
                                     answer.http_response_code = Some(response.status().as_str().to_string());
                                     let mut out = File::create(format!(
-                                        "gtfs_static_zips/{}.zip",
+                                        "{}/{}.zip",
+                                        gtfs_temp_storage,
                                         staticfeed.feed_id.clone()
                                     ))
                                     .expect("failed to create file");

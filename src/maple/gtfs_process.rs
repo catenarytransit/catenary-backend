@@ -9,10 +9,10 @@ use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::shape_colour_calculator::ShapeToColourResponse;
 use crate::gtfs_handlers::stops_associated_items::*;
+use crate::gtfs_ingestion_sequence::calendar_into_postgres::calendar_into_postgres;
 use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::insert_stop_to_stop_geometry;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres;
-use crate::gtfs_ingestion_sequence::calendar_into_postgres::calendar_into_postgres;
 use crate::DownloadedFeedsInformation;
 use catenary::enum_to_int::*;
 use catenary::gtfs_schedule_protobuf::frequencies_to_protobuf;
@@ -183,8 +183,9 @@ pub async fn gtfs_process_feed(
         feed_id,
         Arc::clone(&arc_conn_pool),
         chateau_id,
-        attempt_id
-    ).await?;
+        attempt_id,
+    )
+    .await?;
 
     //insert stops
     stops_into_postgres(

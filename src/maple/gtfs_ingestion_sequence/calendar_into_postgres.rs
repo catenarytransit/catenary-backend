@@ -31,7 +31,7 @@ pub async fn calendar_into_postgres(
             gtfs_start_date: calendar.start_date,
             gtfs_end_date: calendar.end_date,
             chateau: chateau_id.to_string(),
-            attempt_id: attempt_id.to_string()
+            attempt_id: attempt_id.to_string(),
         };
 
         let _ = diesel::insert_into(catenary::schema::gtfs::calendar::table)
@@ -49,15 +49,15 @@ pub async fn calendar_into_postgres(
                 chateau: chateau_id.to_string(),
                 exception_type: match date.exception_type {
                     gtfs_structures::Exception::Added => 1,
-                    gtfs_structures::Exception::Deleted => 2
+                    gtfs_structures::Exception::Deleted => 2,
                 },
-                attempt_id: attempt_id.to_string()
+                attempt_id: attempt_id.to_string(),
             };
 
             let _ = diesel::insert_into(catenary::schema::gtfs::calendar_dates::table)
-            .values(calendar_date_pg)
-            .execute(conn)
-            .await?;
+                .values(calendar_date_pg)
+                .execute(conn)
+                .await?;
         }
     }
 
