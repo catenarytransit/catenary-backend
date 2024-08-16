@@ -70,7 +70,7 @@ use std::time::Instant;
 pub struct GtfsRealtimeHashStore {
     vehicles: Option<u64>,
     trips: Option<u64>,
-    alerts: Option<u64>
+    alerts: Option<u64>,
 }
 
 // This is the type that implements the generated World trait. It is the business logic
@@ -191,9 +191,15 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-        let v_purehash = vehicles.as_ref().map(|data| catenary::ahash_fast_hash(&data.as_slice()));
-        let t_purehash = trips.as_ref().map(|data| catenary::ahash_fast_hash(&data.as_slice()));
-        let a_purehash = alerts.as_ref().map(|data| catenary::ahash_fast_hash(&data.as_slice()));
+        let v_purehash = vehicles
+            .as_ref()
+            .map(|data| catenary::ahash_fast_hash(&data.as_slice()));
+        let t_purehash = trips
+            .as_ref()
+            .map(|data| catenary::ahash_fast_hash(&data.as_slice()));
+        let a_purehash = alerts
+            .as_ref()
+            .map(|data| catenary::ahash_fast_hash(&data.as_slice()));
 
         let existing_hashes = self.hash_of_raw_gtfs_rt_protobuf.get(&realtime_feed_id);
 
@@ -205,189 +211,195 @@ impl AspenRpc for AspenServer {
 
         let new_data_status_from_pure_hash = match existing_hashes {
             None => true,
-            Some(existing_hashes) => *(existing_hashes.get()) != new_hashes
+            Some(existing_hashes) => *(existing_hashes.get()) != new_hashes,
         };
 
-    if new_data_status_from_pure_hash {
-        self.hash_of_raw_gtfs_rt_protobuf.entry(realtime_feed_id.clone())
-        .and_modify(|existing_hash_mut| *existing_hash_mut = new_hashes)
-        .or_insert(new_hashes);
+        if new_data_status_from_pure_hash {
+            self.hash_of_raw_gtfs_rt_protobuf
+                .entry(realtime_feed_id.clone())
+                .and_modify(|existing_hash_mut| *existing_hash_mut = new_hashes)
+                .or_insert(new_hashes);
 
-        let vehicles_gtfs_rt = match vehicles_response_code {
-            Some(200) => match vehicles {
-                Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
-                    Ok(v) => Some(gtfs_rt_correct_route_id_string(
-                        id_cleanup::gtfs_rt_cleanup(v),
-                        realtime_feed_id.as_str(),
-                    )),
-                    Err(e) => {
-                        println!("Error decoding vehicles: {}", e);
-                        None
-                    }
+            let vehicles_gtfs_rt = match vehicles_response_code {
+                Some(200) => match vehicles {
+                    Some(v) => match parse_gtfs_rt_message(v.as_slice()) {
+                        Ok(v) => Some(gtfs_rt_correct_route_id_string(
+                            id_cleanup::gtfs_rt_cleanup(v),
+                            realtime_feed_id.as_str(),
+                        )),
+                        Err(e) => {
+                            println!("Error decoding vehicles: {}", e);
+                            None
+                        }
+                    },
+                    None => None,
                 },
-                None => None,
-            },
-            _ => None,
-        };
+                _ => None,
+            };
 
-        let vehicles_gtfs_rt =
-            vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
+            let vehicles_gtfs_rt =
+                vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
+                    "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
+                    _ => gtfs_rt_feed,
+                });
+
+            let trips_gtfs_rt = match trips_response_code {
+                Some(200) => match trips {
+                    Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
+                        Ok(t) => Some(gtfs_rt_correct_route_id_string(
+                            id_cleanup::gtfs_rt_cleanup(t),
+                            realtime_feed_id.as_str(),
+                        )),
+                        Err(e) => {
+                            println!("Error decoding trips: {}", e);
+                            None
+                        }
+                    },
+                    None => None,
+                },
+                _ => None,
+            };
+
+            let trips_gtfs_rt = trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
                 "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
                 _ => gtfs_rt_feed,
             });
 
-        let trips_gtfs_rt = match trips_response_code {
-            Some(200) => match trips {
-                Some(t) => match parse_gtfs_rt_message(t.as_slice()) {
-                    Ok(t) => Some(gtfs_rt_correct_route_id_string(
-                        id_cleanup::gtfs_rt_cleanup(t),
-                        realtime_feed_id.as_str(),
-                    )),
-                    Err(e) => {
-                        println!("Error decoding trips: {}", e);
-                        None
-                    }
+            let alerts_gtfs_rt = match alerts_response_code {
+                Some(200) => match alerts {
+                    Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
+                        Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
+                        Err(e) => {
+                            println!("Error decoding alerts: {}", e);
+                            None
+                        }
+                    },
+                    None => None,
                 },
-                None => None,
-            },
-            _ => None,
-        };
+                _ => None,
+            };
 
-        let trips_gtfs_rt = trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
-            "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
-            _ => gtfs_rt_feed,
-        });
+            //get and update raw gtfs_rt data
 
-        let alerts_gtfs_rt = match alerts_response_code {
-            Some(200) => match alerts {
-                Some(a) => match parse_gtfs_rt_message(a.as_slice()) {
-                    Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
-                    Err(e) => {
-                        println!("Error decoding alerts: {}", e);
-                        None
+            //  println!("Parsed FeedMessages for {}", realtime_feed_id);
+
+            let mut new_data = false;
+
+            let hash_data_start = Instant::now();
+
+            if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
+                if !new_data {
+                    let new_data_v = contains_new_data(
+                        &self,
+                        &realtime_feed_id,
+                        GtfsRtType::VehiclePositions,
+                        vehicles_gtfs_rt,
+                    );
+
+                    if new_data_v {
+                        new_data = new_data_v;
                     }
-                },
-                None => None,
-            },
-            _ => None,
-        };
+                }
 
-        //get and update raw gtfs_rt data
-
-        //  println!("Parsed FeedMessages for {}", realtime_feed_id);
-
-        let mut new_data = false;
-
-        let hash_data_start = Instant::now();
-
-        if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
-            if !new_data {
-                let new_data_v = contains_new_data(
+                let _ = save_timestamps(
                     &self,
                     &realtime_feed_id,
                     GtfsRtType::VehiclePositions,
                     vehicles_gtfs_rt,
                 );
-
-                if new_data_v {
-                    new_data = new_data_v;
-                }
             }
 
-            let _ = save_timestamps(
-                &self,
-                &realtime_feed_id,
-                GtfsRtType::VehiclePositions,
-                vehicles_gtfs_rt,
-            );
-        }
+            if let Some(trips_gtfs_rt) = &trips_gtfs_rt {
+                if !new_data {
+                    let new_data_t = contains_new_data(
+                        &self,
+                        &realtime_feed_id,
+                        GtfsRtType::TripUpdates,
+                        trips_gtfs_rt,
+                    );
 
-        if let Some(trips_gtfs_rt) = &trips_gtfs_rt {
-            if !new_data {
-                let new_data_t = contains_new_data(
+                    if new_data_t {
+                        new_data = new_data_t;
+                    }
+                }
+
+                let _ = save_timestamps(
                     &self,
                     &realtime_feed_id,
                     GtfsRtType::TripUpdates,
                     trips_gtfs_rt,
                 );
+            }
 
-                if new_data_t {
-                    new_data = new_data_t;
+            if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
+                if !new_data {
+                    let new_data_a = contains_new_data(
+                        &self,
+                        &realtime_feed_id,
+                        GtfsRtType::Alerts,
+                        alerts_gtfs_rt,
+                    );
+
+                    if new_data_a {
+                        new_data = new_data_a;
+                    }
+                }
+
+                let _ =
+                    save_timestamps(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
+            }
+
+            if new_data {
+                if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
+                    self.authoritative_gtfs_rt_store
+                        .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+                        .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
+                        .or_insert(vehicles_gtfs_rt.clone());
+                }
+
+                if let Some(trip_gtfs_rt) = trips_gtfs_rt {
+                    self.authoritative_gtfs_rt_store
+                        .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+                        .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
+                        .or_insert(trip_gtfs_rt.clone());
+                }
+
+                if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
+                    self.authoritative_gtfs_rt_store
+                        .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
+                        .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
+                        .or_insert(alerts_gtfs_rt.clone());
                 }
             }
 
-            let _ = save_timestamps(
-                &self,
-                &realtime_feed_id,
-                GtfsRtType::TripUpdates,
-                trips_gtfs_rt,
+            let hash_data_duration = hash_data_start.elapsed();
+
+            println!(
+                "wrote {realtime_feed_id}, took {} ms, is new data: {new_data}",
+                hash_data_duration.as_millis()
             );
-        }
 
-        if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
-            if !new_data {
-                let new_data_a =
-                    contains_new_data(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
+            //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
-                if new_data_a {
-                    new_data = new_data_a;
+            if new_data {
+                let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
+
+                if !lock_chateau_queue.contains(&chateau_id) {
+                    lock_chateau_queue.insert(chateau_id.clone());
+                    self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
+                        chateau_id,
+                        realtime_feed_id,
+                        has_vehicles,
+                        has_trips,
+                        has_alerts,
+                        vehicles_response_code,
+                        trips_response_code,
+                        alerts_response_code,
+                        time_of_submission_ms,
+                    });
                 }
             }
-
-            let _ = save_timestamps(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
         }
-
-        if new_data {
-            if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
-                self.authoritative_gtfs_rt_store
-                    .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
-                    .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
-                    .or_insert(vehicles_gtfs_rt.clone());
-            }
-
-            if let Some(trip_gtfs_rt) = trips_gtfs_rt {
-                self.authoritative_gtfs_rt_store
-                    .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
-                    .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
-                    .or_insert(trip_gtfs_rt.clone());
-            }
-
-            if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
-                self.authoritative_gtfs_rt_store
-                    .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
-                    .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
-                    .or_insert(alerts_gtfs_rt.clone());
-            }
-        }
-
-        let hash_data_duration = hash_data_start.elapsed();
-
-        println!(
-            "wrote {realtime_feed_id}, took {} ms, is new data: {new_data}",
-            hash_data_duration.as_millis()
-        );
-
-        //   println!("Saved FeedMessages for {}", realtime_feed_id);
-
-        if new_data {
-            let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
-
-            if !lock_chateau_queue.contains(&chateau_id) {
-                lock_chateau_queue.insert(chateau_id.clone());
-                self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
-                    chateau_id,
-                    realtime_feed_id,
-                    has_vehicles,
-                    has_trips,
-                    has_alerts,
-                    vehicles_response_code,
-                    trips_response_code,
-                    alerts_response_code,
-                    time_of_submission_ms,
-                });
-            }
-        }
-    }
 
         true
     }

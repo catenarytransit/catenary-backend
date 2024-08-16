@@ -3,6 +3,7 @@ use actix_web::web::Query;
 use actix_web::HttpRequest;
 use actix_web::HttpResponse;
 use actix_web::Responder;
+use ahash::AHashMap;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::dsl::sql;
 use diesel::query_dsl::methods::FilterDsl;
@@ -11,6 +12,7 @@ use diesel::sql_types::Bool;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use geo::HaversineDestination;
+use geo::HaversineDistance;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,7 +21,7 @@ use std::sync::Arc;
 struct NearbyFromCoords {
     lat: f64,
     lon: f64,
-    timestamp_seconds: u64,
+    departure_time: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -55,6 +57,11 @@ pub async fn nearby_from_coords(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
 
+    let departure_time = match query.departure_time {
+        Some(departure_time) => departure_time,
+        None => catenary::duration_since_unix_epoch().as_secs(),
+    };
+
     // get all the nearby stops from the coords
 
     // trains within 5km, buses within 2km
@@ -76,7 +83,7 @@ pub async fn nearby_from_coords(
         false => -90.,
     };
 
-    let mut bus_distance_limit = 5000;
+    let mut distance_limit = 5000;
 
     let distance_calc_point = input_point.haversine_destination(direction, 4000.);
 
@@ -85,24 +92,33 @@ pub async fn nearby_from_coords(
     let where_query_for_stops = format!("ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
     query.lon, query.lat, spatial_resolution_in_degs);
 
-    let stops = catenary::schema::gtfs::stops::dsl::stops
-        .filter(sql::<Bool>(&where_query_for_stops))
-        .select(catenary::models::Stop::as_select())
-        .load::<catenary::models::Stop>(conn)
-        .await;
+    let stops: diesel::prelude::QueryResult<Vec<catenary::models::Stop>> =
+        catenary::schema::gtfs::stops::dsl::stops
+            .filter(sql::<Bool>(&where_query_for_stops))
+            .select(catenary::models::Stop::as_select())
+            .load::<catenary::models::Stop>(conn)
+            .await;
 
     match stops {
         Ok(stops) => {
             let number_of_stops = stops.len();
 
+            if number_of_stops > 500 {
+                distance_limit = 3000;
+            }
+
             if number_of_stops > 1000 {
-                bus_distance_limit = 2000;
+                distance_limit = 2000;
             }
 
             //collect chateau list
 
-            let mut sorted_by_chateau: HashMap<String, HashMap<String, catenary::models::Stop>> =
-                HashMap::new();
+            let mut sorted_by_chateau: AHashMap<String, AHashMap<String, catenary::models::Stop>> =
+                AHashMap::new();
+
+            let mut sorted_stop_proximity: AHashMap<String, Vec<(String, f64)>> = AHashMap::new();
+
+            let mut stop_distance: AHashMap<(String, String), f64> = AHashMap::new();
 
             // search through itineraries matching those stops and then put them in a hashmap of stop to itineraries
 
@@ -110,22 +126,55 @@ pub async fn nearby_from_coords(
             //solution, search through chateaus and get current valid attempt number to search through?
             for stop in stops.iter() {
                 //  result
-                sorted_by_chateau
-                    .entry(stop.chateau.clone())
-                    .and_modify(|hashmap_under_chateau| {
-                        hashmap_under_chateau.insert(stop.gtfs_id.clone(), stop.clone());
-                    })
-                    .or_insert({
-                        let mut hashmap_under_chateau: HashMap<String, catenary::models::Stop> =
-                            HashMap::new();
 
-                        hashmap_under_chateau.insert(stop.gtfs_id.clone(), stop.clone());
+                let stop_point = stop.point.as_ref().unwrap();
 
-                        hashmap_under_chateau
-                    });
+                let stop_point_geo: geo::Point = (stop_point.x, stop_point.y).into();
+
+                let haversine_distance = input_point.haversine_distance(&stop_point_geo);
+
+                if haversine_distance < distance_limit as f64 {
+                    sorted_by_chateau
+                        .entry(stop.chateau.clone())
+                        .and_modify(|hashmap_under_chateau| {
+                            hashmap_under_chateau.insert(stop.gtfs_id.clone(), stop.clone());
+                        })
+                        .or_insert({
+                            let mut hashmap_under_chateau: AHashMap<
+                                String,
+                                catenary::models::Stop,
+                            > = AHashMap::new();
+
+                            hashmap_under_chateau.insert(stop.gtfs_id.clone(), stop.clone());
+
+                            hashmap_under_chateau
+                        });
+
+                    stop_distance.insert(
+                        (stop.chateau.clone(), stop.gtfs_id.clone()),
+                        haversine_distance,
+                    );
+
+                    sorted_stop_proximity
+                        .entry(stop.chateau.clone())
+                        .and_modify(|proximity_list| {
+                            proximity_list.push((stop.gtfs_id.clone(), haversine_distance))
+                        })
+                        .or_insert(vec![(stop.gtfs_id.clone(), haversine_distance)]);
+                }
             }
 
             let sorted_by_chateau = sorted_by_chateau;
+
+            let sorted_stop_proximity: AHashMap<String, Vec<(String, f64)>> = sorted_stop_proximity
+                .into_iter()
+                .map(|(chateau_id, list)| {
+                    let mut list = list;
+                    list.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+                    (chateau_id, list)
+                })
+                .collect();
 
             //for each chateau
 
@@ -143,8 +192,8 @@ pub async fn nearby_from_coords(
 
             let answer = DepartingTripsDataAnswer {
                 number_of_stops_searched_through: number_of_stops,
-                bus_limited_metres: 2000.,
-                rail_and_other_limited_metres: 2000.,
+                bus_limited_metres: distance_limit as f64,
+                rail_and_other_limited_metres: distance_limit as f64,
             };
 
             let stringified_answer = serde_json::to_string(&answer).unwrap();
