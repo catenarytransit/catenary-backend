@@ -1,5 +1,6 @@
 // GTFS stop time compression algorithm
-// Probably not compatible with transfer patterns yet, this is just for schedule lookup for now
+// Compatible with transfer patterns
+
 use crate::enum_to_int::*;
 use crate::fast_hash;
 use ahash::AHashMap;
