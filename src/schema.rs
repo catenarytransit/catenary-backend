@@ -63,7 +63,7 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
-        gtfs.calendar_dates (onestop_feed_id, service_id, gtfs_date) {
+        gtfs.calendar_dates (onestop_feed_id, attempt_id, service_id, gtfs_date) {
             onestop_feed_id -> Text,
             attempt_id -> Text,
             service_id -> Text,
