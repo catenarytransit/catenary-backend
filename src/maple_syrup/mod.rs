@@ -1,8 +1,8 @@
 // GTFS stop time compression algorithm
 // Compatible with transfer patterns
 
-use crate::enum_to_int::*;
 use crate::ahash_fast_hash;
+use crate::enum_to_int::*;
 use ahash::AHashMap;
 use ahash::AHashSet;
 use gtfs_structures::DirectionType;

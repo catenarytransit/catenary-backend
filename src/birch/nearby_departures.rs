@@ -4,7 +4,8 @@ use actix_web::HttpRequest;
 use actix_web::HttpResponse;
 use actix_web::Responder;
 use ahash::AHashMap;
-use catenary::models::ItineraryPatternRow;
+use catenary::models::ItineraryPatternMeta;
+use catenary::models::{CompressedTrip, ItineraryPatternRow};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::dsl::sql;
 use diesel::query_dsl::methods::FilterDsl;
@@ -45,6 +46,9 @@ pub struct DepartingTrip {
     pub stop_id: String,
     pub route_type: i16,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DepartingTripAnswer {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DepartingTripsDataAnswer {
@@ -218,8 +222,12 @@ pub async fn nearby_from_coords(
                     .collect::<Vec<_>>()
                     .await;
 
-            let mut patterns_found: HashMap<String, HashMap<String, Vec<ItineraryPatternRow>>> =
-                HashMap::new();
+            let mut patterns_found_per_chateau_and_stop: HashMap<
+                String,
+                HashMap<String, Vec<ItineraryPatternRow>>,
+            > = HashMap::new();
+
+            let mut pattern_ids_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
 
             for r in run_futures {
                 let r = r.unwrap();
@@ -227,9 +235,13 @@ pub async fn nearby_from_coords(
                 let mut pattern_per_stop: HashMap<String, Vec<ItineraryPatternRow>> =
                     HashMap::new();
 
+                let mut hashset_of_itinerary_patterns: HashSet<String> = HashSet::new();
+
                 let chateau = r[0].chateau.clone();
 
                 for ipr in r {
+                    hashset_of_itinerary_patterns.insert(ipr.itinerary_pattern_id.clone());
+
                     match pattern_per_stop.entry(ipr.stop_id.clone()) {
                         std::collections::hash_map::Entry::Occupied(mut oe) => {
                             oe.get_mut().push(ipr);
@@ -240,30 +252,114 @@ pub async fn nearby_from_coords(
                     }
                 }
 
-                patterns_found.insert(chateau, pattern_per_stop);
+                patterns_found_per_chateau_and_stop.insert(chateau.clone(), pattern_per_stop);
+                pattern_ids_per_chateau.insert(chateau, hashset_of_itinerary_patterns);
             }
 
             for (chateau_id, hash_under_chateau) in &sorted_by_chateau {
+                let itin_list = pattern_ids_per_chateau.get(chateau_id).unwrap();
+
+                let itinerary_pattern_metadatas: diesel::prelude::QueryResult<
+                    Vec<ItineraryPatternMeta>,
+                > = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern_meta::chateau
+                            .eq(chateau_id.to_string()),
+                    )
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id
+                            .eq_any(itin_list),
+                    )
+                    .select(ItineraryPatternMeta::as_select())
+                    .load(conn)
+                    .await;
+
+                let group_queries: Result<
+                    (
+                        Vec<catenary::models::Calendar>,
+                        Vec<catenary::models::CalendarDate>,
+                        Vec<CompressedTrip>,
+                    ),
+                    diesel::result::Error,
+                > = futures::try_join!(
+                    catenary::schema::gtfs::calendar::dsl::calendar
+                        .filter(
+                            catenary::schema::gtfs::calendar::dsl::chateau
+                                .eq(chateau_id.to_string()),
+                        )
+                        .select(catenary::models::Calendar::as_select())
+                        .load(conn),
+                    catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                        .filter(
+                            catenary::schema::gtfs::calendar_dates::dsl::chateau
+                                .eq(chateau_id.to_string()),
+                        )
+                        .select(catenary::models::CalendarDate::as_select())
+                        .load(conn),
+                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::dsl::chateau
+                                .eq(chateau_id.to_string()),
+                        )
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                                .eq_any(itin_list),
+                        )
+                        .select(CompressedTrip::as_select())
+                        .load(conn)
+                );
+
+                if group_queries.is_err() {
+                    return HttpResponse::InternalServerError()
+                        .body("Could not query additional data out of postgres");
+                }
+
+                let (calendars, calendar_dates, compressed_trips) = group_queries.unwrap();
+
+                let itinerary_pattern_metadatas = itinerary_pattern_metadatas.unwrap();
+
+                let itinerary_pattern_metadata_map = itinerary_pattern_metadatas
+                    .into_iter()
+                    .map(|ipm| (ipm.itinerary_pattern_id.clone(), ipm))
+                    .collect::<HashMap<String, ItineraryPatternMeta>>();
+
+                //once a route is found, no other departure should be more than 400m additional difference from the closest stop containing that stop
+                let mut route_id_to_closest_distance: HashMap<String, f64> = HashMap::new();
+
+                let mut relevant_stops: ahash::AHashSet<String> = ahash::AHashSet::new();
+
                 // get the closest stop for each itinerary by greedy search
 
                 let mut itins_found: ahash::AHashSet<String> = ahash::AHashSet::new();
 
-                let patterns_per_stop = patterns_found.get(chateau_id).unwrap();
+                let patterns_per_stop =
+                    patterns_found_per_chateau_and_stop.get(chateau_id).unwrap();
 
                 let sorted_stop_prox_for_this_chateau =
                     sorted_stop_proximity.get(&chateau_id.clone()).unwrap();
 
                 for (stop_id, distance) in sorted_stop_prox_for_this_chateau {
-                        if let Some(patterns_per_stop) = patterns_per_stop.get(stop_id) {
-                            for pattern in patterns_per_stop {
-                                if !itins_found.contains(&pattern.itinerary_pattern_id) {
+                    if let Some(patterns_per_stop) = patterns_per_stop.get(stop_id) {
+                        for pattern in patterns_per_stop {
+                            if !itins_found.contains(&pattern.itinerary_pattern_id) {
+                               
+                               //how to calculate the next ~24 hours of departures
 
-                                    itins_found.insert(pattern.itinerary_pattern_id.clone());
-                                }
+                               //get the range of valid service dates based on the current date in the time zone of the itinerary pattern,
+                               // subtract the itinerary offset, then look back up to 1 hour for buses, 3 hours for trains, look forward in time up to 24 hours.
+
+                               //for each trip, check if the service date is correct
+
+                               //if so, insert into the list of avaliable departures
+
+                               //itins_found.insert(pattern.itinerary_pattern_id.clone());
+                               //relevant_stops.insert(stop_id.clone());
                             }
                         }
+                    }
                 }
             }
+
             //get the start of the trip and the offset for the current stop
 
             //look through time compressed and decompress the itineraries, using timezones and calendar calcs
