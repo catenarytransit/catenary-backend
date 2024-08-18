@@ -47,6 +47,47 @@ pub struct DepartingTrip {
     pub route_type: i16,
 }
 
+// final datastructure ideas?
+
+/* 
+{
+departures: [{
+    route_id: 1,
+    route_short_name: 1,
+    route_long_name: Sesame Street
+    [
+        {
+            headsign: Elmo's House,
+            trips: [
+                {
+                "stop_id:" 1,
+                "departure": unix_time
+                },
+                {
+                "stop_id:" 1,
+                "departure": unix_time
+                },
+            ]
+        },
+         {
+            headsign: Big Bird's House,
+            trips: [
+               {
+                "stop_id:" 2,
+                "departure": unix_time
+                },
+                {
+                "stop_id:" 2,
+                "departure": unix_time
+                }
+            ]
+        }
+    ]
+}],
+stop_reference: stop_id -> stop
+}
+*/
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DepartingTripAnswer {}
 
