@@ -349,11 +349,13 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .filter(|x| x.1)
                 .map(|(feed_id, _)| feed_id)
                 .map(|feed_id| {
-                    let stop_path_str = format!("{}/{}/stops.txt", gtfs_uncompressed_temp_storage, &feed_id);
+                    let stop_path_str =
+                        format!("{}/{}/stops.txt", gtfs_uncompressed_temp_storage, &feed_id);
 
                     let has_stop_table = std::path::Path::new(&stop_path_str).exists();
 
-                    let trip_path_str = format!("{}/{}/trips.txt", gtfs_uncompressed_temp_storage, &feed_id);
+                    let trip_path_str =
+                        format!("{}/{}/trips.txt", gtfs_uncompressed_temp_storage, &feed_id);
 
                     let has_trip_table = std::path::Path::new(&trip_path_str).exists();
 

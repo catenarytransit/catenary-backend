@@ -47,7 +47,7 @@ pub struct GtfsSummary {
 
 // take a feed id and throw it into postgres
 pub async fn gtfs_process_feed(
-    gtfs_unzipped_path: &str, 
+    gtfs_unzipped_path: &str,
     feed_id: &str,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
     chateau_id: &str,

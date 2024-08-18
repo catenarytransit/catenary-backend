@@ -4,6 +4,7 @@ use actix_web::HttpRequest;
 use actix_web::HttpResponse;
 use actix_web::Responder;
 use ahash::AHashMap;
+use catenary::models::ItineraryPatternRow;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::dsl::sql;
 use diesel::query_dsl::methods::FilterDsl;
@@ -12,9 +13,12 @@ use diesel::sql_types::Bool;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
+use futures::stream::FuturesUnordered;
+use futures::stream::StreamExt;
 use geo::HaversineDestination;
 use geo::HaversineDistance;
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -113,6 +117,10 @@ pub async fn nearby_from_coords(
                 distance_limit = 2000;
             }
 
+            if number_of_stops > 2000 {
+                distance_limit = 1500;
+            }
+
             //collect chateau list
 
             let mut sorted_by_chateau: AHashMap<String, AHashMap<String, catenary::models::Stop>> =
@@ -180,7 +188,9 @@ pub async fn nearby_from_coords(
 
             //for each chateau
 
-            for (chateau_id, hash_under_chateau) in sorted_by_chateau {
+            let mut futures_array = vec![];
+
+            for (chateau_id, hash_under_chateau) in &sorted_by_chateau {
                 let stop_id_vec = hash_under_chateau
                     .keys()
                     .map(|key| key.to_string())
@@ -190,19 +200,70 @@ pub async fn nearby_from_coords(
 
                 let itineraries_searched =
                     catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                        .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_id))
+                        .filter(
+                            catenary::schema::gtfs::itinerary_pattern::chateau
+                                .eq(chateau_id.to_string()),
+                        )
                         .filter(
                             catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(stop_id_vec),
                         )
-                        .select(catenary::models::ItineraryPatternRow::as_select())
-                        .load(conn)
-                        .await;
+                        .select(ItineraryPatternRow::as_select())
+                        .load(conn);
 
-                // get the closest stop for each itinerary by greedy search
-
-                let itins_found: HashSet<String> = HashSet::new();
+                futures_array.push(itineraries_searched);
             }
 
+            let run_futures: Vec<Result<Vec<ItineraryPatternRow>, diesel::result::Error>> =
+                FuturesUnordered::from_iter(futures_array)
+                    .collect::<Vec<_>>()
+                    .await;
+
+            let mut patterns_found: HashMap<String, HashMap<String, Vec<ItineraryPatternRow>>> =
+                HashMap::new();
+
+            for r in run_futures {
+                let r = r.unwrap();
+
+                let mut pattern_per_stop: HashMap<String, Vec<ItineraryPatternRow>> =
+                    HashMap::new();
+
+                let chateau = r[0].chateau.clone();
+
+                for ipr in r {
+                    match pattern_per_stop.entry(ipr.stop_id.clone()) {
+                        std::collections::hash_map::Entry::Occupied(mut oe) => {
+                            oe.get_mut().push(ipr);
+                        }
+                        std::collections::hash_map::Entry::Vacant(ve) => {
+                            ve.insert(vec![ipr]);
+                        }
+                    }
+                }
+
+                patterns_found.insert(chateau, pattern_per_stop);
+            }
+
+            for (chateau_id, hash_under_chateau) in &sorted_by_chateau {
+                // get the closest stop for each itinerary by greedy search
+
+                let mut itins_found: ahash::AHashSet<String> = ahash::AHashSet::new();
+
+                let patterns_per_stop = patterns_found.get(chateau_id).unwrap();
+
+                let sorted_stop_prox_for_this_chateau =
+                    sorted_stop_proximity.get(&chateau_id.clone()).unwrap();
+
+                for (stop_id, distance) in sorted_stop_prox_for_this_chateau {
+                        if let Some(patterns_per_stop) = patterns_per_stop.get(stop_id) {
+                            for pattern in patterns_per_stop {
+                                if !itins_found.contains(&pattern.itinerary_pattern_id) {
+
+                                    itins_found.insert(pattern.itinerary_pattern_id.clone());
+                                }
+                            }
+                        }
+                }
+            }
             //get the start of the trip and the offset for the current stop
 
             //look through time compressed and decompress the itineraries, using timezones and calendar calcs
