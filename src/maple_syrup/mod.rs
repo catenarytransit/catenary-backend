@@ -2,7 +2,7 @@
 // Compatible with transfer patterns
 
 use crate::enum_to_int::*;
-use crate::fast_hash;
+use crate::ahash_fast_hash;
 use ahash::AHashMap;
 use ahash::AHashSet;
 use gtfs_structures::DirectionType;
@@ -312,7 +312,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         };
 
         //itinerary id generated
-        let hash_of_itinerary = fast_hash(&itinerary_cover);
+        let hash_of_itinerary = ahash_fast_hash(&itinerary_cover);
 
         itineraries.insert(hash_of_itinerary, itinerary_cover);
         trips_to_itineraries.insert(trip_id.clone(), hash_of_itinerary);
@@ -396,7 +396,7 @@ fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<String>) ->
         hash_of_direction_pattern_temp.push(stop_id);
     }
 
-    fast_hash(&hash_of_direction_pattern_temp)
+    ahash_fast_hash(&hash_of_direction_pattern_temp)
 }
 
 #[cfg(test)]
