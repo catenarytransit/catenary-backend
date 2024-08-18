@@ -42,9 +42,25 @@ pub struct DepartingTrip {
     pub departure_realtime_s: Option<u64>,
     pub arrival_schedule_s: Option<u64>,
     pub arrival_realtime_s: Option<u64>,
-    pub stop_sequence: Option<u16>,
     pub stop_id: String,
+    pub trip_short_name: String
+}
+
+pub struct DepartingHeadsignGroup {
+    pub headsign: String,
+    pub direction_id: String,
+    pub trips: Vec<DepartingTrip>
+}
+
+pub struct DepartureRouteGroup {
+    pub chateau_id: String,
+    pub route_id: String,
+    pub route_color: String,
+    pub route_text_color: String,
+    pub route_short_name: Option<String>,
+    pub route_long_name: Option<String>,
     pub route_type: i16,
+    pub directions: HashMap<String, DepartingHeadsignGroup>
 }
 
 // final datastructure ideas?
@@ -52,6 +68,7 @@ pub struct DepartingTrip {
 /* 
 {
 departures: [{
+    chateau_id: nyct,
     route_id: 1,
     route_short_name: 1,
     route_long_name: Sesame Street
@@ -61,11 +78,13 @@ departures: [{
             trips: [
                 {
                 "stop_id:" 1,
-                "departure": unix_time
+                "departure": unix_time,
+                "trip_id": 374276327
                 },
                 {
                 "stop_id:" 1,
-                "departure": unix_time
+                "departure": unix_time,
+                "trip_id": 345834
                 },
             ]
         },
@@ -74,11 +93,12 @@ departures: [{
             trips: [
                {
                 "stop_id:" 2,
-                "departure": unix_time
+                "departure": unix_time,
+                "trip_id": 45353534
                 },
                 {
                 "stop_id:" 2,
-                "departure": unix_time
+                "trip_id": 345343535
                 }
             ]
         }
