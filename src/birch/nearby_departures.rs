@@ -32,6 +32,13 @@ struct NearbyFromCoords {
     departure_time: Option<u64>,
 }
 
+#[derive(Deserialize,Serialize, Clone, Debug)]
+struct DeparturesTimeDebug {
+    get_stops: u32,
+    get_itins: u32,
+    all_group_queries: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DepartingTrip {
     pub chateau_id: String,
@@ -110,13 +117,11 @@ stop_reference: stop_id -> stop
 */
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct DepartingTripAnswer {}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DepartingTripsDataAnswer {
     pub number_of_stops_searched_through: usize,
     pub bus_limited_metres: f64,
     pub rail_and_other_limited_metres: f64,
+    pub debug_info: DeparturesTimeDebug
 }
 
 #[actix_web::get("/nearbydeparturesfromcoords")]
@@ -324,6 +329,8 @@ pub async fn nearby_from_coords(
                 }
             }
 
+            let grouped_queries_start = Instant::now();
+
             for (chateau_id, hash_under_chateau) in &sorted_by_chateau {
                 if let Some(itin_list) = pattern_ids_per_chateau.get(chateau_id) {
                     let itinerary_pattern_metadatas: diesel::prelude::QueryResult<
@@ -438,6 +445,11 @@ pub async fn nearby_from_coords(
                 number_of_stops_searched_through: number_of_stops,
                 bus_limited_metres: distance_limit as f64,
                 rail_and_other_limited_metres: distance_limit as f64,
+                debug_info: DeparturesTimeDebug {
+                    get_stops: end_stops_duration.as_millis() as u32,
+                    get_itins:  itinerary_patterns_for_stops_end.as_millis() as u32,
+                    all_group_queries: grouped_queries_start.elapsed().as_millis() as u32
+                }
             };
 
             let stringified_answer = serde_json::to_string(&answer).unwrap();
