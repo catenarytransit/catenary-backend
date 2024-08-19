@@ -32,7 +32,7 @@ struct NearbyFromCoords {
     departure_time: Option<u64>,
 }
 
-#[derive(Deserialize,Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 struct DeparturesTimeDebug {
     get_stops: u32,
     get_itins: u32,
@@ -121,7 +121,7 @@ pub struct DepartingTripsDataAnswer {
     pub number_of_stops_searched_through: usize,
     pub bus_limited_metres: f64,
     pub rail_and_other_limited_metres: f64,
-    pub debug_info: DeparturesTimeDebug
+    pub debug_info: DeparturesTimeDebug,
 }
 
 #[actix_web::get("/nearbydeparturesfromcoords")]
@@ -447,9 +447,9 @@ pub async fn nearby_from_coords(
                 rail_and_other_limited_metres: distance_limit as f64,
                 debug_info: DeparturesTimeDebug {
                     get_stops: end_stops_duration.as_millis() as u32,
-                    get_itins:  itinerary_patterns_for_stops_end.as_millis() as u32,
-                    all_group_queries: grouped_queries_start.elapsed().as_millis() as u32
-                }
+                    get_itins: itinerary_patterns_for_stops_end.as_millis() as u32,
+                    all_group_queries: grouped_queries_start.elapsed().as_millis() as u32,
+                },
             };
 
             let stringified_answer = serde_json::to_string(&answer).unwrap();
