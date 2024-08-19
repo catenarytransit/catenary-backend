@@ -23,6 +23,7 @@ use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyFromCoords {
@@ -160,6 +161,8 @@ pub async fn nearby_from_coords(
 
     let spatial_resolution_in_degs = f64::abs(distance_calc_point.x() - input_point.x());
 
+    let start_stops_query = Instant::now();
+
     let where_query_for_stops = format!("ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
     query.lon, query.lat, spatial_resolution_in_degs);
 
@@ -169,6 +172,8 @@ pub async fn nearby_from_coords(
             .select(catenary::models::Stop::as_select())
             .load::<catenary::models::Stop>(conn)
             .await;
+
+    let end_stops_duration = start_stops_query.elapsed();
 
     match stops {
         Ok(stops) => {
@@ -274,10 +279,14 @@ pub async fn nearby_from_coords(
                 futures_array.push(itineraries_searched);
             }
 
+            let itinerary_patterns_for_stops_start = Instant::now();
+
             let run_futures: Vec<Result<Vec<ItineraryPatternRow>, diesel::result::Error>> =
                 FuturesUnordered::from_iter(futures_array)
                     .collect::<Vec<_>>()
                     .await;
+
+            let itinerary_patterns_for_stops_end = itinerary_patterns_for_stops_start.elapsed();
 
             let mut patterns_found_per_chateau_and_stop: HashMap<
                 String,
