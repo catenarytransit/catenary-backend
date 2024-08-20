@@ -34,6 +34,7 @@
     clippy::useless_vec
 )]
 
+mod departures_at_stop;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use catenary::models::IpToGeoAddr;
@@ -55,7 +56,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 use tilejson::TileJSON;
-
 mod api_key_management;
 mod aspenised_data_over_https;
 mod chicago_proxy;
@@ -1640,6 +1640,7 @@ async fn main() -> std::io::Result<()> {
             .service(aspenised_data_over_https::get_realtime_locations)
             .service(chicago_proxy::ttarrivals_proxy)
             .service(nearby_departures::nearby_from_coords)
+            .service(departures_at_stop::departures_at_stop)
             .service(get_vehicle_trip_information::get_trip_init)
             .service(get_vehicle_trip_information::get_trip_rt_update)
             .service(get_vehicle_trip_information::get_vehicle_information)

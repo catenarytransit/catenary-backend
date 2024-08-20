@@ -185,11 +185,11 @@ pub async fn nearby_from_coords(
             let number_of_stops = stops.len();
 
             if number_of_stops > 300 {
-                distance_limit = 3000;
+                distance_limit = 2000;
             }
 
             if number_of_stops > 800 {
-                distance_limit = 2000;
+                distance_limit = 1500;
             }
 
             //collect chateau list
@@ -461,27 +461,9 @@ pub async fn nearby_from_coords(
 }
 
 #[derive(Deserialize, Clone, Debug)]
-struct NearbyFromStops {
-    //serialise and deserialise using serde_json into Vec<NearbyStopsDeserialize>
-    stops: String,
-}
-
-#[derive(Deserialize, Clone, Debug)]
 struct NearbyStopsDeserialize {
     stop_id: String,
     chateau_id: String,
     timestamp_seconds: u64,
 }
 
-#[actix_web::get("/nearbydeparturesfromstops/")]
-pub async fn nearby_from_stops(req: HttpRequest, query: Query<NearbyFromStops>) -> impl Responder {
-    // search through itineraries matching those stops and then put them in a hashmap of stop to itineraries
-
-    //get the start of the trip and the offset for the current stop
-
-    //look through time compressed and decompress the itineraries, using timezones and calendar calcs
-
-    //look through gtfs-rt times and hydrate the itineraries
-
-    HttpResponse::Ok().body("Hello!")
-}
