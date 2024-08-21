@@ -322,7 +322,7 @@ pub struct AdminCredentials {
     pub last_updated_ms: i64,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize, QueryableByName)]
 #[diesel(table_name = crate::schema::gtfs::direction_pattern)]
 #[derive(Associations)]
 #[diesel(belongs_to(DirectionPatternMeta, foreign_key = direction_pattern_id))]
@@ -338,7 +338,7 @@ pub struct DirectionPatternRow {
     pub attempt_id: String,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize, QueryableByName)]
 #[diesel(table_name = crate::schema::gtfs::direction_pattern_meta)]
 pub struct DirectionPatternMeta {
     pub chateau: String,

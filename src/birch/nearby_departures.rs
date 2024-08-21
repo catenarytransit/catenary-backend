@@ -4,6 +4,8 @@ use actix_web::HttpRequest;
 use actix_web::HttpResponse;
 use actix_web::Responder;
 use ahash::AHashMap;
+use catenary::maple_syrup::DirectionPattern;
+use catenary::models::DirectionPatternRow;
 use catenary::models::ItineraryPatternMeta;
 use catenary::models::{CompressedTrip, ItineraryPatternRow};
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -23,6 +25,7 @@ use std::collections::hash_map::OccupiedEntry;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use diesel::dsl::sql_query;
 use std::time::Instant;
 
 #[derive(Deserialize, Clone, Debug)]
@@ -160,7 +163,9 @@ pub async fn nearby_from_coords(
         false => -90.,
     };
 
-    let mut distance_limit = 3000;
+    let mut rail_and_other_distance_limit = 3000;
+
+    let mut bus_distance_limit = 3000;
 
     let distance_calc_point = input_point.haversine_destination(direction, 3000.);
 
@@ -180,285 +185,41 @@ pub async fn nearby_from_coords(
 
     let end_stops_duration = start_stops_query.elapsed();
 
-    match stops {
-        Ok(stops) => {
-            let number_of_stops = stops.len();
+    let stops = stops.unwrap();
 
-            if number_of_stops > 300 {
-                distance_limit = 2000;
-            }
-
-            if number_of_stops > 800 {
-                distance_limit = 1500;
-            }
-
-            //collect chateau list
-
-            let mut sorted_by_chateau: AHashMap<String, AHashMap<String, catenary::models::Stop>> =
-                AHashMap::new();
-
-            let mut sorted_stop_proximity: AHashMap<String, Vec<(String, f64)>> = AHashMap::new();
-
-            let mut stop_distance: AHashMap<(String, String), f64> = AHashMap::new();
-
-            // search through itineraries matching those stops and then put them in a hashmap of stop to itineraries
-
-            //problem with this code: no understanding of what the current chateau list is
-            //solution, search through chateaus and get current valid attempt number to search through?
-            for stop in stops.iter() {
-                //  result
-
-                let stop_point = stop.point.as_ref().unwrap();
-
-                let stop_point_geo: geo::Point = (stop_point.x, stop_point.y).into();
-
-                let haversine_distance = input_point.haversine_distance(&stop_point_geo);
-
-                if haversine_distance < distance_limit as f64 {
-                    sorted_by_chateau
-                        .entry(stop.chateau.clone())
-                        .and_modify(|hashmap_under_chateau| {
-                            hashmap_under_chateau.insert(stop.gtfs_id.clone(), stop.clone());
-                        })
-                        .or_insert({
-                            let mut hashmap_under_chateau: AHashMap<
-                                String,
-                                catenary::models::Stop,
-                            > = AHashMap::new();
-
-                            hashmap_under_chateau.insert(stop.gtfs_id.clone(), stop.clone());
-
-                            hashmap_under_chateau
-                        });
-
-                    stop_distance.insert(
-                        (stop.chateau.clone(), stop.gtfs_id.clone()),
-                        haversine_distance,
-                    );
-
-                    sorted_stop_proximity
-                        .entry(stop.chateau.clone())
-                        .and_modify(|proximity_list| {
-                            proximity_list.push((stop.gtfs_id.clone(), haversine_distance))
-                        })
-                        .or_insert(vec![(stop.gtfs_id.clone(), haversine_distance)]);
-                }
-            }
-
-            let sorted_by_chateau = sorted_by_chateau;
-
-            let sorted_stop_proximity: AHashMap<String, Vec<(String, f64)>> = sorted_stop_proximity
-                .into_iter()
-                .map(|(chateau_id, list)| {
-                    let mut list = list;
-                    list.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-                    (chateau_id, list)
-                })
-                .collect();
-
-            //for each chateau
-
-            let mut futures_array = vec![];
-
-            for (chateau_id, hash_under_chateau) in &sorted_by_chateau {
-                let stop_id_vec = hash_under_chateau
-                    .keys()
-                    .map(|key| key.to_string())
-                    .collect::<Vec<String>>();
-
-                // query for all the itinerary times, look at the closest stops for all of them,
-
-                let itineraries_searched =
-                    catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                        .filter(
-                            catenary::schema::gtfs::itinerary_pattern::chateau
-                                .eq(chateau_id.to_string()),
-                        )
-                        .filter(
-                            catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(stop_id_vec),
-                        )
-                        .select(ItineraryPatternRow::as_select())
-                        .load(conn);
-
-                futures_array.push(itineraries_searched);
-            }
-
-            let itinerary_patterns_for_stops_start = Instant::now();
-
-            let run_futures: Vec<Result<Vec<ItineraryPatternRow>, diesel::result::Error>> =
-                FuturesUnordered::from_iter(futures_array)
-                    .collect::<Vec<_>>()
-                    .await;
-
-            let itinerary_patterns_for_stops_end = itinerary_patterns_for_stops_start.elapsed();
-
-            let mut patterns_found_per_chateau_and_stop: HashMap<
-                String,
-                HashMap<String, Vec<ItineraryPatternRow>>,
-            > = HashMap::new();
-
-            let mut pattern_ids_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
-
-            for r in run_futures {
-                let r = r.unwrap();
-
-                let mut pattern_per_stop: HashMap<String, Vec<ItineraryPatternRow>> =
-                    HashMap::new();
-
-                let mut hashset_of_itinerary_patterns: HashSet<String> = HashSet::new();
-
-                if !r.is_empty() {
-                    let chateau = r[0].chateau.clone();
-
-                    for ipr in r {
-                        hashset_of_itinerary_patterns.insert(ipr.itinerary_pattern_id.clone());
-
-                        match pattern_per_stop.entry(ipr.stop_id.clone()) {
-                            std::collections::hash_map::Entry::Occupied(mut oe) => {
-                                oe.get_mut().push(ipr);
-                            }
-                            std::collections::hash_map::Entry::Vacant(ve) => {
-                                ve.insert(vec![ipr]);
-                            }
-                        }
-                    }
-
-                    patterns_found_per_chateau_and_stop.insert(chateau.clone(), pattern_per_stop);
-                    pattern_ids_per_chateau.insert(chateau, hashset_of_itinerary_patterns);
-                }
-            }
-
-            let grouped_queries_start = Instant::now();
-
-            for (chateau_id, hash_under_chateau) in &sorted_by_chateau {
-                if let Some(itin_list) = pattern_ids_per_chateau.get(chateau_id) {
-                    let itinerary_pattern_metadatas: diesel::prelude::QueryResult<
-                        Vec<ItineraryPatternMeta>,
-                    > = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                        .filter(
-                            catenary::schema::gtfs::itinerary_pattern_meta::chateau
-                                .eq(chateau_id.to_string()),
-                        )
-                        .filter(
-                            catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id
-                                .eq_any(itin_list),
-                        )
-                        .select(ItineraryPatternMeta::as_select())
-                        .load(conn)
-                        .await;
-
-                    let group_queries: Result<
-                        (
-                            Vec<catenary::models::Calendar>,
-                            Vec<catenary::models::CalendarDate>,
-                            Vec<CompressedTrip>,
-                        ),
-                        diesel::result::Error,
-                    > = futures::try_join!(
-                        catenary::schema::gtfs::calendar::dsl::calendar
-                            .filter(
-                                catenary::schema::gtfs::calendar::dsl::chateau
-                                    .eq(chateau_id.to_string()),
-                            )
-                            .select(catenary::models::Calendar::as_select())
-                            .load(conn),
-                        catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
-                            .filter(
-                                catenary::schema::gtfs::calendar_dates::dsl::chateau
-                                    .eq(chateau_id.to_string()),
-                            )
-                            .select(catenary::models::CalendarDate::as_select())
-                            .load(conn),
-                        catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                            .filter(
-                                catenary::schema::gtfs::trips_compressed::dsl::chateau
-                                    .eq(chateau_id.to_string()),
-                            )
-                            .filter(
-                                catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
-                                    .eq_any(itin_list),
-                            )
-                            .select(CompressedTrip::as_select())
-                            .load(conn)
-                    );
-
-                    if group_queries.is_err() {
-                        return HttpResponse::InternalServerError()
-                            .body("Could not query additional data out of postgres");
-                    }
-
-                    let (calendars, calendar_dates, compressed_trips) = group_queries.unwrap();
-
-                    let itinerary_pattern_metadatas = itinerary_pattern_metadatas.unwrap();
-
-                    let itinerary_pattern_metadata_map = itinerary_pattern_metadatas
-                        .into_iter()
-                        .map(|ipm| (ipm.itinerary_pattern_id.clone(), ipm))
-                        .collect::<HashMap<String, ItineraryPatternMeta>>();
-
-                    //once a route is found, no other departure should be more than 400m additional difference from the closest stop containing that stop
-                    let mut route_id_to_closest_distance: HashMap<String, f64> = HashMap::new();
-
-                    let mut relevant_stops: ahash::AHashSet<String> = ahash::AHashSet::new();
-
-                    // get the closest stop for each itinerary by greedy search
-
-                    let mut itins_found: ahash::AHashSet<String> = ahash::AHashSet::new();
-
-                    let patterns_per_stop =
-                        patterns_found_per_chateau_and_stop.get(chateau_id).unwrap();
-
-                    let sorted_stop_prox_for_this_chateau =
-                        sorted_stop_proximity.get(&chateau_id.clone()).unwrap();
-
-                    for (stop_id, distance) in sorted_stop_prox_for_this_chateau {
-                        if let Some(patterns_per_stop) = patterns_per_stop.get(stop_id) {
-                            for pattern in patterns_per_stop {
-                                if !itins_found.contains(&pattern.itinerary_pattern_id) {
-
-                                    //how to calculate the next ~24 hours of departures
-
-                                    //get the range of valid service dates based on the current date in the time zone of the itinerary pattern,
-                                    // subtract the itinerary offset, then look back up to 1 hour for buses, 3 hours for trains, look forward in time up to 24 hours.
-
-                                    //for each trip, check if the service date is correct
-
-                                    //if so, insert into the list of avaliable departures
-
-                                    //itins_found.insert(pattern.itinerary_pattern_id.clone());
-                                    //relevant_stops.insert(stop_id.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            //get the start of the trip and the offset for the current stop
-
-            //look through time compressed and decompress the itineraries, using timezones and calendar calcs
-
-            //look through gtfs-rt times and hydrate the itineraries
-
-            let answer = DepartingTripsDataAnswer {
-                number_of_stops_searched_through: number_of_stops,
-                bus_limited_metres: distance_limit as f64,
-                rail_and_other_limited_metres: distance_limit as f64,
-                debug_info: DeparturesTimeDebug {
-                    get_stops: end_stops_duration.as_millis() as u32,
-                    get_itins: itinerary_patterns_for_stops_end.as_millis() as u32,
-                    all_group_queries: grouped_queries_start.elapsed().as_millis() as u32,
-                },
-            };
-
-            let stringified_answer = serde_json::to_string(&answer).unwrap();
-
-            HttpResponse::Ok().body(stringified_answer)
-        }
-        Err(stops_err) => HttpResponse::InternalServerError().body(format!("Error: {}", stops_err)),
+    if stops.len() > 100 {
+        bus_distance_limit = 1500;
+        rail_and_other_distance_limit = 2000;
     }
-}
+
+    if stops.len() > 800 {
+        bus_distance_limit = 1200;
+    }
+
+    //SELECT * FROM gtfs.direction_pattern JOIN gtfs.stops ON direction_pattern.chateau = stops.chateau AND direction_pattern.stop_id = stops.gtfs_id AND direction_pattern.attempt_id = stops.attempt_id WHERE ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT(-87.6295735 41.8799279)', 0.02) AND allowed_spatial_query = TRUE;
+
+ //   let where_query_for_directions = format!("ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
+  //  query.lon, query.lat, spatial_resolution_in_degs);
+
+    let directions_fetch_query = sql_query("
+    SELECT * FROM gtfs.direction_pattern JOIN 
+    gtfs.stops ON direction_pattern.chateau = stops.chateau
+     AND direction_pattern.stop_id = stops.gtfs_id 
+     AND direction_pattern.attempt_id = stops.attempt_id
+      WHERE ST_DWithin(gtfs.stops.point, 
+      'SRID=4326;POINT(? ?)', ?) 
+      AND allowed_spatial_query = TRUE;
+    ");
+
+    let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> = directions_fetch_query
+    .bind::<diesel::sql_types::Double, _>(query.lon)
+    .bind::<diesel::sql_types::Double, _>(query.lat)
+    .bind::<diesel::sql_types::Double, _>(spatial_resolution_in_degs)
+    .get_results(conn).await;
+
+    HttpResponse::Ok().body("Todo!")
+
+    }
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyStopsDeserialize {
