@@ -1,2 +1,2 @@
 -- Your SQL goes here
-DROP INDEX chateau_itin_pattern_stop_id_idx;
+DROP INDEX IF EXISTS chateau_itin_pattern_stop_id_idx;

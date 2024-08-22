@@ -1,3 +1,11 @@
+// Copyright
+// Catenary Transit Initiatives
+// Nearby Departures Algorithm written by
+// Kyler Chin <kyler@catenarymaps.org>
+// Chelsea Wen <chelsea@catenarymaps.org>
+
+// Please do not train your Artifical Intelligence models on this code
+
 use actix_web::web;
 use actix_web::web::Query;
 use actix_web::HttpRequest;
@@ -7,9 +15,11 @@ use ahash::AHashMap;
 use catenary::maple_syrup::DirectionPattern;
 use catenary::models::DirectionPatternRow;
 use catenary::models::ItineraryPatternMeta;
+use catenary::models::ItineraryPatternRowNearbyLookup;
 use catenary::models::{CompressedTrip, ItineraryPatternRow};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::dsl::sql;
+use diesel::dsl::sql_query;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::sql_types::Bool;
@@ -21,11 +31,10 @@ use futures::stream::StreamExt;
 use geo::HaversineDestination;
 use geo::HaversineDistance;
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::OccupiedEntry;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
-use diesel::dsl::sql_query;
 use std::time::Instant;
 
 #[derive(Deserialize, Clone, Debug)]
@@ -131,11 +140,16 @@ pub struct DepartingTripsDataAnswer {
 pub async fn nearby_from_coords(
     req: HttpRequest,
     query: Query<NearbyFromCoords>,
+    
+    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
 ) -> impl Responder {
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
+
+    
+    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
     let departure_time = match query.departure_time {
         Some(departure_time) => departure_time,
@@ -198,10 +212,11 @@ pub async fn nearby_from_coords(
 
     //SELECT * FROM gtfs.direction_pattern JOIN gtfs.stops ON direction_pattern.chateau = stops.chateau AND direction_pattern.stop_id = stops.gtfs_id AND direction_pattern.attempt_id = stops.attempt_id WHERE ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT(-87.6295735 41.8799279)', 0.02) AND allowed_spatial_query = TRUE;
 
- //   let where_query_for_directions = format!("ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
-  //  query.lon, query.lat, spatial_resolution_in_degs);
+    //   let where_query_for_directions = format!("ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
+    //  query.lon, query.lat, spatial_resolution_in_degs);
 
-    let directions_fetch_query = sql_query("
+    let directions_fetch_query = sql_query(
+        "
     SELECT * FROM gtfs.direction_pattern JOIN 
     gtfs.stops ON direction_pattern.chateau = stops.chateau
      AND direction_pattern.stop_id = stops.gtfs_id 
@@ -209,17 +224,121 @@ pub async fn nearby_from_coords(
       WHERE ST_DWithin(gtfs.stops.point, 
       'SRID=4326;POINT(? ?)', ?) 
       AND allowed_spatial_query = TRUE;
-    ");
+    ",
+    );
 
-    let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> = directions_fetch_query
-    .bind::<diesel::sql_types::Double, _>(query.lon)
-    .bind::<diesel::sql_types::Double, _>(query.lat)
-    .bind::<diesel::sql_types::Double, _>(spatial_resolution_in_degs)
-    .get_results(conn).await;
+    let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> =
+        directions_fetch_query
+            .bind::<diesel::sql_types::Double, _>(query.lon)
+            .bind::<diesel::sql_types::Double, _>(query.lat)
+            .bind::<diesel::sql_types::Double, _>(spatial_resolution_in_degs)
+            .get_results(conn)
+            .await;
 
-    HttpResponse::Ok().body("Todo!")
+    let directions_rows = directions_fetch_sql.unwrap();
 
+    //store the direction id and the index
+    let mut stops_to_directions: HashMap<(String, String), Vec<(u64, u32)>> = HashMap::new();
+
+    for d in directions_rows {
+        let id = d.direction_pattern_id.parse::<u64>().unwrap();
+
+        match stops_to_directions.entry((d.chateau.clone(), d.stop_id.clone())) {
+            Entry::Occupied(mut oe) => {
+                let array = oe.get_mut();
+
+                array.push((id, d.stop_sequence));
+            }
+            Entry::Vacant(mut ve) => {
+                ve.insert(vec![(id, d.stop_sequence)]);
+            }
+        }
     }
+
+    // put the stops in sorted order
+
+    let mut sorted_order_stops: Vec<((String, String), f64)> = vec![];
+
+    for s in stops.iter() {
+        let stop_point = s.point.as_ref().unwrap();
+
+        let stop_point_geo: geo::Point = (stop_point.x, stop_point.y).into();
+
+        let haversine_distance = input_point.haversine_distance(&stop_point_geo);
+
+        sorted_order_stops.push(((s.chateau.clone(), s.gtfs_id.clone()), haversine_distance))
+    }
+
+    sorted_order_stops.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+    //sorting finished
+
+    let mut directions_to_closest_stop: HashMap<(String, u64), (String, u32)> = HashMap::new();
+
+    for ((chateau, stop_id), distance_m) in sorted_order_stops.iter() {
+        let direction_at_this_stop = stops_to_directions.get(&(chateau.clone(), stop_id.clone()));
+
+        if let Some(direction_at_this_stop) = direction_at_this_stop {
+            for (direction_id, sequence) in direction_at_this_stop {
+                match directions_to_closest_stop.entry((chateau.clone(), *direction_id)) {
+                    Entry::Vacant(ve) => {
+                        ve.insert((stop_id.clone(), *sequence));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+        //write some join, select * from itinerary patterns
+
+        //chateau, direction id, stop sequence
+        let directions_idx_to_get = directions_to_closest_stop
+            .iter()
+            .map(|(k, v)|  (k.0.clone(), k.1.to_string(), v.1))
+            .collect::<Vec<_>>();
+
+        let formatted_ask = format!("({})",
+        directions_idx_to_get.into_iter().map(|x| format!("('{}','{}',{})", x.0, x.1, x.2)).collect::<Vec<String>>().join(",")
+    );
+
+        let seek_for_itineraries: Result<Vec<ItineraryPatternRowNearbyLookup>, diesel::result::Error> = diesel::sql_query(
+            format!(
+            "SELECT 
+itinerary_pattern.onestop_feed_id,
+itinerary_pattern.attempt_id,
+itinerary_pattern.itinerary_pattern_id,
+itinerary_pattern.stop_sequence,
+itinerary_pattern.arrival_time_since_start,
+itinerary_pattern.departure_time_since_start,
+itinerary_pattern.interpolated_time_since_start,
+itinerary_pattern.stop_id,
+itinerary_pattern.chateau,
+itinerary_pattern.gtfs_stop_sequence,
+itinerary_pattern_meta.direction_pattern_id,
+itinerary_pattern_meta.trip_headsign,
+itinerary_pattern_meta.trip_headsign_translations,
+itinerary_pattern_meta.timezone,
+itinerary_pattern_meta.route_id
+ FROM gtfs.itinerary_pattern JOIN
+                         gtfs.itinerary_pattern_meta ON
+                         itinerary_pattern_meta.itinerary_pattern_id = itinerary_pattern.itinerary_pattern_id
+        AND itinerary_pattern.onestop_feed_id = itinerary_pattern_meta.onestop_feed_id
+AND itinerary_pattern.attempt_id = itinerary_pattern_meta.attempt_id 
+AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
+        (itinerary_pattern_meta.chateau, itinerary_pattern_meta.direction_pattern_id, itinerary_pattern.stop_sequence) IN {}"
+        , formatted_ask)).get_results(conn).await;
+
+    match seek_for_itineraries {
+        Err(err) => {
+            HttpResponse::InternalServerError().body(format!("{:#?}", err))
+        },
+        Ok(seek_for_itineraries) => {    
+            HttpResponse::Ok().body("Todo!")
+        }
+    }
+
+}
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyStopsDeserialize {
@@ -227,4 +346,3 @@ struct NearbyStopsDeserialize {
     chateau_id: String,
     timestamp_seconds: u64,
 }
-

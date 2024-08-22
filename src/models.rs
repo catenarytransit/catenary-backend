@@ -2,12 +2,16 @@
 // Catenary Transit Initiatives
 // Attribution cannot be removed
 
+use diesel::pg::Pg;
 use diesel::prelude::*;
+use diesel::FromSqlRow;
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;
 
-#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize)]
+use diesel::sql_types::*;
+
+#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize, QueryableByName)]
 #[diesel(table_name = crate::schema::gtfs::itinerary_pattern)]
 pub struct ItineraryPatternRow {
     pub onestop_feed_id: String,
@@ -22,7 +26,40 @@ pub struct ItineraryPatternRow {
     pub gtfs_stop_sequence: u32,
 }
 
-#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize)]
+
+#[derive( Debug, Clone, Serialize, Deserialize, QueryableByName)]
+pub struct ItineraryPatternRowNearbyLookup {
+    #[diesel(sql_type = Text)]
+    pub onestop_feed_id: String,
+    #[diesel(sql_type = Text)]
+    pub attempt_id: String,
+    #[diesel(sql_type = Text)]
+    pub itinerary_pattern_id: String,
+    #[diesel(sql_type = Nullable<Integer>)]
+    pub arrival_time_since_start: Option<i32>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    pub departure_time_since_start: Option<i32>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    pub interpolated_time_since_start: Option<i32>,
+    #[diesel(sql_type = Text)]
+    pub stop_id: String,
+    #[diesel(sql_type = Text)]
+    pub chateau: String,
+    #[diesel(sql_type = Oid)]
+    pub gtfs_stop_sequence: u32,
+    #[diesel(sql_type = Text)]
+    pub direction_pattern_id: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub trip_headsign: Option<String>,
+    #[diesel(sql_type = Nullable<Json>)]
+    pub trip_headsign_translations: Option<serde_json::Value>,
+    #[diesel(sql_type = Text)]
+    pub timezone: String,
+    #[diesel(sql_type = Text)]
+    pub route_id: String,
+}
+
+#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize, QueryableByName)]
 #[diesel(table_name = crate::schema::gtfs::itinerary_pattern_meta)]
 pub struct ItineraryPatternMeta {
     pub onestop_feed_id: String,
@@ -69,7 +106,7 @@ pub struct Shape {
     pub routes: Option<Vec<Option<String>>>,
     pub route_type: i16,
     pub route_label: Option<String>,
-    pub route_label_translations: Option<serde_json::Value>,
+    pub route_label_translations: Option<Value>,
     pub text_color: Option<String>,
     pub chateau: String,
     //insert with false, then enable after when mark for production
@@ -322,7 +359,9 @@ pub struct AdminCredentials {
     pub last_updated_ms: i64,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize, QueryableByName)]
+#[derive(
+    Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize, QueryableByName,
+)]
 #[diesel(table_name = crate::schema::gtfs::direction_pattern)]
 #[derive(Associations)]
 #[diesel(belongs_to(DirectionPatternMeta, foreign_key = direction_pattern_id))]
@@ -338,7 +377,9 @@ pub struct DirectionPatternRow {
     pub attempt_id: String,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize, QueryableByName)]
+#[derive(
+    Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize, QueryableByName,
+)]
 #[diesel(table_name = crate::schema::gtfs::direction_pattern_meta)]
 pub struct DirectionPatternMeta {
     pub chateau: String,
