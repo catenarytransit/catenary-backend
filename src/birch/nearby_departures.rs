@@ -26,10 +26,12 @@ use diesel::sql_types::Bool;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
+use futures::stream::futures_unordered;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use geo::HaversineDestination;
 use geo::HaversineDistance;
+use rouille::input;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -45,10 +47,9 @@ struct NearbyFromCoords {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
-struct DeparturesTimeDebug {
-    get_stops: u32,
-    get_itins: u32,
-    all_group_queries: u32,
+struct DeparturesDebug {
+    directions_count: usize,
+    itineraries_count: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -133,14 +134,14 @@ pub struct DepartingTripsDataAnswer {
     pub number_of_stops_searched_through: usize,
     pub bus_limited_metres: f64,
     pub rail_and_other_limited_metres: f64,
-    pub debug_info: DeparturesTimeDebug,
+    pub debug_info: DeparturesDebug,
 }
 
 #[actix_web::get("/nearbydeparturesfromcoords")]
 pub async fn nearby_from_coords(
     req: HttpRequest,
     query: Query<NearbyFromCoords>,
-    
+
     sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
 ) -> impl Responder {
@@ -148,7 +149,6 @@ pub async fn nearby_from_coords(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
 
-    
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
     let departure_time = match query.departure_time {
@@ -181,9 +181,7 @@ pub async fn nearby_from_coords(
 
     let mut bus_distance_limit = 3000;
 
-    let distance_calc_point = input_point.haversine_destination(direction, 3000.);
-
-    let spatial_resolution_in_degs = f64::abs(distance_calc_point.x() - input_point.x());
+    let spatial_resolution_in_degs = make_degree_length_as_distance_from_point(&input_point, 3000.);
 
     let start_stops_query = Instant::now();
 
@@ -201,6 +199,23 @@ pub async fn nearby_from_coords(
 
     let stops = stops.unwrap();
 
+    let stops_table = stops
+        .iter()
+        .map(|stop| {
+            (
+                (stop.chateau.clone(), stop.gtfs_id.clone()),
+                (
+                    stop.clone(),
+                    geo::Point::new(
+                        stop.point.as_ref().unwrap().x,
+                        stop.point.as_ref().unwrap().y,
+                    )
+                    .haversine_distance(&input_point),
+                ),
+            )
+        })
+        .collect::<HashMap<(String, String), (catenary::models::Stop, f64)>>();
+
     if stops.len() > 100 {
         bus_distance_limit = 1500;
         rail_and_other_distance_limit = 2000;
@@ -208,6 +223,10 @@ pub async fn nearby_from_coords(
 
     if stops.len() > 800 {
         bus_distance_limit = 1200;
+    }
+
+    if stops.len() > 1500 {
+        rail_and_other_distance_limit = 1500;
     }
 
     //SELECT * FROM gtfs.direction_pattern JOIN gtfs.stops ON direction_pattern.chateau = stops.chateau AND direction_pattern.stop_id = stops.gtfs_id AND direction_pattern.attempt_id = stops.attempt_id WHERE ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT(-87.6295735 41.8799279)', 0.02) AND allowed_spatial_query = TRUE;
@@ -231,7 +250,10 @@ pub async fn nearby_from_coords(
         directions_fetch_query
             .bind::<diesel::sql_types::Double, _>(query.lon)
             .bind::<diesel::sql_types::Double, _>(query.lat)
-            .bind::<diesel::sql_types::Double, _>(spatial_resolution_in_degs)
+            .bind::<diesel::sql_types::Double, _>(make_degree_length_as_distance_from_point(
+                &input_point,
+                rail_and_other_distance_limit as f64,
+            ))
             .get_results(conn)
             .await;
 
@@ -259,7 +281,7 @@ pub async fn nearby_from_coords(
 
     let mut sorted_order_stops: Vec<((String, String), f64)> = vec![];
 
-    for s in stops.iter() {
+    for s in stops.iter().filter(|stop| stop.point.is_some()) {
         let stop_point = s.point.as_ref().unwrap();
 
         let stop_point_geo: geo::Point = (stop_point.x, stop_point.y).into();
@@ -290,19 +312,24 @@ pub async fn nearby_from_coords(
         }
     }
 
-        //write some join, select * from itinerary patterns
+    //write some join, select * from itinerary patterns
 
-        //chateau, direction id, stop sequence
-        let directions_idx_to_get = directions_to_closest_stop
-            .iter()
-            .map(|(k, v)|  (k.0.clone(), k.1.to_string(), v.1))
-            .collect::<Vec<_>>();
+    //chateau, direction id, stop sequence
+    let directions_idx_to_get = directions_to_closest_stop
+        .iter()
+        .map(|(k, v)| (k.0.clone(), k.1.to_string(), v.1))
+        .collect::<Vec<_>>();
 
-        let formatted_ask = format!("({})",
-        directions_idx_to_get.into_iter().map(|x| format!("('{}','{}',{})", x.0, x.1, x.2)).collect::<Vec<String>>().join(",")
+    let formatted_ask = format!(
+        "({})",
+        directions_idx_to_get
+            .into_iter()
+            .map(|x| format!("('{}','{}',{})", x.0, x.1, x.2))
+            .collect::<Vec<String>>()
+            .join(",")
     );
 
-        let seek_for_itineraries: Result<Vec<ItineraryPatternRowNearbyLookup>, diesel::result::Error> = diesel::sql_query(
+    let seek_for_itineraries: Result<Vec<ItineraryPatternRowNearbyLookup>, diesel::result::Error> = diesel::sql_query(
             format!(
             "SELECT 
 itinerary_pattern.onestop_feed_id,
@@ -330,14 +357,101 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
         , formatted_ask)).get_results(conn).await;
 
     match seek_for_itineraries {
-        Err(err) => {
-            HttpResponse::InternalServerError().body(format!("{:#?}", err))
-        },
-        Ok(seek_for_itineraries) => {    
+        Err(err) => HttpResponse::InternalServerError().body(format!("{:#?}", err)),
+        Ok(seek_for_itineraries) => {
+            let mut itins_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
+
+            for itin in &seek_for_itineraries {
+                match itins_per_chateau.entry(itin.chateau.clone()) {
+                    Entry::Occupied(mut oe) => {
+                        oe.get_mut().insert(itin.itinerary_pattern_id.clone());
+                    }
+                    Entry::Vacant(mut ve) => {
+                        ve.insert(HashSet::from_iter([itin.itinerary_pattern_id.clone()]));
+                    }
+                }
+            }
+
+            let trip_lookup_queries_to_perform =
+                futures::stream::iter(itins_per_chateau.iter().map(|(chateau, set_of_itin)| {
+                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                        .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau))
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::dsl::itinerary_pattern_id
+                                .eq_any(set_of_itin),
+                        )
+                        .select(catenary::models::CompressedTrip::as_select())
+                        .load::<catenary::models::CompressedTrip>(conn)
+                }))
+                .buffer_unordered(8)
+                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CompressedTrip>>>>()
+                .await;
+
+            let mut compressed_trips_table = HashMap::new();
+
+            let mut services_to_lookup_table: HashMap<String, Vec<String>> = HashMap::new();
+
+            for trip_group in trip_lookup_queries_to_perform {
+                match trip_group {
+                    Ok(compressed_trip_group) => {
+                        let chateau = compressed_trip_group[0].chateau.to_string();
+
+                        let service_ids = compressed_trip_group
+                            .iter()
+                            .map(|x| x.service_id.clone())
+                            .collect::<Vec<String>>();
+
+                        services_to_lookup_table.insert(chateau.clone(), service_ids);
+                        compressed_trips_table.insert(chateau, compressed_trip_group);
+                    }
+                    Err(err) => {
+                        return HttpResponse::InternalServerError().body(format!("{:#?}", err));
+                    }
+                }
+            }
+
+            let compressed_trips_table = compressed_trips_table;
+            let services_to_lookup_table = services_to_lookup_table;
+
+            let (
+                services_calendar_lookup_queries_to_perform,
+                services_calendar_dates_lookup_queries_to_perform,
+            ) = tokio::join!(
+                futures::stream::iter(services_to_lookup_table.iter().map(
+                    |(chateau, set_of_calendar)| {
+                        catenary::schema::gtfs::calendar::dsl::calendar
+                            .filter(catenary::schema::gtfs::calendar::dsl::chateau.eq(chateau))
+                            .filter(
+                                catenary::schema::gtfs::calendar::dsl::service_id
+                                    .eq_any(set_of_calendar),
+                            )
+                            .select(catenary::models::Calendar::as_select())
+                            .load::<catenary::models::Calendar>(conn)
+                    },
+                ))
+                .buffer_unordered(8)
+                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Calendar>>>>(),
+                futures::stream::iter(services_to_lookup_table.iter().map(
+                    |(chateau, set_of_calendar)| {
+                        catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                            .filter(
+                                catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(chateau),
+                            )
+                            .filter(
+                                catenary::schema::gtfs::calendar_dates::dsl::service_id
+                                    .eq_any(set_of_calendar),
+                            )
+                            .select(catenary::models::CalendarDate::as_select())
+                            .load::<catenary::models::CalendarDate>(conn)
+                    },
+                ))
+                .buffer_unordered(8)
+                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CalendarDate>>>>()
+            );
+
             HttpResponse::Ok().body("Todo!")
         }
     }
-
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -345,4 +459,15 @@ struct NearbyStopsDeserialize {
     stop_id: String,
     chateau_id: String,
     timestamp_seconds: u64,
+}
+
+fn make_degree_length_as_distance_from_point(point: &geo::Point, distance_metres: f64) -> f64 {
+    let direction = match point.x() > 0. {
+        true => 90.,
+        false => -90.,
+    };
+
+    let distance_calc_point = point.haversine_destination(direction, distance_metres);
+
+    f64::abs(distance_calc_point.x() - point.x())
 }

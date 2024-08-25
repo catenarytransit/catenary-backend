@@ -702,3 +702,17 @@ pub fn contains_rail_or_metro_lines(gtfs: &gtfs_structures::Gtfs) -> bool {
 
     answer
 }
+
+pub struct CalendarUnified {
+    pub id: String,
+    pub monday: bool,
+    pub tuesday: bool,
+    pub wednesday: bool,
+    pub thursday: bool,
+    pub friday: bool,
+    pub saturday: bool,
+    pub sunday: bool,
+    pub start_date: chrono::NaiveDate,
+    pub end_date: chrono::NaiveDate,
+    pub exceptions: HashMap<chrono::NaiveDate, gtfs_structures::Exception>,
+}

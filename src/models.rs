@@ -26,8 +26,7 @@ pub struct ItineraryPatternRow {
     pub gtfs_stop_sequence: u32,
 }
 
-
-#[derive( Debug, Clone, Serialize, Deserialize, QueryableByName)]
+#[derive(Debug, Clone, Serialize, Deserialize, QueryableByName)]
 pub struct ItineraryPatternRowNearbyLookup {
     #[diesel(sql_type = Text)]
     pub onestop_feed_id: String,
