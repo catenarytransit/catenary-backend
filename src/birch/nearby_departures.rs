@@ -18,6 +18,7 @@ use catenary::models::ItineraryPatternMeta;
 use catenary::models::ItineraryPatternRowNearbyLookup;
 use catenary::models::{CompressedTrip, ItineraryPatternRow};
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::CalendarUnified;
 use diesel::dsl::sql;
 use diesel::dsl::sql_query;
 use diesel::query_dsl::methods::FilterDsl;
@@ -33,6 +34,7 @@ use geo::HaversineDestination;
 use geo::HaversineDistance;
 use rouille::input;
 use serde::{Deserialize, Serialize};
+use std::collections::btree_map;
 use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -453,44 +455,121 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                 .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CalendarDate>>>>()
             );
 
-            let calendar_structures: BTreeMap<String, BTreeMap<String, catenary::CalendarUnified>> =
-                BTreeMap::new();
+            let calendar_structure = make_calendar_structure_from_pg(
+                services_calendar_lookup_queries_to_perform,
+                services_calendar_dates_lookup_queries_to_perform,
+            );
 
-            for calendar_group in services_calendar_lookup_queries_to_perform {
-                if let Err(calendar_group) = &calendar_group {
-                    return HttpResponse::InternalServerError().body("Could not look up calendar");
-                }
+            match calendar_structure {
+                Err(err) => HttpResponse::InternalServerError().body("CANNOT FIND CALENDARS"),
+                Ok(calendar_structure) => {
+                    // im too tired to come up with the algo
 
-                let calendar_group = calendar_group.unwrap();
-
-                let mut new_calendar_table: BTreeMap<String, catenary::CalendarUnified> =
-                    BTreeMap::new();
-
-                for calendar in calendar_group {
-                    new_calendar_table.insert(
-                        calendar.service_id.clone(),
-                        catenary::CalendarUnified {
-                            id: calendar.service_id.clone(),
-                            general_calendar: Some(catenary::GeneralCalendar {
-                                monday: calendar.monday,
-                                tuesday: calendar.tuesday,
-                                wednesday: calendar.wednesday,
-                                thursday: calendar.thursday,
-                                friday: calendar.friday,
-                                saturday: calendar.saturday,
-                                sunday: calendar.sunday,
-                                start_date: calendar.gtfs_start_date,
-                                end_date: calendar.gtfs_end_date,
-                            }),
-                            exceptions: None,
-                        },
-                    );
-                }
+                    HttpResponse::Ok().body("Todo!")
+                },
             }
-
-            HttpResponse::Ok().body("Todo!")
         }
     }
+}
+
+fn make_calendar_structure_from_pg(
+    services_calendar_lookup_queries_to_perform: Vec<
+        diesel::QueryResult<Vec<catenary::models::Calendar>>,
+    >,
+    services_calendar_dates_lookup_queries_to_perform: Vec<
+        diesel::QueryResult<Vec<catenary::models::CalendarDate>>,
+    >,
+) -> Result<
+    BTreeMap<String, BTreeMap<String, catenary::CalendarUnified>>,
+    Box<dyn std::error::Error + Sync + Send>,
+> {
+    let mut calendar_structures: BTreeMap<String, BTreeMap<String, catenary::CalendarUnified>> =
+        BTreeMap::new();
+
+    for calendar_group in services_calendar_lookup_queries_to_perform {
+        if let Err(calendar_group_err) = calendar_group {
+            return Err(Box::new(calendar_group_err));
+        }
+
+        let calendar_group = calendar_group.unwrap();
+
+        let chateau = calendar_group[0].chateau.clone();
+
+        let mut new_calendar_table: BTreeMap<String, catenary::CalendarUnified> = BTreeMap::new();
+
+        for calendar in calendar_group {
+            new_calendar_table.insert(
+                calendar.service_id.clone(),
+                catenary::CalendarUnified {
+                    id: calendar.service_id.clone(),
+                    general_calendar: Some(catenary::GeneralCalendar {
+                        monday: calendar.monday,
+                        tuesday: calendar.tuesday,
+                        wednesday: calendar.wednesday,
+                        thursday: calendar.thursday,
+                        friday: calendar.friday,
+                        saturday: calendar.saturday,
+                        sunday: calendar.sunday,
+                        start_date: calendar.gtfs_start_date,
+                        end_date: calendar.gtfs_end_date,
+                    }),
+                    exceptions: None,
+                },
+            );
+        }
+
+        calendar_structures.insert(chateau, new_calendar_table);
+    }
+
+    for calendar_date_group in services_calendar_dates_lookup_queries_to_perform {
+        if let Err(calendar_date_group) = calendar_date_group {
+            return Err(Box::new(calendar_date_group));
+        }
+
+        let calendar_date_group = calendar_date_group.unwrap();
+
+        if !calendar_date_group.is_empty() {
+            let chateau = calendar_date_group[0].chateau.clone();
+
+            let pile_of_calendars_exists = calendar_structures.contains_key(&chateau);
+
+            if !pile_of_calendars_exists {
+                calendar_structures.insert(chateau.clone(), BTreeMap::new());
+            }
+
+            let pile_of_calendars = calendar_structures.get_mut(&chateau).unwrap();
+
+            for calendar_date in calendar_date_group {
+                let exception_number = match calendar_date.exception_type {
+                    1 => gtfs_structures::Exception::Added,
+                    2 => gtfs_structures::Exception::Deleted,
+                    _ => panic!("WHAT IS THIS!!!!!!"),
+                };
+
+                match pile_of_calendars.entry(calendar_date.service_id.clone()) {
+                    btree_map::Entry::Occupied(mut oe) => {
+                        let mut calendar_unified = oe.get_mut();
+
+                        if let Some(entry) = &mut calendar_unified.exceptions {
+                            entry.insert(calendar_date.gtfs_date, exception_number);
+                        } else {
+                            calendar_unified.exceptions = Some(BTreeMap::from_iter([(
+                                calendar_date.gtfs_date,
+                                exception_number,
+                            )]));
+                        }
+                    }
+                    btree_map::Entry::Vacant(mut ve) => {
+                        ve.insert(CalendarUnified::empty_exception_from_calendar_date(
+                            &calendar_date,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(calendar_structures)
 }
 
 #[derive(Deserialize, Clone, Debug)]

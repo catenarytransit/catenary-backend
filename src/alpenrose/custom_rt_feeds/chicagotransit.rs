@@ -1,8 +1,8 @@
 use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id;
 use prost::Message;
-use zip::ZipArchive;
 use std::io;
+use zip::ZipArchive;
 
 pub async fn fetch_chicago_data(
     etcd: &mut etcd_client::Client,
@@ -34,8 +34,12 @@ pub async fn fetch_chicago_data(
             let socket_addr = std::net::SocketAddr::new(worker_metadata.ip.0, worker_metadata.ip.1);
             let worker_id = worker_metadata.worker_id;
 
-            let chicago_rt_data =
-                chicago_gtfs_rt::train_feed(client, "13f685e4b9054545b19470556103ec73", &trips_content).await;
+            let chicago_rt_data = chicago_gtfs_rt::train_feed(
+                client,
+                "13f685e4b9054545b19470556103ec73",
+                &trips_content,
+            )
+            .await;
 
             if let Ok(chicago_rt_data) = chicago_rt_data {
                 let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)

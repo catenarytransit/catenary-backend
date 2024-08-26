@@ -721,3 +721,20 @@ pub struct CalendarUnified {
     pub exceptions:
         Option<std::collections::BTreeMap<chrono::NaiveDate, gtfs_structures::Exception>>,
 }
+
+impl CalendarUnified {
+    pub fn empty_exception_from_calendar_date(x: &crate::models::CalendarDate) -> Self {
+        CalendarUnified {
+            id: x.service_id.clone(),
+            general_calendar: None,
+            exceptions: Some(std::collections::BTreeMap::from_iter([(
+                x.gtfs_date,
+                match x.exception_type {
+                    1 => gtfs_structures::Exception::Added,
+                    2 => gtfs_structures::Exception::Deleted,
+                    _ => panic!("WHAT IS THIS!!!!!!"),
+                },
+            )])),
+        }
+    }
+}
