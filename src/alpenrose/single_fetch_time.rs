@@ -81,7 +81,8 @@ pub async fn single_fetch_time(
         let hashes_of_data = Arc::clone(&hashes_of_data);
         let last_fetch_per_feed = last_fetch_per_feed.clone();
         let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
-
+        let chicago_text_str = chicago_text_str.clone();
+        
         async move {
             let start = Instant::now();
 
@@ -275,7 +276,7 @@ pub async fn single_fetch_time(
                     "f-bus~dft~gov~uk~rt" => {
                         custom_rt_feeds::uk::fetch_dft_bus_data(&mut etcd, feed_id, &client).await;
                     }
-                    "f-dp3-cta~rt" => match chicago_text_str {
+                    "f-dp3-cta~rt" => match chicago_text_str.as_ref() {
                         Some(chicago_text_str) => {
                             custom_rt_feeds::chicagotransit::fetch_chicago_data(
                                 &mut etcd,
