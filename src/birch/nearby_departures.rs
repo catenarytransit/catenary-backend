@@ -34,6 +34,7 @@ use geo::HaversineDistance;
 use rouille::input;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -448,6 +449,40 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                 .buffer_unordered(8)
                 .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CalendarDate>>>>()
             );
+
+            let calendar_structures: BTreeMap<String, BTreeMap<String, catenary::CalendarUnified>> =
+                BTreeMap::new();
+
+            for calendar_group in services_calendar_lookup_queries_to_perform {
+                if let Err(calendar_group) = &calendar_group {
+                    return HttpResponse::InternalServerError().body("Could not look up calendar");
+                }
+
+                let calendar_group = calendar_group.unwrap();
+
+                let mut new_calendar_table: BTreeMap<String, catenary::CalendarUnified> = BTreeMap::new();
+
+                for calendar in calendar_group {
+                    new_calendar_table.insert(
+                        calendar.service_id.clone(),
+                        catenary::CalendarUnified {
+                            id: calendar.service_id.clone(),
+                            general_calendar: Some(catenary::GeneralCalendar {
+                                monday: calendar.monday,
+                                tuesday: calendar.tuesday,
+                                wednesday: calendar.wednesday,
+                                thursday: calendar.thursday,
+                                friday: calendar.friday,
+                                saturday: calendar.saturday,
+                                sunday: calendar.sunday,
+                                start_date: calendar.gtfs_start_date,
+                                end_date: calendar.gtfs_end_date
+                            }),
+                            exceptions: None
+                        }
+                    );
+                }
+            }
 
             HttpResponse::Ok().body("Todo!")
         }
