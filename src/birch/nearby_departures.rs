@@ -466,7 +466,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                     // im too tired to come up with the algo
 
                     HttpResponse::Ok().body("Todo!")
-                },
+                }
             }
         }
     }
