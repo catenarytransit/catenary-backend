@@ -82,7 +82,7 @@ pub async fn single_fetch_time(
         let last_fetch_per_feed = last_fetch_per_feed.clone();
         let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
         let chicago_text_str = chicago_text_str.clone();
-        
+
         async move {
             let start = Instant::now();
 

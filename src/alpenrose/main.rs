@@ -136,22 +136,34 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let chicago_trips_str = Arc::new(match schedule_response {
         Ok(schedule_resp) => {
             // Create a ZIP archive from the bytes
-            let schedule_bytes = schedule_resp.bytes().await.unwrap();
-            let mut archive = ZipArchive::new(io::Cursor::new(schedule_bytes)).unwrap();
+            let schedule_bytes = schedule_resp.bytes().await;
 
-            // Find and open the desired file
-            let mut trips_file = archive
-                .by_name("trips.txt")
-                .expect("trips.txt doesn't exist");
-            let mut buffer = Vec::new();
-            io::copy(&mut trips_file, &mut buffer).unwrap();
+            match schedule_bytes {
+                Ok(schedule_bytes) => {
+                    let mut archive = ZipArchive::new(io::Cursor::new(schedule_bytes)).unwrap();
 
-            // Convert the buffer to a string
-            let trips_content = String::from_utf8(buffer).unwrap();
+                    // Find and open the desired file
+                    let mut trips_file = archive
+                        .by_name("trips.txt")
+                        .expect("trips.txt doesn't exist");
+                    let mut buffer = Vec::new();
+                    io::copy(&mut trips_file, &mut buffer).unwrap();
 
-            Some(trips_content)
+                    // Convert the buffer to a string
+                    let trips_content = String::from_utf8(buffer).unwrap();
+
+                    Some(trips_content)
+                }
+                Err(e) => {
+                    eprintln!("{:#?}", e);
+                    None
+                },
+            }
         }
-        Err(_) => None,
+        Err(e) => {
+            eprintln!("{:#?}", e);
+            None
+        },
     });
 
     //create parent node for workers
