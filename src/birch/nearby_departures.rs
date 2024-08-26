@@ -414,6 +414,9 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
             let compressed_trips_table = compressed_trips_table;
             let services_to_lookup_table = services_to_lookup_table;
 
+            let conn2_pre = conn_pool.get().await;
+            let conn2 = &mut conn2_pre.unwrap();
+
             let (
                 services_calendar_lookup_queries_to_perform,
                 services_calendar_dates_lookup_queries_to_perform,
@@ -443,7 +446,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                     .eq_any(set_of_calendar),
                             )
                             .select(catenary::models::CalendarDate::as_select())
-                            .load::<catenary::models::CalendarDate>(conn)
+                            .load::<catenary::models::CalendarDate>(conn2)
                     },
                 ))
                 .buffer_unordered(8)
@@ -460,7 +463,8 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
 
                 let calendar_group = calendar_group.unwrap();
 
-                let mut new_calendar_table: BTreeMap<String, catenary::CalendarUnified> = BTreeMap::new();
+                let mut new_calendar_table: BTreeMap<String, catenary::CalendarUnified> =
+                    BTreeMap::new();
 
                 for calendar in calendar_group {
                     new_calendar_table.insert(
@@ -476,10 +480,10 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                 saturday: calendar.saturday,
                                 sunday: calendar.sunday,
                                 start_date: calendar.gtfs_start_date,
-                                end_date: calendar.gtfs_end_date
+                                end_date: calendar.gtfs_end_date,
                             }),
-                            exceptions: None
-                        }
+                            exceptions: None,
+                        },
                     );
                 }
             }
