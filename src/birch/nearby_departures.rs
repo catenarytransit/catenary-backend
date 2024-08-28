@@ -12,6 +12,7 @@ use actix_web::HttpRequest;
 use actix_web::HttpResponse;
 use actix_web::Responder;
 use ahash::AHashMap;
+use catenary::make_weekdays;
 use catenary::maple_syrup::DirectionPattern;
 use catenary::models::DirectionPatternRow;
 use catenary::models::ItineraryPatternMeta;
@@ -463,7 +464,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
             match calendar_structure {
                 Err(err) => HttpResponse::InternalServerError().body("CANNOT FIND CALENDARS"),
                 Ok(calendar_structure) => {
-                    // im too tired to come up with the algo
+                    // iterate through all trips and produce a timezone and timeoffset.
 
                     HttpResponse::Ok().body("Todo!")
                 }
@@ -503,15 +504,9 @@ fn make_calendar_structure_from_pg(
                 catenary::CalendarUnified {
                     id: calendar.service_id.clone(),
                     general_calendar: Some(catenary::GeneralCalendar {
-                        monday: calendar.monday,
-                        tuesday: calendar.tuesday,
-                        wednesday: calendar.wednesday,
-                        thursday: calendar.thursday,
-                        friday: calendar.friday,
-                        saturday: calendar.saturday,
-                        sunday: calendar.sunday,
+                        dates: make_weekdays(&calendar),
                         start_date: calendar.gtfs_start_date,
-                        end_date: calendar.gtfs_end_date,
+                        end_date: calendar.gtfs_start_date,
                     }),
                     exceptions: None,
                 },

@@ -157,13 +157,13 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Err(e) => {
                     eprintln!("{:#?}", e);
                     None
-                },
+                }
             }
         }
         Err(e) => {
             eprintln!("{:#?}", e);
             None
-        },
+        }
     });
 
     //create parent node for workers

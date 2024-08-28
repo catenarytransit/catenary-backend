@@ -56,6 +56,7 @@ use ahash::AHasher;
 use fasthash::MetroHasher;
 use gtfs_realtime::{FeedEntity, FeedMessage};
 use gtfs_structures::RouteType;
+use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -704,13 +705,7 @@ pub fn contains_rail_or_metro_lines(gtfs: &gtfs_structures::Gtfs) -> bool {
 }
 
 pub struct GeneralCalendar {
-    pub monday: bool,
-    pub tuesday: bool,
-    pub wednesday: bool,
-    pub thursday: bool,
-    pub friday: bool,
-    pub saturday: bool,
-    pub sunday: bool,
+    pub dates: Vec<chrono::Weekday>,
     pub start_date: chrono::NaiveDate,
     pub end_date: chrono::NaiveDate,
 }
@@ -720,6 +715,28 @@ pub struct CalendarUnified {
     pub general_calendar: Option<GeneralCalendar>,
     pub exceptions:
         Option<std::collections::BTreeMap<chrono::NaiveDate, gtfs_structures::Exception>>,
+}
+
+// Kyler Chin
+// Iterator Optimisation by https://github.com/Priyansh4444 Priyash Sash
+pub fn make_weekdays(calendar: &crate::models::Calendar) -> Vec<chrono::Weekday> {
+    use chrono::Weekday::*;
+
+    let day_list = [
+        (calendar.monday, Mon),
+        (calendar.tuesday, Tue),
+        (calendar.wednesday, Wed),
+        (calendar.thursday, Thu),
+        (calendar.friday, Fri),
+        (calendar.saturday, Sat),
+        (calendar.sunday, Sun),
+    ];
+
+    day_list
+        .into_iter()
+        .filter(|(a, _)| *a)
+        .map(|(a, b)| b)
+        .collect()
 }
 
 impl CalendarUnified {
@@ -737,4 +754,35 @@ impl CalendarUnified {
             )])),
         }
     }
+}
+
+mod nearby_structs {
+    struct TripToFindScheduleFor {
+        trip_id: String,
+        is_freq: String,
+        chateau: String,
+        timezone: chrono_tz::Tz,
+        time_since_start: String,
+        frequency: Option<gtfs_structures::Frequency>,
+        itinerary_id: String,
+        direction_id: String
+    }
+
+    fn find_service_ranges(
+        service: &crate::CalendarUnified,
+        trip_instance: TripToFindScheduleFor,
+        input_time: chrono::DateTime<chrono::Utc>,
+        back_duration: chrono::Duration,
+        forward_duration: chrono::Duration,
+    ) -> Option<Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)>> {
+        let date_instances: Vec<chrono::NaiveDate> = vec![];
+
+        
+
+        None
+    }
+}
+
+fn is_date_covered() -> bool {
+    false
 }
