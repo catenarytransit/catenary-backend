@@ -53,9 +53,12 @@ pub mod schema;
 pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataEtcd;
 use ahash::AHasher;
+use chrono::Datelike;
+use chrono::NaiveDate;
 use fasthash::MetroHasher;
 use gtfs_realtime::{FeedEntity, FeedMessage};
 use gtfs_structures::RouteType;
+use schema::gtfs::trip_frequencies::start_time;
 use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -705,7 +708,7 @@ pub fn contains_rail_or_metro_lines(gtfs: &gtfs_structures::Gtfs) -> bool {
 }
 
 pub struct GeneralCalendar {
-    pub dates: Vec<chrono::Weekday>,
+    pub days: Vec<chrono::Weekday>,
     pub start_date: chrono::NaiveDate,
     pub end_date: chrono::NaiveDate,
 }
@@ -756,33 +759,102 @@ impl CalendarUnified {
     }
 }
 
-mod nearby_structs {
-    struct TripToFindScheduleFor {
-        trip_id: String,
-        is_freq: String,
-        chateau: String,
-        timezone: chrono_tz::Tz,
-        time_since_start: String,
-        frequency: Option<gtfs_structures::Frequency>,
-        itinerary_id: String,
-        direction_id: String
-    }
-
-    fn find_service_ranges(
-        service: &crate::CalendarUnified,
-        trip_instance: TripToFindScheduleFor,
-        input_time: chrono::DateTime<chrono::Utc>,
-        back_duration: chrono::Duration,
-        forward_duration: chrono::Duration,
-    ) -> Option<Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)>> {
-        let date_instances: Vec<chrono::NaiveDate> = vec![];
-
-        
-
-        None
-    }
+struct TripToFindScheduleFor {
+    trip_id: String,
+    is_freq: String,
+    chateau: String,
+    timezone: chrono_tz::Tz,
+    time_since_start_of_service_date: chrono::Duration,
+    frequency: Option<gtfs_structures::Frequency>,
+    itinerary_id: String,
+    direction_id: String,
 }
 
-fn is_date_covered() -> bool {
-    false
+fn find_service_ranges(
+    service: &CalendarUnified,
+    trip_instance: TripToFindScheduleFor,
+    input_time: chrono::DateTime<chrono::Utc>,
+    back_duration: chrono::Duration,
+    forward_duration: chrono::Duration,
+) -> Option<Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)>> {
+    let date_instances: Vec<chrono::NaiveDate> = vec![];
+
+    let start_chrono = input_time - back_duration;
+
+    let additional_lookback = match trip_instance.frequency {
+        Some(freq) => freq.end_time,
+        None => 0,
+    };
+
+    let start_service_datetime_falls_here = start_chrono
+        - trip_instance.time_since_start_of_service_date
+        - chrono::TimeDelta::new(additional_lookback.into(), 0).unwrap();
+
+    let end_chrono = input_time + trip_instance.time_since_start_of_service_date;
+
+    let look_at_this_service_start =
+        start_service_datetime_falls_here.with_timezone(&trip_instance.timezone);
+
+    let look_at_this_service_end = end_chrono.with_timezone(&trip_instance.timezone);
+
+    let start_service_date_check = look_at_this_service_start.date_naive();
+    let end_date_service_check = look_at_this_service_end.date_naive();
+
+    let mut i = start_service_date_check;
+    let mut valid_service_days_to_look_at: Vec<NaiveDate> = vec![];
+
+    while i <= end_date_service_check {
+        if datetime_in_service(service, i) {
+            valid_service_days_to_look_at.push(i);
+        }
+
+        i = i.succ_opt().unwrap();
+    }
+
+    let results = valid_service_days_to_look_at
+        .iter()
+        .map(|nd| {
+            let noon = nd
+                .and_hms_opt(12, 0, 0)
+                .unwrap()
+                .and_local_timezone(trip_instance.timezone)
+                .unwrap();
+
+            let starting_time = noon - chrono::TimeDelta::new(43200, 0).unwrap();
+
+            (*nd, starting_time)
+        })
+        .collect::<Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)>>();
+
+    None
+}
+
+fn datetime_in_service(service: &CalendarUnified, input_date: chrono::NaiveDate) -> bool {
+    let mut answer = false;
+
+    if let Some(calendar_general) = &service.general_calendar {
+        let weekday = input_date.weekday();
+
+        if calendar_general.days.contains(&weekday)
+            && calendar_general.start_date <= input_date
+            && calendar_general.end_date >= input_date
+        {
+            answer = true;
+        }
+    }
+
+    if let Some(exceptions) = &service.exceptions {
+        if let Some(exception) = exceptions.get(&input_date) {
+            match exception {
+                gtfs_structures::Exception::Added => {
+                    answer = true;
+                }
+                gtfs_structures::Exception::Deleted => {
+                    answer = false;
+                }
+            }
+        }
+    }
+
+    answer
 }

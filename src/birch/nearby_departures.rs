@@ -13,6 +13,7 @@ use actix_web::HttpResponse;
 use actix_web::Responder;
 use ahash::AHashMap;
 use catenary::make_weekdays;
+use catenary::aspen_dataset::AspenisedTripUpdate;
 use catenary::maple_syrup::DirectionPattern;
 use catenary::models::DirectionPatternRow;
 use catenary::models::ItineraryPatternMeta;
@@ -20,6 +21,7 @@ use catenary::models::ItineraryPatternRowNearbyLookup;
 use catenary::models::{CompressedTrip, ItineraryPatternRow};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::CalendarUnified;
+use catenary::EtcdConnectionIps;
 use diesel::dsl::sql;
 use diesel::dsl::sql_query;
 use diesel::query_dsl::methods::FilterDsl;
@@ -145,10 +147,14 @@ pub struct DepartingTripsDataAnswer {
 pub async fn nearby_from_coords(
     req: HttpRequest,
     query: Query<NearbyFromCoords>,
-
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
 ) -> impl Responder {
+    let mut etcd = etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None)
+        .await
+        .unwrap();
+
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
@@ -417,6 +423,31 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
             let compressed_trips_table = compressed_trips_table;
             let services_to_lookup_table = services_to_lookup_table;
 
+            let chateaus = services_to_lookup_table
+                .keys()
+                .cloned()
+                .collect::<Vec<String>>();
+
+            let mut chateau_metadata = HashMap::new();
+
+            for chateau_id in chateaus {
+                let this_chateau_metadata = etcd
+                    .get(
+                        format!("/aspen_assigned_chateaus/{}", chateau_id.clone()).as_str(),
+                        None,
+                    )
+                    .await.unwrap();
+
+                chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
+            }
+
+            // make trip data pile
+
+            let trip_updates: HashMap<String, HashMap<String, AspenisedTripUpdate>> = HashMap::new();
+            let trip_updates_lookup_by_trip_id_to_trip_update_ids: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+
+            // fetch and shove into there
+
             let conn2_pre = conn_pool.get().await;
             let conn2 = &mut conn2_pre.unwrap();
 
@@ -504,7 +535,7 @@ fn make_calendar_structure_from_pg(
                 catenary::CalendarUnified {
                     id: calendar.service_id.clone(),
                     general_calendar: Some(catenary::GeneralCalendar {
-                        dates: make_weekdays(&calendar),
+                        days: make_weekdays(&calendar),
                         start_date: calendar.gtfs_start_date,
                         end_date: calendar.gtfs_start_date,
                     }),

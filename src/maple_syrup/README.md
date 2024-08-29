@@ -10,7 +10,7 @@ In reality, many routes have many different forks and iterations such as the Van
 
 We then store the start time of each trip and the arrival or departure time from the station is simply the start time of the trip + the itinerary offset.
 
-We can answer a direct-connection query of A@t -> B by looking at all itineraries containing stops A and B, then querying the start times of the trip id. 
+We can answer a direct-connection query of A@t -> B by looking at all itineraries containing stops A and B, then querying the start times of the trip id. Each stop time is thus trip_start_time + stop_offset.
 
 Remember that trip ids must be filtered by service ids that use the day of the query.
 
