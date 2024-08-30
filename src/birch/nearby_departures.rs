@@ -63,12 +63,12 @@ pub struct DepartingTrip {
     pub chateau_id: String,
     pub trip_id: String,
     pub gtfs_frequency_start_time: Option<String>,
-    pub gtfs_schedule_start_day: String,
+    pub gtfs_schedule_start_day: chrono::NaiveDate,
     pub is_frequency: String,
-    pub departure_schedule_s: Option<u64>,
-    pub departure_realtime_s: Option<u64>,
-    pub arrival_schedule_s: Option<u64>,
-    pub arrival_realtime_s: Option<u64>,
+    pub departure_schedule: Option<u64>,
+    pub departure_realtime: Option<u64>,
+    pub arrival_schedule: Option<u64>,
+    pub arrival_realtime: Option<u64>,
     pub stop_id: String,
     pub trip_short_name: String,
 }
@@ -428,26 +428,6 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                 .cloned()
                 .collect::<Vec<String>>();
 
-            let mut chateau_metadata = HashMap::new();
-
-            for chateau_id in chateaus {
-                let this_chateau_metadata = etcd
-                    .get(
-                        format!("/aspen_assigned_chateaus/{}", chateau_id.clone()).as_str(),
-                        None,
-                    )
-                    .await.unwrap();
-
-                chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
-            }
-
-            // make trip data pile
-
-            let trip_updates: HashMap<String, HashMap<String, AspenisedTripUpdate>> = HashMap::new();
-            let trip_updates_lookup_by_trip_id_to_trip_update_ids: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
-
-            // fetch and shove into there
-
             let conn2_pre = conn_pool.get().await;
             let conn2 = &mut conn2_pre.unwrap();
 
@@ -492,12 +472,34 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                 services_calendar_dates_lookup_queries_to_perform,
             );
 
+            let mut chateau_metadata = HashMap::new();
+
+            for chateau_id in chateaus {
+                let this_chateau_metadata = etcd
+                    .get(
+                        format!("/aspen_assigned_chateaus/{}", chateau_id.clone()).as_str(),
+                        None,
+                    )
+                    .await.unwrap();
+
+                chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
+            }
+
+            let chateau_metadata = chateau_metadata;
+
             match calendar_structure {
                 Err(err) => HttpResponse::InternalServerError().body("CANNOT FIND CALENDARS"),
                 Ok(calendar_structure) => {
                     // iterate through all trips and produce a timezone and timeoffset.
 
-                    HttpResponse::Ok().body("Todo!")
+                    let seek_backward_number_secs = chrono::TimeDelta::new(3600 * 2, 0).unwrap();
+                    let seek_forward_number_secs = chrono::TimeDelta::new(3600 * 12, 0).unwrap();
+
+                    for (chateau_id, calendar_in_chateau) in calendar_structure.iter() {
+                            
+                    }
+
+                    HttpResponse::InternalServerError().body("TODO")
                 }
             }
         }
