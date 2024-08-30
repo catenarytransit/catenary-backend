@@ -49,12 +49,12 @@ use uuid::Uuid;
 mod leader_thread;
 use leader_thread::aspen_leader_thread;
 mod import_alpenrose;
+use ahash::AHashMap;
 use catenary::aspen_dataset::GtfsRtType;
 use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::Injector;
 use gtfs_realtime::FeedMessage;
-use ahash::AHashMap;
 use scc::HashMap as SccHashMap;
 use std::error::Error;
 mod async_threads_alpenrose;
@@ -105,10 +105,11 @@ impl AspenRpc for AspenServer {
         format!("Hello, {name}! You are connected from {}", self.addr)
     }
 
-    async fn get_all_trips_with_ids(self,
-    ctx: context::Context,
-     chateau_id: String,
-     trip_ids: Vec<String>
+    async fn get_all_trips_with_ids(
+        self,
+        ctx: context::Context,
+        chateau_id: String,
+        trip_ids: Vec<String>,
     ) -> Option<TripsSelectionResponse> {
         match self.authoritative_data_store.get(&chateau_id) {
             None => None,
@@ -121,20 +122,27 @@ impl AspenRpc for AspenServer {
                 let mut trip_updates: AHashMap<String, AspenisedTripUpdate> = AHashMap::new();
 
                 for trip_id in trip_id_list {
-                    if let Some(trip_update_id_list) = authoritative_data.trip_updates_lookup_by_trip_id_to_trip_update_ids.get(&trip_id) {
-                        trip_id_to_trip_update_ids.insert(trip_id.clone(), trip_update_id_list.clone());
+                    if let Some(trip_update_id_list) = authoritative_data
+                        .trip_updates_lookup_by_trip_id_to_trip_update_ids
+                        .get(&trip_id)
+                    {
+                        trip_id_to_trip_update_ids
+                            .insert(trip_id.clone(), trip_update_id_list.clone());
 
                         for trip_update_id in trip_update_id_list {
-                            if let Some(trip_update) = authoritative_data.trip_updates.get(trip_update_id) {
+                            if let Some(trip_update) =
+                                authoritative_data.trip_updates.get(trip_update_id)
+                            {
                                 trip_updates.insert(trip_update_id.clone(), trip_update.clone());
                             }
                         }
                     }
                 }
 
-                Some(
-                    TripsSelectionResponse { trip_updates, trip_id_to_trip_update_ids }
-                )
+                Some(TripsSelectionResponse {
+                    trip_updates,
+                    trip_id_to_trip_update_ids,
+                })
             }
         }
     }

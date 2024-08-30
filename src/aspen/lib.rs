@@ -26,7 +26,10 @@ pub trait AspenRpc {
     /// Returns a greeting for name.
     async fn hello(name: String) -> String;
 
-    async fn get_all_trips_with_ids(chateau_id: String, trip_id: Vec<String>) -> Option<TripsSelectionResponse>;
+    async fn get_all_trips_with_ids(
+        chateau_id: String,
+        trip_id: Vec<String>,
+    ) -> Option<TripsSelectionResponse>;
 
     //maybesend gtfs rt?
     async fn from_alpenrose(

@@ -759,18 +759,18 @@ impl CalendarUnified {
     }
 }
 
-struct TripToFindScheduleFor {
-    trip_id: String,
-    is_freq: String,
-    chateau: String,
-    timezone: chrono_tz::Tz,
-    time_since_start_of_service_date: chrono::Duration,
-    frequency: Option<gtfs_structures::Frequency>,
-    itinerary_id: String,
-    direction_id: String,
+pub struct TripToFindScheduleFor {
+    pub trip_id: String,
+    pub is_freq: String,
+    pub chateau: String,
+    pub timezone: chrono_tz::Tz,
+    pub time_since_start_of_service_date: chrono::Duration,
+    pub frequency: Option<gtfs_structures::Frequency>,
+    pub itinerary_id: String,
+    pub direction_id: String,
 }
 
-fn find_service_ranges(
+pub fn find_service_ranges(
     service: &CalendarUnified,
     trip_instance: TripToFindScheduleFor,
     input_time: chrono::DateTime<chrono::Utc>,

@@ -12,8 +12,8 @@ use actix_web::HttpRequest;
 use actix_web::HttpResponse;
 use actix_web::Responder;
 use ahash::AHashMap;
-use catenary::make_weekdays;
 use catenary::aspen_dataset::AspenisedTripUpdate;
+use catenary::make_weekdays;
 use catenary::maple_syrup::DirectionPattern;
 use catenary::models::DirectionPatternRow;
 use catenary::models::ItineraryPatternMeta;
@@ -88,6 +88,17 @@ pub struct DepartureRouteGroup {
     pub route_long_name: Option<String>,
     pub route_type: i16,
     pub directions: HashMap<String, DepartingHeadsignGroup>,
+}
+
+pub struct ValidTrip {
+    //  chateau_id: String,
+    pub trip_id: String,
+    pub is_freq: bool,
+    pub trip_departure_schedule: chrono::DateTime<chrono_tz::Tz>,
+    pub trip_service_date: chrono::NaiveDate,
+    pub is_interpolated: bool,
+    pub trip_departure_realtime: Option<chrono::DateTime<chrono_tz::Tz>>,
+    pub is_cancelled: bool,
 }
 
 // final datastructure ideas?
@@ -480,7 +491,8 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                         format!("/aspen_assigned_chateaus/{}", chateau_id.clone()).as_str(),
                         None,
                     )
-                    .await.unwrap();
+                    .await
+                    .unwrap();
 
                 chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
             }
@@ -496,7 +508,9 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                     let seek_forward_number_secs = chrono::TimeDelta::new(3600 * 12, 0).unwrap();
 
                     for (chateau_id, calendar_in_chateau) in calendar_structure.iter() {
-                            
+                        let mut valid_trips: Vec<ValidTrip> = vec![];
+
+                        for trip in compressed_trips_table.get(chateau_id).unwrap() {}
                     }
 
                     HttpResponse::InternalServerError().body("TODO")
