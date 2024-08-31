@@ -761,11 +761,10 @@ impl CalendarUnified {
 
 pub struct TripToFindScheduleFor {
     pub trip_id: String,
-    pub is_freq: String,
     pub chateau: String,
     pub timezone: chrono_tz::Tz,
     pub time_since_start_of_service_date: chrono::Duration,
-    pub frequency: Option<gtfs_structures::Frequency>,
+    pub frequency: Option<Vec<gtfs_structures::Frequency>>,
     pub itinerary_id: String,
     pub direction_id: String,
 }
@@ -782,7 +781,12 @@ pub fn find_service_ranges(
     let start_chrono = input_time - back_duration;
 
     let additional_lookback = match trip_instance.frequency {
-        Some(freq) => freq.end_time,
+        Some(freq) => {
+            freq.iter()
+                .max_by(|a, b| a.end_time.cmp(&b.end_time))
+                .unwrap()
+                .end_time
+        }
         None => 0,
     };
 
