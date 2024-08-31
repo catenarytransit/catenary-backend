@@ -771,16 +771,16 @@ pub struct TripToFindScheduleFor {
 
 pub fn find_service_ranges(
     service: &CalendarUnified,
-    trip_instance: TripToFindScheduleFor,
+    trip_instance: &TripToFindScheduleFor,
     input_time: chrono::DateTime<chrono::Utc>,
     back_duration: chrono::Duration,
     forward_duration: chrono::Duration,
-) -> Option<Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)>> {
+) -> Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)> {
     let date_instances: Vec<chrono::NaiveDate> = vec![];
 
     let start_chrono = input_time - back_duration;
 
-    let additional_lookback = match trip_instance.frequency {
+    let additional_lookback = match &trip_instance.frequency {
         Some(freq) => {
             freq.iter()
                 .max_by(|a, b| a.end_time.cmp(&b.end_time))
@@ -830,7 +830,7 @@ pub fn find_service_ranges(
         })
         .collect::<Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)>>();
 
-    None
+    results
 }
 
 fn datetime_in_service(service: &CalendarUnified, input_date: chrono::NaiveDate) -> bool {
