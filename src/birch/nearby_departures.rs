@@ -869,6 +869,8 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                 });
                             }
 
+                            headsign_group.trips.sort_by_key(|x| x.departure_schedule.unwrap_or(0));
+
                             let stop = stops_table
                                 .get(
                                     &(chateau_id.clone(), headsign_group.trips[0].stop_id.clone())
