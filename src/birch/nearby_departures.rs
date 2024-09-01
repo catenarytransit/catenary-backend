@@ -277,6 +277,8 @@ pub async fn nearby_from_coords(
         rail_and_other_distance_limit as f64,
     );
 
+    let directions_timer = Instant::now();
+
     let directions_fetch_query = sql_query(format!(
         "
     SELECT * FROM gtfs.direction_pattern JOIN 
@@ -289,6 +291,8 @@ pub async fn nearby_from_coords(
     ",
         query.lon, query.lat, new_spatial_resolution_in_degs
     ));
+
+    println!("Finished getting direction-stops in {:?}", end_stops_duration);
 
     let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> =
         directions_fetch_query.get_results(conn).await;
@@ -365,6 +369,8 @@ pub async fn nearby_from_coords(
             .join(",")
     );
 
+    let itineraries_timer  = Instant::now();
+
     let seek_for_itineraries: Result<Vec<ItineraryPatternRowNearbyLookup>, diesel::result::Error> = diesel::sql_query(
             format!(
             "SELECT 
@@ -395,6 +401,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
     match seek_for_itineraries {
         Err(err) => HttpResponse::InternalServerError().body(format!("{:#?}", err)),
         Ok(seek_for_itineraries) => {
+            println!("Finished getting itineraries in {:?}", itineraries_timer.elapsed());
             let mut itins_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
 
             let mut itinerary_table: HashMap<
@@ -426,6 +433,9 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                 }
             }
 
+            println!("Looking up trips");
+            let timer_trips = Instant::now();
+
             let trip_lookup_queries_to_perform =
                 futures::stream::iter(itins_per_chateau.iter().map(|(chateau, set_of_itin)| {
                     catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
@@ -441,9 +451,11 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                 .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CompressedTrip>>>>()
                 .await;
 
+            println!("Finished looking up trips in {:?}", timer_trips.elapsed());
+
             let mut compressed_trips_table = HashMap::new();
 
-            let mut services_to_lookup_table: HashMap<String, Vec<String>> = HashMap::new();
+            let mut services_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
 
             let mut routes_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
 
@@ -455,7 +467,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                         let service_ids = compressed_trip_group
                             .iter()
                             .map(|x| x.service_id.clone())
-                            .collect::<Vec<String>>();
+                            .collect::<BTreeSet<String>>();
 
                         let route_ids = compressed_trip_group
                             .iter()
@@ -484,6 +496,8 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
 
             let conn3_pre = conn_pool.get().await;
             let conn3 = &mut conn3_pre.unwrap();
+
+            let calendar_timer = Instant::now();
 
             let (
                 services_calendar_lookup_queries_to_perform,
@@ -534,6 +548,8 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                 .buffer_unordered(8)
                 .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Route>>>>(),
             );
+
+            println!("Finished getting calendar, routes, and calendar dates, took {:?}", calendar_timer.elapsed());
 
             let calendar_structure = make_calendar_structure_from_pg(
                 services_calendar_lookup_queries_to_perform,
