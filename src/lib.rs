@@ -53,9 +53,13 @@ pub mod schema;
 pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataEtcd;
 use ahash::AHasher;
+use chrono::Datelike;
+use chrono::NaiveDate;
 use fasthash::MetroHasher;
 use gtfs_realtime::{FeedEntity, FeedMessage};
 use gtfs_structures::RouteType;
+use schema::gtfs::trip_frequencies::start_time;
+use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -701,4 +705,194 @@ pub fn contains_rail_or_metro_lines(gtfs: &gtfs_structures::Gtfs) -> bool {
     }
 
     answer
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GeneralCalendar {
+    pub days: Vec<chrono::Weekday>,
+    pub start_date: chrono::NaiveDate,
+    pub end_date: chrono::NaiveDate,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CalendarUnified {
+    pub id: String,
+    pub general_calendar: Option<GeneralCalendar>,
+    pub exceptions:
+        Option<std::collections::BTreeMap<chrono::NaiveDate, gtfs_structures::Exception>>,
+}
+
+// Kyler Chin
+// Iterator Optimisation by https://github.com/Priyansh4444 Priyash Sash
+pub fn make_weekdays(calendar: &crate::models::Calendar) -> Vec<chrono::Weekday> {
+    use chrono::Weekday::*;
+
+    let day_list = [
+        (calendar.monday, Mon),
+        (calendar.tuesday, Tue),
+        (calendar.wednesday, Wed),
+        (calendar.thursday, Thu),
+        (calendar.friday, Fri),
+        (calendar.saturday, Sat),
+        (calendar.sunday, Sun),
+    ];
+
+    day_list
+        .into_iter()
+        .filter(|(a, _)| *a)
+        .map(|(_, b)| b)
+        .collect()
+}
+
+impl CalendarUnified {
+    pub fn empty_exception_from_calendar_date(x: &crate::models::CalendarDate) -> Self {
+        CalendarUnified {
+            id: x.service_id.clone(),
+            general_calendar: None,
+            exceptions: Some(std::collections::BTreeMap::from_iter([(
+                x.gtfs_date,
+                match x.exception_type {
+                    1 => gtfs_structures::Exception::Added,
+                    2 => gtfs_structures::Exception::Deleted,
+                    _ => panic!("WHAT IS THIS!!!!!!"),
+                },
+            )])),
+        }
+    }
+}
+
+pub struct TripToFindScheduleFor {
+    pub trip_id: String,
+    pub chateau: String,
+    pub timezone: chrono_tz::Tz,
+    pub time_since_start_of_service_date: chrono::Duration,
+    pub frequency: Option<Vec<gtfs_structures::Frequency>>,
+    pub itinerary_id: String,
+    pub direction_id: String,
+}
+
+pub fn find_service_ranges(
+    service: &CalendarUnified,
+    trip_instance: &TripToFindScheduleFor,
+    input_time: chrono::DateTime<chrono::Utc>,
+    back_duration: chrono::Duration,
+    forward_duration: chrono::Duration,
+) -> Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)> {
+    let start_chrono = input_time - back_duration;
+
+    let additional_lookback = match &trip_instance.frequency {
+        Some(freq) => {
+            freq.iter()
+                .max_by(|a, b| a.end_time.cmp(&b.end_time))
+                .unwrap()
+                .end_time
+        }
+        None => 0,
+    };
+
+    let start_service_datetime_falls_here = start_chrono
+        - trip_instance.time_since_start_of_service_date
+        - chrono::TimeDelta::new(additional_lookback.into(), 0).unwrap();
+
+    let end_chrono = input_time + forward_duration - trip_instance.time_since_start_of_service_date;
+
+    let look_at_this_service_start =
+        start_service_datetime_falls_here.with_timezone(&trip_instance.timezone);
+
+    let look_at_this_service_end = end_chrono.with_timezone(&trip_instance.timezone);
+
+    let start_service_date_check = look_at_this_service_start.date_naive();
+    let end_date_service_check = look_at_this_service_end.date_naive();
+
+    let mut i = start_service_date_check;
+    let mut valid_service_days_to_look_at: Vec<NaiveDate> = vec![];
+
+    while i <= end_date_service_check {
+        if datetime_in_service(service, i) {
+            valid_service_days_to_look_at.push(i);
+        }
+
+        i = i.succ_opt().unwrap();
+    }
+
+    //println!("checked {:?} from {:?} to {:?}, found {} valid", service, start_service_date_check, end_date_service_check, valid_service_days_to_look_at.len());
+
+    let results = valid_service_days_to_look_at
+        .iter()
+        .map(|nd| {
+            let noon = nd
+                .and_hms_opt(12, 0, 0)
+                .unwrap()
+                .and_local_timezone(trip_instance.timezone)
+                .unwrap();
+
+            let starting_time = noon - chrono::TimeDelta::new(43200, 0).unwrap();
+
+            (*nd, starting_time)
+        })
+        .collect::<Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)>>();
+
+    results
+}
+
+fn datetime_in_service(service: &CalendarUnified, input_date: chrono::NaiveDate) -> bool {
+    let mut answer = false;
+
+    if let Some(calendar_general) = &service.general_calendar {
+        let weekday = input_date.weekday();
+
+        if calendar_general.days.contains(&weekday)
+            && calendar_general.start_date <= input_date
+            && calendar_general.end_date >= input_date
+        {
+            answer = true;
+        }
+    }
+
+    if let Some(exceptions) = &service.exceptions {
+        if let Some(exception) = exceptions.get(&input_date) {
+            match exception {
+                gtfs_structures::Exception::Added => {
+                    answer = true;
+                }
+                gtfs_structures::Exception::Deleted => {
+                    answer = false;
+                }
+            }
+        }
+    }
+
+    answer
+}
+
+#[cfg(test)]
+mod test_calendar {
+    use super::*;
+
+    #[test]
+    fn test_date() {
+        let calendar = CalendarUnified {
+            id: "a".to_string(),
+            general_calendar: Some(GeneralCalendar {
+                days: vec![chrono::Weekday::Mon],
+                start_date: NaiveDate::from_ymd(2024, 8, 1),
+                end_date: NaiveDate::from_ymd(2024, 8, 31),
+            }),
+            exceptions: None,
+        };
+
+        let date = NaiveDate::from_ymd(2024, 8, 26);
+
+        assert!(datetime_in_service(&calendar, date));
+
+        let trip_instance = TripToFindScheduleFor {
+            trip_id: "11499201".to_string(),
+            chateau: "orangecountytransportationauthority".to_string(),
+            timezone: chrono_tz::Tz::UTC,
+            time_since_start_of_service_date: chrono::Duration::zero(),
+            frequency: None,
+            itinerary_id: "9936372064990961207".to_string(),
+            direction_id: "0".to_string(),
+        };
+    }
 }

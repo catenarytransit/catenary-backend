@@ -118,7 +118,7 @@ amtrak-gtfs-rt = "0.3"
 chrono-tz = { version = "0.9.0", features = ["case-insensitive", "serde"] }
 ping = "0.5.2"
 online = { version = "4.0.2", features = ["tokio-runtime"] }
-chicago-gtfs-rt = "0.2.0"
+chicago-gtfs-rt = "0.2.2"
 etcd-client = "0.14.0"
 ipnet = { version = "2.9.0", features = ["serde"] }
 flate2 = "1.0.30"

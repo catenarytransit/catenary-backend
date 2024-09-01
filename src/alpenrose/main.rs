@@ -49,6 +49,8 @@ use uuid::Uuid;
 mod custom_rt_feeds;
 pub mod get_feed_metadata;
 mod leader_job;
+use std::io;
+use zip::ZipArchive;
 mod single_fetch_time;
 use get_feed_metadata::RealtimeFeedFetch;
 
@@ -126,6 +128,43 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .await?;
 
     println!("etcd registered lease {}", etcd_lease_id);
+
+    let chicago_gtfs = "https://www.transitchicago.com/downloads/sch_data/google_transit.zip";
+
+    let schedule_response = client.get(chicago_gtfs).send().await;
+
+    let chicago_trips_str = Arc::new(match schedule_response {
+        Ok(schedule_resp) => {
+            // Create a ZIP archive from the bytes
+            let schedule_bytes = schedule_resp.bytes().await;
+
+            match schedule_bytes {
+                Ok(schedule_bytes) => {
+                    let mut archive = ZipArchive::new(io::Cursor::new(schedule_bytes)).unwrap();
+
+                    // Find and open the desired file
+                    let mut trips_file = archive
+                        .by_name("trips.txt")
+                        .expect("trips.txt doesn't exist");
+                    let mut buffer = Vec::new();
+                    io::copy(&mut trips_file, &mut buffer).unwrap();
+
+                    // Convert the buffer to a string
+                    let trips_content = String::from_utf8(buffer).unwrap();
+
+                    Some(trips_content)
+                }
+                Err(e) => {
+                    eprintln!("{:#?}", e);
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("{:#?}", e);
+            None
+        }
+    });
 
     //create parent node for workers
 
@@ -292,6 +331,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&assignments_for_this_worker),
                 Arc::clone(&last_fetch_per_feed),
                 Arc::clone(&amtrak_gtfs),
+                Arc::clone(&chicago_trips_str),
             )
             .await?;
         } else {

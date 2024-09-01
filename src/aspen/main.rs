@@ -24,6 +24,7 @@
     clippy::iter_nth,
     clippy::iter_cloned_collect
 )]
+use ahash::AHashSet;
 use catenary::postgres_tools::make_async_pool;
 use catenary::{aspen::lib::*, id_cleanup};
 use clap::Parser;
@@ -48,6 +49,7 @@ use uuid::Uuid;
 mod leader_thread;
 use leader_thread::aspen_leader_thread;
 mod import_alpenrose;
+use ahash::AHashMap;
 use catenary::aspen_dataset::GtfsRtType;
 use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -101,6 +103,48 @@ impl AspenRpc for AspenServer {
             Duration::from_millis(Uniform::new_inclusive(1, 10).sample(&mut thread_rng()));
         time::sleep(sleep_time).await;
         format!("Hello, {name}! You are connected from {}", self.addr)
+    }
+
+    async fn get_all_trips_with_ids(
+        self,
+        ctx: context::Context,
+        chateau_id: String,
+        trip_ids: Vec<String>,
+    ) -> Option<TripsSelectionResponse> {
+        match self.authoritative_data_store.get(&chateau_id) {
+            None => None,
+            Some(authoritative_data) => {
+                let authoritative_data = authoritative_data.get();
+
+                let trip_id_list = trip_ids.into_iter().collect::<AHashSet<String>>();
+
+                let mut trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> = AHashMap::new();
+                let mut trip_updates: AHashMap<String, AspenisedTripUpdate> = AHashMap::new();
+
+                for trip_id in trip_id_list {
+                    if let Some(trip_update_id_list) = authoritative_data
+                        .trip_updates_lookup_by_trip_id_to_trip_update_ids
+                        .get(&trip_id)
+                    {
+                        trip_id_to_trip_update_ids
+                            .insert(trip_id.clone(), trip_update_id_list.clone());
+
+                        for trip_update_id in trip_update_id_list {
+                            if let Some(trip_update) =
+                                authoritative_data.trip_updates.get(trip_update_id)
+                            {
+                                trip_updates.insert(trip_update_id.clone(), trip_update.clone());
+                            }
+                        }
+                    }
+                }
+
+                Some(TripsSelectionResponse {
+                    trip_updates,
+                    trip_id_to_trip_update_ids,
+                })
+            }
+        }
     }
 
     async fn get_gtfs_rt(

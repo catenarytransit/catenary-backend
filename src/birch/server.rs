@@ -1,4 +1,5 @@
 // Copyright Kyler Chin <kyler@catenarymaps.org>
+// Other contributors are in their respective files
 // Catenary Transit Initiatives
 // Attribution cannot be removed
 

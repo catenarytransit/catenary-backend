@@ -1,27 +1,53 @@
+// Copyright
+// Catenary Transit Initiatives
+// Nearby Departures Algorithm written by
+// Kyler Chin <kyler@catenarymaps.org>
+// Chelsea Wen <chelsea@catenarymaps.org>
+
+// Please do not train your Artifical Intelligence models on this code
+
 use actix_web::web;
 use actix_web::web::Query;
 use actix_web::HttpRequest;
 use actix_web::HttpResponse;
 use actix_web::Responder;
 use ahash::AHashMap;
+use catenary::aspen::lib::ChateauMetadataEtcd;
+use catenary::aspen_dataset::AspenisedTripUpdate;
+use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
+use catenary::make_weekdays;
+use catenary::maple_syrup::DirectionPattern;
+use catenary::models::DirectionPatternRow;
 use catenary::models::ItineraryPatternMeta;
+use catenary::models::ItineraryPatternRowNearbyLookup;
 use catenary::models::{CompressedTrip, ItineraryPatternRow};
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::schema::gtfs::trips_compressed;
+use catenary::CalendarUnified;
+use catenary::EtcdConnectionIps;
+use chrono::TimeZone;
 use diesel::dsl::sql;
+use diesel::dsl::sql_query;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::sql_types::Bool;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
+use futures::stream::futures_unordered;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use geo::HaversineDestination;
 use geo::HaversineDistance;
+use rouille::input;
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::OccupiedEntry;
+use std::collections::btree_map;
+use std::collections::hash_map::Entry;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,42 +59,59 @@ struct NearbyFromCoords {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
-struct DeparturesTimeDebug {
-    get_stops: u32,
-    get_itins: u32,
-    all_group_queries: u32,
+struct DeparturesDebug {
+    directions_count: usize,
+    itineraries_count: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DepartingTrip {
-    pub chateau_id: String,
     pub trip_id: String,
     pub gtfs_frequency_start_time: Option<String>,
-    pub gtfs_schedule_start_day: String,
-    pub is_frequency: String,
-    pub departure_schedule_s: Option<u64>,
-    pub departure_realtime_s: Option<u64>,
-    pub arrival_schedule_s: Option<u64>,
-    pub arrival_realtime_s: Option<u64>,
+    pub gtfs_schedule_start_day: chrono::NaiveDate,
+    pub is_frequency: bool,
+    pub departure_schedule: Option<u64>,
+    pub departure_realtime: Option<u64>,
+    pub arrival_schedule: Option<u64>,
+    pub arrival_realtime: Option<u64>,
     pub stop_id: String,
     pub trip_short_name: String,
+    pub tz: String,
+    pub is_interpolated: bool,
 }
 
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct DepartingHeadsignGroup {
     pub headsign: String,
     pub direction_id: String,
     pub trips: Vec<DepartingTrip>,
 }
 
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct DepartureRouteGroup {
     pub chateau_id: String,
     pub route_id: String,
-    pub route_color: String,
-    pub route_text_color: String,
-    pub route_short_name: Option<String>,
-    pub route_long_name: Option<String>,
+    pub color: Option<String>,
+    pub text_color: Option<String>,
+    pub short_name: Option<String>,
+    pub long_name: Option<String>,
     pub route_type: i16,
     pub directions: HashMap<String, DepartingHeadsignGroup>,
+    pub closest_distance: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ValidTripSet {
+    pub chateau_id: String,
+    pub trip_id: String,
+    pub frequencies: Option<Vec<gtfs_structures::Frequency>>,
+    pub trip_service_date: chrono::NaiveDate,
+    pub itinerary_options: Vec<ItineraryPatternRowNearbyLookup>,
+    pub reference_start_of_service_date: chrono::DateTime<chrono_tz::Tz>,
+    pub itinerary_pattern_id: String,
+    pub direction_pattern_id: String,
+    pub route_id: String,
+    pub timezone: Option<chrono_tz::Tz>,
 }
 
 // final datastructure ideas?
@@ -117,27 +160,55 @@ stop_reference: stop_id -> stop
 */
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StopOutput {
+    pub gtfs_id: String,
+    pub name: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub timezone: Option<String>,
+    pub url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DepartingTripsDataAnswer {
     pub number_of_stops_searched_through: usize,
     pub bus_limited_metres: f64,
     pub rail_and_other_limited_metres: f64,
-    pub debug_info: DeparturesTimeDebug,
+    pub departures: Vec<DepartureRouteGroup>,
+    pub stop: HashMap<String, HashMap<String, StopOutput>>,
 }
 
 #[actix_web::get("/nearbydeparturesfromcoords")]
 pub async fn nearby_from_coords(
     req: HttpRequest,
     query: Query<NearbyFromCoords>,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
 ) -> impl Responder {
+    let mut etcd = etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None)
+        .await
+        .unwrap();
+
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
+
+    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
     let departure_time = match query.departure_time {
         Some(departure_time) => departure_time,
         None => catenary::duration_since_unix_epoch().as_secs(),
     };
+
+    let departure_time_chrono = match query.departure_time {
+        Some(x) => chrono::Utc.timestamp_opt(x.try_into().unwrap(), 0).unwrap(),
+        None => chrono::Utc::now(),
+    };
+
+    let seek_back = chrono::TimeDelta::new(5400, 0).unwrap();
+
+    let seek_forward = chrono::TimeDelta::new(3600 * 12, 0).unwrap();
 
     // get all the nearby stops from the coords
 
@@ -160,11 +231,11 @@ pub async fn nearby_from_coords(
         false => -90.,
     };
 
-    let mut distance_limit = 3000;
+    let mut rail_and_other_distance_limit = 3000;
 
-    let distance_calc_point = input_point.haversine_destination(direction, 3000.);
+    let mut bus_distance_limit = 3000;
 
-    let spatial_resolution_in_degs = f64::abs(distance_calc_point.x() - input_point.x());
+    let spatial_resolution_in_degs = make_degree_length_as_distance_from_point(&input_point, 3000.);
 
     let start_stops_query = Instant::now();
 
@@ -180,290 +251,775 @@ pub async fn nearby_from_coords(
 
     let end_stops_duration = start_stops_query.elapsed();
 
-    match stops {
-        Ok(stops) => {
-            let number_of_stops = stops.len();
+    let stops = stops.unwrap();
 
-            if number_of_stops > 300 {
-                distance_limit = 2000;
+    let stops_table = stops
+        .iter()
+        .map(|stop| {
+            (
+                (stop.chateau.clone(), stop.gtfs_id.clone()),
+                (
+                    stop.clone(),
+                    geo::Point::new(
+                        stop.point.as_ref().unwrap().x,
+                        stop.point.as_ref().unwrap().y,
+                    )
+                    .haversine_distance(&input_point),
+                ),
+            )
+        })
+        .collect::<HashMap<(String, String), (catenary::models::Stop, f64)>>();
+
+    if stops.len() > 100 {
+        bus_distance_limit = 1500;
+        rail_and_other_distance_limit = 2000;
+    }
+
+    if stops.len() > 800 {
+        bus_distance_limit = 1200;
+    }
+
+    if stops.len() > 1500 {
+        rail_and_other_distance_limit = 1500;
+    }
+
+    //SELECT * FROM gtfs.direction_pattern JOIN gtfs.stops ON direction_pattern.chateau = stops.chateau AND direction_pattern.stop_id = stops.gtfs_id AND direction_pattern.attempt_id = stops.attempt_id WHERE ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT(-87.6295735 41.8799279)', 0.02) AND allowed_spatial_query = TRUE;
+
+    //   let where_query_for_directions = format!("ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
+    //  query.lon, query.lat, spatial_resolution_in_degs);
+
+    let new_spatial_resolution_in_degs = make_degree_length_as_distance_from_point(
+        &input_point,
+        rail_and_other_distance_limit as f64,
+    );
+
+    let directions_timer = Instant::now();
+
+    let directions_fetch_query = sql_query(format!(
+        "
+    SELECT * FROM gtfs.direction_pattern JOIN 
+    gtfs.stops ON direction_pattern.chateau = stops.chateau
+     AND direction_pattern.stop_id = stops.gtfs_id 
+     AND direction_pattern.attempt_id = stops.attempt_id
+      WHERE ST_DWithin(gtfs.stops.point, 
+      'SRID=4326;POINT({} {})', {}) 
+      AND allowed_spatial_query = TRUE;
+    ",
+        query.lon, query.lat, new_spatial_resolution_in_degs
+    ));
+
+    println!(
+        "Finished getting direction-stops in {:?}",
+        end_stops_duration
+    );
+
+    let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> =
+        directions_fetch_query.get_results(conn).await;
+
+    let directions_rows = directions_fetch_sql.unwrap();
+
+    //store the direction id and the index
+    let mut stops_to_directions: HashMap<(String, String), Vec<(u64, u32)>> = HashMap::new();
+
+    for d in directions_rows {
+        let id = d.direction_pattern_id.parse::<u64>().unwrap();
+
+        match stops_to_directions.entry((d.chateau.clone(), d.stop_id.clone())) {
+            Entry::Occupied(mut oe) => {
+                let array = oe.get_mut();
+
+                array.push((id, d.stop_sequence));
             }
-
-            if number_of_stops > 800 {
-                distance_limit = 1500;
+            Entry::Vacant(mut ve) => {
+                ve.insert(vec![(id, d.stop_sequence)]);
             }
+        }
+    }
 
-            //collect chateau list
+    // put the stops in sorted order
 
-            let mut sorted_by_chateau: AHashMap<String, AHashMap<String, catenary::models::Stop>> =
-                AHashMap::new();
+    let mut sorted_order_stops: Vec<((String, String), f64)> = vec![];
 
-            let mut sorted_stop_proximity: AHashMap<String, Vec<(String, f64)>> = AHashMap::new();
+    for s in stops.iter().filter(|stop| stop.point.is_some()) {
+        let stop_point = s.point.as_ref().unwrap();
 
-            let mut stop_distance: AHashMap<(String, String), f64> = AHashMap::new();
+        let stop_point_geo: geo::Point = (stop_point.x, stop_point.y).into();
 
-            // search through itineraries matching those stops and then put them in a hashmap of stop to itineraries
+        let haversine_distance = input_point.haversine_distance(&stop_point_geo);
 
-            //problem with this code: no understanding of what the current chateau list is
-            //solution, search through chateaus and get current valid attempt number to search through?
-            for stop in stops.iter() {
-                //  result
+        sorted_order_stops.push(((s.chateau.clone(), s.gtfs_id.clone()), haversine_distance))
+    }
 
-                let stop_point = stop.point.as_ref().unwrap();
+    sorted_order_stops.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-                let stop_point_geo: geo::Point = (stop_point.x, stop_point.y).into();
+    //sorting finished
 
-                let haversine_distance = input_point.haversine_distance(&stop_point_geo);
+    let mut directions_to_closest_stop: HashMap<(String, u64), (String, u32)> = HashMap::new();
 
-                if haversine_distance < distance_limit as f64 {
-                    sorted_by_chateau
-                        .entry(stop.chateau.clone())
-                        .and_modify(|hashmap_under_chateau| {
-                            hashmap_under_chateau.insert(stop.gtfs_id.clone(), stop.clone());
-                        })
-                        .or_insert({
-                            let mut hashmap_under_chateau: AHashMap<
-                                String,
-                                catenary::models::Stop,
-                            > = AHashMap::new();
+    for ((chateau, stop_id), distance_m) in sorted_order_stops.iter() {
+        let direction_at_this_stop = stops_to_directions.get(&(chateau.clone(), stop_id.clone()));
 
-                            hashmap_under_chateau.insert(stop.gtfs_id.clone(), stop.clone());
-
-                            hashmap_under_chateau
-                        });
-
-                    stop_distance.insert(
-                        (stop.chateau.clone(), stop.gtfs_id.clone()),
-                        haversine_distance,
-                    );
-
-                    sorted_stop_proximity
-                        .entry(stop.chateau.clone())
-                        .and_modify(|proximity_list| {
-                            proximity_list.push((stop.gtfs_id.clone(), haversine_distance))
-                        })
-                        .or_insert(vec![(stop.gtfs_id.clone(), haversine_distance)]);
+        if let Some(direction_at_this_stop) = direction_at_this_stop {
+            for (direction_id, sequence) in direction_at_this_stop {
+                match directions_to_closest_stop.entry((chateau.clone(), *direction_id)) {
+                    Entry::Vacant(ve) => {
+                        ve.insert((stop_id.clone(), *sequence));
+                    }
+                    _ => {}
                 }
             }
+        }
+    }
 
-            let sorted_by_chateau = sorted_by_chateau;
+    //write some join, select * from itinerary patterns
 
-            let sorted_stop_proximity: AHashMap<String, Vec<(String, f64)>> = sorted_stop_proximity
-                .into_iter()
-                .map(|(chateau_id, list)| {
-                    let mut list = list;
-                    list.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    //chateau, direction id, stop sequence
+    let directions_idx_to_get = directions_to_closest_stop
+        .iter()
+        .map(|(k, v)| (k.0.clone(), k.1.to_string(), v.1))
+        .collect::<Vec<_>>();
 
-                    (chateau_id, list)
-                })
-                .collect();
+    let formatted_ask = format!(
+        "({})",
+        directions_idx_to_get
+            .into_iter()
+            .map(|x| format!("('{}','{}',{})", x.0, x.1, x.2))
+            .collect::<Vec<String>>()
+            .join(",")
+    );
 
-            //for each chateau
+    let itineraries_timer = Instant::now();
 
-            let mut futures_array = vec![];
+    let seek_for_itineraries: Result<Vec<ItineraryPatternRowNearbyLookup>, diesel::result::Error> = diesel::sql_query(
+            format!(
+            "SELECT 
+itinerary_pattern.onestop_feed_id,
+itinerary_pattern.attempt_id,
+itinerary_pattern.itinerary_pattern_id,
+itinerary_pattern.stop_sequence,
+itinerary_pattern.arrival_time_since_start,
+itinerary_pattern.departure_time_since_start,
+itinerary_pattern.interpolated_time_since_start,
+itinerary_pattern.stop_id,
+itinerary_pattern.chateau,
+itinerary_pattern.gtfs_stop_sequence,
+itinerary_pattern_meta.direction_pattern_id,
+itinerary_pattern_meta.trip_headsign,
+itinerary_pattern_meta.trip_headsign_translations,
+itinerary_pattern_meta.timezone,
+itinerary_pattern_meta.route_id
+ FROM gtfs.itinerary_pattern JOIN
+                         gtfs.itinerary_pattern_meta ON
+                         itinerary_pattern_meta.itinerary_pattern_id = itinerary_pattern.itinerary_pattern_id
+        AND itinerary_pattern.onestop_feed_id = itinerary_pattern_meta.onestop_feed_id
+AND itinerary_pattern.attempt_id = itinerary_pattern_meta.attempt_id 
+AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
+        (itinerary_pattern_meta.chateau, itinerary_pattern_meta.direction_pattern_id, itinerary_pattern.stop_sequence) IN {}"
+        , formatted_ask)).get_results(conn).await;
 
-            for (chateau_id, hash_under_chateau) in &sorted_by_chateau {
-                let stop_id_vec = hash_under_chateau
-                    .keys()
-                    .map(|key| key.to_string())
-                    .collect::<Vec<String>>();
+    match seek_for_itineraries {
+        Err(err) => HttpResponse::InternalServerError().body(format!("{:#?}", err)),
+        Ok(seek_for_itineraries) => {
+            println!(
+                "Finished getting itineraries in {:?}",
+                itineraries_timer.elapsed()
+            );
 
-                // query for all the itinerary times, look at the closest stops for all of them,
+            // println!("Itins: {:#?}", seek_for_itineraries);
 
-                let itineraries_searched =
-                    catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                        .filter(
-                            catenary::schema::gtfs::itinerary_pattern::chateau
-                                .eq(chateau_id.to_string()),
-                        )
-                        .filter(
-                            catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(stop_id_vec),
-                        )
-                        .select(ItineraryPatternRow::as_select())
-                        .load(conn);
+            let mut itins_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
 
-                futures_array.push(itineraries_searched);
-            }
-
-            let itinerary_patterns_for_stops_start = Instant::now();
-
-            let run_futures: Vec<Result<Vec<ItineraryPatternRow>, diesel::result::Error>> =
-                FuturesUnordered::from_iter(futures_array)
-                    .collect::<Vec<_>>()
-                    .await;
-
-            let itinerary_patterns_for_stops_end = itinerary_patterns_for_stops_start.elapsed();
-
-            let mut patterns_found_per_chateau_and_stop: HashMap<
-                String,
-                HashMap<String, Vec<ItineraryPatternRow>>,
+            let mut itinerary_table: HashMap<
+                (String, String),
+                Vec<ItineraryPatternRowNearbyLookup>,
             > = HashMap::new();
 
-            let mut pattern_ids_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
-
-            for r in run_futures {
-                let r = r.unwrap();
-
-                let mut pattern_per_stop: HashMap<String, Vec<ItineraryPatternRow>> =
-                    HashMap::new();
-
-                let mut hashset_of_itinerary_patterns: HashSet<String> = HashSet::new();
-
-                if !r.is_empty() {
-                    let chateau = r[0].chateau.clone();
-
-                    for ipr in r {
-                        hashset_of_itinerary_patterns.insert(ipr.itinerary_pattern_id.clone());
-
-                        match pattern_per_stop.entry(ipr.stop_id.clone()) {
-                            std::collections::hash_map::Entry::Occupied(mut oe) => {
-                                oe.get_mut().push(ipr);
-                            }
-                            std::collections::hash_map::Entry::Vacant(ve) => {
-                                ve.insert(vec![ipr]);
-                            }
-                        }
+            for itin in &seek_for_itineraries {
+                match itins_per_chateau.entry(itin.chateau.clone()) {
+                    Entry::Occupied(mut oe) => {
+                        oe.get_mut().insert(itin.itinerary_pattern_id.clone());
                     }
-
-                    patterns_found_per_chateau_and_stop.insert(chateau.clone(), pattern_per_stop);
-                    pattern_ids_per_chateau.insert(chateau, hashset_of_itinerary_patterns);
+                    Entry::Vacant(mut ve) => {
+                        ve.insert(HashSet::from_iter([itin.itinerary_pattern_id.clone()]));
+                    }
                 }
             }
 
-            let grouped_queries_start = Instant::now();
+            for itin in seek_for_itineraries {
+                match itinerary_table
+                    .entry((itin.chateau.clone(), itin.itinerary_pattern_id.clone()))
+                {
+                    Entry::Occupied(mut oe) => {
+                        oe.get_mut().push(itin);
+                    }
+                    Entry::Vacant(mut ve) => {
+                        ve.insert(vec![itin]);
+                    }
+                }
+            }
 
-            for (chateau_id, hash_under_chateau) in &sorted_by_chateau {
-                if let Some(itin_list) = pattern_ids_per_chateau.get(chateau_id) {
-                    let itinerary_pattern_metadatas: diesel::prelude::QueryResult<
-                        Vec<ItineraryPatternMeta>,
-                    > = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                        .filter(
-                            catenary::schema::gtfs::itinerary_pattern_meta::chateau
-                                .eq(chateau_id.to_string()),
-                        )
-                        .filter(
-                            catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id
-                                .eq_any(itin_list),
-                        )
-                        .select(ItineraryPatternMeta::as_select())
-                        .load(conn)
-                        .await;
+            println!("Looking up trips");
+            let timer_trips = Instant::now();
 
-                    let group_queries: Result<
-                        (
-                            Vec<catenary::models::Calendar>,
-                            Vec<catenary::models::CalendarDate>,
-                            Vec<CompressedTrip>,
-                        ),
-                        diesel::result::Error,
-                    > = futures::try_join!(
+            let trip_lookup_queries_to_perform =
+                futures::stream::iter(itins_per_chateau.iter().map(|(chateau, set_of_itin)| {
+                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                        .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau))
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::dsl::itinerary_pattern_id
+                                .eq_any(set_of_itin),
+                        )
+                        .select(catenary::models::CompressedTrip::as_select())
+                        .load::<catenary::models::CompressedTrip>(conn)
+                }))
+                .buffer_unordered(8)
+                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CompressedTrip>>>>()
+                .await;
+
+            println!("Finished looking up trips in {:?}", timer_trips.elapsed());
+
+            let mut compressed_trips_table = HashMap::new();
+
+            let mut services_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
+
+            let mut routes_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
+
+            for trip_group in trip_lookup_queries_to_perform {
+                match trip_group {
+                    Ok(compressed_trip_group) => {
+                        let chateau = compressed_trip_group[0].chateau.to_string();
+
+                        let service_ids = compressed_trip_group
+                            .iter()
+                            .map(|x| x.service_id.clone())
+                            .collect::<BTreeSet<String>>();
+
+                        let route_ids = compressed_trip_group
+                            .iter()
+                            .map(|x| x.route_id.clone())
+                            .collect::<BTreeSet<String>>();
+
+                        services_to_lookup_table.insert(chateau.clone(), service_ids);
+                        compressed_trips_table.insert(chateau.clone(), compressed_trip_group);
+                        routes_to_lookup_table.insert(chateau, route_ids);
+                    }
+                    Err(err) => {
+                        return HttpResponse::InternalServerError().body(format!("{:#?}", err));
+                    }
+                }
+            }
+
+            let compressed_trips_table = compressed_trips_table;
+            let services_to_lookup_table = services_to_lookup_table;
+
+            let chateaus = services_to_lookup_table
+                .keys()
+                .cloned()
+                .collect::<Vec<String>>();
+
+            let conn2_pre = conn_pool.get().await;
+            let conn2 = &mut conn2_pre.unwrap();
+
+            let conn3_pre = conn_pool.get().await;
+            let conn3 = &mut conn3_pre.unwrap();
+
+            let calendar_timer = Instant::now();
+
+            let (
+                services_calendar_lookup_queries_to_perform,
+                services_calendar_dates_lookup_queries_to_perform,
+                routes_query,
+            ) = tokio::join!(
+                futures::stream::iter(services_to_lookup_table.iter().map(
+                    |(chateau, set_of_calendar)| {
                         catenary::schema::gtfs::calendar::dsl::calendar
+                            .filter(catenary::schema::gtfs::calendar::dsl::chateau.eq(chateau))
                             .filter(
-                                catenary::schema::gtfs::calendar::dsl::chateau
-                                    .eq(chateau_id.to_string()),
+                                catenary::schema::gtfs::calendar::dsl::service_id
+                                    .eq_any(set_of_calendar),
                             )
                             .select(catenary::models::Calendar::as_select())
-                            .load(conn),
+                            .load::<catenary::models::Calendar>(conn)
+                    },
+                ))
+                .buffer_unordered(8)
+                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Calendar>>>>(),
+                futures::stream::iter(services_to_lookup_table.iter().map(
+                    |(chateau, set_of_calendar)| {
                         catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
                             .filter(
-                                catenary::schema::gtfs::calendar_dates::dsl::chateau
-                                    .eq(chateau_id.to_string()),
+                                catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(chateau),
+                            )
+                            .filter(
+                                catenary::schema::gtfs::calendar_dates::dsl::service_id
+                                    .eq_any(set_of_calendar),
                             )
                             .select(catenary::models::CalendarDate::as_select())
-                            .load(conn),
-                        catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                            .load::<catenary::models::CalendarDate>(conn2)
+                    },
+                ))
+                .buffer_unordered(8)
+                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CalendarDate>>>>(),
+                futures::stream::iter(routes_to_lookup_table.iter().map(
+                    |(chateau, set_of_routes)| {
+                        catenary::schema::gtfs::routes::dsl::routes
+                            .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(chateau))
                             .filter(
-                                catenary::schema::gtfs::trips_compressed::dsl::chateau
-                                    .eq(chateau_id.to_string()),
+                                catenary::schema::gtfs::routes::dsl::route_id.eq_any(set_of_routes),
                             )
-                            .filter(
-                                catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
-                                    .eq_any(itin_list),
-                            )
-                            .select(CompressedTrip::as_select())
-                            .load(conn)
-                    );
-
-                    if group_queries.is_err() {
-                        return HttpResponse::InternalServerError()
-                            .body("Could not query additional data out of postgres");
+                            .select(catenary::models::Route::as_select())
+                            .load::<catenary::models::Route>(conn3)
                     }
+                ))
+                .buffer_unordered(8)
+                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Route>>>>(),
+            );
 
-                    let (calendars, calendar_dates, compressed_trips) = group_queries.unwrap();
+            println!(
+                "Finished getting calendar, routes, and calendar dates, took {:?}",
+                calendar_timer.elapsed()
+            );
 
-                    let itinerary_pattern_metadatas = itinerary_pattern_metadatas.unwrap();
+            let calendar_structure = make_calendar_structure_from_pg(
+                services_calendar_lookup_queries_to_perform,
+                services_calendar_dates_lookup_queries_to_perform,
+            );
 
-                    let itinerary_pattern_metadata_map = itinerary_pattern_metadatas
-                        .into_iter()
-                        .map(|ipm| (ipm.itinerary_pattern_id.clone(), ipm))
-                        .collect::<HashMap<String, ItineraryPatternMeta>>();
+            let mut routes_table: HashMap<String, HashMap<String, catenary::models::Route>> =
+                HashMap::new();
 
-                    //once a route is found, no other departure should be more than 400m additional difference from the closest stop containing that stop
-                    let mut route_id_to_closest_distance: HashMap<String, f64> = HashMap::new();
+            for route_group in routes_query {
+                match route_group {
+                    Ok(route_group) => {
+                        let chateau = route_group[0].chateau.clone();
 
-                    let mut relevant_stops: ahash::AHashSet<String> = ahash::AHashSet::new();
+                        let mut route_table = HashMap::new();
 
-                    // get the closest stop for each itinerary by greedy search
+                        for route in route_group {
+                            route_table.insert(route.route_id.clone(), route);
+                        }
 
-                    let mut itins_found: ahash::AHashSet<String> = ahash::AHashSet::new();
+                        routes_table.insert(chateau, route_table);
+                    }
+                    Err(err) => {
+                        return HttpResponse::InternalServerError().body(format!("{:#?}", err));
+                    }
+                }
+            }
 
-                    let patterns_per_stop =
-                        patterns_found_per_chateau_and_stop.get(chateau_id).unwrap();
+            let mut chateau_metadata = HashMap::new();
 
-                    let sorted_stop_prox_for_this_chateau =
-                        sorted_stop_proximity.get(&chateau_id.clone()).unwrap();
+            for chateau_id in chateaus {
+                let etcd_data = etcd
+                    .get(
+                        format!("/aspen_assigned_chateaus/{}", chateau_id.clone()).as_str(),
+                        None,
+                    )
+                    .await;
 
-                    for (stop_id, distance) in sorted_stop_prox_for_this_chateau {
-                        if let Some(patterns_per_stop) = patterns_per_stop.get(stop_id) {
-                            for pattern in patterns_per_stop {
-                                if !itins_found.contains(&pattern.itinerary_pattern_id) {
+                if let Ok(etcd_data) = etcd_data {
+                    let this_chateau_metadata = bincode::deserialize::<ChateauMetadataEtcd>(
+                        etcd_data.kvs().first().unwrap().value(),
+                    )
+                    .unwrap();
 
-                                    //how to calculate the next ~24 hours of departures
+                    chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
+                }
+            }
 
-                                    //get the range of valid service dates based on the current date in the time zone of the itinerary pattern,
-                                    // subtract the itinerary offset, then look back up to 1 hour for buses, 3 hours for trains, look forward in time up to 24 hours.
+            let chateau_metadata = chateau_metadata;
 
-                                    //for each trip, check if the service date is correct
+            match calendar_structure {
+                Err(err) => HttpResponse::InternalServerError().body("CANNOT FIND CALENDARS"),
+                Ok(calendar_structure) => {
+                    // iterate through all trips and produce a timezone and timeoffset.
 
-                                    //if so, insert into the list of avaliable departures
+                    let mut stops_answer: HashMap<String, HashMap<String, StopOutput>> =
+                        HashMap::new();
+                    let mut departures: Vec<DepartureRouteGroup> = vec![];
 
-                                    //itins_found.insert(pattern.itinerary_pattern_id.clone());
-                                    //relevant_stops.insert(stop_id.clone());
+                    for (chateau_id, calendar_in_chateau) in calendar_structure.iter() {
+                        let mut directions_route_group_for_this_chateau: HashMap<
+                            String,
+                            DepartureRouteGroup,
+                        > = HashMap::new();
+
+                        let mut valid_trips: HashMap<String, Vec<ValidTripSet>> = HashMap::new();
+                        let itinerary = itins_per_chateau.get(chateau_id).unwrap();
+                        let routes = routes_table.get(chateau_id).unwrap();
+                        for trip in compressed_trips_table.get(chateau_id).unwrap() {
+                            //extract protobuf of frequency and convert to gtfs_structures::Frequency
+
+                            let frequency: Option<
+                                catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto,
+                            > = trip
+                                .frequencies
+                                .as_ref()
+                                .map(|data| prost::Message::decode(data.as_ref()).unwrap());
+
+                            let freq_converted = frequency.map(|x| protobuf_to_frequencies(&x));
+
+                            let this_itin_list = itinerary_table
+                                .get(&(trip.chateau.clone(), trip.itinerary_pattern_id.clone()))
+                                .unwrap();
+
+                            let itin_ref: ItineraryPatternRowNearbyLookup =
+                                this_itin_list[0].clone();
+
+                            let time_since_start = match itin_ref.departure_time_since_start {
+                                Some(departure_time_since_start) => departure_time_since_start,
+                                None => match itin_ref.arrival_time_since_start {
+                                    Some(arrival) => arrival,
+                                    None => itin_ref.interpolated_time_since_start.unwrap_or(0),
+                                },
+                            };
+
+                            let t_to_find_schedule_for = catenary::TripToFindScheduleFor {
+                                trip_id: trip.trip_id.clone(),
+                                chateau: chateau_id.clone(),
+                                timezone: chrono_tz::Tz::from_str(itin_ref.timezone.as_str())
+                                    .unwrap(),
+                                time_since_start_of_service_date: chrono::TimeDelta::new(
+                                    time_since_start.into(),
+                                    0,
+                                )
+                                .unwrap(),
+                                frequency: freq_converted.clone(),
+                                itinerary_id: itin_ref.itinerary_pattern_id.clone(),
+                                direction_id: itin_ref.direction_pattern_id.clone(),
+                            };
+
+                            let service = calendar_in_chateau.get(&trip.service_id);
+
+                            if let Some(service) = service {
+                                let dates = catenary::find_service_ranges(
+                                    service,
+                                    &t_to_find_schedule_for,
+                                    departure_time_chrono,
+                                    seek_back,
+                                    seek_forward,
+                                );
+
+                                if !dates.is_empty() {
+                                    for date in dates {
+                                        let t = ValidTripSet {
+                                            chateau_id: chateau_id.clone(),
+                                            trip_id: trip.trip_id.clone(),
+                                            timezone: chrono_tz::Tz::from_str(
+                                                itin_ref.timezone.as_str(),
+                                            )
+                                            .ok(),
+                                            frequencies: freq_converted.clone(),
+                                            trip_service_date: date.0,
+                                            itinerary_options: this_itin_list.clone(),
+                                            reference_start_of_service_date: date.1,
+                                            itinerary_pattern_id: itin_ref
+                                                .itinerary_pattern_id
+                                                .clone(),
+                                            direction_pattern_id: itin_ref
+                                                .direction_pattern_id
+                                                .clone(),
+                                            route_id: itin_ref.route_id.clone(),
+                                        };
+
+                                        match valid_trips.entry(trip.trip_id.clone()) {
+                                            Entry::Occupied(mut oe) => {
+                                                oe.get_mut().push(t);
+                                            }
+                                            Entry::Vacant(mut ve) => {
+                                                ve.insert(vec![t]);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
+
+                        // Hydrate into realtime data
+
+                        //1. connect with tarpc server
+
+                        let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
+                            Some(chateau_metadata_for_c) => {
+                                let socket_addr = std::net::SocketAddr::new(
+                                    chateau_metadata_for_c.ip.0,
+                                    chateau_metadata_for_c.ip.1,
+                                );
+
+                                let aspen_client =
+                                    catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
+                                        .await;
+
+                                match aspen_client {
+                                    Ok(aspen_client) => {
+                                        let gtfs_trip_aspenised = aspen_client
+                                            .get_all_trips_with_ids(
+                                                tarpc::context::current(),
+                                                chateau_id.clone(),
+                                                valid_trips
+                                                    .keys()
+                                                    .cloned()
+                                                    .collect::<Vec<String>>(),
+                                            )
+                                            .await
+                                            .unwrap();
+
+                                        Some(gtfs_trip_aspenised)
+                                    }
+                                    Err(err) => None,
+                                }
+                            }
+                            None => None,
+                        }
+                        .flatten();
+
+                        //sort through each time response
+
+                        //  temp_answer.insert(chateau_id.clone(), valid_trips);
+
+                        for (trip_id, trip_grouping) in valid_trips {
+                            let route = routes.get(&trip_grouping[0].route_id).unwrap();
+
+                            if !directions_route_group_for_this_chateau
+                                .contains_key(&route.route_id)
+                            {
+                                directions_route_group_for_this_chateau.insert(
+                                    route.route_id.clone(),
+                                    DepartureRouteGroup {
+                                        chateau_id: chateau_id.clone(),
+                                        route_id: route.route_id.clone(),
+                                        color: route.color.clone(),
+                                        text_color: route.text_color.clone(),
+                                        short_name: route.short_name.clone(),
+                                        long_name: route.long_name.clone(),
+                                        route_type: route.route_type,
+                                        directions: HashMap::new(),
+                                        closest_distance: 100000.,
+                                    },
+                                );
+                            }
+
+                            let route_group = directions_route_group_for_this_chateau
+                                .get_mut(&route.route_id)
+                                .unwrap();
+
+                            if !route_group
+                                .directions
+                                .contains_key(trip_grouping[0].direction_pattern_id.as_str())
+                            {
+                                route_group.directions.insert(
+                                    trip_grouping[0].direction_pattern_id.clone(),
+                                    DepartingHeadsignGroup {
+                                        headsign: trip_grouping[0].itinerary_options[0]
+                                            .trip_headsign
+                                            .clone()
+                                            .unwrap_or("".to_string()),
+                                        direction_id: trip_grouping[0].direction_pattern_id.clone(),
+                                        trips: vec![],
+                                    },
+                                );
+                            }
+
+                            let headsign_group = route_group
+                                .directions
+                                .get_mut(trip_grouping[0].direction_pattern_id.as_str())
+                                .unwrap();
+
+                            for trip in trip_grouping {
+                                headsign_group.trips.push(DepartingTrip {
+                                    trip_id: trip.trip_id.clone(),
+                                    gtfs_schedule_start_day: trip.trip_service_date,
+                                    departure_realtime: None,
+                                    arrival_schedule: None,
+                                    arrival_realtime: None,
+                                    stop_id: trip.itinerary_options[0].stop_id.clone(),
+                                    trip_short_name: trip.itinerary_options[0]
+                                        .trip_headsign
+                                        .clone()
+                                        .unwrap_or("".to_string()),
+                                    tz: trip.timezone.as_ref().unwrap().name().to_string(),
+                                    is_frequency: trip.frequencies.is_some(),
+                                    departure_schedule: match trip.itinerary_options[0]
+                                        .departure_time_since_start
+                                    {
+                                        Some(departure_time_since_start) => {
+                                            Some(departure_time + departure_time_since_start as u64)
+                                        }
+                                        None => match trip.itinerary_options[0]
+                                            .arrival_time_since_start
+                                        {
+                                            Some(arrival) => Some(departure_time + arrival as u64),
+                                            None => Some(
+                                                departure_time
+                                                    + trip.itinerary_options[0]
+                                                        .interpolated_time_since_start
+                                                        .unwrap_or(0)
+                                                        as u64,
+                                            ),
+                                        },
+                                    },
+                                    is_interpolated: trip.itinerary_options[0]
+                                        .interpolated_time_since_start
+                                        .is_some(),
+                                    gtfs_frequency_start_time: None,
+                                });
+                            }
+
+                            let stop = stops_table
+                                .get(
+                                    &(chateau_id.clone(), headsign_group.trips[0].stop_id.clone())
+                                        .clone(),
+                                )
+                                .unwrap();
+
+                            if !stops_answer.contains_key(chateau_id) {
+                                stops_answer.insert(chateau_id.clone(), HashMap::new());
+                            }
+
+                            let stop_group = stops_answer.get_mut(chateau_id).unwrap();
+
+                            if !stop_group.contains_key(&headsign_group.trips[0].stop_id) {
+                                stop_group.insert(
+                                    headsign_group.trips[0].stop_id.clone(),
+                                    StopOutput {
+                                        gtfs_id: stop.0.gtfs_id.clone(),
+                                        name: stop.0.name.clone().unwrap_or("".to_string()),
+                                        lat: stop.0.point.as_ref().unwrap().x,
+                                        lon: stop.0.point.as_ref().unwrap().y,
+                                        timezone: stop.0.timezone.clone(),
+                                        url: stop.0.url.clone(),
+                                    },
+                                );
+                            }
+
+                            if stop.1 < route_group.closest_distance {
+                                route_group.closest_distance = stop.1;
+                            }
+                        }
+
+                        for (route_id, route_group) in directions_route_group_for_this_chateau {
+                            departures.push(route_group);
+                        }
                     }
+
+                    departures.sort_by(|a, b| {
+                        a.closest_distance.partial_cmp(&b.closest_distance).unwrap()
+                    });
+
+                    HttpResponse::Ok().json(DepartingTripsDataAnswer {
+                        number_of_stops_searched_through: stops.len(),
+                        bus_limited_metres: bus_distance_limit as f64,
+                        rail_and_other_limited_metres: rail_and_other_distance_limit as f64,
+                        departures: departures,
+                        stop: stops_answer,
+                    })
                 }
             }
-
-            //get the start of the trip and the offset for the current stop
-
-            //look through time compressed and decompress the itineraries, using timezones and calendar calcs
-
-            //look through gtfs-rt times and hydrate the itineraries
-
-            let answer = DepartingTripsDataAnswer {
-                number_of_stops_searched_through: number_of_stops,
-                bus_limited_metres: distance_limit as f64,
-                rail_and_other_limited_metres: distance_limit as f64,
-                debug_info: DeparturesTimeDebug {
-                    get_stops: end_stops_duration.as_millis() as u32,
-                    get_itins: itinerary_patterns_for_stops_end.as_millis() as u32,
-                    all_group_queries: grouped_queries_start.elapsed().as_millis() as u32,
-                },
-            };
-
-            let stringified_answer = serde_json::to_string(&answer).unwrap();
-
-            HttpResponse::Ok().body(stringified_answer)
         }
-        Err(stops_err) => HttpResponse::InternalServerError().body(format!("Error: {}", stops_err)),
     }
 }
 
-#[derive(Deserialize, Clone, Debug)]
-struct NearbyStopsDeserialize {
-    stop_id: String,
-    chateau_id: String,
-    timestamp_seconds: u64,
+fn make_calendar_structure_from_pg(
+    services_calendar_lookup_queries_to_perform: Vec<
+        diesel::QueryResult<Vec<catenary::models::Calendar>>,
+    >,
+    services_calendar_dates_lookup_queries_to_perform: Vec<
+        diesel::QueryResult<Vec<catenary::models::CalendarDate>>,
+    >,
+) -> Result<
+    BTreeMap<String, BTreeMap<String, catenary::CalendarUnified>>,
+    Box<dyn std::error::Error + Sync + Send>,
+> {
+    let mut calendar_structures: BTreeMap<String, BTreeMap<String, catenary::CalendarUnified>> =
+        BTreeMap::new();
+
+    for calendar_group in services_calendar_lookup_queries_to_perform {
+        if let Err(calendar_group_err) = calendar_group {
+            return Err(Box::new(calendar_group_err));
+        }
+
+        let calendar_group = calendar_group.unwrap();
+
+        let chateau = calendar_group[0].chateau.clone();
+
+        let mut new_calendar_table: BTreeMap<String, catenary::CalendarUnified> = BTreeMap::new();
+
+        for calendar in calendar_group {
+            new_calendar_table.insert(
+                calendar.service_id.clone(),
+                catenary::CalendarUnified {
+                    id: calendar.service_id.clone(),
+                    general_calendar: Some(catenary::GeneralCalendar {
+                        days: make_weekdays(&calendar),
+                        start_date: calendar.gtfs_start_date,
+                        end_date: calendar.gtfs_end_date,
+                    }),
+                    exceptions: None,
+                },
+            );
+        }
+
+        calendar_structures.insert(chateau, new_calendar_table);
+    }
+
+    for calendar_date_group in services_calendar_dates_lookup_queries_to_perform {
+        if let Err(calendar_date_group) = calendar_date_group {
+            return Err(Box::new(calendar_date_group));
+        }
+
+        let calendar_date_group = calendar_date_group.unwrap();
+
+        if !calendar_date_group.is_empty() {
+            let chateau = calendar_date_group[0].chateau.clone();
+
+            let pile_of_calendars_exists = calendar_structures.contains_key(&chateau);
+
+            if !pile_of_calendars_exists {
+                calendar_structures.insert(chateau.clone(), BTreeMap::new());
+            }
+
+            let pile_of_calendars = calendar_structures.get_mut(&chateau).unwrap();
+
+            for calendar_date in calendar_date_group {
+                let exception_number = match calendar_date.exception_type {
+                    1 => gtfs_structures::Exception::Added,
+                    2 => gtfs_structures::Exception::Deleted,
+                    _ => panic!("WHAT IS THIS!!!!!!"),
+                };
+
+                match pile_of_calendars.entry(calendar_date.service_id.clone()) {
+                    btree_map::Entry::Occupied(mut oe) => {
+                        let mut calendar_unified = oe.get_mut();
+
+                        if let Some(entry) = &mut calendar_unified.exceptions {
+                            entry.insert(calendar_date.gtfs_date, exception_number);
+                        } else {
+                            calendar_unified.exceptions = Some(BTreeMap::from_iter([(
+                                calendar_date.gtfs_date,
+                                exception_number,
+                            )]));
+                        }
+                    }
+                    btree_map::Entry::Vacant(mut ve) => {
+                        ve.insert(CalendarUnified::empty_exception_from_calendar_date(
+                            &calendar_date,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(calendar_structures)
 }
 
+fn make_degree_length_as_distance_from_point(point: &geo::Point, distance_metres: f64) -> f64 {
+    let direction = match point.x() > 0. {
+        true => 90.,
+        false => -90.,
+    };
+
+    let distance_calc_point = point.haversine_destination(direction, distance_metres);
+
+    f64::abs(distance_calc_point.x() - point.x())
+}
