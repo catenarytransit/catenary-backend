@@ -485,7 +485,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
             let conn2 = &mut conn2_pre.unwrap();
 
             let conn3_pre = conn_pool.get().await;
-            let conn3 = &mut conn2_pre.unwrap();
+            let conn3 = &mut conn3_pre.unwrap();
 
             let (
                 services_calendar_lookup_queries_to_perform,
