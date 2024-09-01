@@ -815,6 +815,8 @@ pub fn find_service_ranges(
         i = i.succ_opt().unwrap();
     }
 
+    println!("checked {:?} from {:?} to {:?}, found {} valid", valid_service_days_to_look_at, start_service_date_check, end_date_service_check, valid_service_days_to_look_at.len());
+
     let results = valid_service_days_to_look_at
         .iter()
         .map(|nd| {

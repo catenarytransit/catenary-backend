@@ -706,12 +706,6 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                             }
                                         }
                                     }
-                                } else {
-                                    println!(
-                                        "Can't find any dates for service {:#?} and trip {:?} : {:?}",
-                                        service,
-                                        trip, itin_ref
-                                    );
                                 }
                             }
                         }
