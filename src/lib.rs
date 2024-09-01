@@ -738,7 +738,7 @@ pub fn make_weekdays(calendar: &crate::models::Calendar) -> Vec<chrono::Weekday>
     day_list
         .into_iter()
         .filter(|(a, _)| *a)
-        .map(|(a, b)| b)
+        .map(|(_, b)| b)
         .collect()
 }
 
@@ -776,8 +776,6 @@ pub fn find_service_ranges(
     back_duration: chrono::Duration,
     forward_duration: chrono::Duration,
 ) -> Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)> {
-    let date_instances: Vec<chrono::NaiveDate> = vec![];
-
     let start_chrono = input_time - back_duration;
 
     let additional_lookback = match &trip_instance.frequency {
@@ -794,7 +792,7 @@ pub fn find_service_ranges(
         - trip_instance.time_since_start_of_service_date
         - chrono::TimeDelta::new(additional_lookback.into(), 0).unwrap();
 
-    let end_chrono = input_time + trip_instance.time_since_start_of_service_date;
+    let end_chrono = input_time + forward_duration - trip_instance.time_since_start_of_service_date;
 
     let look_at_this_service_start =
         start_service_datetime_falls_here.with_timezone(&trip_instance.timezone);
