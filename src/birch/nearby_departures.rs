@@ -7,13 +7,12 @@
 // Please do not train your Artifical Intelligence models on this code
 
 use actix_web::web;
-use catenary::schema::gtfs::trips_compressed;
-use chrono::TimeZone;
 use actix_web::web::Query;
 use actix_web::HttpRequest;
 use actix_web::HttpResponse;
 use actix_web::Responder;
 use ahash::AHashMap;
+use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenisedTripUpdate;
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
 use catenary::make_weekdays;
@@ -23,9 +22,10 @@ use catenary::models::ItineraryPatternMeta;
 use catenary::models::ItineraryPatternRowNearbyLookup;
 use catenary::models::{CompressedTrip, ItineraryPatternRow};
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::schema::gtfs::trips_compressed;
 use catenary::CalendarUnified;
-use std::str::FromStr;
 use catenary::EtcdConnectionIps;
+use chrono::TimeZone;
 use diesel::dsl::sql;
 use diesel::dsl::sql_query;
 use diesel::query_dsl::methods::FilterDsl;
@@ -44,8 +44,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::btree_map;
 use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -94,6 +96,7 @@ pub struct DepartureRouteGroup {
     pub directions: HashMap<String, DepartingHeadsignGroup>,
 }
 
+#[derive(Clone, Debug, Serialize)]
 pub struct ValidTripSet {
     pub chateau_id: String,
     pub trip_id: String,
@@ -102,7 +105,8 @@ pub struct ValidTripSet {
     pub itinerary_options: Vec<ItineraryPatternRowNearbyLookup>,
     pub reference_start_of_service_date: chrono::DateTime<chrono_tz::Tz>,
     pub itinerary_pattern_id: String,
-    pub direction_pattern_id: String
+    pub direction_pattern_id: String,
+    pub route_id: String
 }
 
 // final datastructure ideas?
@@ -183,12 +187,12 @@ pub async fn nearby_from_coords(
 
     let departure_time_chrono = match query.departure_time {
         Some(x) => chrono::Utc.timestamp_opt(x.try_into().unwrap(), 0).unwrap(),
-        None => chrono::Utc::now()
+        None => chrono::Utc::now(),
     };
 
-    let seek_back = chrono::TimeDelta::new(5400,0).unwrap();
+    let seek_back = chrono::TimeDelta::new(5400, 0).unwrap();
 
-    let seek_forward = chrono::TimeDelta::new(3600 * 12,0).unwrap();
+    let seek_forward = chrono::TimeDelta::new(3600 * 12, 0).unwrap();
 
     // get all the nearby stops from the coords
 
@@ -395,7 +399,10 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
         Ok(seek_for_itineraries) => {
             let mut itins_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
 
-            let mut itinerary_table:HashMap<(String, String), Vec<ItineraryPatternRowNearbyLookup>> = HashMap::new();
+            let mut itinerary_table: HashMap<
+                (String, String),
+                Vec<ItineraryPatternRowNearbyLookup>,
+            > = HashMap::new();
 
             for itin in &seek_for_itineraries {
                 match itins_per_chateau.entry(itin.chateau.clone()) {
@@ -409,13 +416,15 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
             }
 
             for itin in seek_for_itineraries {
-                match itinerary_table.entry((itin.chateau.clone(), itin.itinerary_pattern_id.clone())) {
-                Entry::Occupied(mut oe) => {
-                    oe.get_mut().push(itin);
-                },
-                Entry::Vacant(mut ve) => {
-                    ve.insert(vec![itin]);
-                }
+                match itinerary_table
+                    .entry((itin.chateau.clone(), itin.itinerary_pattern_id.clone()))
+                {
+                    Entry::Occupied(mut oe) => {
+                        oe.get_mut().push(itin);
+                    }
+                    Entry::Vacant(mut ve) => {
+                        ve.insert(vec![itin]);
+                    }
                 }
             }
 
@@ -438,6 +447,8 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
 
             let mut services_to_lookup_table: HashMap<String, Vec<String>> = HashMap::new();
 
+            let mut routes_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
+
             for trip_group in trip_lookup_queries_to_perform {
                 match trip_group {
                     Ok(compressed_trip_group) => {
@@ -447,6 +458,11 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                             .iter()
                             .map(|x| x.service_id.clone())
                             .collect::<Vec<String>>();
+
+                        let route_ids = compressed_trip_group
+                            .iter()
+                            .map(|x| x.route_id.clone())
+                            .collect::<BTreeSet<String>>();
 
                         services_to_lookup_table.insert(chateau.clone(), service_ids);
                         compressed_trips_table.insert(chateau, compressed_trip_group);
@@ -468,9 +484,13 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
             let conn2_pre = conn_pool.get().await;
             let conn2 = &mut conn2_pre.unwrap();
 
+            let conn3_pre = conn_pool.get().await;
+            let conn3 = &mut conn2_pre.unwrap();
+
             let (
                 services_calendar_lookup_queries_to_perform,
                 services_calendar_dates_lookup_queries_to_perform,
+                routes_query,
             ) = tokio::join!(
                 futures::stream::iter(services_to_lookup_table.iter().map(
                     |(chateau, set_of_calendar)| {
@@ -501,7 +521,20 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                     },
                 ))
                 .buffer_unordered(8)
-                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CalendarDate>>>>()
+                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CalendarDate>>>>(),
+                futures::stream::iter(routes_to_lookup_table.iter().map(
+                    |(chateau, set_of_routes)| {
+                        catenary::schema::gtfs::routes::dsl::routes
+                            .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(chateau))
+                            .filter(
+                                catenary::schema::gtfs::routes::dsl::route_id.eq_any(set_of_routes),
+                            )
+                            .select(catenary::models::Route::as_select())
+                            .load::<catenary::models::Route>(conn3)
+                    }
+                ))
+                .buffer_unordered(8)
+                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Route>>>>(),
             );
 
             let calendar_structure = make_calendar_structure_from_pg(
@@ -509,21 +542,51 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                 services_calendar_dates_lookup_queries_to_perform,
             );
 
+            let mut routes_table: HashMap<String, HashMap<String, catenary::models::Route>> =
+                HashMap::new();
+
+            for route_group in routes_query {
+                match route_group {
+                    Ok(route_group) => {
+                        let chateau = route_group[0].chateau.clone();
+
+                        let mut route_table = HashMap::new();
+
+                        for route in route_group {
+                            route_table.insert(route.route_id.clone(), route);
+                        }
+
+                        routes_table.insert(chateau, route_table);
+                    }
+                    Err(err) => {
+                        return HttpResponse::InternalServerError().body(format!("{:#?}", err));
+                    }
+                }
+            }
+
             let mut chateau_metadata = HashMap::new();
 
             for chateau_id in chateaus {
-                let this_chateau_metadata = etcd
+                let etcd_data = etcd
                     .get(
                         format!("/aspen_assigned_chateaus/{}", chateau_id.clone()).as_str(),
                         None,
                     )
-                    .await
+                    .await;
+
+                if let Ok(etcd_data) = etcd_data {
+                    let this_chateau_metadata = bincode::deserialize::<ChateauMetadataEtcd>(
+                        etcd_data.kvs().first().unwrap().value(),
+                    )
                     .unwrap();
 
-                chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
+                    chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
+                }
             }
 
             let chateau_metadata = chateau_metadata;
+
+        
 
             match calendar_structure {
                 Err(err) => HttpResponse::InternalServerError().body("CANNOT FIND CALENDARS"),
@@ -533,9 +596,10 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                     let seek_backward_number_secs = chrono::TimeDelta::new(3600 * 2, 0).unwrap();
                     let seek_forward_number_secs = chrono::TimeDelta::new(3600 * 12, 0).unwrap();
 
+                    let mut temp_answer = HashMap::new();
+
                     for (chateau_id, calendar_in_chateau) in calendar_structure.iter() {
-                        let mut valid_trips: Vec<ValidTripSet> = vec![];
-                        let mut valid_trip_ids: Vec<String> = vec![];
+                        let mut valid_trips: HashMap<String, Vec<ValidTripSet>> = HashMap::new();
                         let itinerary = itins_per_chateau.get(chateau_id).unwrap();
                         for trip in compressed_trips_table.get(chateau_id).unwrap() {
                             //extract protobuf of frequency and convert to gtfs_structures::Frequency
@@ -549,83 +613,123 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
 
                             let freq_converted = frequency.map(|x| protobuf_to_frequencies(&x));
 
-                            let this_itin_list = itinerary_table.get(&(trip.chateau.clone(), trip.itinerary_pattern_id.clone())).unwrap();
+                            let this_itin_list = itinerary_table
+                                .get(&(trip.chateau.clone(), trip.itinerary_pattern_id.clone()))
+                                .unwrap();
 
-                            let itin_ref: ItineraryPatternRowNearbyLookup = this_itin_list[0].clone();
+                            let itin_ref: ItineraryPatternRowNearbyLookup =
+                                this_itin_list[0].clone();
 
                             let time_since_start = match itin_ref.departure_time_since_start {
                                 Some(departure_time_since_start) => departure_time_since_start,
-                                None=> match itin_ref.arrival_time_since_start {
+                                None => match itin_ref.arrival_time_since_start {
                                     Some(arrival) => arrival,
-                                    None => itin_ref.interpolated_time_since_start.unwrap_or(0)
-                                }
+                                    None => itin_ref.interpolated_time_since_start.unwrap_or(0),
+                                },
                             };
 
                             let t_to_find_schedule_for = catenary::TripToFindScheduleFor {
                                 trip_id: trip.trip_id.clone(),
                                 chateau: chateau_id.clone(),
-                                timezone: chrono_tz::Tz::from_str(itin_ref.timezone.as_str()).unwrap(),
-                                time_since_start_of_service_date: chrono::TimeDelta::new(time_since_start.into(), 0).unwrap(),
+                                timezone: chrono_tz::Tz::from_str(itin_ref.timezone.as_str())
+                                    .unwrap(),
+                                time_since_start_of_service_date: chrono::TimeDelta::new(
+                                    time_since_start.into(),
+                                    0,
+                                )
+                                .unwrap(),
                                 frequency: freq_converted.clone(),
                                 itinerary_id: itin_ref.itinerary_pattern_id.clone(),
-                                direction_id: itin_ref.direction_pattern_id.clone()
+                                direction_id: itin_ref.direction_pattern_id.clone(),
                             };
 
                             let service = calendar_in_chateau.get(&trip.service_id);
 
                             if let Some(service) = service {
                                 let dates = catenary::find_service_ranges(
-                                    service, &t_to_find_schedule_for,
+                                    service,
+                                    &t_to_find_schedule_for,
                                     departure_time_chrono,
-                                    seek_back, seek_forward
+                                    seek_back,
+                                    seek_forward,
                                 );
 
                                 if !dates.is_empty() {
                                     for date in dates {
-                                        valid_trips.push(ValidTripSet {
+                                        let t = ValidTripSet {
                                             chateau_id: chateau_id.clone(),
                                             trip_id: trip.trip_id.clone(),
                                             frequencies: freq_converted.clone(),
                                             trip_service_date: date.0,
                                             itinerary_options: this_itin_list.clone(),
                                             reference_start_of_service_date: date.1,
-                                            itinerary_pattern_id: itin_ref.itinerary_pattern_id.clone(),
-                                            direction_pattern_id: itin_ref.direction_pattern_id.clone()
-                                        });   
+                                            itinerary_pattern_id: itin_ref
+                                                .itinerary_pattern_id
+                                                .clone(),
+                                            direction_pattern_id: itin_ref
+                                                .direction_pattern_id
+                                                .clone(),
+                                            route_id: itin_ref.route_id.clone()
+                                        };
+
+                                        match valid_trips.entry(trip.trip_id.clone()) {
+                                            Entry::Occupied(mut oe) => {
+                                                oe.get_mut().push(t);
+                                            }
+                                            Entry::Vacant(mut ve) => {
+                                                ve.insert(vec![t]);
+                                            }
+                                        }
                                     }
-                                    
-                                valid_trip_ids.push(trip.trip_id.clone());
                                 }
                             }
-                        } 
+                        }
 
                         // Hydrate into realtime data
 
                         //1. connect with tarpc server
 
-                        let socket_addr = std::net::SocketAddr::new(
-                            chateau_metadata.get(chateau_id).unwrap().ip.0,
-                            chateau_metadata.get(chateau_id).unwrap().ip.1,
-                        );
+                        let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
+                            Some(chateau_metadata_for_c) => {
+                                let socket_addr = std::net::SocketAddr::new(
+                                    chateau_metadata_for_c.ip.0,
+                                    chateau_metadata_for_c.ip.1,
+                                );
 
-                        let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
-                            .await
-                            .unwrap();
+                                let aspen_client =
+                                    catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
+                                        .await;
 
-                        let gtfs_trip_aspenised = aspen_client
-                            .get_all_trips_with_ids(
-                                tarpc::context::current(),
-                                chateau_id.clone(),
-                                valid_trip_ids.clone(),
-                            )
-                            .await
-                            .unwrap();
-                        
-                        
+                                match aspen_client {
+                                    Ok(aspen_client) => {
+                                        let gtfs_trip_aspenised = aspen_client
+                                            .get_all_trips_with_ids(
+                                                tarpc::context::current(),
+                                                chateau_id.clone(),
+                                                valid_trips.keys().cloned().collect::<Vec<String>>(),
+                                            )
+                                            .await
+                                            .unwrap();
 
+                                        Some(gtfs_trip_aspenised)
+                                    }
+                                    Err(err) => None,
+                                }
+                            }
+                            None => None,
+                        }
+                        .flatten();
+
+                        //sort through each time response
+
+                        temp_answer.insert(chateau_id.clone(), valid_trips);
+
+                       // for (trip_id, trip_grouping) in valid_trips {
+                       //     
+                       // }
                     }
 
-                    HttpResponse::InternalServerError().body("TODO")
+                    HttpResponse::Ok().json(temp_answer)
                 }
             }
         }
