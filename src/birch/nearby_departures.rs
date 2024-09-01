@@ -403,7 +403,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
         Ok(seek_for_itineraries) => {
             println!("Finished getting itineraries in {:?}", itineraries_timer.elapsed());
 
-            println!("Itins: {:#?}", seek_for_itineraries);
+           // println!("Itins: {:#?}", seek_for_itineraries);
 
             let mut itins_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
 
@@ -699,6 +699,8 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                             }
                                         }
                                     }
+                                } else {
+                                    println!("Can't find any dates for {:?} : {:?}", trip, itin_ref);
                                 }
                             }
                         }

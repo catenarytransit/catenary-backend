@@ -74,7 +74,7 @@ pub struct ItineraryPatternMeta {
     pub direction_pattern_id: Option<String>,
 }
 
-#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize)]
+#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize, Debug)]
 #[diesel(table_name = crate::schema::gtfs::trips_compressed)]
 pub struct CompressedTrip {
     pub onestop_feed_id: String,
