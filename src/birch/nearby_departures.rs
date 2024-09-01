@@ -272,26 +272,25 @@ pub async fn nearby_from_coords(
     //   let where_query_for_directions = format!("ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
     //  query.lon, query.lat, spatial_resolution_in_degs);
 
+    let new_spatial_resolution_in_degs = make_degree_length_as_distance_from_point(
+        &input_point,
+        rail_and_other_distance_limit as f64,
+    );
+
     let directions_fetch_query = sql_query(
-        "
+        format!("
     SELECT * FROM gtfs.direction_pattern JOIN 
     gtfs.stops ON direction_pattern.chateau = stops.chateau
      AND direction_pattern.stop_id = stops.gtfs_id 
      AND direction_pattern.attempt_id = stops.attempt_id
       WHERE ST_DWithin(gtfs.stops.point, 
-      'SRID=4326;POINT(? ?)', ?) 
+      'SRID=4326;POINT({} {})', {}) 
       AND allowed_spatial_query = TRUE;
-    ",
+    ", query.lon, query.lat, new_spatial_resolution_in_degs),
     );
 
     let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> =
         directions_fetch_query
-            .bind::<diesel::sql_types::Double, _>(query.lon)
-            .bind::<diesel::sql_types::Double, _>(query.lat)
-            .bind::<diesel::sql_types::Double, _>(make_degree_length_as_distance_from_point(
-                &input_point,
-                rail_and_other_distance_limit as f64,
-            ))
             .get_results(conn)
             .await;
 
