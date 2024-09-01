@@ -480,7 +480,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                             .collect::<BTreeSet<String>>();
 
                         services_to_lookup_table.insert(chateau.clone(), service_ids);
-                        compressed_trips_table.insert(chateau, compressed_trip_group);
+                        compressed_trips_table.insert(chateau.clone(), compressed_trip_group);
                         routes_to_lookup_table.insert(chateau, route_ids);
                     }
                     Err(err) => {
