@@ -106,7 +106,7 @@ pub struct ValidTripSet {
     pub reference_start_of_service_date: chrono::DateTime<chrono_tz::Tz>,
     pub itinerary_pattern_id: String,
     pub direction_pattern_id: String,
-    pub route_id: String
+    pub route_id: String,
 }
 
 // final datastructure ideas?
@@ -277,8 +277,8 @@ pub async fn nearby_from_coords(
         rail_and_other_distance_limit as f64,
     );
 
-    let directions_fetch_query = sql_query(
-        format!("
+    let directions_fetch_query = sql_query(format!(
+        "
     SELECT * FROM gtfs.direction_pattern JOIN 
     gtfs.stops ON direction_pattern.chateau = stops.chateau
      AND direction_pattern.stop_id = stops.gtfs_id 
@@ -286,13 +286,12 @@ pub async fn nearby_from_coords(
       WHERE ST_DWithin(gtfs.stops.point, 
       'SRID=4326;POINT({} {})', {}) 
       AND allowed_spatial_query = TRUE;
-    ", query.lon, query.lat, new_spatial_resolution_in_degs),
-    );
+    ",
+        query.lon, query.lat, new_spatial_resolution_in_degs
+    ));
 
     let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> =
-        directions_fetch_query
-            .get_results(conn)
-            .await;
+        directions_fetch_query.get_results(conn).await;
 
     let directions_rows = directions_fetch_sql.unwrap();
 
@@ -585,8 +584,6 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
 
             let chateau_metadata = chateau_metadata;
 
-        
-
             match calendar_structure {
                 Err(err) => HttpResponse::InternalServerError().body("CANNOT FIND CALENDARS"),
                 Ok(calendar_structure) => {
@@ -668,7 +665,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                             direction_pattern_id: itin_ref
                                                 .direction_pattern_id
                                                 .clone(),
-                                            route_id: itin_ref.route_id.clone()
+                                            route_id: itin_ref.route_id.clone(),
                                         };
 
                                         match valid_trips.entry(trip.trip_id.clone()) {
@@ -705,7 +702,10 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                             .get_all_trips_with_ids(
                                                 tarpc::context::current(),
                                                 chateau_id.clone(),
-                                                valid_trips.keys().cloned().collect::<Vec<String>>(),
+                                                valid_trips
+                                                    .keys()
+                                                    .cloned()
+                                                    .collect::<Vec<String>>(),
                                             )
                                             .await
                                             .unwrap();
@@ -723,9 +723,9 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
 
                         temp_answer.insert(chateau_id.clone(), valid_trips);
 
-                       // for (trip_id, trip_grouping) in valid_trips {
-                       //     
-                       // }
+                        // for (trip_id, trip_grouping) in valid_trips {
+                        //
+                        // }
                     }
 
                     HttpResponse::Ok().json(temp_answer)
