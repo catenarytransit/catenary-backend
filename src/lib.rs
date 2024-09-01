@@ -707,12 +707,14 @@ pub fn contains_rail_or_metro_lines(gtfs: &gtfs_structures::Gtfs) -> bool {
     answer
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GeneralCalendar {
     pub days: Vec<chrono::Weekday>,
     pub start_date: chrono::NaiveDate,
     pub end_date: chrono::NaiveDate,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CalendarUnified {
     pub id: String,
     pub general_calendar: Option<GeneralCalendar>,
@@ -859,4 +861,36 @@ fn datetime_in_service(service: &CalendarUnified, input_date: chrono::NaiveDate)
     }
 
     answer
+}
+
+#[cfg(test)]
+mod test_calendar {
+    use super::*;
+
+    #[test]
+    fn test_date() {
+        let calendar = CalendarUnified {
+            id: "a".to_string(),
+            general_calendar: Some(GeneralCalendar {
+                days: vec![chrono::Weekday::Mon],
+                start_date: NaiveDate::from_ymd(2024, 8, 1),
+                end_date: NaiveDate::from_ymd(2024, 8, 31),
+            }),
+            exceptions: None,
+        };
+
+        let date = NaiveDate::from_ymd(2024, 8, 26);
+
+        assert!(datetime_in_service(&calendar, date));
+
+        let trip_instance = TripToFindScheduleFor {
+            trip_id: "11499201".to_string(),
+            chateau: "orangecountytransportationauthority".to_string(),
+            timezone: chrono_tz::Tz::UTC,
+            time_since_start_of_service_date: chrono::Duration::zero(),
+            frequency: None,
+            itinerary_id: "9936372064990961207".to_string(),
+            direction_id: "0".to_string(),
+        };
+    }
 }

@@ -292,7 +292,10 @@ pub async fn nearby_from_coords(
         query.lon, query.lat, new_spatial_resolution_in_degs
     ));
 
-    println!("Finished getting direction-stops in {:?}", end_stops_duration);
+    println!(
+        "Finished getting direction-stops in {:?}",
+        end_stops_duration
+    );
 
     let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> =
         directions_fetch_query.get_results(conn).await;
@@ -369,7 +372,7 @@ pub async fn nearby_from_coords(
             .join(",")
     );
 
-    let itineraries_timer  = Instant::now();
+    let itineraries_timer = Instant::now();
 
     let seek_for_itineraries: Result<Vec<ItineraryPatternRowNearbyLookup>, diesel::result::Error> = diesel::sql_query(
             format!(
@@ -401,9 +404,12 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
     match seek_for_itineraries {
         Err(err) => HttpResponse::InternalServerError().body(format!("{:#?}", err)),
         Ok(seek_for_itineraries) => {
-            println!("Finished getting itineraries in {:?}", itineraries_timer.elapsed());
+            println!(
+                "Finished getting itineraries in {:?}",
+                itineraries_timer.elapsed()
+            );
 
-           // println!("Itins: {:#?}", seek_for_itineraries);
+            // println!("Itins: {:#?}", seek_for_itineraries);
 
             let mut itins_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
 
@@ -463,8 +469,6 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
             let mut routes_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
 
             for trip_group in trip_lookup_queries_to_perform {
-
-
                 match trip_group {
                     Ok(compressed_trip_group) => {
                         let chateau = compressed_trip_group[0].chateau.to_string();
@@ -555,7 +559,10 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                 .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Route>>>>(),
             );
 
-            println!("Finished getting calendar, routes, and calendar dates, took {:?}", calendar_timer.elapsed());
+            println!(
+                "Finished getting calendar, routes, and calendar dates, took {:?}",
+                calendar_timer.elapsed()
+            );
 
             let calendar_structure = make_calendar_structure_from_pg(
                 services_calendar_lookup_queries_to_perform,
@@ -700,7 +707,11 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                         }
                                     }
                                 } else {
-                                    println!("Can't find any dates for {:?} : {:?}", trip, itin_ref);
+                                    println!(
+                                        "Can't find any dates for service {:#?} and trip {:?} : {:?}",
+                                        service,
+                                        trip, itin_ref
+                                    );
                                 }
                             }
                         }
