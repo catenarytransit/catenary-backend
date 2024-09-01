@@ -797,7 +797,7 @@ fn make_calendar_structure_from_pg(
                     general_calendar: Some(catenary::GeneralCalendar {
                         days: make_weekdays(&calendar),
                         start_date: calendar.gtfs_start_date,
-                        end_date: calendar.gtfs_start_date,
+                        end_date: calendar.gtfs_end_date,
                     }),
                     exceptions: None,
                 },
