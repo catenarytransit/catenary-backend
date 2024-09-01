@@ -402,6 +402,9 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
         Err(err) => HttpResponse::InternalServerError().body(format!("{:#?}", err)),
         Ok(seek_for_itineraries) => {
             println!("Finished getting itineraries in {:?}", itineraries_timer.elapsed());
+
+            println!("Itins: {:#?}", seek_for_itineraries);
+
             let mut itins_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
 
             let mut itinerary_table: HashMap<
@@ -460,6 +463,8 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
             let mut routes_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
 
             for trip_group in trip_lookup_queries_to_perform {
+
+
                 match trip_group {
                     Ok(compressed_trip_group) => {
                         let chateau = compressed_trip_group[0].chateau.to_string();
@@ -476,6 +481,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
 
                         services_to_lookup_table.insert(chateau.clone(), service_ids);
                         compressed_trips_table.insert(chateau, compressed_trip_group);
+                        routes_to_lookup_table.insert(chateau, route_ids);
                     }
                     Err(err) => {
                         return HttpResponse::InternalServerError().body(format!("{:#?}", err));
