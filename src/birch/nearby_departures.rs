@@ -112,6 +112,7 @@ pub struct ValidTripSet {
     pub direction_pattern_id: String,
     pub route_id: String,
     pub timezone: Option<chrono_tz::Tz>,
+    pub trip_start_time: u32,
 }
 
 // final datastructure ideas?
@@ -720,6 +721,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                                 .direction_pattern_id
                                                 .clone(),
                                             route_id: itin_ref.route_id.clone(),
+                                            trip_start_time: trip.start_time,
                                         };
 
                                         match valid_trips.entry(trip.trip_id.clone()) {
@@ -843,19 +845,21 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                         .departure_time_since_start
                                     {
                                         Some(departure_time_since_start) => {
-                                            Some(departure_time + departure_time_since_start as u64)
+                                            Some(trip.reference_start_of_service_date.timestamp() as u64 + trip.trip_start_time as u64 + departure_time_since_start as u64)
                                         }
-                                        None => match trip.itinerary_options[0]
-                                            .arrival_time_since_start
+                                        None => match trip.itinerary_options[0].arrival_time_since_start
                                         {
-                                            Some(arrival) => Some(departure_time + arrival as u64),
-                                            None => Some(
-                                                departure_time
-                                                    + trip.itinerary_options[0]
-                                                        .interpolated_time_since_start
-                                                        .unwrap_or(0)
-                                                        as u64,
-                                            ),
+                                            Some(arrival) => {
+                                                Some(trip.reference_start_of_service_date.timestamp() as u64 + trip.trip_start_time as u64 + arrival as u64)
+                                            }
+                                            None => match trip.itinerary_options[0]
+                                                .interpolated_time_since_start
+                                            {
+                                                Some(interpolated) => {
+                                                    Some(trip.reference_start_of_service_date.timestamp() as u64 + trip.trip_start_time as u64 + interpolated as u64)
+                                                }
+                                                None => None,
+                                            },
                                         },
                                     },
                                     is_interpolated: trip.itinerary_options[0]
