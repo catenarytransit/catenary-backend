@@ -75,7 +75,7 @@ pub struct DepartingTrip {
     pub arrival_schedule: Option<u64>,
     pub arrival_realtime: Option<u64>,
     pub stop_id: String,
-    pub trip_short_name: String,
+    pub trip_short_name: Option<String>,
     pub tz: String,
     pub is_interpolated: bool,
 }
@@ -113,6 +113,7 @@ pub struct ValidTripSet {
     pub route_id: String,
     pub timezone: Option<chrono_tz::Tz>,
     pub trip_start_time: u32,
+    pub trip_short_name: Option<String>
 }
 
 // final datastructure ideas?
@@ -722,6 +723,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                                 .clone(),
                                             route_id: itin_ref.route_id.clone(),
                                             trip_start_time: trip.start_time,
+                                            trip_short_name: trip.trip_short_name.clone()
                                         };
 
                                         match valid_trips.entry(trip.trip_id.clone()) {
@@ -835,10 +837,7 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                                     arrival_schedule: None,
                                     arrival_realtime: None,
                                     stop_id: trip.itinerary_options[0].stop_id.clone(),
-                                    trip_short_name: trip.itinerary_options[0]
-                                        .trip_headsign
-                                        .clone()
-                                        .unwrap_or("".to_string()),
+                                    trip_short_name: trip.trip_short_name.clone(),
                                     tz: trip.timezone.as_ref().unwrap().name().to_string(),
                                     is_frequency: trip.frequencies.is_some(),
                                     departure_schedule: match trip.itinerary_options[0]
