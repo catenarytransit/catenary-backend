@@ -14,7 +14,6 @@ use actix_web::Responder;
 use ahash::AHashMap;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenisedTripUpdate;
-use catenary::aspen_dataset::AspenisedTripUpdate;
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
 use catenary::make_weekdays;
 use catenary::maple_syrup::DirectionPattern;
