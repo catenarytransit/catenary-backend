@@ -114,7 +114,7 @@ pub struct ValidTripSet {
     pub route_id: String,
     pub timezone: Option<chrono_tz::Tz>,
     pub trip_start_time: u32,
-    pub trip_short_name: Option<String>
+    pub trip_short_name: Option<String>,
 }
 
 // final datastructure ideas?
@@ -404,7 +404,7 @@ pub async fn nearby_from_coords(
             .collect::<Vec<String>>()
             .join(",")
     );*/
-    
+
     println!("Starting to search for itineraries");
 
     let itineraries_timer = Instant::now();
@@ -448,157 +448,155 @@ pub async fn nearby_from_coords(
         }
     )).buffer_unordered(8).collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternRowNearbyLookup>>>>().await;
 
+    println!(
+        "Finished getting itineraries in {:?}",
+        itineraries_timer.elapsed()
+    );
 
-            println!(
-                "Finished getting itineraries in {:?}",
-                itineraries_timer.elapsed()
-            );
+    // println!("Itins: {:#?}", seek_for_itineraries);
 
-            // println!("Itins: {:#?}", seek_for_itineraries);
+    let mut itins_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
 
-            let mut itins_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut itinerary_table: HashMap<(String, String), Vec<ItineraryPatternRowNearbyLookup>> =
+        HashMap::new();
 
-            let mut itinerary_table: HashMap<
-                (String, String),
-                Vec<ItineraryPatternRowNearbyLookup>,
-            > = HashMap::new();
-
-            for seek_for_itineraries in seek_for_itineraries_list {
-                match seek_for_itineraries {
-                    Ok(itineraries) => {
-                        for itinerary in itineraries {
-                            match itins_per_chateau.entry(itinerary.chateau.clone()) {
-                                Entry::Occupied(mut oe) => {
-                                    oe.get_mut().insert(itinerary.itinerary_pattern_id.clone());
-                                }
-                                Entry::Vacant(mut ve) => {
-                                    ve.insert(HashSet::from_iter([itinerary.itinerary_pattern_id.clone()]));
-                                }
-                            }
-
-                            match itinerary_table.entry((
-                                itinerary.chateau.clone(),
-                                itinerary.itinerary_pattern_id.clone(),
-                            )) {
-                                Entry::Occupied(mut oe) => {
-                                    oe.get_mut().push(itinerary);
-                                }
-                                Entry::Vacant(mut ve) => {
-                                    ve.insert(vec![itinerary]);
-                                }
-                            }
+    for seek_for_itineraries in seek_for_itineraries_list {
+        match seek_for_itineraries {
+            Ok(itineraries) => {
+                for itinerary in itineraries {
+                    match itins_per_chateau.entry(itinerary.chateau.clone()) {
+                        Entry::Occupied(mut oe) => {
+                            oe.get_mut().insert(itinerary.itinerary_pattern_id.clone());
+                        }
+                        Entry::Vacant(mut ve) => {
+                            ve.insert(HashSet::from_iter([itinerary.itinerary_pattern_id.clone()]));
                         }
                     }
-                    Err(err) => {
-                        return HttpResponse::InternalServerError().body(format!("{:#?}", err));
+
+                    match itinerary_table.entry((
+                        itinerary.chateau.clone(),
+                        itinerary.itinerary_pattern_id.clone(),
+                    )) {
+                        Entry::Occupied(mut oe) => {
+                            oe.get_mut().push(itinerary);
+                        }
+                        Entry::Vacant(mut ve) => {
+                            ve.insert(vec![itinerary]);
+                        }
                     }
                 }
             }
+            Err(err) => {
+                return HttpResponse::InternalServerError().body(format!("{:#?}", err));
+            }
+        }
+    }
 
-            println!("Looking up trips");
-            let timer_trips = Instant::now();
+    println!("Looking up trips");
+    let timer_trips = Instant::now();
 
-            let trip_lookup_queries_to_perform =
-                futures::stream::iter(itins_per_chateau.iter().map(|(chateau, set_of_itin)| {
-                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                        .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau))
+    let trip_lookup_queries_to_perform =
+        futures::stream::iter(itins_per_chateau.iter().map(|(chateau, set_of_itin)| {
+            catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau))
+                .filter(
+                    catenary::schema::gtfs::trips_compressed::dsl::itinerary_pattern_id
+                        .eq_any(set_of_itin),
+                )
+                .select(catenary::models::CompressedTrip::as_select())
+                .load::<catenary::models::CompressedTrip>(conn)
+        }))
+        .buffer_unordered(8)
+        .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CompressedTrip>>>>()
+        .await;
+
+    println!("Finished looking up trips in {:?}", timer_trips.elapsed());
+
+    let mut compressed_trips_table = HashMap::new();
+
+    let mut services_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
+
+    let mut routes_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
+
+    for trip_group in trip_lookup_queries_to_perform {
+        match trip_group {
+            Ok(compressed_trip_group) => {
+                let chateau = compressed_trip_group[0].chateau.to_string();
+
+                let service_ids = compressed_trip_group
+                    .iter()
+                    .map(|x| x.service_id.clone())
+                    .collect::<BTreeSet<String>>();
+
+                let route_ids = compressed_trip_group
+                    .iter()
+                    .map(|x| x.route_id.clone())
+                    .collect::<BTreeSet<String>>();
+
+                services_to_lookup_table.insert(chateau.clone(), service_ids);
+                compressed_trips_table.insert(chateau.clone(), compressed_trip_group);
+                routes_to_lookup_table.insert(chateau, route_ids);
+            }
+            Err(err) => {
+                return HttpResponse::InternalServerError().body(format!("{:#?}", err));
+            }
+        }
+    }
+
+    let compressed_trips_table = compressed_trips_table;
+    let services_to_lookup_table = services_to_lookup_table;
+
+    let chateaus = services_to_lookup_table
+        .keys()
+        .cloned()
+        .collect::<Vec<String>>();
+
+    let conn2_pre = conn_pool.get().await;
+    let conn2 = &mut conn2_pre.unwrap();
+
+    let conn3_pre = conn_pool.get().await;
+    let conn3 = &mut conn3_pre.unwrap();
+
+    let calendar_timer = Instant::now();
+
+    let (
+        services_calendar_lookup_queries_to_perform,
+        services_calendar_dates_lookup_queries_to_perform,
+        routes_query,
+    ) =
+        tokio::join!(
+            futures::stream::iter(services_to_lookup_table.iter().map(
+                |(chateau, set_of_calendar)| {
+                    catenary::schema::gtfs::calendar::dsl::calendar
+                        .filter(catenary::schema::gtfs::calendar::dsl::chateau.eq(chateau))
                         .filter(
-                            catenary::schema::gtfs::trips_compressed::dsl::itinerary_pattern_id
-                                .eq_any(set_of_itin),
+                            catenary::schema::gtfs::calendar::dsl::service_id
+                                .eq_any(set_of_calendar),
                         )
-                        .select(catenary::models::CompressedTrip::as_select())
-                        .load::<catenary::models::CompressedTrip>(conn)
-                }))
-                .buffer_unordered(8)
-                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CompressedTrip>>>>()
-                .await;
-
-            println!("Finished looking up trips in {:?}", timer_trips.elapsed());
-
-            let mut compressed_trips_table = HashMap::new();
-
-            let mut services_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
-
-            let mut routes_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
-
-            for trip_group in trip_lookup_queries_to_perform {
-                match trip_group {
-                    Ok(compressed_trip_group) => {
-                        let chateau = compressed_trip_group[0].chateau.to_string();
-
-                        let service_ids = compressed_trip_group
-                            .iter()
-                            .map(|x| x.service_id.clone())
-                            .collect::<BTreeSet<String>>();
-
-                        let route_ids = compressed_trip_group
-                            .iter()
-                            .map(|x| x.route_id.clone())
-                            .collect::<BTreeSet<String>>();
-
-                        services_to_lookup_table.insert(chateau.clone(), service_ids);
-                        compressed_trips_table.insert(chateau.clone(), compressed_trip_group);
-                        routes_to_lookup_table.insert(chateau, route_ids);
-                    }
-                    Err(err) => {
-                        return HttpResponse::InternalServerError().body(format!("{:#?}", err));
-                    }
-                }
-            }
-
-            let compressed_trips_table = compressed_trips_table;
-            let services_to_lookup_table = services_to_lookup_table;
-
-            let chateaus = services_to_lookup_table
-                .keys()
-                .cloned()
-                .collect::<Vec<String>>();
-
-            let conn2_pre = conn_pool.get().await;
-            let conn2 = &mut conn2_pre.unwrap();
-
-            let conn3_pre = conn_pool.get().await;
-            let conn3 = &mut conn3_pre.unwrap();
-
-            let calendar_timer = Instant::now();
-
-            let (
-                services_calendar_lookup_queries_to_perform,
-                services_calendar_dates_lookup_queries_to_perform,
-                routes_query,
-            ) = tokio::join!(
-                futures::stream::iter(services_to_lookup_table.iter().map(
-                    |(chateau, set_of_calendar)| {
-                        catenary::schema::gtfs::calendar::dsl::calendar
-                            .filter(catenary::schema::gtfs::calendar::dsl::chateau.eq(chateau))
-                            .filter(
-                                catenary::schema::gtfs::calendar::dsl::service_id
-                                    .eq_any(set_of_calendar),
-                            )
-                            .select(catenary::models::Calendar::as_select())
-                            .load::<catenary::models::Calendar>(conn)
-                    },
-                ))
-                .buffer_unordered(8)
-                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Calendar>>>>(),
-                futures::stream::iter(services_to_lookup_table.iter().map(
-                    |(chateau, set_of_calendar)| {
-                        catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
-                            .filter(
-                                catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(chateau),
-                            )
-                            .filter(
-                                catenary::schema::gtfs::calendar_dates::dsl::service_id
-                                    .eq_any(set_of_calendar),
-                            )
-                            .select(catenary::models::CalendarDate::as_select())
-                            .load::<catenary::models::CalendarDate>(conn2)
-                    },
-                ))
-                .buffer_unordered(8)
-                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CalendarDate>>>>(),
-                futures::stream::iter(routes_to_lookup_table.iter().map(
-                    |(chateau, set_of_routes)| {
+                        .select(catenary::models::Calendar::as_select())
+                        .load::<catenary::models::Calendar>(conn)
+                },
+            ))
+            .buffer_unordered(8)
+            .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Calendar>>>>(),
+            futures::stream::iter(services_to_lookup_table.iter().map(
+                |(chateau, set_of_calendar)| {
+                    catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                        .filter(catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(chateau))
+                        .filter(
+                            catenary::schema::gtfs::calendar_dates::dsl::service_id
+                                .eq_any(set_of_calendar),
+                        )
+                        .select(catenary::models::CalendarDate::as_select())
+                        .load::<catenary::models::CalendarDate>(conn2)
+                },
+            ))
+            .buffer_unordered(8)
+            .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CalendarDate>>>>(),
+            futures::stream::iter(
+                routes_to_lookup_table
+                    .iter()
+                    .map(|(chateau, set_of_routes)| {
                         catenary::schema::gtfs::routes::dsl::routes
                             .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(chateau))
                             .filter(
@@ -606,357 +604,341 @@ pub async fn nearby_from_coords(
                             )
                             .select(catenary::models::Route::as_select())
                             .load::<catenary::models::Route>(conn3)
-                    }
-                ))
-                .buffer_unordered(8)
-                .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Route>>>>(),
-            );
-
-            println!(
-                "Finished getting calendar, routes, and calendar dates, took {:?}",
-                calendar_timer.elapsed()
-            );
-
-            let calendar_structure = make_calendar_structure_from_pg(
-                services_calendar_lookup_queries_to_perform,
-                services_calendar_dates_lookup_queries_to_perform,
-            );
-
-            let mut routes_table: HashMap<String, HashMap<String, catenary::models::Route>> =
-                HashMap::new();
-
-            for route_group in routes_query {
-                match route_group {
-                    Ok(route_group) => {
-                        let chateau = route_group[0].chateau.clone();
-
-                        let mut route_table = HashMap::new();
-
-                        for route in route_group {
-                            route_table.insert(route.route_id.clone(), route);
-                        }
-
-                        routes_table.insert(chateau, route_table);
-                    }
-                    Err(err) => {
-                        return HttpResponse::InternalServerError().body(format!("{:#?}", err));
-                    }
-                }
-            }
-
-            let mut chateau_metadata = HashMap::new();
-
-            for chateau_id in chateaus {
-                let etcd_data = etcd
-                    .get(
-                        format!("/aspen_assigned_chateaus/{}", chateau_id.clone()).as_str(),
-                        None,
-                    )
-                    .await;
-
-                if let Ok(etcd_data) = etcd_data {
-                    let this_chateau_metadata = bincode::deserialize::<ChateauMetadataEtcd>(
-                        etcd_data.kvs().first().unwrap().value(),
-                    )
-                    .unwrap();
-
-                    chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
-                }
-            }
-
-            let chateau_metadata = chateau_metadata;
-
-            match calendar_structure {
-                Err(err) => HttpResponse::InternalServerError().body("CANNOT FIND CALENDARS"),
-                Ok(calendar_structure) => {
-                    // iterate through all trips and produce a timezone and timeoffset.
-
-                    let mut stops_answer: HashMap<String, HashMap<String, StopOutput>> =
-                        HashMap::new();
-                    let mut departures: Vec<DepartureRouteGroup> = vec![];
-
-                    for (chateau_id, calendar_in_chateau) in calendar_structure.iter() {
-                        let mut directions_route_group_for_this_chateau: HashMap<
-                            String,
-                            DepartureRouteGroup,
-                        > = HashMap::new();
-
-                        let mut valid_trips: HashMap<String, Vec<ValidTripSet>> = HashMap::new();
-                        let itinerary = itins_per_chateau.get(chateau_id).unwrap();
-                        let routes = routes_table.get(chateau_id).unwrap();
-                        for trip in compressed_trips_table.get(chateau_id).unwrap() {
-                            //extract protobuf of frequency and convert to gtfs_structures::Frequency
-
-                            let frequency: Option<
-                                catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto,
-                            > = trip
-                                .frequencies
-                                .as_ref()
-                                .map(|data| prost::Message::decode(data.as_ref()).unwrap());
-
-                            let freq_converted = frequency.map(|x| protobuf_to_frequencies(&x));
-
-                            let this_itin_list = itinerary_table
-                                .get(&(trip.chateau.clone(), trip.itinerary_pattern_id.clone()))
-                                .unwrap();
-
-                            let itin_ref: ItineraryPatternRowNearbyLookup =
-                                this_itin_list[0].clone();
-
-                            let time_since_start = match itin_ref.departure_time_since_start {
-                                Some(departure_time_since_start) => departure_time_since_start,
-                                None => match itin_ref.arrival_time_since_start {
-                                    Some(arrival) => arrival,
-                                    None => itin_ref.interpolated_time_since_start.unwrap_or(0),
-                                },
-                            };
-
-                            let t_to_find_schedule_for = catenary::TripToFindScheduleFor {
-                                trip_id: trip.trip_id.clone(),
-                                chateau: chateau_id.clone(),
-                                timezone: chrono_tz::Tz::from_str(itin_ref.timezone.as_str())
-                                    .unwrap(),
-                                time_since_start_of_service_date: chrono::TimeDelta::new(
-                                    time_since_start.into(),
-                                    0,
-                                )
-                                .unwrap(),
-                                frequency: freq_converted.clone(),
-                                itinerary_id: itin_ref.itinerary_pattern_id.clone(),
-                                direction_id: itin_ref.direction_pattern_id.clone(),
-                            };
-
-                            let service = calendar_in_chateau.get(&trip.service_id);
-
-                            if let Some(service) = service {
-                                let dates = catenary::find_service_ranges(
-                                    service,
-                                    &t_to_find_schedule_for,
-                                    departure_time_chrono,
-                                    seek_back,
-                                    seek_forward,
-                                );
-
-                                if !dates.is_empty() {
-                                    for date in dates {
-                                        let t = ValidTripSet {
-                                            chateau_id: chateau_id.clone(),
-                                            trip_id: trip.trip_id.clone(),
-                                            timezone: chrono_tz::Tz::from_str(
-                                                itin_ref.timezone.as_str(),
-                                            )
-                                            .ok(),
-                                            frequencies: freq_converted.clone(),
-                                            trip_service_date: date.0,
-                                            itinerary_options: this_itin_list.clone(),
-                                            reference_start_of_service_date: date.1,
-                                            itinerary_pattern_id: itin_ref
-                                                .itinerary_pattern_id
-                                                .clone(),
-                                            direction_pattern_id: itin_ref
-                                                .direction_pattern_id
-                                                .clone(),
-                                            route_id: itin_ref.route_id.clone(),
-                                            trip_start_time: trip.start_time,
-                                            trip_short_name: trip.trip_short_name.clone()
-                                        };
-
-                                        match valid_trips.entry(trip.trip_id.clone()) {
-                                            Entry::Occupied(mut oe) => {
-                                                oe.get_mut().push(t);
-                                            }
-                                            Entry::Vacant(mut ve) => {
-                                                ve.insert(vec![t]);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Hydrate into realtime data
-
-                        //1. connect with tarpc server
-
-                        let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
-                            Some(chateau_metadata_for_c) => {
-                                let socket_addr = std::net::SocketAddr::new(
-                                    chateau_metadata_for_c.ip.0,
-                                    chateau_metadata_for_c.ip.1,
-                                );
-
-                                let aspen_client =
-                                    catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
-                                        .await;
-
-                                match aspen_client {
-                                    Ok(aspen_client) => {
-                                        let gtfs_trip_aspenised = aspen_client
-                                            .get_all_trips_with_ids(
-                                                tarpc::context::current(),
-                                                chateau_id.clone(),
-                                                valid_trips
-                                                    .keys()
-                                                    .cloned()
-                                                    .collect::<Vec<String>>(),
-                                            )
-                                            .await
-                                            .unwrap();
-
-                                        Some(gtfs_trip_aspenised)
-                                    }
-                                    Err(err) => None,
-                                }
-                            }
-                            None => None,
-                        }
-                        .flatten();
-
-                        //sort through each time response
-
-                        //  temp_answer.insert(chateau_id.clone(), valid_trips);
-
-                        for (trip_id, trip_grouping) in valid_trips {
-                            let route = routes.get(&trip_grouping[0].route_id).unwrap();
-
-                            if !directions_route_group_for_this_chateau
-                                .contains_key(&route.route_id)
-                            {
-                                directions_route_group_for_this_chateau.insert(
-                                    route.route_id.clone(),
-                                    DepartureRouteGroup {
-                                        chateau_id: chateau_id.clone(),
-                                        route_id: route.route_id.clone(),
-                                        color: route.color.clone(),
-                                        text_color: route.text_color.clone(),
-                                        short_name: route.short_name.clone(),
-                                        long_name: route.long_name.clone(),
-                                        route_type: route.route_type,
-                                        directions: HashMap::new(),
-                                        closest_distance: 100000.,
-                                    },
-                                );
-                            }
-
-                            let route_group = directions_route_group_for_this_chateau
-                                .get_mut(&route.route_id)
-                                .unwrap();
-
-                            if !route_group
-                                .directions
-                                .contains_key(trip_grouping[0].direction_pattern_id.as_str())
-                            {
-                                route_group.directions.insert(
-                                    trip_grouping[0].direction_pattern_id.clone(),
-                                    DepartingHeadsignGroup {
-                                        headsign: trip_grouping[0].itinerary_options[0]
-                                            .trip_headsign
-                                            .clone()
-                                            .unwrap_or("".to_string()),
-                                        direction_id: trip_grouping[0].direction_pattern_id.clone(),
-                                        trips: vec![],
-                                    },
-                                );
-                            }
-
-                            let headsign_group = route_group
-                                .directions
-                                .get_mut(trip_grouping[0].direction_pattern_id.as_str())
-                                .unwrap();
-
-                            for trip in trip_grouping {
-                                headsign_group.trips.push(DepartingTrip {
-                                    trip_id: trip.trip_id.clone(),
-                                    gtfs_schedule_start_day: trip.trip_service_date,
-                                    departure_realtime: None,
-                                    arrival_schedule: None,
-                                    arrival_realtime: None,
-                                    stop_id: trip.itinerary_options[0].stop_id.clone(),
-                                    trip_short_name: trip.trip_short_name.clone(),
-                                    tz: trip.timezone.as_ref().unwrap().name().to_string(),
-                                    is_frequency: trip.frequencies.is_some(),
-                                    departure_schedule: match trip.itinerary_options[0]
-                                        .departure_time_since_start
-                                    {
-                                        Some(departure_time_since_start) => {
-                                            Some(trip.reference_start_of_service_date.timestamp() as u64 + trip.trip_start_time as u64 + departure_time_since_start as u64)
-                                        }
-                                        None => match trip.itinerary_options[0].arrival_time_since_start
-                                        {
-                                            Some(arrival) => {
-                                                Some(trip.reference_start_of_service_date.timestamp() as u64 + trip.trip_start_time as u64 + arrival as u64)
-                                            }
-                                            None => match trip.itinerary_options[0]
-                                                .interpolated_time_since_start
-                                            {
-                                                Some(interpolated) => {
-                                                    Some(trip.reference_start_of_service_date.timestamp() as u64 + trip.trip_start_time as u64 + interpolated as u64)
-                                                }
-                                                None => None,
-                                            },
-                                        },
-                                    },
-                                    is_interpolated: trip.itinerary_options[0]
-                                        .interpolated_time_since_start
-                                        .is_some(),
-                                    gtfs_frequency_start_time: None,
-                                });
-                            }
-
-                            headsign_group.trips.sort_by_key(|x| x.departure_schedule.unwrap_or(0));
-
-                            let stop = stops_table
-                                .get(
-                                    &(chateau_id.clone(), headsign_group.trips[0].stop_id.clone())
-                                        .clone(),
-                                )
-                                .unwrap();
-
-                            if !stops_answer.contains_key(chateau_id) {
-                                stops_answer.insert(chateau_id.clone(), HashMap::new());
-                            }
-
-                            let stop_group = stops_answer.get_mut(chateau_id).unwrap();
-
-                            if !stop_group.contains_key(&headsign_group.trips[0].stop_id) {
-                                stop_group.insert(
-                                    headsign_group.trips[0].stop_id.clone(),
-                                    StopOutput {
-                                        gtfs_id: stop.0.gtfs_id.clone(),
-                                        name: stop.0.name.clone().unwrap_or("".to_string()),
-                                        lat: stop.0.point.as_ref().unwrap().x,
-                                        lon: stop.0.point.as_ref().unwrap().y,
-                                        timezone: stop.0.timezone.clone(),
-                                        url: stop.0.url.clone(),
-                                    },
-                                );
-                            }
-
-                            if stop.1 < route_group.closest_distance {
-                                route_group.closest_distance = stop.1;
-                            }
-                        }
-
-                        for (route_id, route_group) in directions_route_group_for_this_chateau {
-                            departures.push(route_group);
-                        }
-                    }
-
-                    departures.sort_by(|a, b| {
-                        a.closest_distance.partial_cmp(&b.closest_distance).unwrap()
-                    });
-
-                    HttpResponse::Ok().json(DepartingTripsDataAnswer {
-                        number_of_stops_searched_through: stops.len(),
-                        bus_limited_metres: bus_distance_limit as f64,
-                        rail_and_other_limited_metres: rail_and_other_distance_limit as f64,
-                        departures: departures,
-                        stop: stops_answer,
                     })
+            )
+            .buffer_unordered(8)
+            .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Route>>>>(),
+        );
+
+    println!(
+        "Finished getting calendar, routes, and calendar dates, took {:?}",
+        calendar_timer.elapsed()
+    );
+
+    let calendar_structure = make_calendar_structure_from_pg(
+        services_calendar_lookup_queries_to_perform,
+        services_calendar_dates_lookup_queries_to_perform,
+    );
+
+    let mut routes_table: HashMap<String, HashMap<String, catenary::models::Route>> =
+        HashMap::new();
+
+    for route_group in routes_query {
+        match route_group {
+            Ok(route_group) => {
+                let chateau = route_group[0].chateau.clone();
+
+                let mut route_table = HashMap::new();
+
+                for route in route_group {
+                    route_table.insert(route.route_id.clone(), route);
+                }
+
+                routes_table.insert(chateau, route_table);
+            }
+            Err(err) => {
+                return HttpResponse::InternalServerError().body(format!("{:#?}", err));
+            }
+        }
+    }
+
+    let mut chateau_metadata = HashMap::new();
+
+    for chateau_id in chateaus {
+        let etcd_data = etcd
+            .get(
+                format!("/aspen_assigned_chateaus/{}", chateau_id.clone()).as_str(),
+                None,
+            )
+            .await;
+
+        if let Ok(etcd_data) = etcd_data {
+            let this_chateau_metadata = bincode::deserialize::<ChateauMetadataEtcd>(
+                etcd_data.kvs().first().unwrap().value(),
+            )
+            .unwrap();
+
+            chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
+        }
+    }
+
+    let chateau_metadata = chateau_metadata;
+
+    match calendar_structure {
+        Err(err) => HttpResponse::InternalServerError().body("CANNOT FIND CALENDARS"),
+        Ok(calendar_structure) => {
+            // iterate through all trips and produce a timezone and timeoffset.
+
+            let mut stops_answer: HashMap<String, HashMap<String, StopOutput>> = HashMap::new();
+            let mut departures: Vec<DepartureRouteGroup> = vec![];
+
+            for (chateau_id, calendar_in_chateau) in calendar_structure.iter() {
+                let mut directions_route_group_for_this_chateau: HashMap<
+                    String,
+                    DepartureRouteGroup,
+                > = HashMap::new();
+
+                let mut valid_trips: HashMap<String, Vec<ValidTripSet>> = HashMap::new();
+                let itinerary = itins_per_chateau.get(chateau_id).unwrap();
+                let routes = routes_table.get(chateau_id).unwrap();
+                for trip in compressed_trips_table.get(chateau_id).unwrap() {
+                    //extract protobuf of frequency and convert to gtfs_structures::Frequency
+
+                    let frequency: Option<catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto> =
+                        trip.frequencies
+                            .as_ref()
+                            .map(|data| prost::Message::decode(data.as_ref()).unwrap());
+
+                    let freq_converted = frequency.map(|x| protobuf_to_frequencies(&x));
+
+                    let this_itin_list = itinerary_table
+                        .get(&(trip.chateau.clone(), trip.itinerary_pattern_id.clone()))
+                        .unwrap();
+
+                    let itin_ref: ItineraryPatternRowNearbyLookup = this_itin_list[0].clone();
+
+                    let time_since_start = match itin_ref.departure_time_since_start {
+                        Some(departure_time_since_start) => departure_time_since_start,
+                        None => match itin_ref.arrival_time_since_start {
+                            Some(arrival) => arrival,
+                            None => itin_ref.interpolated_time_since_start.unwrap_or(0),
+                        },
+                    };
+
+                    let t_to_find_schedule_for = catenary::TripToFindScheduleFor {
+                        trip_id: trip.trip_id.clone(),
+                        chateau: chateau_id.clone(),
+                        timezone: chrono_tz::Tz::from_str(itin_ref.timezone.as_str()).unwrap(),
+                        time_since_start_of_service_date: chrono::TimeDelta::new(
+                            time_since_start.into(),
+                            0,
+                        )
+                        .unwrap(),
+                        frequency: freq_converted.clone(),
+                        itinerary_id: itin_ref.itinerary_pattern_id.clone(),
+                        direction_id: itin_ref.direction_pattern_id.clone(),
+                    };
+
+                    let service = calendar_in_chateau.get(&trip.service_id);
+
+                    if let Some(service) = service {
+                        let dates = catenary::find_service_ranges(
+                            service,
+                            &t_to_find_schedule_for,
+                            departure_time_chrono,
+                            seek_back,
+                            seek_forward,
+                        );
+
+                        if !dates.is_empty() {
+                            for date in dates {
+                                let t = ValidTripSet {
+                                    chateau_id: chateau_id.clone(),
+                                    trip_id: trip.trip_id.clone(),
+                                    timezone: chrono_tz::Tz::from_str(itin_ref.timezone.as_str())
+                                        .ok(),
+                                    frequencies: freq_converted.clone(),
+                                    trip_service_date: date.0,
+                                    itinerary_options: this_itin_list.clone(),
+                                    reference_start_of_service_date: date.1,
+                                    itinerary_pattern_id: itin_ref.itinerary_pattern_id.clone(),
+                                    direction_pattern_id: itin_ref.direction_pattern_id.clone(),
+                                    route_id: itin_ref.route_id.clone(),
+                                    trip_start_time: trip.start_time,
+                                    trip_short_name: trip.trip_short_name.clone(),
+                                };
+
+                                match valid_trips.entry(trip.trip_id.clone()) {
+                                    Entry::Occupied(mut oe) => {
+                                        oe.get_mut().push(t);
+                                    }
+                                    Entry::Vacant(mut ve) => {
+                                        ve.insert(vec![t]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Hydrate into realtime data
+
+                //1. connect with tarpc server
+
+                let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
+                    Some(chateau_metadata_for_c) => {
+                        let socket_addr = std::net::SocketAddr::new(
+                            chateau_metadata_for_c.ip.0,
+                            chateau_metadata_for_c.ip.1,
+                        );
+
+                        let aspen_client =
+                            catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
+
+                        match aspen_client {
+                            Ok(aspen_client) => {
+                                let gtfs_trip_aspenised = aspen_client
+                                    .get_all_trips_with_ids(
+                                        tarpc::context::current(),
+                                        chateau_id.clone(),
+                                        valid_trips.keys().cloned().collect::<Vec<String>>(),
+                                    )
+                                    .await
+                                    .unwrap();
+
+                                Some(gtfs_trip_aspenised)
+                            }
+                            Err(err) => None,
+                        }
+                    }
+                    None => None,
+                }
+                .flatten();
+
+                //sort through each time response
+
+                //  temp_answer.insert(chateau_id.clone(), valid_trips);
+
+                for (trip_id, trip_grouping) in valid_trips {
+                    let route = routes.get(&trip_grouping[0].route_id).unwrap();
+
+                    if !directions_route_group_for_this_chateau.contains_key(&route.route_id) {
+                        directions_route_group_for_this_chateau.insert(
+                            route.route_id.clone(),
+                            DepartureRouteGroup {
+                                chateau_id: chateau_id.clone(),
+                                route_id: route.route_id.clone(),
+                                color: route.color.clone(),
+                                text_color: route.text_color.clone(),
+                                short_name: route.short_name.clone(),
+                                long_name: route.long_name.clone(),
+                                route_type: route.route_type,
+                                directions: HashMap::new(),
+                                closest_distance: 100000.,
+                            },
+                        );
+                    }
+
+                    let route_group = directions_route_group_for_this_chateau
+                        .get_mut(&route.route_id)
+                        .unwrap();
+
+                    if !route_group
+                        .directions
+                        .contains_key(trip_grouping[0].direction_pattern_id.as_str())
+                    {
+                        route_group.directions.insert(
+                            trip_grouping[0].direction_pattern_id.clone(),
+                            DepartingHeadsignGroup {
+                                headsign: trip_grouping[0].itinerary_options[0]
+                                    .trip_headsign
+                                    .clone()
+                                    .unwrap_or("".to_string()),
+                                direction_id: trip_grouping[0].direction_pattern_id.clone(),
+                                trips: vec![],
+                            },
+                        );
+                    }
+
+                    let headsign_group = route_group
+                        .directions
+                        .get_mut(trip_grouping[0].direction_pattern_id.as_str())
+                        .unwrap();
+
+                    for trip in trip_grouping {
+                        headsign_group.trips.push(DepartingTrip {
+                            trip_id: trip.trip_id.clone(),
+                            gtfs_schedule_start_day: trip.trip_service_date,
+                            departure_realtime: None,
+                            arrival_schedule: None,
+                            arrival_realtime: None,
+                            stop_id: trip.itinerary_options[0].stop_id.clone(),
+                            trip_short_name: trip.trip_short_name.clone(),
+                            tz: trip.timezone.as_ref().unwrap().name().to_string(),
+                            is_frequency: trip.frequencies.is_some(),
+                            departure_schedule: match trip.itinerary_options[0]
+                                .departure_time_since_start
+                            {
+                                Some(departure_time_since_start) => Some(
+                                    trip.reference_start_of_service_date.timestamp() as u64
+                                        + trip.trip_start_time as u64
+                                        + departure_time_since_start as u64,
+                                ),
+                                None => match trip.itinerary_options[0].arrival_time_since_start {
+                                    Some(arrival) => Some(
+                                        trip.reference_start_of_service_date.timestamp() as u64
+                                            + trip.trip_start_time as u64
+                                            + arrival as u64,
+                                    ),
+                                    None => match trip.itinerary_options[0]
+                                        .interpolated_time_since_start
+                                    {
+                                        Some(interpolated) => Some(
+                                            trip.reference_start_of_service_date.timestamp() as u64
+                                                + trip.trip_start_time as u64
+                                                + interpolated as u64,
+                                        ),
+                                        None => None,
+                                    },
+                                },
+                            },
+                            is_interpolated: trip.itinerary_options[0]
+                                .interpolated_time_since_start
+                                .is_some(),
+                            gtfs_frequency_start_time: None,
+                        });
+                    }
+
+                    headsign_group
+                        .trips
+                        .sort_by_key(|x| x.departure_schedule.unwrap_or(0));
+
+                    let stop = stops_table
+                        .get(&(chateau_id.clone(), headsign_group.trips[0].stop_id.clone()).clone())
+                        .unwrap();
+
+                    if !stops_answer.contains_key(chateau_id) {
+                        stops_answer.insert(chateau_id.clone(), HashMap::new());
+                    }
+
+                    let stop_group = stops_answer.get_mut(chateau_id).unwrap();
+
+                    if !stop_group.contains_key(&headsign_group.trips[0].stop_id) {
+                        stop_group.insert(
+                            headsign_group.trips[0].stop_id.clone(),
+                            StopOutput {
+                                gtfs_id: stop.0.gtfs_id.clone(),
+                                name: stop.0.name.clone().unwrap_or("".to_string()),
+                                lat: stop.0.point.as_ref().unwrap().x,
+                                lon: stop.0.point.as_ref().unwrap().y,
+                                timezone: stop.0.timezone.clone(),
+                                url: stop.0.url.clone(),
+                            },
+                        );
+                    }
+
+                    if stop.1 < route_group.closest_distance {
+                        route_group.closest_distance = stop.1;
+                    }
+                }
+
+                for (route_id, route_group) in directions_route_group_for_this_chateau {
+                    departures.push(route_group);
                 }
             }
-        
+
+            departures.sort_by(|a, b| a.closest_distance.partial_cmp(&b.closest_distance).unwrap());
+
+            HttpResponse::Ok().json(DepartingTripsDataAnswer {
+                number_of_stops_searched_through: stops.len(),
+                bus_limited_metres: bus_distance_limit as f64,
+                rail_and_other_limited_metres: rail_and_other_distance_limit as f64,
+                departures: departures,
+                stop: stops_answer,
+            })
+        }
     }
+}
 
 fn make_calendar_structure_from_pg(
     services_calendar_lookup_queries_to_perform: Vec<
