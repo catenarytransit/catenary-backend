@@ -79,6 +79,7 @@ pub struct DepartingTrip {
     pub trip_short_name: Option<String>,
     pub tz: String,
     pub is_interpolated: bool,
+    pub cancelled: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -848,11 +849,69 @@ pub async fn nearby_from_coords(
                         .get_mut(trip_grouping[0].direction_pattern_id.as_str())
                         .unwrap();
 
+                    let mut already_used_trip_update_id: ahash::AHashSet<String> =
+                        ahash::AHashSet::new();
+
                     for trip in trip_grouping {
+                        let mut is_cancelled: bool = false;
+
+                        let mut departure_time_rt: Option<u64> = None;
+
+                        if let Some(gtfs_trip_aspenised) = gtfs_trips_aspenised.as_ref() {
+                            if let Some(trip_update_ids) = gtfs_trip_aspenised
+                                .trip_id_to_trip_update_ids
+                                .get(&trip.trip_id)
+                            {
+                                if !trip_update_ids.is_empty() {
+                                    // let trip_update_id = trip_rt[0].clone();
+
+                                    if trip_update_ids.len() == 1 && trip_update_ids.len() == 1 {
+                                        already_used_trip_update_id
+                                            .insert(trip_update_ids[0].clone());
+
+                                        let trip_rt = gtfs_trip_aspenised
+                                            .trip_updates
+                                            .get(&trip_update_ids[0])
+                                            .unwrap();
+
+                                        if trip_rt.trip.schedule_relationship == Some(3) {
+                                            is_cancelled = true;
+                                        } else {
+                                            let relevant_stop_time_update =
+                                                trip_rt.stop_time_update.iter()
+                                                .find(|x| {
+                                                    x.stop_id.as_ref() == Some(&trip.itinerary_options[0].stop_id)
+                                                });
+
+                                            if let Some(relevant_stop_time_update) =
+                                                relevant_stop_time_update
+                                            {
+                                                if let Some(departure) =
+                                                    &relevant_stop_time_update.departure
+                                                {
+                                                    if let Some(time) = departure.time {
+                                                        departure_time_rt = Some(time as u64);
+                                                    }
+                                                } else {
+                                                    if let Some(arrival) =
+                                                        &relevant_stop_time_update.arrival
+                                                    {
+                                                       if let Some(time) = arrival.time {
+                                                            departure_time_rt = Some(time as u64);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         headsign_group.trips.push(DepartingTrip {
                             trip_id: trip.trip_id.clone(),
                             gtfs_schedule_start_day: trip.trip_service_date,
-                            departure_realtime: None,
+                            departure_realtime: departure_time_rt,
                             arrival_schedule: None,
                             arrival_realtime: None,
                             stop_id: trip.itinerary_options[0].stop_id.clone(),
@@ -889,6 +948,7 @@ pub async fn nearby_from_coords(
                                 .interpolated_time_since_start
                                 .is_some(),
                             gtfs_frequency_start_time: None,
+                            cancelled: is_cancelled,
                         });
                     }
 
