@@ -14,6 +14,7 @@ use actix_web::Responder;
 use ahash::AHashMap;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenisedTripUpdate;
+use catenary::aspen_dataset::AspenisedTripUpdate;
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
 use catenary::make_weekdays;
 use catenary::maple_syrup::DirectionPattern;
@@ -852,6 +853,8 @@ pub async fn nearby_from_coords(
                     let mut already_used_trip_update_id: ahash::AHashSet<String> =
                         ahash::AHashSet::new();
 
+                    let length_of_trip_grouping = trip_grouping.len();
+
                     for trip in trip_grouping {
                         let mut is_cancelled: bool = false;
 
@@ -865,22 +868,40 @@ pub async fn nearby_from_coords(
                                 if !trip_update_ids.is_empty() {
                                     // let trip_update_id = trip_rt[0].clone();
 
-                                    if trip_update_ids.len() == 1 && trip_update_ids.len() == 1 {
-                                        already_used_trip_update_id
-                                            .insert(trip_update_ids[0].clone());
+                                    let does_trip_set_use_dates = gtfs_trip_aspenised
+                                        .trip_updates
+                                        .get(&trip_update_ids[0])
+                                        .unwrap()
+                                        .trip
+                                        .start_date
+                                        .is_some();
 
-                                        let trip_rt = gtfs_trip_aspenised
-                                            .trip_updates
-                                            .get(&trip_update_ids[0])
-                                            .unwrap();
+                                    let trip_updates: Vec<&AspenisedTripUpdate> = trip_update_ids
+                                        .iter()
+                                        .map(|x| gtfs_trip_aspenised.trip_updates.get(x).unwrap())
+                                        .filter(|trip_update| match does_trip_set_use_dates {
+                                            true => {
+                                                trip_update.trip.start_date
+                                                    == Some(
+                                                        trip.trip_service_date
+                                                            .format("%Y%m%d")
+                                                            .to_string(),
+                                                    )
+                                            }
+                                            false => true,
+                                        })
+                                        .collect();
 
-                                        if trip_rt.trip.schedule_relationship == Some(3) {
+                                    if trip_updates.len() > 0 {
+                                        let trip_update = trip_updates[0];
+
+                                        if trip_update.trip.schedule_relationship == Some(3) {
                                             is_cancelled = true;
                                         } else {
                                             let relevant_stop_time_update =
-                                                trip_rt.stop_time_update.iter()
-                                                .find(|x| {
-                                                    x.stop_id.as_ref() == Some(&trip.itinerary_options[0].stop_id)
+                                                trip_update.stop_time_update.iter().find(|x| {
+                                                    x.stop_id.as_ref()
+                                                        == Some(&trip.itinerary_options[0].stop_id)
                                                 });
 
                                             if let Some(relevant_stop_time_update) =
@@ -896,7 +917,7 @@ pub async fn nearby_from_coords(
                                                     if let Some(arrival) =
                                                         &relevant_stop_time_update.arrival
                                                     {
-                                                       if let Some(time) = arrival.time {
+                                                        if let Some(time) = arrival.time {
                                                             departure_time_rt = Some(time as u64);
                                                         }
                                                     }
