@@ -930,7 +930,11 @@ pub async fn nearby_from_coords(
                 }
             }
 
-            departures.sort_by(|a, b| a.closest_distance.partial_cmp(&b.closest_distance).unwrap());
+            departures.sort_by(|a, b| {
+                a.closest_distance
+                    .partial_cmp(&b.closest_distance)
+                    .unwrap_or(a.route_id.cmp(&b.route_id))
+            });
 
             HttpResponse::Ok().json(DepartingTripsDataAnswer {
                 number_of_stops_searched_through: stops.len(),
