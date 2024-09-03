@@ -312,7 +312,7 @@ pub async fn nearby_from_coords(
 
     println!(
         "Finished getting direction-stops in {:?}",
-        end_stops_duration
+        directions_timer.elapsed()
     );
 
     let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> =
@@ -389,6 +389,8 @@ pub async fn nearby_from_coords(
             .collect::<Vec<String>>()
             .join(",")
     );
+
+    println!("Starting to search for itineraries");
 
     let itineraries_timer = Instant::now();
 
