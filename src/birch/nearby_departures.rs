@@ -443,7 +443,7 @@ pub async fn nearby_from_coords(
                              gtfs.itinerary_pattern_meta ON
                              itinerary_pattern_meta.itinerary_pattern_id = itinerary_pattern.itinerary_pattern_id
     AND itinerary_pattern.attempt_id = itinerary_pattern_meta.attempt_id 
-    AND itinerary_pattern.chateau = '{}' AND
+    AND itinerary_pattern_meta.chateau = '{}' AND
             (itinerary_pattern_meta.direction_pattern_id, itinerary_pattern.stop_sequence) IN {}", chateau, formatted_ask)).get_results(conn)
         }
     )).buffer_unordered(8).collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternRowNearbyLookup>>>>().await;
