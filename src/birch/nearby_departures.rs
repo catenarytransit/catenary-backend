@@ -411,44 +411,40 @@ pub async fn nearby_from_coords(
 
     let seek_for_itineraries_list = futures::stream::iter(hashmap_of_directions_lookup.into_iter().map(
         |(chateau, set_of_directions)|
-          async move {
-                let conn_pre = conn_pool.get().await;
-                let conn = &mut conn_pre.unwrap();
+        {
+            let formatted_ask = format!(
+                "({})",
+                set_of_directions
+                    .into_iter()
+                    .map(|x| format!("('{}',{})" , x.0, x.1))
+                    .collect::<Vec<String>>()
+                    .join(",")
+            );
 
-                let formatted_ask = format!(
-                    "({})",
-                    set_of_directions
-                        .into_iter()
-                        .map(|x| format!("('{}',{})" , x.0, x.1))
-                        .collect::<Vec<String>>()
-                        .join(",")
-                );
-    
-                diesel::sql_query(
-                    format!(
-                    "SELECT 
-        itinerary_pattern.onestop_feed_id,
-        itinerary_pattern.attempt_id,
-        itinerary_pattern.itinerary_pattern_id,
-        itinerary_pattern.stop_sequence,
-        itinerary_pattern.arrival_time_since_start,
-        itinerary_pattern.departure_time_since_start,
-        itinerary_pattern.interpolated_time_since_start,
-        itinerary_pattern.stop_id,
-        itinerary_pattern.chateau,
-        itinerary_pattern.gtfs_stop_sequence,
-        itinerary_pattern_meta.direction_pattern_id,
-        itinerary_pattern_meta.trip_headsign,
-        itinerary_pattern_meta.trip_headsign_translations,
-        itinerary_pattern_meta.timezone,
-        itinerary_pattern_meta.route_id
-         FROM gtfs.itinerary_pattern JOIN
-                                 gtfs.itinerary_pattern_meta ON
-                                 itinerary_pattern_meta.itinerary_pattern_id = itinerary_pattern.itinerary_pattern_id
-        AND itinerary_pattern.attempt_id = itinerary_pattern_meta.attempt_id 
-        AND itinerary_pattern.chateau = '{}' AND
-                (itinerary_pattern_meta.direction_pattern_id, itinerary_pattern.stop_sequence) IN {}", chateau, formatted_ask)).get_results(conn).await
-            
+            diesel::sql_query(
+                format!(
+                "SELECT 
+    itinerary_pattern.onestop_feed_id,
+    itinerary_pattern.attempt_id,
+    itinerary_pattern.itinerary_pattern_id,
+    itinerary_pattern.stop_sequence,
+    itinerary_pattern.arrival_time_since_start,
+    itinerary_pattern.departure_time_since_start,
+    itinerary_pattern.interpolated_time_since_start,
+    itinerary_pattern.stop_id,
+    itinerary_pattern.chateau,
+    itinerary_pattern.gtfs_stop_sequence,
+    itinerary_pattern_meta.direction_pattern_id,
+    itinerary_pattern_meta.trip_headsign,
+    itinerary_pattern_meta.trip_headsign_translations,
+    itinerary_pattern_meta.timezone,
+    itinerary_pattern_meta.route_id
+     FROM gtfs.itinerary_pattern JOIN
+                             gtfs.itinerary_pattern_meta ON
+                             itinerary_pattern_meta.itinerary_pattern_id = itinerary_pattern.itinerary_pattern_id
+    AND itinerary_pattern.attempt_id = itinerary_pattern_meta.attempt_id 
+    AND itinerary_pattern.chateau = '{}' AND
+            (itinerary_pattern_meta.direction_pattern_id, itinerary_pattern.stop_sequence) IN {}", chateau, formatted_ask)).get_results(conn)
         }
     )).buffer_unordered(8).collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternRowNearbyLookup>>>>().await;
 
