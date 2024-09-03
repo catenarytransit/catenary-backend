@@ -39,6 +39,7 @@ use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use geo::HaversineDestination;
 use geo::HaversineDistance;
+use leapfrog::hashmap;
 use rouille::input;
 use serde::{Deserialize, Serialize};
 use std::collections::btree_map;
@@ -381,6 +382,20 @@ pub async fn nearby_from_coords(
         .map(|(k, v)| (k.0.clone(), k.1.to_string(), v.1))
         .collect::<Vec<_>>();
 
+    let mut hashmap_of_directions_lookup: HashMap<String, HashSet<(String, u32)>> = HashMap::new();
+
+    for (chateau, direction_id, stop_sequence) in directions_idx_to_get {
+        match hashmap_of_directions_lookup.entry(chateau.clone()) {
+            Entry::Occupied(mut oe) => {
+                oe.get_mut().insert((direction_id, stop_sequence));
+            }
+            Entry::Vacant(mut ve) => {
+                ve.insert(HashSet::from_iter([(direction_id, stop_sequence)]));
+            }
+        }
+    }
+
+    /*
     let formatted_ask = format!(
         "({})",
         directions_idx_to_get
@@ -388,42 +403,56 @@ pub async fn nearby_from_coords(
             .map(|x| format!("('{}','{}',{})", x.0, x.1, x.2))
             .collect::<Vec<String>>()
             .join(",")
-    );
-
+    );*/
+    
     println!("Starting to search for itineraries");
 
     let itineraries_timer = Instant::now();
 
-    let seek_for_itineraries: Result<Vec<ItineraryPatternRowNearbyLookup>, diesel::result::Error> = diesel::sql_query(
-            format!(
-            "SELECT 
-itinerary_pattern.onestop_feed_id,
-itinerary_pattern.attempt_id,
-itinerary_pattern.itinerary_pattern_id,
-itinerary_pattern.stop_sequence,
-itinerary_pattern.arrival_time_since_start,
-itinerary_pattern.departure_time_since_start,
-itinerary_pattern.interpolated_time_since_start,
-itinerary_pattern.stop_id,
-itinerary_pattern.chateau,
-itinerary_pattern.gtfs_stop_sequence,
-itinerary_pattern_meta.direction_pattern_id,
-itinerary_pattern_meta.trip_headsign,
-itinerary_pattern_meta.trip_headsign_translations,
-itinerary_pattern_meta.timezone,
-itinerary_pattern_meta.route_id
- FROM gtfs.itinerary_pattern JOIN
-                         gtfs.itinerary_pattern_meta ON
-                         itinerary_pattern_meta.itinerary_pattern_id = itinerary_pattern.itinerary_pattern_id
-        AND itinerary_pattern.onestop_feed_id = itinerary_pattern_meta.onestop_feed_id
-AND itinerary_pattern.attempt_id = itinerary_pattern_meta.attempt_id 
-AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
-        (itinerary_pattern_meta.chateau, itinerary_pattern_meta.direction_pattern_id, itinerary_pattern.stop_sequence) IN {}"
-        , formatted_ask)).get_results(conn).await;
+    let seek_for_itineraries_list = futures::stream::iter(hashmap_of_directions_lookup.into_iter().map(
+        |(chateau, set_of_directions)|
+          async move {
+                let conn_pre = conn_pool.get().await;
+                let conn = &mut conn_pre.unwrap();
 
-    match seek_for_itineraries {
-        Err(err) => HttpResponse::InternalServerError().body(format!("{:#?}", err)),
-        Ok(seek_for_itineraries) => {
+                let formatted_ask = format!(
+                    "({})",
+                    set_of_directions
+                        .into_iter()
+                        .map(|x| format!("('{}',{})" , x.0, x.1))
+                        .collect::<Vec<String>>()
+                        .join(",")
+                );
+    
+                diesel::sql_query(
+                    format!(
+                    "SELECT 
+        itinerary_pattern.onestop_feed_id,
+        itinerary_pattern.attempt_id,
+        itinerary_pattern.itinerary_pattern_id,
+        itinerary_pattern.stop_sequence,
+        itinerary_pattern.arrival_time_since_start,
+        itinerary_pattern.departure_time_since_start,
+        itinerary_pattern.interpolated_time_since_start,
+        itinerary_pattern.stop_id,
+        itinerary_pattern.chateau,
+        itinerary_pattern.gtfs_stop_sequence,
+        itinerary_pattern_meta.direction_pattern_id,
+        itinerary_pattern_meta.trip_headsign,
+        itinerary_pattern_meta.trip_headsign_translations,
+        itinerary_pattern_meta.timezone,
+        itinerary_pattern_meta.route_id
+         FROM gtfs.itinerary_pattern JOIN
+                                 gtfs.itinerary_pattern_meta ON
+                                 itinerary_pattern_meta.itinerary_pattern_id = itinerary_pattern.itinerary_pattern_id
+        AND itinerary_pattern.attempt_id = itinerary_pattern_meta.attempt_id 
+        AND itinerary_pattern.chateau = {} AND
+                (itinerary_pattern_meta.direction_pattern_id, itinerary_pattern.stop_sequence) IN {}", chateau, formatted_ask)).get_results(conn).await
+            
+        }
+    )).buffer_unordered(8).collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternRowNearbyLookup>>>>().await;
+
+
             println!(
                 "Finished getting itineraries in {:?}",
                 itineraries_timer.elapsed()
@@ -438,26 +467,34 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                 Vec<ItineraryPatternRowNearbyLookup>,
             > = HashMap::new();
 
-            for itin in &seek_for_itineraries {
-                match itins_per_chateau.entry(itin.chateau.clone()) {
-                    Entry::Occupied(mut oe) => {
-                        oe.get_mut().insert(itin.itinerary_pattern_id.clone());
-                    }
-                    Entry::Vacant(mut ve) => {
-                        ve.insert(HashSet::from_iter([itin.itinerary_pattern_id.clone()]));
-                    }
-                }
-            }
+            for seek_for_itineraries in seek_for_itineraries_list {
+                match seek_for_itineraries {
+                    Ok(itineraries) => {
+                        for itinerary in itineraries {
+                            match itins_per_chateau.entry(itinerary.chateau.clone()) {
+                                Entry::Occupied(mut oe) => {
+                                    oe.get_mut().insert(itinerary.itinerary_pattern_id.clone());
+                                }
+                                Entry::Vacant(mut ve) => {
+                                    ve.insert(HashSet::from_iter([itinerary.itinerary_pattern_id.clone()]));
+                                }
+                            }
 
-            for itin in seek_for_itineraries {
-                match itinerary_table
-                    .entry((itin.chateau.clone(), itin.itinerary_pattern_id.clone()))
-                {
-                    Entry::Occupied(mut oe) => {
-                        oe.get_mut().push(itin);
+                            match itinerary_table.entry((
+                                itinerary.chateau.clone(),
+                                itinerary.itinerary_pattern_id.clone(),
+                            )) {
+                                Entry::Occupied(mut oe) => {
+                                    oe.get_mut().push(itinerary);
+                                }
+                                Entry::Vacant(mut ve) => {
+                                    ve.insert(vec![itinerary]);
+                                }
+                            }
+                        }
                     }
-                    Entry::Vacant(mut ve) => {
-                        ve.insert(vec![itin]);
+                    Err(err) => {
+                        return HttpResponse::InternalServerError().body(format!("{:#?}", err));
                     }
                 }
             }
@@ -922,9 +959,8 @@ AND itinerary_pattern.chateau = itinerary_pattern_meta.chateau AND
                     })
                 }
             }
-        }
+        
     }
-}
 
 fn make_calendar_structure_from_pg(
     services_calendar_lookup_queries_to_perform: Vec<
