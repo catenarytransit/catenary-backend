@@ -97,6 +97,7 @@ The following `cargo clippy` rules are enforced.
     clippy::cmp_owned,
     clippy::cmp_null,
     clippy::op_ref,
-    clippy::useless_vec
+    clippy::useless_vec,
+    clippy::module_inception
 )]
 ```

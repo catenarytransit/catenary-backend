@@ -130,7 +130,7 @@ pub mod gtfs {
             onestop_feed_id -> Text,
             attempt_id -> Text,
             route_id -> Nullable<Text>,
-            route_type -> Nullable<Int2>,
+            route_type -> Nullable<Int2>
         }
     }
 
