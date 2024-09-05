@@ -292,6 +292,7 @@ pub async fn gtfs_process_feed(
             attempt_id: attempt_id.to_string(),
             route_id: Some(itin_pattern.route_id.clone()),
             route_type: Some(itin_pattern.route_type),
+            direction_id: itin_pattern.direction_id,
         };
 
         //insert stop list into DirectionPatternRow
