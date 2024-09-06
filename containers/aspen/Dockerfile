@@ -20,4 +20,10 @@ COPY ./../.. .
 
 RUN cargo build --release --bin aspen
 
-CMD ["./target/release/aspen"]
+RUN mkdir output-binaries/
+
+RUN cp ./target/release/aspen ./output-binaries/
+
+RUN rm -rf ./target/
+
+CMD ["./output-binaries/aspen"]

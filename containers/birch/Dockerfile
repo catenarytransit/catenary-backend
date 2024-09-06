@@ -20,4 +20,10 @@ COPY ./../.. .
 
 RUN cargo build --release --bin birch
 
-CMD ["./target/release/birch"]
+RUN mkdir output-binaries/
+
+RUN cp ./target/release/birch ./output-binaries/
+
+RUN rm -rf ./target/
+
+CMD ["./output-binaries/birch"]

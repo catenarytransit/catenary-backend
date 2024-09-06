@@ -20,4 +20,10 @@ COPY ./../.. .
 
 RUN cargo build --release --bin maple
 
-CMD ["./target/release/maple"]
+RUN mkdir output-binaries/
+
+RUN cp ./target/release/maple ./output-binaries/
+
+RUN rm -rf ./target/
+
+CMD ["./output-binaries/maple"]

@@ -20,4 +20,10 @@ COPY ./../.. .
 
 RUN cargo build --release --bin alpenrose
 
-CMD ["./target/release/alpenrose"]
+RUN mkdir output-binaries/
+
+RUN cp ./target/release/alpenrose ./output-binaries/
+
+RUN rm -rf ./target/
+
+CMD ["./output-binaries/alpenrose"]
