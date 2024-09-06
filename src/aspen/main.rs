@@ -585,7 +585,10 @@ async fn main() -> anyhow::Result<()> {
     // Worker Id for this instance of Aspen
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
-    let etcd_addresses = Arc::new(vec![String::from("localhost:2379")]);
+    let etcd_urls_original = std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
+    let etcd_urls = etcd_urls_original.split(',').map(|x| x.to_string()).collect::<Vec<String>>();
+
+    let etcd_addresses = Arc::new(etcd_urls);
 
     let channel_count = std::env::var("CHANNELS")
         .expect("channels not set")
@@ -712,8 +715,6 @@ async fn main() -> anyhow::Result<()> {
     let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
             println!("Listening on port {}", listener.local_addr().port());
-
-            let etcd_addresses = etcd_addresses.clone();
 
             move || async move {
                 listener

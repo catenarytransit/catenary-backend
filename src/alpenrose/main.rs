@@ -112,8 +112,11 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
+    
+        let etcd_urls_original = std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
+        let etcd_urls = etcd_urls_original.split(',').collect::<Vec<&str>>();
 
-    let mut etcd = etcd_client::Client::connect(["localhost:2379"], None).await?;
+    let mut etcd = etcd_client::Client::connect(&etcd_urls, None).await?;
 
     println!("Connected to etcd");
 
@@ -332,6 +335,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&last_fetch_per_feed),
                 Arc::clone(&amtrak_gtfs),
                 Arc::clone(&chicago_trips_str),
+                &etcd_urls
             )
             .await?;
         } else {

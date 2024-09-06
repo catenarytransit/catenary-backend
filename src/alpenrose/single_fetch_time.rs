@@ -69,6 +69,7 @@ pub async fn single_fetch_time(
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
     amtrak_gtfs: Arc<gtfs_structures::Gtfs>, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
     chicago_text_str: Arc<Option<String>>,
+    etcd_urls: &Vec<&str>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let start = Instant::now();
 
@@ -82,11 +83,12 @@ pub async fn single_fetch_time(
         let last_fetch_per_feed = last_fetch_per_feed.clone();
         let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
         let chicago_text_str = chicago_text_str.clone();
+        let etcd_urls = etcd_urls.clone();
 
         async move {
             let start = Instant::now();
 
-            let mut etcd = etcd_client::Client::connect(["localhost:2379"], None)
+            let mut etcd = etcd_client::Client::connect(etcd_urls, None)
                 .await
                 .unwrap();
 
