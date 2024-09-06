@@ -10,7 +10,7 @@ env:
   IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
 
 jobs:
-  build-and-push-image:
+  build-and-push-maple-image:
     runs-on: ubuntu-latest
 
     permissions:
@@ -35,6 +35,96 @@ jobs:
       uses: redhat-actions/push-to-registry@v2
       with:
         image: maple
+        tags: ${{ github.sha }}
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+  alpenrose:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Compile Alpenrose
+      uses: redhat-actions/buildah-build@v2
+      with:
+        image: alpenrose
+        tags: ${{ github.sha }}
+        containerfiles: | 
+          ./containers/alpenrose/Dockerfile
+
+    - name: Push Alpenrose To ghcr.io
+      id: push-to-ghcr-alpenrose
+      uses: redhat-actions/push-to-registry@v2
+      with:
+        image: alpenrose
+        tags: ${{ github.sha }}
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+  aspen:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Compile aspen
+      uses: redhat-actions/buildah-build@v2
+      with:
+        image: aspen
+        tags: ${{ github.sha }}
+        containerfiles: | 
+          ./containers/aspen/Dockerfile
+
+    - name: Push aspen To ghcr.io
+      id: push-to-ghcr-aspen
+      uses: redhat-actions/push-to-registry@v2
+      with:
+        image: aspen
+        tags: ${{ github.sha }}
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+  birch:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Compile birch
+      uses: redhat-actions/buildah-build@v2
+      with:
+        image: birch
+        tags: ${{ github.sha }}
+        containerfiles: | 
+          ./containers/birch/Dockerfile
+
+    - name: Push birch To ghcr.io
+      id: push-to-ghcr-birch
+      uses: redhat-actions/push-to-registry@v2
+      with:
+        image: birch
         tags: ${{ github.sha }}
         registry: ghcr.io
         username: ${{ github.actor }}
