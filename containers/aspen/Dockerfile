@@ -10,8 +10,7 @@ RUN rustup default stable
 # Install the necessary dependencies
 
 RUN  apt install -y protobuf-compiler build-essential gcc pkg-config libssl-dev unzip wget libpq-dev
-RUN sudo apt-get install libpq-dev
-RUN cargo install diesel_cli --no-default-features --features 
+RUN cargo install diesel_cli --no-default-features --features postgres
 
 WORKDIR /catenary
 
