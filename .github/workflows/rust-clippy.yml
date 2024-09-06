@@ -10,8 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install Dependencies
-        run: sudo apt install protobuf-compiler
-      - uses: actions/checkout@v2
+        run: sudo apt install -y protobuf-compiler
+      - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
             toolchain: nightly
