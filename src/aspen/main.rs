@@ -763,28 +763,28 @@ async fn main() -> anyhow::Result<()> {
 
             match &result_series_ok.0 {
                 Err(e) => {
-                    panic!("Error: {:?}", e);
+                    panic!("Error 0: {:?}", e);
                 }
                 Ok(_) => {}
             }
 
             match &result_series_ok.1 {
                 Err(e) => {
-                    panic!("Error: {:?}", e);
+                    panic!("Error 1: {:?}", e);
                 }
                 Ok(_) => {}
             }
 
             match &result_series_ok.2 {
                 Err(e) => {
-                    panic!("Error: {:?}", e);
+                    panic!("Error 2: {:?}", e);
                 }
                 Ok(_) => {}
             }
 
             match &result_series_ok.3 {
                 Err(e) => {
-                    panic!("Error: {:?}", e);
+                    panic!("Error 3: {:?}", e);
                 }
                 Ok(_) => {}
             }
@@ -792,7 +792,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Err(e) => {
-            println!("Error: {:?}", e);
+            println!("Error Outer: {:?}", e);
             panic!("{:#?}", e);
             Err(anyhow::Error::new(e))
         }
