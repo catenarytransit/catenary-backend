@@ -38,7 +38,7 @@ jobs:
         tags: ${{ github.sha }}
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        password: ${{ secrets.PACKAGE_TOKEN }}
 
   alpenrose:
     runs-on: ubuntu-latest
@@ -68,7 +68,7 @@ jobs:
         tags: ${{ github.sha }}
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        password: ${{ secrets.PACKAGE_TOKEN }}
 
   aspen:
     runs-on: ubuntu-latest
@@ -98,7 +98,7 @@ jobs:
         tags: ${{ github.sha }}
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        password: ${{ secrets.PACKAGE_TOKEN }}
 
   birch:
     runs-on: ubuntu-latest
@@ -128,4 +128,4 @@ jobs:
         tags: ${{ github.sha }}
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        password: ${{ secrets.PACKAGE_TOKEN }}
