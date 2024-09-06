@@ -102,10 +102,7 @@ pub async fn get_realtime_locations(
 
     //then connect to the node via tarpc
 
-    let socket_addr =
-        std::net::SocketAddr::new(assigned_chateau_data.ip.0, assigned_chateau_data.ip.1);
-
-    let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
+    let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
 
     if aspen_client.is_err() {
         return HttpResponse::InternalServerError()

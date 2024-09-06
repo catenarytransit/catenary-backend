@@ -131,7 +131,7 @@ pub async fn assign_chateaus(
 
                     let assigned_chateau_data = ChateauMetadataEtcd {
                         worker_id: selected_aspen_worker_to_assign.clone(),
-                        ip: worker_metadata.worker_ip,
+                        socket: worker_metadata.socket
                     };
 
                     let save_to_etcd = etcd
@@ -148,7 +148,7 @@ pub async fn assign_chateaus(
                     for realtime_feed_id in chateau.realtime_feeds.iter() {
                         let assigned_realtime_feed_data = RealtimeFeedMetadataEtcd {
                             worker_id: selected_aspen_worker_to_assign.clone(),
-                            ip: worker_metadata.worker_ip,
+                            socket: worker_metadata.socket,
                             chateau_id: chateau_id.clone(),
                         };
 

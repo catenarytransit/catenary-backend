@@ -11,7 +11,6 @@ pub async fn fetch_amtrak_data(
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
 
     if let Some(data) = fetch_assigned_node_meta {
-        let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
         let worker_id = data.worker_id;
 
         let amtrak_gtfs_rt = amtrak_gtfs_rt::fetch_amtrak_gtfs_rt(gtfs, client).await;
@@ -21,7 +20,7 @@ pub async fn fetch_amtrak_data(
             let vehicle_data = amtrak_gtfs_rt.vehicle_positions.encode_to_vec();
             let trip_data = amtrak_gtfs_rt.trip_updates.encode_to_vec();
 
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
+            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
                 .await
                 .unwrap();
 

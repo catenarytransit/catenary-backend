@@ -9,7 +9,6 @@ pub async fn aspen_leader_thread(
     workers_nodes: Arc<Mutex<Vec<String>>>,
     feeds_list: Arc<Mutex<Option<ChateausLeaderHashMap>>>,
     this_worker_id: Arc<String>,
-    tailscale_ip: Arc<IpAddr>,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
     etcd_addresses: Arc<Vec<String>>,
     lease_id_for_this_worker: i64,

@@ -69,10 +69,7 @@ pub async fn get_vehicle_information(
             )
             .unwrap();
 
-            let socket_addr =
-                std::net::SocketAddr::new(assigned_chateau_data.ip.0, assigned_chateau_data.ip.1);
-
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
+            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
 
             if let Ok(aspen_client) = aspen_client {
                 let get_vehicle = aspen_client
@@ -232,10 +229,7 @@ pub async fn get_trip_rt_update(
             )
             .unwrap();
 
-            let socket_addr =
-                std::net::SocketAddr::new(assigned_chateau_data.ip.0, assigned_chateau_data.ip.1);
-
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
+            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
 
             if let Ok(aspen_client) = aspen_client {
                 let get_trip = aspen_client
@@ -724,10 +718,9 @@ pub async fn get_trip_init(
             )
             .unwrap();
 
-            let socket_addr =
-                std::net::SocketAddr::new(assigned_chateau_data.ip.0, assigned_chateau_data.ip.1);
-
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
+            let aspen_client =
+                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+                    .await;
 
             timer.add("open_aspen_connection");
 

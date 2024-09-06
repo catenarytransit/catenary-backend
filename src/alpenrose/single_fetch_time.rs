@@ -157,13 +157,12 @@ pub async fn single_fetch_time(
 
                         //send the data to the worker
                         println!(
-                            "Attempting to send {} data to {} : {} via tarpc",
-                            feed_id, data.ip.0, data.ip.1
+                            "Attempting to send {} data to {} via tarpc",
+                            feed_id, data.socket
                         );
-                        let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
 
                         let aspen_client =
-                            catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
+                            catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket).await;
 
                         match aspen_client {
                             Ok(aspen_client) => {

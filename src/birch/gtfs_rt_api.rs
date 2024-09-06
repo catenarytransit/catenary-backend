@@ -45,9 +45,7 @@ async fn gtfs_rt(
         Some(data) => {
             let worker_id = data.worker_id;
 
-            let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
-
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
+            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
                 .await
                 .unwrap();
 

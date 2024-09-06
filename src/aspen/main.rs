@@ -33,6 +33,7 @@ use rand::{
     distributions::{Distribution, Uniform},
     thread_rng,
 };
+use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::{
     net::{IpAddr, SocketAddr},
@@ -80,7 +81,6 @@ pub struct GtfsRealtimeHashStore {
 #[derive(Clone)]
 pub struct AspenServer {
     pub addr: SocketAddr,
-    pub this_tailscale_ip: IpAddr,
     pub worker_id: Arc<String>, // Worker Id for this instance of Aspen
     pub authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     // Backed up in redis as well, program can be shut down and restarted without data loss
@@ -607,6 +607,7 @@ async fn main() -> anyhow::Result<()> {
     let tailscale_ip = catenary::tailscale::interface().expect("no tailscale interface found");
 
     let server_addr = (tailscale_ip, 40427);
+    let socket = SocketAddr::new(server_addr.0, server_addr.1);
 
     let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Bincode::default).await?;
     //tracing::info!("Listening on port {}", listener.local_addr().port());
@@ -630,7 +631,7 @@ async fn main() -> anyhow::Result<()> {
 
     let worker_metadata = AspenWorkerMetadataEtcd {
         etcd_lease_id: etcd_lease_id_for_this_worker,
-        worker_ip: server_addr,
+        socket,
         worker_id: this_worker_id.to_string(),
     };
 
@@ -662,14 +663,12 @@ async fn main() -> anyhow::Result<()> {
     let workers_nodes_for_leader_thread = Arc::clone(&workers_nodes);
     let chateau_list_for_leader_thread = Arc::clone(&chateau_list);
     let this_worker_id_for_leader_thread = Arc::clone(&this_worker_id);
-    let tailscale_ip_for_leader_thread = Arc::new(tailscale_ip);
     let arc_conn_pool_for_leader_thread = Arc::clone(&arc_conn_pool);
     let leader_thread_handler: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn(aspen_leader_thread(
             workers_nodes_for_leader_thread,
             chateau_list_for_leader_thread,
             this_worker_id_for_leader_thread,
-            tailscale_ip_for_leader_thread,
             arc_conn_pool_for_leader_thread,
             Arc::clone(&etcd_addresses),
             etcd_lease_id_for_this_worker,
@@ -724,7 +723,6 @@ async fn main() -> anyhow::Result<()> {
                     .map(|channel| {
                         let server = AspenServer {
                             addr: channel.transport().peer_addr().unwrap(),
-                            this_tailscale_ip: tailscale_ip,
                             worker_id: Arc::clone(&this_worker_id),
                             authoritative_data_store: Arc::clone(&authoritative_data_store),
                             conn_pool: Arc::clone(&arc_conn_pool),

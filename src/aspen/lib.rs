@@ -107,13 +107,13 @@ pub struct GetVehicleLocationsResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChateauMetadataEtcd {
     pub worker_id: String,
-    pub ip: (IpAddr, u16),
+    pub socket: SocketAddr,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RealtimeFeedMetadataEtcd {
     pub worker_id: String,
-    pub ip: (IpAddr, u16),
+    pub socket: SocketAddr,
     pub chateau_id: String,
 }
 
@@ -146,6 +146,6 @@ pub async fn spawn_aspen_client_from_ip(
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct AspenWorkerMetadataEtcd {
     pub etcd_lease_id: i64,
-    pub worker_ip: (IpAddr, u16),
+    pub socket: SocketAddr,
     pub worker_id: String,
 }

@@ -10,13 +10,12 @@ pub async fn fetch_dft_bus_data(
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
 
     if let Some(data) = fetch_assigned_node_meta {
-        let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
         let worker_id = data.worker_id;
 
         let uk_rt_data = get_raw_gtfs_rt(client).await;
 
         if let Ok(uk_rt_data) = uk_rt_data {
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
+            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
                 .await
                 .unwrap();
 
@@ -42,7 +41,7 @@ pub async fn fetch_dft_bus_data(
                 Ok(_) => {
                     println!(
                         "Successfully sent UK data to {}, feed {} to chateau {}",
-                        data.ip.0, feed_id, data.chateau_id
+                        data.socket, feed_id, data.chateau_id
                     );
                 }
                 Err(e) => {

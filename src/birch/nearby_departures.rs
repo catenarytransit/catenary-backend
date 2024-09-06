@@ -770,13 +770,10 @@ pub async fn nearby_from_coords(
 
                 let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
                     Some(chateau_metadata_for_c) => {
-                        let socket_addr = std::net::SocketAddr::new(
-                            chateau_metadata_for_c.ip.0,
-                            chateau_metadata_for_c.ip.1,
-                        );
-
-                        let aspen_client =
-                            catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr).await;
+                        let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(
+                            &chateau_metadata_for_c.socket,
+                        )
+                        .await;
 
                         match aspen_client {
                             Ok(aspen_client) => {

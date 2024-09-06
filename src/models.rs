@@ -390,7 +390,7 @@ pub struct DirectionPatternMeta {
     pub attempt_id: String,
     pub route_id: Option<String>,
     pub route_type: Option<i16>,
-    pub direction_id: Option<bool>
+    pub direction_id: Option<bool>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]

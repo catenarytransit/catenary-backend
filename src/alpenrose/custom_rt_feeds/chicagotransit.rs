@@ -11,7 +11,6 @@ pub async fn fetch_chicago_data(
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
 
     if let Some(worker_metadata) = fetch_assigned_node_meta {
-        let socket_addr = std::net::SocketAddr::new(worker_metadata.ip.0, worker_metadata.ip.1);
         let worker_id = worker_metadata.worker_id;
 
         let chicago_rt_data =
@@ -19,7 +18,7 @@ pub async fn fetch_chicago_data(
                 .await;
 
         if let Ok(chicago_rt_data) = chicago_rt_data {
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
+            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&worker_metadata.socket)
                 .await
                 .unwrap();
 
@@ -45,7 +44,7 @@ pub async fn fetch_chicago_data(
                 Ok(_) => {
                     println!(
                         "Successfully sent chicago data to {}, feed {} to chateau {}",
-                        worker_metadata.ip.0, feed_id, worker_metadata.chateau_id
+                        worker_metadata.socket, feed_id, worker_metadata.chateau_id
                     );
                 }
                 Err(e) => {

@@ -9,9 +9,8 @@ pub async fn fetch_via_data(
 ) {
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
 
-    if let Some(data) = fetch_assigned_node_meta {
-        let socket_addr = std::net::SocketAddr::new(data.ip.0, data.ip.1);
-        let worker_id = data.worker_id;
+    if let Some(assigned_chateau_data) = fetch_assigned_node_meta {
+        let worker_id = assigned_chateau_data.worker_id;
 
         let via_gtfs_rt_data = via_rail_gtfsrt::get_via_rail_gtfs_rt().await;
 
@@ -20,14 +19,13 @@ pub async fn fetch_via_data(
             let vehicle_data = via_gtfs_rt.clone().encode_to_vec();
             let trip_data = via_gtfs_rt.clone().encode_to_vec();
 
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_addr)
-                .await
+            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await
                 .unwrap();
 
             let tarpc_send_to_aspen = aspen_client
                 .from_alpenrose(
                     tarpc::context::current(),
-                    data.chateau_id.clone(),
+                    assigned_chateau_data.chateau_id.clone(),
                     String::from(feed_id),
                     Some(vehicle_data),
                     Some(trip_data),
