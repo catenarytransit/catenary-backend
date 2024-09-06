@@ -604,9 +604,9 @@ async fn main() -> anyhow::Result<()> {
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
     println!("Connected to postgres");
 
-    let tailscale_ip = catenary::tailscale::interface().expect("no tailscale interface found");
+    //let tailscale_ip = catenary::tailscale::interface().expect("no tailscale interface found");
 
-    let server_addr = (tailscale_ip, 40427);
+    let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), 40427);
     let socket = SocketAddr::new(server_addr.0, server_addr.1);
 
     let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Bincode::default).await?;

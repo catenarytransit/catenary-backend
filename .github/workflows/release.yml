@@ -10,7 +10,7 @@ env:
   IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
 
 jobs:
-  build-and-push-maple-image:
+  maple:
     runs-on: ubuntu-latest
 
     permissions:
@@ -26,7 +26,7 @@ jobs:
       uses: redhat-actions/buildah-build@v2
       with:
         image: maple
-        tags: ${{ github.sha }}
+        tags: ${{ github.sha }} latest
         containerfiles: | 
           ./containers/maple/Dockerfile
 
@@ -35,7 +35,7 @@ jobs:
       uses: redhat-actions/push-to-registry@v2
       with:
         image: maple
-        tags: ${{ github.sha }}
+        tags: ${{ github.sha }} latest
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.PACKAGE_TOKEN }}
@@ -56,7 +56,7 @@ jobs:
       uses: redhat-actions/buildah-build@v2
       with:
         image: alpenrose
-        tags: ${{ github.sha }}
+        tags: ${{ github.sha }} latest
         containerfiles: | 
           ./containers/alpenrose/Dockerfile
 
@@ -65,7 +65,7 @@ jobs:
       uses: redhat-actions/push-to-registry@v2
       with:
         image: alpenrose
-        tags: ${{ github.sha }}
+        tags: ${{ github.sha }} latest
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.PACKAGE_TOKEN }}
@@ -86,7 +86,7 @@ jobs:
       uses: redhat-actions/buildah-build@v2
       with:
         image: aspen
-        tags: ${{ github.sha }}
+        tags: ${{ github.sha }} latest
         containerfiles: | 
           ./containers/aspen/Dockerfile
 
@@ -95,7 +95,7 @@ jobs:
       uses: redhat-actions/push-to-registry@v2
       with:
         image: aspen
-        tags: ${{ github.sha }}
+        tags: ${{ github.sha }} latest
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.PACKAGE_TOKEN }}
@@ -116,7 +116,7 @@ jobs:
       uses: redhat-actions/buildah-build@v2
       with:
         image: birch
-        tags: ${{ github.sha }}
+        tags: ${{ github.sha }} latest
         containerfiles: | 
           ./containers/birch/Dockerfile
 
@@ -125,7 +125,7 @@ jobs:
       uses: redhat-actions/push-to-registry@v2
       with:
         image: birch
-        tags: ${{ github.sha }}
+        tags: ${{ github.sha }} latest
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.PACKAGE_TOKEN }}
