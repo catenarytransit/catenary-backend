@@ -25,7 +25,7 @@ jobs:
     - name: Compile Maple
       uses: redhat-actions/buildah-build@v2
       with:
-        image: maple
+        image: catenarytransit/maple
         tags: ${{ github.sha }} latest
         containerfiles: | 
           ./containers/maple/Dockerfile
@@ -34,7 +34,7 @@ jobs:
       id: push-to-ghcr-maple
       uses: redhat-actions/push-to-registry@v2
       with:
-        image: maple
+        image: catenarytransit/maple
         tags: ${{ github.sha }} latest
         registry: ghcr.io
         username: ${{ github.actor }}
@@ -55,7 +55,7 @@ jobs:
     - name: Compile Alpenrose
       uses: redhat-actions/buildah-build@v2
       with:
-        image: alpenrose
+        image: catenarytransit/alpenrose
         tags: ${{ github.sha }} latest
         containerfiles: | 
           ./containers/alpenrose/Dockerfile
@@ -64,7 +64,7 @@ jobs:
       id: push-to-ghcr-alpenrose
       uses: redhat-actions/push-to-registry@v2
       with:
-        image: alpenrose
+        image: catenarytransit/alpenrose
         tags: ${{ github.sha }} latest
         registry: ghcr.io
         username: ${{ github.actor }}
@@ -85,7 +85,7 @@ jobs:
     - name: Compile aspen
       uses: redhat-actions/buildah-build@v2
       with:
-        image: aspen
+        image: catenarytransit/aspen
         tags: ${{ github.sha }} latest
         containerfiles: | 
           ./containers/aspen/Dockerfile
@@ -94,7 +94,7 @@ jobs:
       id: push-to-ghcr-aspen
       uses: redhat-actions/push-to-registry@v2
       with:
-        image: aspen
+        image: catenarytransit/aspen
         tags: ${{ github.sha }} latest
         registry: ghcr.io
         username: ${{ github.actor }}
@@ -115,7 +115,7 @@ jobs:
     - name: Compile birch
       uses: redhat-actions/buildah-build@v2
       with:
-        image: birch
+        image: catenarytransit/birch
         tags: ${{ github.sha }} latest
         containerfiles: | 
           ./containers/birch/Dockerfile
@@ -124,7 +124,7 @@ jobs:
       id: push-to-ghcr-birch
       uses: redhat-actions/push-to-registry@v2
       with:
-        image: birch
+        image: catenarytransit/birch
         tags: ${{ github.sha }} latest
         registry: ghcr.io
         username: ${{ github.actor }}
