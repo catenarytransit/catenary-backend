@@ -31,7 +31,7 @@ jobs:
           ./containers/maple/Dockerfile
 
     - name: Push Maple To ghcr.io
-      id: push-to-ghcr.io
+      id: push-to-ghcr-maple
       uses: redhat-actions/push-to-registry@v2
       with:
         image: maple
