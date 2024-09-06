@@ -13,6 +13,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install Dependencies
-      run: sudo apt install -y protobuf-compiler redis docker.io docker-buildx
+      run: sudo apt install -y protobuf-compiler redis 
     - name: Build
       run: cargo build --verbose
