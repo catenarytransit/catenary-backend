@@ -615,7 +615,7 @@ async fn main() -> anyhow::Result<()> {
 
     //connect to etcd
 
-    let mut etcd = etcd_client::Client::connect(etcd_addresses.as_slice(), None).await?;
+    let mut etcd = etcd_client::Client::connect(etcd_addresses.as_slice(), None).await.expect("Failed to connect to etcd");
 
     //register etcd_lease_id
 
@@ -625,7 +625,7 @@ async fn main() -> anyhow::Result<()> {
             5,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
         )
-        .await?;
+        .await.expect("Failed to make lease with etcd");
 
     //register that the worker exists
 
