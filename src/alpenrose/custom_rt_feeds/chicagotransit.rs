@@ -18,9 +18,10 @@ pub async fn fetch_chicago_data(
                 .await;
 
         if let Ok(chicago_rt_data) = chicago_rt_data {
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&worker_metadata.socket)
-                .await
-                .unwrap();
+            let aspen_client =
+                catenary::aspen::lib::spawn_aspen_client_from_ip(&worker_metadata.socket)
+                    .await
+                    .unwrap();
 
             let tarpc_send_to_aspen = aspen_client
                 .from_alpenrose(

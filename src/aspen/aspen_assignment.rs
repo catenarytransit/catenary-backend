@@ -131,7 +131,7 @@ pub async fn assign_chateaus(
 
                     let assigned_chateau_data = ChateauMetadataEtcd {
                         worker_id: selected_aspen_worker_to_assign.clone(),
-                        socket: worker_metadata.socket
+                        socket: worker_metadata.socket,
                     };
 
                     let save_to_etcd = etcd

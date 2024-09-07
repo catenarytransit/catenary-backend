@@ -70,6 +70,7 @@ pub async fn single_fetch_time(
     amtrak_gtfs: Arc<gtfs_structures::Gtfs>, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
     chicago_text_str: Arc<Option<String>>,
     etcd_urls: &Vec<&str>,
+    etcd_connection_options: &Option<etcd_client::ConnectOptions>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let start = Instant::now();
 
@@ -88,7 +89,7 @@ pub async fn single_fetch_time(
         async move {
             let start = Instant::now();
 
-            let mut etcd = etcd_client::Client::connect(etcd_urls, None)
+            let mut etcd = etcd_client::Client::connect(etcd_urls, etcd_connection_options.clone())
                 .await
                 .unwrap();
 

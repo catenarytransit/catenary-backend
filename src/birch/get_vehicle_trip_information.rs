@@ -34,11 +34,15 @@ pub async fn get_vehicle_metadata(path: web::Path<(String, String)>) -> impl Res
 pub async fn get_vehicle_information(
     path: web::Path<(String, String)>,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
 ) -> impl Responder {
     let (chateau, gtfs_id) = path.into_inner();
 
-    let etcd =
-        etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+    let etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await;
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);
@@ -69,7 +73,9 @@ pub async fn get_vehicle_information(
             )
             .unwrap();
 
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
+            let aspen_client =
+                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+                    .await;
 
             if let Ok(aspen_client) = aspen_client {
                 let get_vehicle = aspen_client
@@ -192,13 +198,17 @@ pub async fn get_trip_rt_update(
     path: web::Path<String>,
     query: web::Query<QueryTripInformationParams>, // pool: web::Data<Arc<CatenaryPostgresPool>>,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
 ) -> impl Responder {
     let chateau = path.into_inner();
 
     let query = query.into_inner();
 
-    let etcd =
-        etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+    let etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await;
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);
@@ -229,7 +239,9 @@ pub async fn get_trip_rt_update(
             )
             .unwrap();
 
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
+            let aspen_client =
+                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+                    .await;
 
             if let Ok(aspen_client) = aspen_client {
                 let get_trip = aspen_client
@@ -332,6 +344,7 @@ pub async fn get_trip_init(
     // sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
 ) -> impl Responder {
     let mut timer = simple_server_timing_header::Timer::new();
     let chateau = path.into_inner();
@@ -680,8 +693,11 @@ pub async fn get_trip_init(
 
     timer.add("stop_time_calculation");
 
-    let etcd =
-        etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+    let etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await;
 
     timer.add("connect_to_etcd");
 

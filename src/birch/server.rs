@@ -1592,9 +1592,28 @@ async fn main() -> std::io::Result<()> {
             .unwrap(),
     );
 
+    let etcd_urls_original =
+        std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
+    let etcd_urls = etcd_urls_original
+        .split(',')
+        .map(|x| x.to_string())
+        .collect::<Vec<String>>();
+
     let etcd_connection_ips = Arc::new(EtcdConnectionIps {
-        ip_addresses: vec![String::from("localhost:2379")],
+        ip_addresses: etcd_urls,
     });
+
+    let etcd_username = std::env::var("ETCD_USERNAME");
+
+    let etcd_password = std::env::var("ETCD_PASSWORD");
+
+    let etcd_connection_options: Option<etcd_client::ConnectOptions> =
+        match (etcd_username, etcd_password) {
+            (Ok(username), Ok(password)) => {
+                Some(etcd_client::ConnectOptions::new().with_user(username, password))
+            }
+            _ => None,
+        };
 
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
@@ -1615,6 +1634,9 @@ async fn main() -> std::io::Result<()> {
             .app_data(actix_web::web::Data::new(Arc::new(RwLock::new(
                 None::<ChateauCache>,
             ))))
+            .app_data(actix_web::web::Data::new(Arc::new(
+                etcd_connection_options.clone(),
+            )))
             .app_data(actix_web::web::Data::new(Arc::clone(&etcd_connection_ips)))
             .route("/", web::get().to(index))
             .route("robots.txt", web::get().to(robots))

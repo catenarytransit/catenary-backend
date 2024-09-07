@@ -11,11 +11,16 @@ pub async fn aspen_leader_thread(
     this_worker_id: Arc<String>,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
     etcd_addresses: Arc<Vec<String>>,
+    arc_etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
     lease_id_for_this_worker: i64,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("starting leader thread");
 
-    let mut etcd = etcd_client::Client::connect(etcd_addresses.as_slice(), None).await?;
+    let mut etcd = etcd_client::Client::connect(
+        etcd_addresses.as_slice(),
+        arc_etcd_connection_options.as_ref().to_owned(),
+    )
+    .await?;
 
     println!("Connected to etcd!");
 

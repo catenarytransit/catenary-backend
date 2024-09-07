@@ -93,6 +93,7 @@ pub struct AspenServer {
     pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     pub etcd_addresses: Arc<Vec<String>>,
+    pub etcd_connect_options: Arc<Option<etcd_client::ConnectOptions>>,
     pub worker_etcd_lease_id: i64,
     pub timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
 }
@@ -585,10 +586,28 @@ async fn main() -> anyhow::Result<()> {
     // Worker Id for this instance of Aspen
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
-    let etcd_urls_original = std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
-    let etcd_urls = etcd_urls_original.split(',').map(|x| x.to_string()).collect::<Vec<String>>();
+    let etcd_urls_original =
+        std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
+    let etcd_urls = etcd_urls_original
+        .split(',')
+        .map(|x| x.to_string())
+        .collect::<Vec<String>>();
 
     let etcd_addresses = Arc::new(etcd_urls);
+
+    let etcd_username = std::env::var("ETCD_USERNAME");
+
+    let etcd_password = std::env::var("ETCD_PASSWORD");
+
+    let etcd_connect_options: Option<etcd_client::ConnectOptions> =
+        match (etcd_username, etcd_password) {
+            (Ok(username), Ok(password)) => {
+                Some(etcd_client::ConnectOptions::new().with_user(username, password))
+            }
+            _ => None,
+        };
+
+    let arc_etcd_connect_options = Arc::new(etcd_connect_options.clone());
 
     let channel_count = std::env::var("CHANNELS")
         .expect("channels not set")
@@ -618,7 +637,12 @@ async fn main() -> anyhow::Result<()> {
 
     //connect to etcd
 
-    let mut etcd = etcd_client::Client::connect(etcd_addresses.as_slice(), None).await.expect("Failed to connect to etcd");
+    let mut etcd = etcd_client::Client::connect(
+        etcd_addresses.as_slice(),
+        arc_etcd_connect_options.as_ref().to_owned(),
+    )
+    .await
+    .expect("Failed to connect to etcd");
 
     //register etcd_lease_id
 
@@ -628,7 +652,8 @@ async fn main() -> anyhow::Result<()> {
             5,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
         )
-        .await.expect("Failed to make lease with etcd");
+        .await
+        .expect("Failed to make lease with etcd");
 
     //register that the worker exists
 
@@ -667,6 +692,9 @@ async fn main() -> anyhow::Result<()> {
     let chateau_list_for_leader_thread = Arc::clone(&chateau_list);
     let this_worker_id_for_leader_thread = Arc::clone(&this_worker_id);
     let arc_conn_pool_for_leader_thread = Arc::clone(&arc_conn_pool);
+
+    let arc_etcd_connect_options_for_lt = Arc::clone(&arc_etcd_connect_options);
+
     let leader_thread_handler: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn(aspen_leader_thread(
             workers_nodes_for_leader_thread,
@@ -674,6 +702,7 @@ async fn main() -> anyhow::Result<()> {
             this_worker_id_for_leader_thread,
             arc_conn_pool_for_leader_thread,
             Arc::clone(&etcd_addresses),
+            arc_etcd_connect_options_for_lt,
             etcd_lease_id_for_this_worker,
         ));
 
@@ -692,18 +721,21 @@ async fn main() -> anyhow::Result<()> {
         b_conn_pool,
         b_thread_count,
         Arc::clone(&alpenrose_to_process_queue_chateaus),
-        Arc::clone(&etcd_addresses),
         etcd_lease_id_for_this_worker,
     ));
 
     let etcd_lease_renewer: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
             let etcd_addresses = etcd_addresses.clone();
+            let arc_etcd_connect_options = arc_etcd_connect_options.clone();
+
             async move {
                 loop {
-                    let mut etcd =
-                        etcd_client::Client::connect(etcd_addresses.clone().as_slice(), None)
-                            .await?;
+                    let mut etcd = etcd_client::Client::connect(
+                        etcd_addresses.clone().as_slice(),
+                        arc_etcd_connect_options.as_ref().to_owned(),
+                    )
+                    .await?;
                     let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await?;
 
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -738,6 +770,7 @@ async fn main() -> anyhow::Result<()> {
                             hash_of_raw_gtfs_rt_protobuf: Arc::clone(&hash_of_raw_gtfs_rt_protobuf),
                             worker_etcd_lease_id: etcd_lease_id_for_this_worker,
                             etcd_addresses: Arc::clone(&etcd_addresses),
+                            etcd_connect_options: Arc::clone(&arc_etcd_connect_options),
                             timestamps_of_gtfs_rt: Arc::clone(&timestamps_of_gtfs_rt),
                         };
                         channel.execute(server.serve()).for_each(spawn)

@@ -19,8 +19,10 @@ pub async fn fetch_via_data(
             let vehicle_data = via_gtfs_rt.clone().encode_to_vec();
             let trip_data = via_gtfs_rt.clone().encode_to_vec();
 
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await
-                .unwrap();
+            let aspen_client =
+                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+                    .await
+                    .unwrap();
 
             let tarpc_send_to_aspen = aspen_client
                 .from_alpenrose(

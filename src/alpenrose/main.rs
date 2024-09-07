@@ -112,11 +112,27 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
-    
-        let etcd_urls_original = std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
-        let etcd_urls = etcd_urls_original.split(',').collect::<Vec<&str>>();
 
-    let mut etcd = etcd_client::Client::connect(&etcd_urls, None).await?;
+    let etcd_urls_original =
+        std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
+    let etcd_urls = etcd_urls_original.split(',').collect::<Vec<&str>>();
+
+    let etcd_username = std::env::var("ETCD_USERNAME");
+
+    let etcd_password = std::env::var("ETCD_PASSWORD");
+
+    let etcd_connection_options: Option<etcd_client::ConnectOptions> =
+        match (etcd_username, etcd_password) {
+            (Ok(username), Ok(password)) => {
+                Some(etcd_client::ConnectOptions::new().with_user(username, password))
+            }
+            _ => None,
+        };
+
+    let arc_etcd_connection_options = Arc::new(etcd_connection_options.clone());
+
+    let mut etcd =
+        etcd_client::Client::connect(&etcd_urls, etcd_connection_options.clone()).await?;
 
     println!("Connected to etcd");
 
@@ -335,7 +351,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&last_fetch_per_feed),
                 Arc::clone(&amtrak_gtfs),
                 Arc::clone(&chicago_trips_str),
-                &etcd_urls
+                &etcd_urls,
+                &etcd_connection_options,
             )
             .await?;
         } else {

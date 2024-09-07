@@ -189,10 +189,14 @@ pub async fn nearby_from_coords(
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
 ) -> impl Responder {
-    let mut etcd = etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None)
-        .await
-        .unwrap();
+    let mut etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await
+    .unwrap();
 
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
