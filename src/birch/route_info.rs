@@ -54,7 +54,7 @@ struct QueryRouteInfo {
 #[actix_web::get("/route_info")]
 pub async fn route_info(
     query: web::Query<QueryRouteInfo>,
-
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
 ) -> impl Responder {
@@ -62,8 +62,11 @@ pub async fn route_info(
 
     //connect to etcd
 
-    let etcd =
-        etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+    let etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await;
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);
