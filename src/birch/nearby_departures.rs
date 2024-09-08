@@ -1048,7 +1048,10 @@ fn make_calendar_structure_from_pg(
 
         let calendar_group = calendar_group.unwrap();
 
-        let chateau = calendar_group[0].chateau.clone();
+        let chateau = match calendar_group.get(0) {
+            Some(calendar) => calendar.chateau.clone(),
+            None => continue,
+        };
 
         let mut new_calendar_table: BTreeMap<String, catenary::CalendarUnified> = BTreeMap::new();
 
@@ -1078,7 +1081,10 @@ fn make_calendar_structure_from_pg(
         let calendar_date_group = calendar_date_group.unwrap();
 
         if !calendar_date_group.is_empty() {
-            let chateau = calendar_date_group[0].chateau.clone();
+            let chateau = match calendar_date_group.get(0) {
+                Some(calendar_date) => calendar_date.chateau.clone(),
+                None => continue,
+            };
 
             let pile_of_calendars_exists = calendar_structures.contains_key(&chateau);
 
