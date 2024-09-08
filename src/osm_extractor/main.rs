@@ -1,4 +1,3 @@
-
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::prelude::*;
@@ -16,7 +15,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let routing_export_path = arguments
         .get::<String>("routing_export_path")
         .expect("Missing parameter routing_export_path");
-    let temp_dir = arguments.get::<String>("temp_dir").expect("Missing parameter temp_dir");
+    let temp_dir = arguments
+        .get::<String>("temp_dir")
+        .expect("Missing parameter temp_dir");
 
     //create dirs if they don't exist
 
@@ -53,7 +54,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let polygon = poly_parser(&poly_str)?;
 
-    
         println!("Writing to {}", path);
 
         let mut file = OpenOptions::new()
@@ -65,7 +65,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         //write
 
         file.write_all(&bytes)?;
-         
 
         //write poly
 
@@ -83,38 +82,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         //filter OSM into what's useful for road network
 
-        let mut nodes:usize = 0;
-        let mut ways:usize = 0;
+        let mut nodes: usize = 0;
+        let mut ways: usize = 0;
 
-        let mut keep_node_ped_bike_count:usize = 0;
-        let mut keep_way_ped_bike_count:usize = 0;
+        let mut keep_node_ped_bike_count: usize = 0;
+        let mut keep_way_ped_bike_count: usize = 0;
 
         let mut read_osm = osmpbfreader::OsmPbfReader::new(bytes.as_ref());
 
         let mut kept_ped_bike_list = Vec::new();
 
         for obj in read_osm.iter() {
-
-            
-
             match obj {
                 Err(e) => {
                     println!("Error reading OSM: {}", e);
                 }
                 Ok(obj) => {
-
-                    
-            let mut keep_ped_bike = false;
+                    let mut keep_ped_bike = false;
 
                     //sidewalk and bike lane extraction
                     match &obj {
                         OsmObj::Node(e) => {
                             nodes += 1;
-        
-                            if let Some(road_type) = e.tags.clone().iter().find(|(k, _)| k.eq(&"highway")) {
+
+                            if let Some(road_type) =
+                                e.tags.clone().iter().find(|(k, _)| k.eq(&"highway"))
+                            {
                                 keep_ped_bike = true;
                             }
-        
+
                             if let (Some(bicycle), Some(foot)) = (
                                 e.tags.clone().iter().find(|(k, _)| k.eq(&"bicycle")),
                                 e.tags.clone().iter().find(|(k, _)| k.eq(&"foot")),
@@ -122,23 +118,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 if bicycle.1.eq(&"yes") || foot.1.eq(&"yes") {
                                     keep_ped_bike = true;
                                 }
-        
+
                                 if bicycle.1.eq(&"no") || foot.1.eq(&"no") {
                                     keep_ped_bike = false;
                                 }
                             }
-        
+
                             if keep_ped_bike {
                                 keep_node_ped_bike_count += 1;
                             }
                         }
                         OsmObj::Way(e) => {
                             ways += 1;
-        
-                            if let Some(road_type) = e.tags.clone().iter().find(|(k, _)| k.eq(&"highway")) {
-                              keep_ped_bike = true;
+
+                            if let Some(road_type) =
+                                e.tags.clone().iter().find(|(k, _)| k.eq(&"highway"))
+                            {
+                                keep_ped_bike = true;
                             }
-        
+
                             if let (Some(bicycle), Some(foot)) = (
                                 e.tags.clone().iter().find(|(k, _)| k.eq(&"bicycle")),
                                 e.tags.clone().iter().find(|(k, _)| k.eq(&"foot")),
@@ -146,12 +144,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 if bicycle.1.eq(&"yes") || foot.1.eq(&"yes") {
                                     keep_ped_bike = true;
                                 }
-        
+
                                 if bicycle.1.eq(&"no") || foot.1.eq(&"no") {
                                     keep_ped_bike = false;
                                 }
                             }
-        
+
                             if keep_ped_bike {
                                 keep_way_ped_bike_count += 1;
                             }
@@ -159,29 +157,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         _ => {}
                     }
 
-                    
-            //push to vecs
+                    //push to vecs
 
-            if keep_ped_bike {
-                kept_ped_bike_list.push(obj.clone());
-            }
+                    if keep_ped_bike {
+                        kept_ped_bike_list.push(obj.clone());
+                    }
                 }
             }
-
         }
 
         println!("Nodes: {}", nodes);
         println!("Ways: {}", ways);
 
-        println!("Nodes to keep for pedestrians and cyclists: {}", keep_node_ped_bike_count);
-        println!("Ways to keep for pedestrians and cyclists: {}", keep_way_ped_bike_count);
+        println!(
+            "Nodes to keep for pedestrians and cyclists: {}",
+            keep_node_ped_bike_count
+        );
+        println!(
+            "Ways to keep for pedestrians and cyclists: {}",
+            keep_way_ped_bike_count
+        );
 
         //write to file
 
-        let ped_bike_path = format!("{}/ped-and-bike-{}.osm.bincode", routing_export_path, file_name.replace("/", "-"));
+        let ped_bike_path = format!(
+            "{}/ped-and-bike-{}.osm.bincode",
+            routing_export_path,
+            file_name.replace("/", "-")
+        );
 
         let mut ped_bike_path = OpenOptions::new()
-            .write(true) 
+            .write(true)
             .create(true)
             .open(path.clone())
             .expect("Failed to open file");
