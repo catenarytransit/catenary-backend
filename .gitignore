@@ -69,3 +69,6 @@ temp-ipv4/
 temp-ipv6/
 
 output-binaries/
+
+testing_*
+
