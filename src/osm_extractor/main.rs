@@ -1,30 +1,28 @@
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::prelude::*;
 use std::process::exit;
-use std::fs::OpenOptions;
 
 use geofabrik_handler::poly_parser;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let arguments = std::env::args();
     let arguments = arguments::parse(arguments).unwrap();
 
-    let routing_export_path = arguments.get::<String>("routing_export_path").expect("Missing parameter routing_export_path");
+    let routing_export_path = arguments
+        .get::<String>("routing_export_path")
+        .expect("Missing parameter routing_export_path");
     //let temp_dir = arguments.get::<String>("temp_dir").expect("Missing parameter temp_dir");
 
     //create dirs if they don't exist
 
     tokio::fs::create_dir_all(&routing_export_path).await?;
-   // tokio::fs::create_dir_all(&temp_dir).await?;
+    // tokio::fs::create_dir_all(&temp_dir).await?;
 
     //download OSM
 
-    let file_list = [
-        "north-america/canada/quebec",
-        "north-america/us/california"
-    ];
+    let file_list = ["north-america/canada/quebec", "north-america/us/california"];
 
     for file in file_list {
         let full_url = format!("https://download.geofabrik.de/{}.osm.pbf", file);
@@ -44,15 +42,17 @@ async fn main() -> anyhow::Result<()> {
 
         let poly_str = poly_download.text().await?;
 
-        let poly_export_path = format!("{}/{}.polygon.bincode", routing_export_path, file.replace("/", "-"));
+        let poly_export_path = format!(
+            "{}/{}.polygon.bincode",
+            routing_export_path,
+            file.replace("/", "-")
+        );
 
         let polygon = poly_parser(&poly_str)?;
 
         println!("Writing to {}", path);
 
-        let mut file = OpenOptions::new().write(true)
-                             .create_new(true)
-                             .open(path)?;
+        let mut file = OpenOptions::new().write(true).create(true).open(path).expect("Failed to open file");
 
         //write
 
@@ -62,19 +62,16 @@ async fn main() -> anyhow::Result<()> {
 
         let bincoded_poly = bincode::serialize(&polygon)?;
 
-        let mut poly_file = OpenOptions::new().write(true)
-                             .create_new(true)
-                             .open(poly_export_path)?;
+        let mut poly_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(poly_export_path.clone()).unwrap();
 
         poly_file.write_all(&bincoded_poly)?;
 
         println!("Wrote to {}", poly_export_path);
 
         //filter OSM into what's useful for road network
-
-
-        
-
     }
 
     Ok(())
