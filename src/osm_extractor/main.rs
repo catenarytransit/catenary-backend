@@ -1,4 +1,6 @@
 use ahash::AHashSet;
+use osmpbfreader::Node;
+use osmpbfreader::Way;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::prelude::*;
@@ -6,7 +8,14 @@ use std::process::exit;
 
 use geofabrik_handler::poly_parser;
 
+use serde::{Deserialize, Serialize};
 use osmpbfreader::OsmObj;
+
+#[derive(Serialize, Deserialize, Clone)]
+struct ExportOsm {
+    nodes: Vec<Node>,
+    ways: Vec<Way>,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -98,7 +107,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let mut read_osm = osmpbfreader::OsmPbfReader::new(bytes.as_ref());
 
-        let mut kept_ped_bike_list: Vec<OsmObj> = Vec::new();
+        let mut kept_ped_bike_nodes: Vec<Node> = Vec::new();
+        let mut kept_ped_bike_ways: Vec<Way> = Vec::new();
         let mut kept_place_search_list: Vec<OsmObj> = Vec::new();
 
         let mut nodes_to_keep_places: HashSet<i64> = HashSet::new();
@@ -106,6 +116,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let mut nodes_to_keep_ped_and_bike: HashSet<i64> = HashSet::new();
         let mut nodes_already_kept_ped_and_bike: HashSet<i64> = HashSet::new();
+
+        let mut pruned_car_only: usize = 0;
 
         let mut objs = Vec::new();
 
@@ -167,6 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 }
 
                                 if bicycle.eq(&"no") || foot.eq(&"no") {
+                                    pruned_car_only += 1;
                                     keep_ped_bike = false;
                                 }
                             }
@@ -174,6 +187,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             if keep_ped_bike {
                                 keep_node_ped_bike_count += 1;
                                 nodes_already_kept_ped_and_bike.insert(e.id.0);
+
+                                
+                                    kept_ped_bike_nodes.push(e.clone());
+                                
                             }
 
                            /*  if keep_place_search {
@@ -181,34 +198,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 nodes_already_kept_places.insert(e.id.0);
                             }*/
                         }
-                        OsmObj::Way(e) => {
+                        OsmObj::Way(way) => {
                             ways += 1;
 
                             if let Some((_, name)) =
-                                e.tags.clone().iter().find(|(k, _)| k.eq(&"name"))
+                                way.tags.clone().iter().find(|(k, _)| k.eq(&"name"))
                             {
                                 keep_place_search = true;
                             }
 
                             if let Some((_, addr)) =
-                                e.tags.clone().iter().find(|(k, _)| k.eq(&"addr:street"))
+                                way.tags.clone().iter().find(|(k, _)| k.eq(&"addr:street"))
                             {
                                 keep_place_search = true;
                             }
 
                             if let Some((_, road_type)) =
-                                e.tags.clone().iter().find(|(k, _)| k.eq(&"highway"))
+                            way.tags.clone().iter().find(|(k, _)| k.eq(&"highway"))
                             {
                                 keep_ped_bike = true;
 
-                                if road_type == "motorway" {
+                                if road_type == "motorway" || road_type == "motorway_link" {
                                     keep_ped_bike = false;
+                                    pruned_car_only += 1;
                                 }
                             }
 
                             if let (Some((_, bicycle)), Some((_, foot))) = (
-                                e.tags.clone().iter().find(|(k, _)| k.eq(&"bicycle")),
-                                e.tags.clone().iter().find(|(k, _)| k.eq(&"foot")),
+                                way.tags.clone().iter().find(|(k, _)| k.eq(&"bicycle")),
+                                way.tags.clone().iter().find(|(k, _)| k.eq(&"foot")),
                             ) {
                                 if bicycle.eq(&"yes") || foot.eq(&"yes") {
                                     keep_ped_bike = true;
@@ -219,12 +237,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 }
                             }
 
+                            if let Some((_, access)) =
+                            way.tags.clone().iter().find(|(k, _)| k.eq(&"access"))
+                            {
+                                if access == "no" || access == "private" || access == "military" {
+                                    keep_ped_bike = false;
+                                }
+                            }
+
                             if keep_ped_bike {
                                 keep_way_ped_bike_count += 1;
 
-                                for node in e.nodes.iter() {
+                                for node in way.nodes.iter() {
                                     nodes_to_keep_ped_and_bike.insert(node.0);
                                 }
+
+                                kept_ped_bike_ways.push(way.clone());
                             }
 
                             /* 
@@ -244,10 +272,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     if keep_place_search {
                      //   kept_place_search_list.push(obj.clone());
                     }
-
-                    if keep_ped_bike {
-                        kept_ped_bike_list.push(obj.clone());
-                    }
                
         }
 
@@ -266,7 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     keep_node_ped_bike_count_second_round += 1;
 
                     if !nodes_already_kept_ped_and_bike.contains(&e.id.0) {
-                        kept_ped_bike_list.push(obj.clone());
+                        kept_ped_bike_nodes.push(e.clone());
                         keep_node_ped_bike_count += 1;
                     }
                 }
@@ -303,6 +327,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             nodes_to_keep_ped_and_bike.len(), keep_node_ped_bike_count_second_round
         );
 
+        println!("Rejected car-only ways: {}", pruned_car_only);
+
         println!("Nodes to keep for place search: {}", keep_place_node_count);
 
         println!("Ways to keep for place search: {}", keep_place_way_count);
@@ -321,7 +347,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .open(ped_bike_file_path.clone())
             .expect("Failed to open file");
 
-        let bincoded_ped_bike = bincode::serialize(&kept_ped_bike_list)?;
+        let export_ped_bike = ExportOsm {
+            nodes: kept_ped_bike_nodes,
+            ways: kept_ped_bike_ways,
+        };
+
+        let bincoded_ped_bike = bincode::serialize(&export_ped_bike)?;
 
         ped_bike_file.write_all(&bincoded_ped_bike)?;
 
