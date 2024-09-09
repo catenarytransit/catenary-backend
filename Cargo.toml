@@ -133,6 +133,7 @@ gtfs-realtime = "0.1.2"
 via-rail-gtfsrt = "0.1.1"
 wyhash2 = "0.2.1"
 console-subscriber = "0.4.0"
+strumbra = "0.4.0"
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"

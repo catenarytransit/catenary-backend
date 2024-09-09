@@ -51,11 +51,19 @@ use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
+use strumbra::UniqueString;
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyFromCoords {
     lat: f64,
     lon: f64,
+    departure_time: Option<u64>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+struct DeparturesFromStop {
+    chateau_id: String,
+    stop_id: String,
     departure_time: Option<u64>,
 }
 
@@ -180,6 +188,202 @@ pub struct DepartingTripsDataAnswer {
     pub rail_and_other_limited_metres: f64,
     pub departures: Vec<DepartureRouteGroup>,
     pub stop: HashMap<String, HashMap<String, StopOutput>>,
+}
+
+#[actix_web::get("/departurefromstop")]
+pub async fn departures_from_stop(
+    req: HttpRequest,
+    query: Query<DeparturesFromStop>,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+) -> impl Responder {
+    let mut etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await
+    .unwrap();
+
+    let conn_pool = pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre.unwrap();
+
+    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+
+    let departure_time = match query.departure_time {
+        Some(departure_time) => departure_time,
+        None => catenary::duration_since_unix_epoch().as_secs(),
+    };
+
+    let departure_time_chrono = match query.departure_time {
+        Some(x) => chrono::Utc.timestamp_opt(x.try_into().unwrap(), 0).unwrap(),
+        None => chrono::Utc::now(),
+    };
+
+    let seek_back = chrono::TimeDelta::new(5400, 0).unwrap();
+
+    let seek_forward = chrono::TimeDelta::new(3600 * 24, 0).unwrap();
+
+    let stops: diesel::prelude::QueryResult<Vec<catenary::models::Stop>> =
+        catenary::schema::gtfs::stops::dsl::stops
+            .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&query.chateau_id))
+            .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq(&query.stop_id))
+            .select(catenary::models::Stop::as_select())
+            .load::<catenary::models::Stop>(conn)
+            .await;
+
+    let directions_timer = Instant::now();
+
+    let directions_fetch_query = sql_query(format!(
+        "
+    SELECT * FROM gtfs.direction_pattern JOIN 
+    gtfs.stops ON direction_pattern.chateau = stops.chateau
+     AND direction_pattern.stop_id = stops.gtfs_id 
+     AND direction_pattern.attempt_id = stops.attempt_id
+      WHERE gtfs.stops.point = {} AND gtfs.stops.chateau = {}
+      AND allowed_spatial_query = TRUE;
+    ",
+        query.stop_id, query.chateau_id
+    ));
+
+    println!(
+        "Finished getting direction-stops in {:?}",
+        directions_timer.elapsed()
+    );
+
+    let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> =
+        directions_fetch_query.get_results(conn).await;
+
+    let directions_rows = directions_fetch_sql.unwrap();
+
+    let set_of_directions = directions_rows
+        .iter()
+        .map(|x| (x.direction_pattern_id.clone(), x.stop_sequence))
+        .collect::<HashSet<(String, u32)>>();
+
+    let formatted_ask = format!(
+        "({})",
+        set_of_directions
+            .into_iter()
+            .map(|x| format!("('{}',{})", x.0, x.1))
+            .collect::<Vec<String>>()
+            .join(",")
+    );
+
+    let seek_itins: Vec<ItineraryPatternRowNearbyLookup> =  
+
+    diesel::sql_query(
+        format!(
+        "SELECT 
+itinerary_pattern.onestop_feed_id,
+itinerary_pattern.attempt_id,
+itinerary_pattern.itinerary_pattern_id,
+itinerary_pattern.stop_sequence,
+itinerary_pattern.arrival_time_since_start,
+itinerary_pattern.departure_time_since_start,
+itinerary_pattern.interpolated_time_since_start,
+itinerary_pattern.stop_id,
+itinerary_pattern.chateau,
+itinerary_pattern.gtfs_stop_sequence,
+itinerary_pattern_meta.direction_pattern_id,
+itinerary_pattern_meta.trip_headsign,
+itinerary_pattern_meta.trip_headsign_translations,
+itinerary_pattern_meta.timezone,
+itinerary_pattern_meta.route_id
+FROM gtfs.itinerary_pattern JOIN
+                     gtfs.itinerary_pattern_meta ON
+                     itinerary_pattern_meta.itinerary_pattern_id = itinerary_pattern.itinerary_pattern_id
+AND itinerary_pattern_meta.chateau = '{}'
+AND itinerary_pattern.chateau = '{}' AND
+itinerary_pattern.onestop_feed_id = itinerary_pattern_meta.onestop_feed_id
+AND
+    (itinerary_pattern_meta.direction_pattern_id, itinerary_pattern.stop_sequence) IN {}",query.chateau_id, query.chateau_id, formatted_ask)).get_results(conn).await.unwrap();
+
+    let set_of_itin = seek_itins
+        .iter()
+        .map(|x| x.itinerary_pattern_id.clone())
+        .collect::<HashSet<String>>();
+
+    println!("Looking up trips");
+    let timer_trips = Instant::now();
+
+    let query_trips_compressed = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+        .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(&query.chateau_id))
+        .filter(
+            catenary::schema::gtfs::trips_compressed::dsl::itinerary_pattern_id.eq_any(set_of_itin),
+        )
+        .select(catenary::models::CompressedTrip::as_select())
+        .load::<catenary::models::CompressedTrip>(conn)
+        .await
+        .unwrap();
+
+    println!("Finished looking up trips in {:?}", timer_trips.elapsed());
+
+    let mut compressed_trips:  Vec<CompressedTrip> = vec![];
+
+    let mut services_to_lookup: BTreeSet<String> = BTreeSet::new();
+
+    let mut routes_to_lookup: BTreeSet<String> = BTreeSet::new();
+
+    for trip in query_trips_compressed {
+        compressed_trips.push(trip.clone());
+        services_to_lookup.insert(trip.service_id.clone());
+        routes_to_lookup.insert(trip.route_id.clone());
+    }
+
+    let calendar_timer = Instant::now();
+
+    let (
+        services_calendar_lookup,
+        services_calendar_dates_lookup,
+        routes_query,
+    ) = tokio::join!(
+        catenary::schema::gtfs::calendar::dsl::calendar
+            .filter(catenary::schema::gtfs::calendar::dsl::chateau.eq(&query.chateau_id))
+            .filter(catenary::schema::gtfs::calendar::dsl::service_id.eq_any(services_to_lookup.clone()))
+            .select(catenary::models::Calendar::as_select())
+            .load::<catenary::models::Calendar>(conn),
+        catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+            .filter(catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(&query.chateau_id))
+            .filter(
+                catenary::schema::gtfs::calendar_dates::dsl::service_id.eq_any(services_to_lookup.clone()),
+            )
+            .select(catenary::models::CalendarDate::as_select())
+            .load::<catenary::models::CalendarDate>(conn),
+        catenary::schema::gtfs::routes::dsl::routes
+            .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(&query.chateau_id))
+            .filter(catenary::schema::gtfs::routes::dsl::route_id.eq_any(routes_to_lookup))
+            .select(catenary::models::Route::as_select())
+            .load::<catenary::models::Route>(conn),
+    );
+
+    println!(
+        "Finished getting calendar, routes, and calendar dates, took {:?}",
+        calendar_timer.elapsed()
+    );
+
+    let calendar_structure = make_calendar_structure_from_pg_single_chateau(
+        services_calendar_lookup.unwrap(),
+        services_calendar_dates_lookup.unwrap(),
+    );
+
+    let mut route_table: HashMap<String, catenary::models::Route> = HashMap::new();
+
+    for route in routes_query.unwrap() {
+        route_table.insert(route.route_id.clone(), route);
+    }
+
+    let mut trips_table: HashMap<String, Vec<CompressedTrip>> = HashMap::new();
+
+    for trip in compressed_trips {
+       
+    }
+
+
+
+    HttpResponse::Ok().json("Hello")
 }
 
 #[actix_web::get("/nearbydeparturesfromcoords")]
@@ -519,7 +723,7 @@ pub async fn nearby_from_coords(
 
     println!("Finished looking up trips in {:?}", timer_trips.elapsed());
 
-    let mut compressed_trips_table = HashMap::new();
+    let mut compressed_trips_table: HashMap<String, Vec<CompressedTrip>> = HashMap::new();
 
     let mut services_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
 
@@ -1025,6 +1229,62 @@ pub async fn nearby_from_coords(
             })
         }
     }
+}
+
+
+fn make_calendar_structure_from_pg_single_chateau(
+    services_calendar_lookup_queries_to_perform: Vec<catenary::models::Calendar>,
+    services_calendar_dates_lookup_queries_to_perform: Vec<catenary::models::CalendarDate>
+) -> BTreeMap<String, catenary::CalendarUnified> {
+    let mut calendar_structures:  BTreeMap<String, catenary::CalendarUnified> =
+        BTreeMap::new();
+
+
+        for calendar in  services_calendar_lookup_queries_to_perform {
+            calendar_structures.insert(
+                calendar.service_id.clone(),
+                catenary::CalendarUnified {
+                    id: calendar.service_id.clone(),
+                    general_calendar: Some(catenary::GeneralCalendar {
+                        days: make_weekdays(&calendar),
+                        start_date: calendar.gtfs_start_date,
+                        end_date: calendar.gtfs_end_date,
+                    }),
+                    exceptions: None,
+                },
+            );
+        }
+
+        for calendar_date in services_calendar_dates_lookup_queries_to_perform {
+            let exception_number = match calendar_date.exception_type {
+                1 => gtfs_structures::Exception::Added,
+                2 => gtfs_structures::Exception::Deleted,
+                _ => panic!("WHAT IS THIS!!!!!!"),
+            };
+
+            match calendar_structures.entry(calendar_date.service_id.clone()) {
+                btree_map::Entry::Occupied(mut oe) => {
+                    let mut calendar_unified = oe.get_mut();
+
+                    if let Some(entry) = &mut calendar_unified.exceptions {
+                        entry.insert(calendar_date.gtfs_date, exception_number);
+                    } else {
+                        calendar_unified.exceptions = Some(BTreeMap::from_iter([(
+                            calendar_date.gtfs_date,
+                            exception_number,
+                        )]));
+                    }
+                }
+                btree_map::Entry::Vacant(mut ve) => {
+                    ve.insert(CalendarUnified::empty_exception_from_calendar_date(
+                        &calendar_date,
+                    ));
+                }
+            }
+        }
+
+
+    calendar_structures
 }
 
 fn make_calendar_structure_from_pg(

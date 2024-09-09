@@ -1,3 +1,4 @@
+use ahash::AHashSet;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::prelude::*;
@@ -21,12 +22,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     //create dirs if they don't exist
 
+    use std::collections::HashSet;
+
     tokio::fs::create_dir_all(&routing_export_path).await?;
     // tokio::fs::create_dir_all(&temp_dir).await?;
 
     //download OSM
 
-    let file_list = ["north-america/canada/quebec", "north-america/us/california"];
+    let file_list = ["north-america/canada/quebec",
+     //"north-america/canada/new-brunswick"
+     ];
 
     for file_name in file_list {
         let full_url = format!("https://download.geofabrik.de/{}-latest.osm.pbf", file_name);
@@ -88,9 +93,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut keep_node_ped_bike_count: usize = 0;
         let mut keep_way_ped_bike_count: usize = 0;
 
+        let mut keep_place_node_count: usize = 0;
+        let mut keep_place_way_count: usize = 0;
+
         let mut read_osm = osmpbfreader::OsmPbfReader::new(bytes.as_ref());
 
-        let mut kept_ped_bike_list = Vec::new();
+        let mut kept_ped_bike_list: Vec<OsmObj> = Vec::new();
+        let mut kept_place_search_list: Vec<OsmObj> = Vec::new();
+
+        let mut nodes_to_keep_places: HashSet<i64> = HashSet::new();
+        let mut nodes_already_kept_places: HashSet<i64> = HashSet::new();
+
+        let mut nodes_to_keep_ped_and_bike: HashSet<i64> = HashSet::new();
+        let mut nodes_already_kept_ped_and_bike: HashSet<i64> = HashSet::new();
+
+        let mut objs = Vec::new();
 
         for obj in read_osm.iter() {
             match obj {
@@ -98,72 +115,175 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     println!("Error reading OSM: {}", e);
                 }
                 Ok(obj) => {
+                    objs.push(obj);
+                }
+            }
+        }
+
+        println!("Finished moving OSM to vec");
+
+        drop(read_osm);
+
+        for obj in objs.iter() {
                     let mut keep_ped_bike = false;
+                    let mut keep_place_search = false;
 
                     //sidewalk and bike lane extraction
                     match &obj {
                         OsmObj::Node(e) => {
                             nodes += 1;
 
-                            if let Some(road_type) =
+                            if let Some((_, place_name)) =
+                                e.tags.clone().iter().find(|(k, _)| k.eq(&"name"))
+                            {
+                                keep_place_search = true;
+                            }
+
+                            if let Some((_, road_type)) =
                                 e.tags.clone().iter().find(|(k, _)| k.eq(&"highway"))
                             {
                                 keep_ped_bike = true;
+
+                                if road_type == "motorway" {
+                                    keep_ped_bike = false;
+                                }
                             }
 
-                            if let (Some(bicycle), Some(foot)) = (
+                            if let Some(pt) = e
+                                .tags
+                                .clone()
+                                .iter()
+                                .find(|(k, _)| k.eq(&"public_transport"))
+                            {
+                                keep_place_search = false;
+                            }
+
+                            if let (Some((_, bicycle)), Some((_, foot))) = (
                                 e.tags.clone().iter().find(|(k, _)| k.eq(&"bicycle")),
                                 e.tags.clone().iter().find(|(k, _)| k.eq(&"foot")),
                             ) {
-                                if bicycle.1.eq(&"yes") || foot.1.eq(&"yes") {
+                                if bicycle.eq(&"yes") || foot.eq(&"yes") {
                                     keep_ped_bike = true;
                                 }
 
-                                if bicycle.1.eq(&"no") || foot.1.eq(&"no") {
+                                if bicycle.eq(&"no") || foot.eq(&"no") {
                                     keep_ped_bike = false;
                                 }
                             }
 
                             if keep_ped_bike {
                                 keep_node_ped_bike_count += 1;
+                                nodes_already_kept_ped_and_bike.insert(e.id.0);
                             }
+
+                           /*  if keep_place_search {
+                                keep_place_node_count += 1;
+                                nodes_already_kept_places.insert(e.id.0);
+                            }*/
                         }
                         OsmObj::Way(e) => {
                             ways += 1;
 
-                            if let Some(road_type) =
+                            if let Some((_, name)) =
+                                e.tags.clone().iter().find(|(k, _)| k.eq(&"name"))
+                            {
+                                keep_place_search = true;
+                            }
+
+                            if let Some((_, addr)) =
+                                e.tags.clone().iter().find(|(k, _)| k.eq(&"addr:street"))
+                            {
+                                keep_place_search = true;
+                            }
+
+                            if let Some((_, road_type)) =
                                 e.tags.clone().iter().find(|(k, _)| k.eq(&"highway"))
                             {
                                 keep_ped_bike = true;
+
+                                if road_type == "motorway" {
+                                    keep_ped_bike = false;
+                                }
                             }
 
-                            if let (Some(bicycle), Some(foot)) = (
+                            if let (Some((_, bicycle)), Some((_, foot))) = (
                                 e.tags.clone().iter().find(|(k, _)| k.eq(&"bicycle")),
                                 e.tags.clone().iter().find(|(k, _)| k.eq(&"foot")),
                             ) {
-                                if bicycle.1.eq(&"yes") || foot.1.eq(&"yes") {
+                                if bicycle.eq(&"yes") || foot.eq(&"yes") {
                                     keep_ped_bike = true;
                                 }
 
-                                if bicycle.1.eq(&"no") || foot.1.eq(&"no") {
+                                if bicycle.eq(&"no") || foot.eq(&"no") {
                                     keep_ped_bike = false;
                                 }
                             }
 
                             if keep_ped_bike {
                                 keep_way_ped_bike_count += 1;
+
+                                for node in e.nodes.iter() {
+                                    nodes_to_keep_ped_and_bike.insert(node.0);
+                                }
                             }
+
+                            /* 
+                            if keep_place_search {
+                                keep_place_way_count += 1;
+
+                                for node in e.nodes.iter() {
+                                    nodes_to_keep_places.insert(node.0);
+                                }
+                            }*/
                         }
                         _ => {}
                     }
 
                     //push to vecs
 
+                    if keep_place_search {
+                     //   kept_place_search_list.push(obj.clone());
+                    }
+
                     if keep_ped_bike {
                         kept_ped_bike_list.push(obj.clone());
                     }
+               
+        }
+
+        let mut keep_node_ped_bike_count_second_round: usize = 0;
+
+        //println!("kept place search list: {:?}", nodes_to_keep_ped_and_bike);
+        // get nodes again
+
+        for obj in objs.iter() {
+           match obj {
+            
+            OsmObj::Node(e) => {
+             //   println!("Node: {:?}", e.id.0);
+                if nodes_to_keep_ped_and_bike.contains(&e.id.0) {
+                    
+                    keep_node_ped_bike_count_second_round += 1;
+
+                    if !nodes_already_kept_ped_and_bike.contains(&e.id.0) {
+                        kept_ped_bike_list.push(obj.clone());
+                        keep_node_ped_bike_count += 1;
+                    }
                 }
-            }
+
+                /*
+                if nodes_to_keep_places.contains(&e.id.0) {
+                    if !nodes_already_kept_places.contains(&e.id.0) {
+                        kept_place_search_list.push(obj.clone());
+                        keep_place_node_count += 1;
+                    }
+                }*/
+          
+    },
+    _ => {
+        continue;
+    }
+           }
         }
 
         println!("Nodes: {}", nodes);
@@ -178,23 +298,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             keep_way_ped_bike_count
         );
 
+        println!(
+            "Nodes that are from ways for ped and bike: {}, second round: {}",
+            nodes_to_keep_ped_and_bike.len(), keep_node_ped_bike_count_second_round
+        );
+
+        println!("Nodes to keep for place search: {}", keep_place_node_count);
+
+        println!("Ways to keep for place search: {}", keep_place_way_count);
+
         //write to file
 
-        let ped_bike_path = format!(
+        let ped_bike_file_path = format!(
             "{}/ped-and-bike-{}.osm.bincode",
             routing_export_path,
             file_name.replace("/", "-")
         );
 
-        let mut ped_bike_path = OpenOptions::new()
+        let mut ped_bike_file = OpenOptions::new()
             .write(true)
             .create(true)
-            .open(path.clone())
+            .open(ped_bike_file_path.clone())
             .expect("Failed to open file");
 
         let bincoded_ped_bike = bincode::serialize(&kept_ped_bike_list)?;
 
-        ped_bike_path.write_all(&bincoded_ped_bike)?;
+        ped_bike_file.write_all(&bincoded_ped_bike)?;
+
+        println!("Wrote to {}", ped_bike_file_path);
     }
 
     Ok(())
