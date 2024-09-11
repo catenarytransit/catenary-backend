@@ -489,10 +489,7 @@ pub async fn nearby_from_coords(
 
     if stops.len() > 800 {
         bus_distance_limit = 1200;
-    }
-
-    if stops.len() > 1500 {
-        rail_and_other_distance_limit = 1500;
+        rail_and_other_distance_limit = 1200;
     }
 
     //SELECT * FROM gtfs.direction_pattern JOIN gtfs.stops ON direction_pattern.chateau = stops.chateau AND direction_pattern.stop_id = stops.gtfs_id AND direction_pattern.attempt_id = stops.attempt_id WHERE ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT(-87.6295735 41.8799279)', 0.02) AND allowed_spatial_query = TRUE;
