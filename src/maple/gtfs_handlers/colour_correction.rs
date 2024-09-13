@@ -78,6 +78,7 @@ pub fn fix_background_colour_rgb_feed_route(
             "510" => RGB::new(0, 112, 191),
             "520" => RGB::new(255, 143, 0),
             "530" => RGB::new(0, 171, 70),
+            "535" => RGB::new(175, 99, 49),
             "888" | "891" | "892" | "894" => RGB::new(98, 54, 27),
             _ => RGB::new(220, 38, 38),
         },
