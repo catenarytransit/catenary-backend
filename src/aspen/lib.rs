@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use tarpc::{client, tokio_serde::formats::Bincode};
-pub mod rt_recent_history;
 
 #[derive(serde::Deserialize, Clone, serde::Serialize, Debug)]
 pub struct TripsSelectionResponse {
