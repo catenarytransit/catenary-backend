@@ -93,6 +93,7 @@ pub async fn new_rt_data(
 
     let mut aspenised_vehicle_positions: AHashMap<String, AspenisedVehiclePosition> =
         AHashMap::new();
+    let mut gtfs_vehicle_labels_to_ids: AHashMap<String, String> = AHashMap::new();
     let mut vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache> = AHashMap::new();
     let mut trip_updates: AHashMap<String, AspenisedTripUpdate> = AHashMap::new();
     let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> =
@@ -100,6 +101,7 @@ pub async fn new_rt_data(
 
     //let alerts hashmap
     let mut alerts: AHashMap<String, AspenisedAlert> = AHashMap::new();
+    
 
     let mut impacted_route_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
     let impacted_stop_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
@@ -489,8 +491,7 @@ pub async fn new_rt_data(
 
         //vehicle labels to gtfs ids
 
-        let mut gtfs_vehicle_labels_to_ids: AHashMap<String, String> = AHashMap::new();
-
+    
         for (key, vehicle_gtfs) in aspenised_vehicle_positions.iter() {
             if let Some(vehicle_data) = &vehicle_gtfs.vehicle {
                 if let Some(label) = &vehicle_data.label {
@@ -498,54 +499,50 @@ pub async fn new_rt_data(
                 }
             }
         }
+        
+    }
 
-        //Insert data back into process-wide authoritative_data_store
+      //Insert data back into process-wide authoritative_data_store
 
-        match authoritative_data_store.entry(chateau_id.clone()) {
-            scc::hash_map::Entry::Occupied(oe) => {
-                let mut data = oe.get_mut();
-                *data = AspenisedData {
-                    vehicle_positions: aspenised_vehicle_positions,
-                    vehicle_routes_cache: vehicle_routes_cache,
-                    trip_updates: trip_updates,
-                    trip_updates_lookup_by_trip_id_to_trip_update_ids:
-                        trip_updates_lookup_by_trip_id_to_trip_update_ids,
-                    aspenised_alerts: alerts,
-                    impacted_routes_alerts: impacted_route_id_to_alert_ids,
-                    impacted_stops_alerts: AHashMap::new(),
-                    vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
-                    impacted_trips_alerts: impact_trip_id_to_alert_ids,
-                    last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
-                }
-            }
-            scc::hash_map::Entry::Vacant(ve) => {
-                ve.insert_entry(AspenisedData {
-                    vehicle_positions: aspenised_vehicle_positions,
-                    vehicle_routes_cache: vehicle_routes_cache,
-                    trip_updates: trip_updates,
-                    trip_updates_lookup_by_trip_id_to_trip_update_ids:
-                        trip_updates_lookup_by_trip_id_to_trip_update_ids,
-                    aspenised_alerts: alerts,
-                    impacted_routes_alerts: impacted_route_id_to_alert_ids,
-                    impacted_stops_alerts: AHashMap::new(),
-                    vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
-                    impacted_trips_alerts: impact_trip_id_to_alert_ids,
-                    last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
-                });
+      match authoritative_data_store.entry(chateau_id.clone()) {
+        scc::hash_map::Entry::Occupied(mut oe) => {
+            let mut data = oe.get_mut();
+            *data = AspenisedData {
+                vehicle_positions: aspenised_vehicle_positions,
+                vehicle_routes_cache: vehicle_routes_cache,
+                trip_updates: trip_updates,
+                trip_updates_lookup_by_trip_id_to_trip_update_ids:
+                    trip_updates_lookup_by_trip_id_to_trip_update_ids,
+                aspenised_alerts: alerts,
+                impacted_routes_alerts: impacted_route_id_to_alert_ids,
+                impacted_stops_alerts: AHashMap::new(),
+                vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
+                impacted_trips_alerts: impact_trip_id_to_alert_ids,
+                last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
             }
         }
-
-        println!(
-            "Updated Chateau {} with realtime data from {}, took {} ms, with {} ms chateau lookup, {} ms route lookup, {} ms trips and {} ms itin lookup",
-            chateau_id,
-            realtime_feed_id,
-            start.elapsed().as_millis(),
-            chateau_elapsed.as_millis(),
-            routes_query_elapsed.as_millis(),
-            trip_duration.as_millis(),
-            itin_lookup_duration.as_millis()
-        );
+        scc::hash_map::Entry::Vacant(ve) => {
+            ve.insert_entry(AspenisedData {
+                vehicle_positions: aspenised_vehicle_positions,
+                vehicle_routes_cache: vehicle_routes_cache,
+                trip_updates: trip_updates,
+                trip_updates_lookup_by_trip_id_to_trip_update_ids:
+                    trip_updates_lookup_by_trip_id_to_trip_update_ids,
+                aspenised_alerts: alerts,
+                impacted_routes_alerts: impacted_route_id_to_alert_ids,
+                impacted_stops_alerts: AHashMap::new(),
+                vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
+                impacted_trips_alerts: impact_trip_id_to_alert_ids,
+                last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
+            });
+        }
     }
+
+    println!(
+        "Updated Chateau {}",
+        chateau_id,
+    );
+
     Ok(true)
 }
 
