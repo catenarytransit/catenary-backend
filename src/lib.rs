@@ -65,6 +65,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub mod metrolink_ptc_to_stop_id;
+pub mod rt_recent_history;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ChateauDataNoGeometry {
@@ -897,3 +898,4 @@ mod test_calendar {
         };
     }
 }
+
