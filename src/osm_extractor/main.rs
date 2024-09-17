@@ -8,8 +8,8 @@ use std::process::exit;
 
 use geofabrik_handler::poly_parser;
 
-use serde::{Deserialize, Serialize};
 use osmpbfreader::OsmObj;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct ExportOsm {
@@ -38,9 +38,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     //download OSM
 
-    let file_list = ["north-america/canada/quebec",
-     //"north-america/canada/new-brunswick"
-     ];
+    let file_list = [
+        "north-america/canada/quebec",
+        //"north-america/canada/new-brunswick"
+    ];
 
     for file_name in file_list {
         let full_url = format!("https://download.geofabrik.de/{}-latest.osm.pbf", file_name);
@@ -137,142 +138,137 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         drop(read_osm);
 
         for obj in objs.iter() {
-                    let mut keep_ped_bike = false;
-                    let mut keep_place_search = false;
+            let mut keep_ped_bike = false;
+            let mut keep_place_search = false;
 
-                    //sidewalk and bike lane extraction
-                    match &obj {
-                        OsmObj::Node(e) => {
-                            nodes += 1;
+            //sidewalk and bike lane extraction
+            match &obj {
+                OsmObj::Node(e) => {
+                    nodes += 1;
 
-                            if let Some((_, place_name)) =
-                                e.tags.clone().iter().find(|(k, _)| k.eq(&"name"))
-                            {
-                                keep_place_search = true;
-                            }
-
-                            if let Some((_, road_type)) =
-                                e.tags.clone().iter().find(|(k, _)| k.eq(&"highway"))
-                            {
-                                keep_ped_bike = true;
-
-                                if road_type == "motorway" {
-                                    keep_ped_bike = false;
-                                }
-                            }
-
-                            if let Some(pt) = e
-                                .tags
-                                .clone()
-                                .iter()
-                                .find(|(k, _)| k.eq(&"public_transport"))
-                            {
-                                keep_place_search = false;
-                            }
-
-                            if let (Some((_, bicycle)), Some((_, foot))) = (
-                                e.tags.clone().iter().find(|(k, _)| k.eq(&"bicycle")),
-                                e.tags.clone().iter().find(|(k, _)| k.eq(&"foot")),
-                            ) {
-                                if bicycle.eq(&"yes") || foot.eq(&"yes") {
-                                    keep_ped_bike = true;
-                                }
-
-                                if bicycle.eq(&"no") || foot.eq(&"no") {
-                                    pruned_car_only += 1;
-                                    keep_ped_bike = false;
-                                }
-                            }
-
-                            if keep_ped_bike {
-                                keep_node_ped_bike_count += 1;
-                                nodes_already_kept_ped_and_bike.insert(e.id.0);
-
-                                
-                                    kept_ped_bike_nodes.push(e.clone());
-                                
-                            }
-
-                           /*  if keep_place_search {
-                                keep_place_node_count += 1;
-                                nodes_already_kept_places.insert(e.id.0);
-                            }*/
-                        }
-                        OsmObj::Way(way) => {
-                            ways += 1;
-
-                            if let Some((_, name)) =
-                                way.tags.clone().iter().find(|(k, _)| k.eq(&"name"))
-                            {
-                                keep_place_search = true;
-                            }
-
-                            if let Some((_, addr)) =
-                                way.tags.clone().iter().find(|(k, _)| k.eq(&"addr:street"))
-                            {
-                                keep_place_search = true;
-                            }
-
-                            if let Some((_, road_type)) =
-                            way.tags.clone().iter().find(|(k, _)| k.eq(&"highway"))
-                            {
-                                keep_ped_bike = true;
-
-                                if road_type == "motorway" || road_type == "motorway_link" {
-                                    keep_ped_bike = false;
-                                    pruned_car_only += 1;
-                                }
-                            }
-
-                            if let (Some((_, bicycle)), Some((_, foot))) = (
-                                way.tags.clone().iter().find(|(k, _)| k.eq(&"bicycle")),
-                                way.tags.clone().iter().find(|(k, _)| k.eq(&"foot")),
-                            ) {
-                                if bicycle.eq(&"yes") || foot.eq(&"yes") {
-                                    keep_ped_bike = true;
-                                }
-
-                                if bicycle.eq(&"no") || foot.eq(&"no") {
-                                    keep_ped_bike = false;
-                                }
-                            }
-
-                            if let Some((_, access)) =
-                            way.tags.clone().iter().find(|(k, _)| k.eq(&"access"))
-                            {
-                                if access == "no" || access == "private" || access == "military" {
-                                    keep_ped_bike = false;
-                                }
-                            }
-
-                            if keep_ped_bike {
-                                keep_way_ped_bike_count += 1;
-
-                                for node in way.nodes.iter() {
-                                    nodes_to_keep_ped_and_bike.insert(node.0);
-                                }
-
-                                kept_ped_bike_ways.push(way.clone());
-                            }
-
-                            /* 
-                            if keep_place_search {
-                                keep_place_way_count += 1;
-
-                                for node in e.nodes.iter() {
-                                    nodes_to_keep_places.insert(node.0);
-                                }
-                            }*/
-                        }
-                        _ => {}
+                    if let Some((_, place_name)) =
+                        e.tags.clone().iter().find(|(k, _)| k.eq(&"name"))
+                    {
+                        keep_place_search = true;
                     }
 
-                    //push to vecs
+                    if let Some((_, road_type)) =
+                        e.tags.clone().iter().find(|(k, _)| k.eq(&"highway"))
+                    {
+                        keep_ped_bike = true;
 
+                        if road_type == "motorway" {
+                            keep_ped_bike = false;
+                        }
+                    }
+
+                    if let Some(pt) = e
+                        .tags
+                        .clone()
+                        .iter()
+                        .find(|(k, _)| k.eq(&"public_transport"))
+                    {
+                        keep_place_search = false;
+                    }
+
+                    if let (Some((_, bicycle)), Some((_, foot))) = (
+                        e.tags.clone().iter().find(|(k, _)| k.eq(&"bicycle")),
+                        e.tags.clone().iter().find(|(k, _)| k.eq(&"foot")),
+                    ) {
+                        if bicycle.eq(&"yes") || foot.eq(&"yes") {
+                            keep_ped_bike = true;
+                        }
+
+                        if bicycle.eq(&"no") || foot.eq(&"no") {
+                            pruned_car_only += 1;
+                            keep_ped_bike = false;
+                        }
+                    }
+
+                    if keep_ped_bike {
+                        keep_node_ped_bike_count += 1;
+                        nodes_already_kept_ped_and_bike.insert(e.id.0);
+
+                        kept_ped_bike_nodes.push(e.clone());
+                    }
+
+                    /*  if keep_place_search {
+                        keep_place_node_count += 1;
+                        nodes_already_kept_places.insert(e.id.0);
+                    }*/
+                }
+                OsmObj::Way(way) => {
+                    ways += 1;
+
+                    if let Some((_, name)) = way.tags.clone().iter().find(|(k, _)| k.eq(&"name")) {
+                        keep_place_search = true;
+                    }
+
+                    if let Some((_, addr)) =
+                        way.tags.clone().iter().find(|(k, _)| k.eq(&"addr:street"))
+                    {
+                        keep_place_search = true;
+                    }
+
+                    if let Some((_, road_type)) =
+                        way.tags.clone().iter().find(|(k, _)| k.eq(&"highway"))
+                    {
+                        keep_ped_bike = true;
+
+                        if road_type == "motorway" || road_type == "motorway_link" {
+                            keep_ped_bike = false;
+                            pruned_car_only += 1;
+                        }
+                    }
+
+                    if let (Some((_, bicycle)), Some((_, foot))) = (
+                        way.tags.clone().iter().find(|(k, _)| k.eq(&"bicycle")),
+                        way.tags.clone().iter().find(|(k, _)| k.eq(&"foot")),
+                    ) {
+                        if bicycle.eq(&"yes") || foot.eq(&"yes") {
+                            keep_ped_bike = true;
+                        }
+
+                        if bicycle.eq(&"no") || foot.eq(&"no") {
+                            keep_ped_bike = false;
+                        }
+                    }
+
+                    if let Some((_, access)) =
+                        way.tags.clone().iter().find(|(k, _)| k.eq(&"access"))
+                    {
+                        if access == "no" || access == "private" || access == "military" {
+                            keep_ped_bike = false;
+                        }
+                    }
+
+                    if keep_ped_bike {
+                        keep_way_ped_bike_count += 1;
+
+                        for node in way.nodes.iter() {
+                            nodes_to_keep_ped_and_bike.insert(node.0);
+                        }
+
+                        kept_ped_bike_ways.push(way.clone());
+                    }
+
+                    /*
                     if keep_place_search {
-                     //   kept_place_search_list.push(obj.clone());
-                    }
-               
+                        keep_place_way_count += 1;
+
+                        for node in e.nodes.iter() {
+                            nodes_to_keep_places.insert(node.0);
+                        }
+                    }*/
+                }
+                _ => {}
+            }
+
+            //push to vecs
+
+            if keep_place_search {
+                //   kept_place_search_list.push(obj.clone());
+            }
         }
 
         let mut keep_node_ped_bike_count_second_round: usize = 0;
@@ -281,33 +277,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // get nodes again
 
         for obj in objs.iter() {
-           match obj {
-            
-            OsmObj::Node(e) => {
-             //   println!("Node: {:?}", e.id.0);
-                if nodes_to_keep_ped_and_bike.contains(&e.id.0) {
-                    
-                    keep_node_ped_bike_count_second_round += 1;
+            match obj {
+                OsmObj::Node(e) => {
+                    //   println!("Node: {:?}", e.id.0);
+                    if nodes_to_keep_ped_and_bike.contains(&e.id.0) {
+                        keep_node_ped_bike_count_second_round += 1;
 
-                    if !nodes_already_kept_ped_and_bike.contains(&e.id.0) {
-                        kept_ped_bike_nodes.push(e.clone());
-                        keep_node_ped_bike_count += 1;
+                        if !nodes_already_kept_ped_and_bike.contains(&e.id.0) {
+                            kept_ped_bike_nodes.push(e.clone());
+                            keep_node_ped_bike_count += 1;
+                        }
                     }
+
+                    /*
+                    if nodes_to_keep_places.contains(&e.id.0) {
+                        if !nodes_already_kept_places.contains(&e.id.0) {
+                            kept_place_search_list.push(obj.clone());
+                            keep_place_node_count += 1;
+                        }
+                    }*/
                 }
-
-                /*
-                if nodes_to_keep_places.contains(&e.id.0) {
-                    if !nodes_already_kept_places.contains(&e.id.0) {
-                        kept_place_search_list.push(obj.clone());
-                        keep_place_node_count += 1;
-                    }
-                }*/
-          
-    },
-    _ => {
-        continue;
-    }
-           }
+                _ => {
+                    continue;
+                }
+            }
         }
 
         println!("Nodes: {}", nodes);
@@ -324,7 +317,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         println!(
             "Nodes that are from ways for ped and bike: {}, second round: {}",
-            nodes_to_keep_ped_and_bike.len(), keep_node_ped_bike_count_second_round
+            nodes_to_keep_ped_and_bike.len(),
+            keep_node_ped_bike_count_second_round
         );
 
         println!("Rejected car-only ways: {}", pruned_car_only);

@@ -190,6 +190,7 @@ pub mod aspen_dataset {
     pub struct AspenisedData {
         pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
         pub vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache>,
+        pub vehicle_label_to_gtfs_id: AHashMap<String, String>,
         //id to trip update
         pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
         pub trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
@@ -898,4 +899,3 @@ mod test_calendar {
         };
     }
 }
-

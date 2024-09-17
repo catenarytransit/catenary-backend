@@ -52,6 +52,11 @@ pub trait AspenRpc {
         gtfs_id: String,
     ) -> Option<AspenisedVehiclePosition>;
 
+    async fn get_single_vehicle_location_from_vehicle_label(
+        chateau_id: String,
+        vehicle_label: String,
+    ) -> Option<AspenisedVehiclePosition>;
+
     async fn get_vehicle_locations(
         chateau_id: String,
         existing_fasthash_of_routes: Option<u64>,

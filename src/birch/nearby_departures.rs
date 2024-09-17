@@ -321,7 +321,7 @@ AND
 
     println!("Finished looking up trips in {:?}", timer_trips.elapsed());
 
-    let mut compressed_trips:  Vec<CompressedTrip> = vec![];
+    let mut compressed_trips: Vec<CompressedTrip> = vec![];
 
     let mut services_to_lookup: BTreeSet<String> = BTreeSet::new();
 
@@ -335,20 +335,20 @@ AND
 
     let calendar_timer = Instant::now();
 
-    let (
-        services_calendar_lookup,
-        services_calendar_dates_lookup,
-        routes_query,
-    ) = tokio::join!(
+    let (services_calendar_lookup, services_calendar_dates_lookup, routes_query) = tokio::join!(
         catenary::schema::gtfs::calendar::dsl::calendar
             .filter(catenary::schema::gtfs::calendar::dsl::chateau.eq(&query.chateau_id))
-            .filter(catenary::schema::gtfs::calendar::dsl::service_id.eq_any(services_to_lookup.clone()))
+            .filter(
+                catenary::schema::gtfs::calendar::dsl::service_id
+                    .eq_any(services_to_lookup.clone())
+            )
             .select(catenary::models::Calendar::as_select())
             .load::<catenary::models::Calendar>(conn),
         catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
             .filter(catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(&query.chateau_id))
             .filter(
-                catenary::schema::gtfs::calendar_dates::dsl::service_id.eq_any(services_to_lookup.clone()),
+                catenary::schema::gtfs::calendar_dates::dsl::service_id
+                    .eq_any(services_to_lookup.clone()),
             )
             .select(catenary::models::CalendarDate::as_select())
             .load::<catenary::models::CalendarDate>(conn),
@@ -377,11 +377,7 @@ AND
 
     let mut trips_table: HashMap<String, Vec<CompressedTrip>> = HashMap::new();
 
-    for trip in compressed_trips {
-       
-    }
-
-
+    for trip in compressed_trips {}
 
     HttpResponse::Ok().json("Hello")
 }
@@ -1228,58 +1224,54 @@ pub async fn nearby_from_coords(
     }
 }
 
-
 fn make_calendar_structure_from_pg_single_chateau(
     services_calendar_lookup_queries_to_perform: Vec<catenary::models::Calendar>,
-    services_calendar_dates_lookup_queries_to_perform: Vec<catenary::models::CalendarDate>
+    services_calendar_dates_lookup_queries_to_perform: Vec<catenary::models::CalendarDate>,
 ) -> BTreeMap<String, catenary::CalendarUnified> {
-    let mut calendar_structures:  BTreeMap<String, catenary::CalendarUnified> =
-        BTreeMap::new();
+    let mut calendar_structures: BTreeMap<String, catenary::CalendarUnified> = BTreeMap::new();
 
+    for calendar in services_calendar_lookup_queries_to_perform {
+        calendar_structures.insert(
+            calendar.service_id.clone(),
+            catenary::CalendarUnified {
+                id: calendar.service_id.clone(),
+                general_calendar: Some(catenary::GeneralCalendar {
+                    days: make_weekdays(&calendar),
+                    start_date: calendar.gtfs_start_date,
+                    end_date: calendar.gtfs_end_date,
+                }),
+                exceptions: None,
+            },
+        );
+    }
 
-        for calendar in  services_calendar_lookup_queries_to_perform {
-            calendar_structures.insert(
-                calendar.service_id.clone(),
-                catenary::CalendarUnified {
-                    id: calendar.service_id.clone(),
-                    general_calendar: Some(catenary::GeneralCalendar {
-                        days: make_weekdays(&calendar),
-                        start_date: calendar.gtfs_start_date,
-                        end_date: calendar.gtfs_end_date,
-                    }),
-                    exceptions: None,
-                },
-            );
-        }
+    for calendar_date in services_calendar_dates_lookup_queries_to_perform {
+        let exception_number = match calendar_date.exception_type {
+            1 => gtfs_structures::Exception::Added,
+            2 => gtfs_structures::Exception::Deleted,
+            _ => panic!("WHAT IS THIS!!!!!!"),
+        };
 
-        for calendar_date in services_calendar_dates_lookup_queries_to_perform {
-            let exception_number = match calendar_date.exception_type {
-                1 => gtfs_structures::Exception::Added,
-                2 => gtfs_structures::Exception::Deleted,
-                _ => panic!("WHAT IS THIS!!!!!!"),
-            };
+        match calendar_structures.entry(calendar_date.service_id.clone()) {
+            btree_map::Entry::Occupied(mut oe) => {
+                let mut calendar_unified = oe.get_mut();
 
-            match calendar_structures.entry(calendar_date.service_id.clone()) {
-                btree_map::Entry::Occupied(mut oe) => {
-                    let mut calendar_unified = oe.get_mut();
-
-                    if let Some(entry) = &mut calendar_unified.exceptions {
-                        entry.insert(calendar_date.gtfs_date, exception_number);
-                    } else {
-                        calendar_unified.exceptions = Some(BTreeMap::from_iter([(
-                            calendar_date.gtfs_date,
-                            exception_number,
-                        )]));
-                    }
-                }
-                btree_map::Entry::Vacant(mut ve) => {
-                    ve.insert(CalendarUnified::empty_exception_from_calendar_date(
-                        &calendar_date,
-                    ));
+                if let Some(entry) = &mut calendar_unified.exceptions {
+                    entry.insert(calendar_date.gtfs_date, exception_number);
+                } else {
+                    calendar_unified.exceptions = Some(BTreeMap::from_iter([(
+                        calendar_date.gtfs_date,
+                        exception_number,
+                    )]));
                 }
             }
+            btree_map::Entry::Vacant(mut ve) => {
+                ve.insert(CalendarUnified::empty_exception_from_calendar_date(
+                    &calendar_date,
+                ));
+            }
         }
-
+    }
 
     calendar_structures
 }

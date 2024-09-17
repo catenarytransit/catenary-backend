@@ -487,36 +487,53 @@ pub async fn new_rt_data(
             }
         }
 
+        //vehicle labels to gtfs ids
+
+        let mut gtfs_vehicle_labels_to_ids: AHashMap<String, String> = AHashMap::new();
+
+        for (key, vehicle_gtfs) in aspenised_vehicle_positions.iter() {
+            if let Some(vehicle_data) = &vehicle_gtfs.vehicle {
+                if let Some(label) = &vehicle_data.label {
+                    gtfs_vehicle_labels_to_ids.insert(label.clone(), key.clone());
+                }
+            }
+        }
+
         //Insert data back into process-wide authoritative_data_store
 
-        authoritative_data_store
-            .entry(chateau_id.clone())
-            .and_modify(|data| {
+        match authoritative_data_store.entry(chateau_id.clone()) {
+            scc::hash_map::Entry::Occupied(oe) => {
+                let mut data = oe.get_mut();
                 *data = AspenisedData {
-                    vehicle_positions: aspenised_vehicle_positions.clone(),
-                    vehicle_routes_cache: vehicle_routes_cache.clone(),
-                    trip_updates: trip_updates.clone(),
+                    vehicle_positions: aspenised_vehicle_positions,
+                    vehicle_routes_cache: vehicle_routes_cache,
+                    trip_updates: trip_updates,
                     trip_updates_lookup_by_trip_id_to_trip_update_ids:
-                        trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
-                    aspenised_alerts: alerts.clone(),
-                    impacted_routes_alerts: impacted_route_id_to_alert_ids.clone(),
+                        trip_updates_lookup_by_trip_id_to_trip_update_ids,
+                    aspenised_alerts: alerts,
+                    impacted_routes_alerts: impacted_route_id_to_alert_ids,
                     impacted_stops_alerts: AHashMap::new(),
-                    impacted_trips_alerts: impact_trip_id_to_alert_ids.clone(),
+                    vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
+                    impacted_trips_alerts: impact_trip_id_to_alert_ids,
                     last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
                 }
-            })
-            .or_insert(AspenisedData {
-                vehicle_positions: aspenised_vehicle_positions.clone(),
-                vehicle_routes_cache: vehicle_routes_cache.clone(),
-                trip_updates: trip_updates.clone(),
-                trip_updates_lookup_by_trip_id_to_trip_update_ids:
-                    trip_updates_lookup_by_trip_id_to_trip_update_ids.clone(),
-                aspenised_alerts: alerts.clone(),
-                impacted_routes_alerts: impacted_route_id_to_alert_ids.clone(),
-                impacted_stops_alerts: AHashMap::new(),
-                impacted_trips_alerts: impact_trip_id_to_alert_ids.clone(),
-                last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
-            });
+            }
+            scc::hash_map::Entry::Vacant(ve) => {
+                ve.insert_entry(AspenisedData {
+                    vehicle_positions: aspenised_vehicle_positions,
+                    vehicle_routes_cache: vehicle_routes_cache,
+                    trip_updates: trip_updates,
+                    trip_updates_lookup_by_trip_id_to_trip_update_ids:
+                        trip_updates_lookup_by_trip_id_to_trip_update_ids,
+                    aspenised_alerts: alerts,
+                    impacted_routes_alerts: impacted_route_id_to_alert_ids,
+                    impacted_stops_alerts: AHashMap::new(),
+                    vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
+                    impacted_trips_alerts: impact_trip_id_to_alert_ids,
+                    last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
+                });
+            }
+        }
 
         println!(
             "Updated Chateau {} with realtime data from {}, took {} ms, with {} ms chateau lookup, {} ms route lookup, {} ms trips and {} ms itin lookup",

@@ -30,6 +30,92 @@ pub async fn get_vehicle_metadata(path: web::Path<(String, String)>) -> impl Res
     HttpResponse::Ok().body("get_vehicle_metadata")
 }
 
+#[actix_web::get("/get_vehicle_information_from_label/{chateau}/{vehicle_label}")]
+pub async fn get_vehicle_information_from_label(
+    path: web::Path<(String, String)>,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+) -> impl Responder {
+    let (chateau, vehicle_label) = path.into_inner();
+
+    let etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await;
+
+    if let Err(etcd_err) = &etcd {
+        eprintln!("{:#?}", etcd_err);
+
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Could not connect to etcd");
+    }
+
+    let mut etcd = etcd.unwrap();
+
+    let fetch_assigned_node_for_this_chateau = etcd
+        .get(
+            format!("/aspen_assigned_chateaus/{}", chateau).as_str(),
+            None,
+        )
+        .await;
+
+    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
+        let fetch_assigned_node_for_this_chateau_kv_first =
+            fetch_assigned_node_for_this_chateau.kvs().first();
+
+        if let Some(fetch_assigned_node_for_this_chateau_data) =
+            fetch_assigned_node_for_this_chateau_kv_first
+        {
+            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+                fetch_assigned_node_for_this_chateau_data.value(),
+            )
+            .unwrap();
+
+            let aspen_client =
+                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+                    .await;
+
+            if let Ok(aspen_client) = aspen_client {
+                let get_vehicle = aspen_client
+                    .get_single_vehicle_location_from_vehicle_label(
+                        context::current(),
+                        chateau.clone(),
+                        vehicle_label.clone(),
+                    )
+                    .await;
+
+                if let Ok(get_vehicle) = get_vehicle {
+                    if let Some(get_vehicle) = get_vehicle {
+                        let response_struct = ResponseForGtfsVehicle {
+                            found_data: true,
+                            data: Some(get_vehicle),
+                        };
+
+                        let response = serde_json::to_string(&response_struct).unwrap();
+                        return HttpResponse::Ok()
+                            .insert_header(("Content-Type", "application/json"))
+                            .body(response);
+                    } else {
+                        let response_struct = ResponseForGtfsVehicle {
+                            found_data: false,
+                            data: None,
+                        };
+
+                        let response = serde_json::to_string(&response_struct).unwrap();
+                        return HttpResponse::Ok()
+                            .insert_header(("Content-Type", "application/json"))
+                            .body(response);
+                    }
+                }
+            }
+        }
+    }
+
+    HttpResponse::InternalServerError().body("Could not connect to assigned node")
+}
+
 #[actix_web::get("/get_vehicle_information/{chateau}/{gtfs_rt_id}")]
 pub async fn get_vehicle_information(
     path: web::Path<(String, String)>,
