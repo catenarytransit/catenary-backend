@@ -101,7 +101,6 @@ pub async fn new_rt_data(
 
     //let alerts hashmap
     let mut alerts: AHashMap<String, AspenisedAlert> = AHashMap::new();
-    
 
     let mut impacted_route_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
     let impacted_stop_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
@@ -494,7 +493,6 @@ pub async fn new_rt_data(
 
         //vehicle labels to gtfs ids
 
-    
         for (key, vehicle_gtfs) in aspenised_vehicle_positions.iter() {
             if let Some(vehicle_data) = &vehicle_gtfs.vehicle {
                 if let Some(label) = &vehicle_data.label {
@@ -502,12 +500,11 @@ pub async fn new_rt_data(
                 }
             }
         }
-        
     }
 
-      //Insert data back into process-wide authoritative_data_store
+    //Insert data back into process-wide authoritative_data_store
 
-      match authoritative_data_store.entry(chateau_id.clone()) {
+    match authoritative_data_store.entry(chateau_id.clone()) {
         scc::hash_map::Entry::Occupied(mut oe) => {
             let mut data = oe.get_mut();
             *data = AspenisedData {
@@ -541,10 +538,7 @@ pub async fn new_rt_data(
         }
     }
 
-    println!(
-        "Updated Chateau {}",
-        chateau_id,
-    );
+    println!("Updated Chateau {}", chateau_id,);
 
     Ok(true)
 }
