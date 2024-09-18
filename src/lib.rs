@@ -183,7 +183,7 @@ pub mod tailscale {
 
 pub mod aspen_dataset {
     use ahash::AHashMap;
-
+    use compact_str::CompactString;
     use std::hash::Hash;
 
     #[derive(Clone, Serialize, Deserialize)]
@@ -193,7 +193,7 @@ pub mod aspen_dataset {
         pub vehicle_label_to_gtfs_id: AHashMap<String, String>,
         //id to trip update
         pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
-        pub trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
+        pub trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<CompactString, Vec<CompactString>>,
         //        pub raw_alerts: AHashMap<String, gtfs_realtime::Alert>,
         pub aspenised_alerts: AHashMap<String, AspenisedAlert>,
         pub impacted_routes_alerts: AHashMap<String, Vec<String>>,
@@ -412,7 +412,7 @@ pub mod aspen_dataset {
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenisedStopTimeUpdate {
         pub stop_sequence: Option<u32>,
-        pub stop_id: Option<String>,
+        pub stop_id: Option<compact_str::CompactString>,
         pub arrival: Option<AspenStopTimeEvent>,
         pub departure: Option<AspenStopTimeEvent>,
         pub departure_occupancy_status: Option<i32>,

@@ -12,6 +12,7 @@ use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use gtfs_realtime::FeedMessage;
 use scc::HashMap as SccHashMap;
+use compact_str::CompactString;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -96,7 +97,7 @@ pub async fn new_rt_data(
     let mut gtfs_vehicle_labels_to_ids: AHashMap<String, String> = AHashMap::new();
     let mut vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache> = AHashMap::new();
     let mut trip_updates: AHashMap<String, AspenisedTripUpdate> = AHashMap::new();
-    let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> =
+    let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<CompactString, Vec<CompactString>> =
         AHashMap::new();
 
     //let alerts hashmap
@@ -390,7 +391,7 @@ pub async fn new_rt_data(
                                 .iter()
                                 .map(|stu| AspenisedStopTimeUpdate {
                                     stop_sequence: stu.stop_sequence,
-                                    stop_id: stu.stop_id.clone(),
+                                    stop_id: stu.stop_id.as_ref().map(|x| x.into()),
                                     arrival: stu.arrival.clone().map(|arrival| {
                                         AspenStopTimeEvent {
                                             delay: arrival.delay,
@@ -421,8 +422,8 @@ pub async fn new_rt_data(
 
                         if trip_id.is_some() {
                             trip_updates_lookup_by_trip_id_to_trip_update_ids
-                                .entry(trip_id.as_ref().unwrap().clone())
-                                .or_insert(vec![trip_update_entity.id.clone()]);
+                                .entry(trip_id.as_ref().unwrap().into())
+                                .or_insert(vec![trip_update_entity.id.clone().into()]);
                         }
 
                         trip_updates.insert(trip_update_entity.id.clone(), trip_update);

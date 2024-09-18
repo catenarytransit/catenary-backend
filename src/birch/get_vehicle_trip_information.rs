@@ -221,7 +221,7 @@ struct GtfsRtRefreshData {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeRefresh {
-    pub stop_id: Option<String>,
+    pub stop_id: Option<compact_str::CompactString>,
     pub rt_arrival: Option<AspenStopTimeEvent>,
     pub rt_departure: Option<AspenStopTimeEvent>,
     pub schedule_relationship: Option<i32>,

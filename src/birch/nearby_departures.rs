@@ -1096,7 +1096,9 @@ pub async fn nearby_from_coords(
                                         } else {
                                             let relevant_stop_time_update =
                                                 trip_update.stop_time_update.iter().find(|x| {
-                                                    x.stop_id.as_ref()
+                                                    x.stop_id
+                                                        .as_ref()
+                                                        .map(|compare| compare.as_str())
                                                         == Some(&trip.itinerary_options[0].stop_id)
                                                 });
 
