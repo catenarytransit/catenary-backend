@@ -192,8 +192,9 @@ pub mod aspen_dataset {
         pub vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache>,
         pub vehicle_label_to_gtfs_id: AHashMap<String, String>,
         //id to trip update
-        pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
-        pub trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<CompactString, Vec<CompactString>>,
+        pub trip_updates: AHashMap<CompactString, AspenisedTripUpdate>,
+        pub trip_updates_lookup_by_trip_id_to_trip_update_ids:
+            AHashMap<CompactString, Vec<CompactString>>,
         //        pub raw_alerts: AHashMap<String, gtfs_realtime::Alert>,
         pub aspenised_alerts: AHashMap<String, AspenisedAlert>,
         pub impacted_routes_alerts: AHashMap<String, Vec<String>>,

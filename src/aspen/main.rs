@@ -28,6 +28,7 @@ use ahash::AHashSet;
 use catenary::postgres_tools::make_async_pool;
 use catenary::{aspen::lib::*, id_cleanup};
 use clap::Parser;
+use compact_str::CompactString;
 use futures::{future, prelude::*};
 use rand::{
     distributions::{Distribution, Uniform},
@@ -45,7 +46,6 @@ use tarpc::{
     tokio_serde::formats::Bincode,
 };
 use tokio::sync::Mutex;
-use compact_str::CompactString;
 use tokio::time;
 use uuid::Uuid;
 mod leader_thread;
@@ -128,14 +128,20 @@ impl AspenRpc for AspenServer {
                         .trip_updates_lookup_by_trip_id_to_trip_update_ids
                         .get(trip_id.as_str())
                     {
-                        trip_id_to_trip_update_ids
-                            .insert(trip_id.clone(), trip_update_id_list.iter().map(|x| x.to_string()).collect::<Vec<String>>());
+                        trip_id_to_trip_update_ids.insert(
+                            trip_id.clone(),
+                            trip_update_id_list
+                                .iter()
+                                .map(|x| x.to_string())
+                                .collect::<Vec<String>>(),
+                        );
 
                         for trip_update_id in trip_update_id_list {
                             if let Some(trip_update) =
                                 authoritative_data.trip_updates.get(trip_update_id.as_str())
                             {
-                                trip_updates.insert(trip_update_id.to_string(), trip_update.clone());
+                                trip_updates
+                                    .insert(trip_update_id.to_string(), trip_update.clone());
                             }
                         }
                     }
@@ -560,7 +566,8 @@ impl AspenRpc for AspenServer {
                         let mut trip_updates = Vec::new();
 
                         for trip_update_id in trip_updates_id_list {
-                            let trip_update = aspenised_data.trip_updates.get(trip_update_id.as_str());
+                            let trip_update =
+                                aspenised_data.trip_updates.get(trip_update_id.as_str());
 
                             match trip_update {
                                 Some(trip_update) => {
