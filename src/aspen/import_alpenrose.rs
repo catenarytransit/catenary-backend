@@ -323,7 +323,10 @@ pub async fn new_rt_data(
                                 timestamp: vehicle_pos.timestamp,
                                 vehicle: vehicle_pos.vehicle.as_ref().map(|vehicle| AspenisedVehicleDescriptor {
                                     id: vehicle.id.clone(),
-                                    label: vehicle.label.clone(),
+                                    label: match realtime_feed_id.as_str() {
+                                        "f-trimet~rt" => vehicle.id.clone(),
+                                        _ => vehicle.label.clone()
+                                    },
                                     license_plate: vehicle.license_plate.clone(),
                                     wheelchair_accessible: vehicle.wheelchair_accessible,
                                     }),
