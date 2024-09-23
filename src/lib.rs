@@ -557,20 +557,6 @@ pub fn parse_gtfs_rt_message(
 
 pub fn route_id_transform(feed_id: &str, route_id: String) -> String {
     match feed_id {
-        "f-mta~nyc~rt~lirr" | "f-dr5-mtanyclirr" => {
-            if !route_id.contains("lirr") {
-                format!("lirr{}", route_id)
-            } else {
-                route_id.to_owned() // Return unmodified route_id if it contains "lirr"
-            }
-        }
-        "f-mta~nyc~rt~mnr" | "f-dr7-mtanyc~metro~north" => {
-            if !route_id.contains("mnr") {
-                format!("mnr{}", route_id)
-            } else {
-                route_id.to_owned() // Return unmodified route_id if it contains "mnr"
-            }
-        }
         "f-dp3-pace~rt" => {
             if !route_id.contains("-367") {
                 format!("{}-367", route_id)
