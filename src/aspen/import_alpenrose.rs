@@ -60,8 +60,14 @@ enum MetrolinkEventType {
     Departure,
 }
 
+struct MetrolinkOutputTrackData {
+    //cleaned 3 digit trip number -> stop_id -> MetrolinkTrackDataCleaned
+    track_lookup: HashMap<String, HashMap<String, MetrolinkTrackDataCleaned>>,
+}
+
 #[derive(Clone, Debug)]
 pub enum TrackData {
+    //output Option<MetrolinkOutputTrackData> instead
     Metrolink(Option<Vec<MetrolinkTrackData>>),
     None,
 }
@@ -560,5 +566,19 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
             TrackData::Metrolink(Some(response))
         }
         _ => TrackData::None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn test_fetch_track_data() {
+        let track_data = super::fetch_track_data("metrolinktrains").await;
+        match track_data {
+            super::TrackData::Metrolink(m_data) => {
+                assert!(m_data.is_some());
+            }
+            _ => panic!("Expected Metrolink data"),
+        }
     }
 }
