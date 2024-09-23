@@ -578,6 +578,14 @@ pub fn route_id_transform(feed_id: &str, route_id: String) -> String {
                 route_id.to_owned()
             }
         }
+        "f-foothilltransit~rt" => {
+            //if the route id is 5 digits, use the last 3
+            if route_id.len() == 5 {
+                route_id.chars().skip(2).collect()
+            } else {
+                route_id
+            }
+        }
         _ => route_id,
     }
 }
