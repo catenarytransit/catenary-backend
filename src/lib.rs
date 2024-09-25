@@ -66,6 +66,7 @@ use std::hash::Hasher;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub mod metrolink_ptc_to_stop_id;
 pub mod rt_recent_history;
+use crate::rt_recent_history::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ChateauDataNoGeometry {
@@ -185,6 +186,8 @@ pub mod aspen_dataset {
     use ahash::AHashMap;
     use compact_str::CompactString;
     use std::hash::Hash;
+    use crate::RtKey;
+    use crate::RtCacheEntry;
 
     #[derive(Clone, Serialize, Deserialize)]
     pub struct AspenisedData {
@@ -438,7 +441,7 @@ pub mod aspen_dataset {
         }
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
     pub struct AspenStopTimeEvent {
         pub delay: Option<i32>,
         pub time: Option<i64>,

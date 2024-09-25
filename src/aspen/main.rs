@@ -69,6 +69,8 @@ mod alerts_responder;
 mod aspen_assignment;
 use prost::Message;
 use std::time::Instant;
+use catenary::rt_recent_history::RtKey;
+use catenary::rt_recent_history::RtCacheEntry;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct GtfsRealtimeHashStore {
@@ -87,12 +89,14 @@ pub struct AspenServer {
     // Backed up in redis as well, program can be shut down and restarted without data loss
     pub authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
+    pub authoritative_trip_updates_by_gtfs_feed_history: Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
     pub alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
     pub alpenrose_to_process_queue_chateaus: Arc<Mutex<HashSet<String>>>,
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
     pub hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>>,
     pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
+    pub backup_trip_updates_by_gtfs_feed_history: Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
     pub etcd_addresses: Arc<Vec<String>>,
     pub etcd_connect_options: Arc<Option<etcd_client::ConnectOptions>>,
     pub worker_etcd_lease_id: i64,
@@ -811,6 +815,8 @@ async fn main() -> anyhow::Result<()> {
                             etcd_addresses: Arc::clone(&etcd_addresses),
                             etcd_connect_options: Arc::clone(&arc_etcd_connect_options),
                             timestamps_of_gtfs_rt: Arc::clone(&timestamps_of_gtfs_rt),
+                            authoritative_trip_updates_by_gtfs_feed_history: Arc::new(SccHashMap::new()),
+                            backup_trip_updates_by_gtfs_feed_history: Arc::new(SccHashMap::new()),
                         };
                         channel.execute(server.serve()).for_each(spawn)
                     })
