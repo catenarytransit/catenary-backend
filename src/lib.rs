@@ -183,11 +183,11 @@ pub mod tailscale {
 }
 
 pub mod aspen_dataset {
+    use crate::RtCacheEntry;
+    use crate::RtKey;
     use ahash::AHashMap;
     use compact_str::CompactString;
     use std::hash::Hash;
-    use crate::RtKey;
-    use crate::RtCacheEntry;
 
     #[derive(Clone, Serialize, Deserialize)]
     pub struct AspenisedData {
