@@ -163,7 +163,7 @@ pub async fn new_rt_data(
 
                                 for pos in metrolink_data {
                                     let lat = metrlink_coord_to_f32(&pos.lat);
-                                    let lon = metrlink_coord_to_f32(&pos.lon);
+                                    let lon = metrlink_coord_to_f32(&pos.long);
                                     let speed = mph_to_mps(&pos.speed);
 
                                     if let (Some(lat), Some(lon), Some(speed)) = (lat, lon, speed) {
