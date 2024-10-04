@@ -544,14 +544,14 @@ pub async fn new_rt_data(
                                     stop_id: stu.stop_id.as_ref().map(|x| x.into()),
                                     arrival: stu.arrival.clone().map(|arrival| {
                                         AspenStopTimeEvent {
-                                            delay: arrival.delay,
+                                            delay: None,
                                             time: arrival.time,
                                             uncertainty: arrival.uncertainty,
                                         }
                                     }),
                                     departure: stu.departure.clone().map(|departure| {
                                         AspenStopTimeEvent {
-                                            delay: departure.delay,
+                                            delay: None,
                                             time: departure.time,
                                             uncertainty: departure.uncertainty,
                                         }
