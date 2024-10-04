@@ -116,6 +116,10 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
         Err(_) => return None,
     };
 
+    let sign = if degrees < 0. { -1.0 } else { 1.0 };
+
+    let degrees = degrees.abs();
+
     let minutes: f32 = match parts[1].parse() {
         Ok(minutes) => minutes,
         Err(_) => return None,
@@ -126,7 +130,9 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
         Err(_) => return None,
     };
 
-    let decimal = degrees + minutes / 60.0 + seconds / 3600.0;
+    let mut decimal = degrees + minutes / 60.0 + seconds / 3600.0;
+
+    decimal = decimal * sign;
 
     Some(decimal)
 }
