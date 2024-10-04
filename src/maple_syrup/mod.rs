@@ -5,11 +5,11 @@ use crate::ahash_fast_hash;
 use crate::enum_to_int::*;
 use ahash::AHashMap;
 use ahash::AHashSet;
+use compact_str::CompactString;
 use gtfs_structures::DirectionType;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use std::hash::Hash;
-use compact_str::CompactString;
 use tzf_rs::DefaultFinder;
 
 lazy_static! {

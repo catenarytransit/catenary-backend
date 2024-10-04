@@ -368,7 +368,8 @@ pub async fn nearby_from_coords(
 
     //sorting finished
 
-    let mut directions_to_closest_stop: HashMap<(String, u64), (CompactString, u32)> = HashMap::new();
+    let mut directions_to_closest_stop: HashMap<(String, u64), (CompactString, u32)> =
+        HashMap::new();
 
     for ((chateau, stop_id), distance_m) in sorted_order_stops.iter() {
         let direction_at_this_stop = stops_to_directions.get(&(chateau.clone(), stop_id.into()));
@@ -682,7 +683,8 @@ pub async fn nearby_from_coords(
         Ok(calendar_structure) => {
             // iterate through all trips and produce a timezone and timeoffset.
 
-            let mut stops_answer: HashMap<String, HashMap<CompactString, StopOutput>> = HashMap::new();
+            let mut stops_answer: HashMap<String, HashMap<CompactString, StopOutput>> =
+                HashMap::new();
             let mut departures: Vec<DepartureRouteGroup> = vec![];
 
             for (chateau_id, calendar_in_chateau) in calendar_structure.iter() {
@@ -985,7 +987,13 @@ pub async fn nearby_from_coords(
                         .sort_by_key(|x| x.departure_schedule.unwrap_or(0));
 
                     let stop = stops_table
-                        .get(&(chateau_id.clone(), headsign_group.trips[0].stop_id.to_string()).clone())
+                        .get(
+                            &(
+                                chateau_id.clone(),
+                                headsign_group.trips[0].stop_id.to_string(),
+                            )
+                                .clone(),
+                        )
                         .unwrap();
 
                     if !stops_answer.contains_key(chateau_id) {
