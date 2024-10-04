@@ -78,7 +78,7 @@ struct MetrolinkPosRaw {
     symbol: CompactString,
     direction: CompactString,
     lat: CompactString,
-    lon: CompactString,
+    long: CompactString,
     speed: CompactString,
     line: CompactString,
     ptc_time: CompactString,
@@ -179,6 +179,8 @@ pub async fn new_rt_data(
                                     }
                                 }
 
+                                println!("Got {} metrolink positions", metrolink_positions.len());
+
                                 Some(metrolink_positions)
                             }
                             Err(e) => {
@@ -187,7 +189,10 @@ pub async fn new_rt_data(
                             }
                         }
                     }
-                    _ => None,
+                    Err(e) => {
+                        println!("Error fetching metrolink data, could not connect: {}", e);
+                        None
+                    }
                 }
             }
             _ => None,
@@ -713,13 +718,16 @@ fn vehicle_pos_supplement(
                 if let Some(vehicle_ids) = &pos_aspenised.vehicle {
                     if let Some(vehicle_id) = &vehicle_ids.id {
                         if let Some(metrolink_pos) = supp_metrolink_data.get(vehicle_id.as_str()) {
-                            pos_aspenised.position = Some(CatenaryRtVehiclePosition {
-                                latitude: metrolink_pos.lat,
-                                longitude: metrolink_pos.lon,
-                                bearing: None,
-                                odometer: None,
-                                speed: Some(metrolink_pos.speed),
-                            });
+                            if pos_aspenised.position.is_none() {
+                                println!("Set new pos for Metrolink {}", vehicle_id);
+                                pos_aspenised.position = Some(CatenaryRtVehiclePosition {
+                                    latitude: metrolink_pos.lat,
+                                    longitude: metrolink_pos.lon,
+                                    bearing: None,
+                                    odometer: None,
+                                    speed: Some(metrolink_pos.speed),
+                                });
+                            }
                         }
                     }
                 }
