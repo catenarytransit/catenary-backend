@@ -242,7 +242,7 @@ pub async fn gtfs_process_feed(
             let stop_points = direction_pattern
                 .stop_sequence
                 .iter()
-                .filter_map(|stop_id| gtfs.stops.get(stop_id))
+                .filter_map(|stop_id| gtfs.stops.get(stop_id.as_str()))
                 .filter_map(|stop| match (stop.latitude, stop.longitude) {
                     (Some(latitude), Some(longitude)) => Some(postgis_diesel::types::Point {
                         y: latitude,
@@ -262,7 +262,7 @@ pub async fn gtfs_process_feed(
 
                 //insert into shapes and shapes_not_bus
 
-                let route = gtfs.routes.get(&direction_pattern.route_id);
+                let route = gtfs.routes.get(direction_pattern.route_id.as_str());
 
                 if let Some(route) = route {
                     let _ = insert_stop_to_stop_geometry(

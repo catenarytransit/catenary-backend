@@ -13,6 +13,7 @@ use catenary::schema::gtfs::trips_compressed as trips_compressed_pg_schema;
 use catenary::EtcdConnectionIps;
 use chrono::TimeZone;
 use chrono_tz::Tz;
+use compact_str::CompactString;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::ExpressionMethods;
@@ -255,7 +256,7 @@ struct TripIntroductionInformation {
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
-    pub stop_id: String,
+    pub stop_id: CompactString,
     pub name: Option<String>,
     pub translations: Option<BTreeMap<String, String>>,
     pub platform_code: Option<String>,
@@ -549,7 +550,7 @@ pub async fn get_trip_init(
 
     //convert shape data into polyline
 
-    let stop_ids_to_lookup: Vec<String> =
+    let stop_ids_to_lookup: Vec<CompactString> =
         itin_rows_to_use.iter().map(|x| x.stop_id.clone()).collect();
 
     let (stops_data, shape_lookup): (
@@ -729,7 +730,7 @@ pub async fn get_trip_init(
     };
 
     for row in itin_rows_to_use {
-        let stop = stops_data_map.get(&row.stop_id);
+        let stop = stops_data_map.get(row.stop_id.as_str());
 
         if stop.is_none() {
             eprintln!("Stop {} not found", row.stop_id);
@@ -739,7 +740,7 @@ pub async fn get_trip_init(
         let stop = stop.unwrap();
 
         let stop_time = StopTimeIntroduction {
-            stop_id: stop.gtfs_id.clone(),
+            stop_id: (&stop.gtfs_id).into(),
             name: stop.name.clone(),
             translations: None,
             platform_code: stop.platform_code.clone(),
@@ -982,7 +983,7 @@ pub async fn get_trip_init(
         wheelchair_accessible: trip_compressed.wheelchair_accessible,
         has_frequencies: trip_compressed.has_frequencies,
         trip_headsign: itin_meta.trip_headsign,
-        trip_short_name: trip_compressed.trip_short_name,
+        trip_short_name: trip_compressed.trip_short_name.map(|x| x.into()),
         route_long_name: route.long_name,
         route_short_name: route.short_name,
         vehicle,

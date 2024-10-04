@@ -9,6 +9,7 @@ use gtfs_structures::DirectionType;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use std::hash::Hash;
+use compact_str::CompactString;
 use tzf_rs::DefaultFinder;
 
 lazy_static! {
@@ -20,7 +21,7 @@ pub struct ItineraryCover {
     pub stop_sequences: Vec<StopDifference>,
     //map 0 to false and 1 to true
     pub direction_id: Option<bool>,
-    pub route_id: String,
+    pub route_id: CompactString,
     pub trip_headsign: Option<String>,
     pub timezone: String,
     pub shape_id: Option<String>,
@@ -30,7 +31,7 @@ pub struct ItineraryCover {
 
 #[derive(Hash, Debug, Clone, PartialEq, Eq)]
 pub struct StopDifference {
-    pub stop_id: String,
+    pub stop_id: CompactString,
     pub arrival_time_since_start: Option<i32>,
     pub departure_time_since_start: Option<i32>,
     pub interpolation_by_catenary: bool,
@@ -47,29 +48,29 @@ pub struct StopDifference {
 
 pub struct DirectionPattern {
     pub direction_id: Option<bool>,
-    pub stop_sequence: Vec<String>,
+    pub stop_sequence: Vec<CompactString>,
     pub headsign_or_destination: Option<String>,
     pub gtfs_shape_id: Option<String>,
-    pub route_id: String,
+    pub route_id: CompactString,
     pub route_type: i16,
 }
 
 #[derive(Clone, Debug)]
 pub struct TripUnderItinerary {
-    pub trip_id: String,
+    pub trip_id: CompactString,
     pub start_time: u32,
-    pub service_id: String,
+    pub service_id: CompactString,
     pub wheelchair_accessible: i16,
     pub block_id: Option<String>,
     pub bikes_allowed: i16,
     pub frequencies: Vec<gtfs_structures::Frequency>,
-    pub trip_short_name: Option<String>,
+    pub trip_short_name: Option<CompactString>,
     pub route_id: String,
 }
 
 pub struct ResponseFromReduce {
     pub itineraries: AHashMap<u64, ItineraryCover>,
-    pub trips_to_itineraries: AHashMap<String, u64>,
+    pub trips_to_itineraries: AHashMap<CompactString, u64>,
     pub itineraries_to_trips: AHashMap<u64, Vec<TripUnderItinerary>>,
     pub direction_patterns: AHashMap<u64, DirectionPattern>,
     pub direction_pattern_id_to_itineraries: AHashMap<u64, AHashSet<u64>>,
@@ -77,7 +78,7 @@ pub struct ResponseFromReduce {
 
 pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
     let mut itineraries: AHashMap<u64, ItineraryCover> = AHashMap::new();
-    let mut trips_to_itineraries: AHashMap<String, u64> = AHashMap::new();
+    let mut trips_to_itineraries: AHashMap<CompactString, u64> = AHashMap::new();
     let mut itineraries_to_trips: AHashMap<u64, Vec<TripUnderItinerary>> = AHashMap::new();
     let mut direction_pattern_id_to_itineraries: AHashMap<u64, AHashSet<u64>> = AHashMap::new();
 
@@ -113,7 +114,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                 .map(|departure_time| departure_time as i32 - start_time as i32);
 
             let stop_diff = StopDifference {
-                stop_id: stop_time.stop.id.clone(),
+                stop_id: (&stop_time.stop.id).into(),
                 arrival_time_since_start,
                 departure_time_since_start,
                 continuous_pickup: continuous_pickup_drop_off_to_i16(&stop_time.continuous_pickup),
@@ -268,7 +269,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
                 match stop_headsigns.len() {
                     0 => match stop_diffs.last() {
-                        Some(last_stop) => match gtfs.stops.get(&last_stop.stop_id) {
+                        Some(last_stop) => match gtfs.stops.get(last_stop.stop_id.as_str()) {
                             // fallback to stop name if neither trip headsign nor stop headsign is available
                             Some(stop) => stop.name.clone(),
                             None => None,
@@ -288,7 +289,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             stop_diffs
                 .iter()
                 .map(|x| x.stop_id.clone())
-                .collect::<Vec<String>>(),
+                .collect::<Vec<CompactString>>(),
         );
 
         let itinerary_cover = ItineraryCover {
@@ -297,7 +298,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                 DirectionType::Outbound => false,
                 DirectionType::Inbound => true,
             }),
-            route_id: trip.route_id.clone(),
+            route_id: (&trip.route_id).into(),
             trip_headsign: trip_headsign_calculated,
             timezone,
             shape_id: trip.shape_id.clone(),
@@ -315,13 +316,13 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         let hash_of_itinerary = ahash_fast_hash(&itinerary_cover);
 
         itineraries.insert(hash_of_itinerary, itinerary_cover);
-        trips_to_itineraries.insert(trip_id.clone(), hash_of_itinerary);
+        trips_to_itineraries.insert(trip_id.into(), hash_of_itinerary);
 
         let trip_under_itinerary = TripUnderItinerary {
-            trip_id: trip_id.clone(),
-            trip_short_name: trip.trip_short_name.clone(),
+            trip_id: trip_id.into(),
+            trip_short_name: trip.trip_short_name.as_ref().map(|x| x.into()),
             start_time,
-            service_id: trip.service_id.clone(),
+            service_id: (&trip.service_id).into(),
             wheelchair_accessible: availability_to_int(&trip.wheelchair_accessible),
             block_id: trip.block_id.clone(),
             bikes_allowed: bikes_allowed_to_int(&trip.bikes_allowed),
@@ -340,7 +341,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
     let mut direction_patterns: AHashMap<u64, DirectionPattern> = AHashMap::new();
 
     for (itinerary_id, itinerary) in &itineraries {
-        let mut stop_sequence: Vec<String> = Vec::new();
+        let mut stop_sequence: Vec<CompactString> = Vec::new();
 
         for stop_diff in &itinerary.stop_sequences {
             stop_sequence.push(stop_diff.stop_id.clone());
@@ -352,7 +353,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             headsign_or_destination: match itinerary.trip_headsign.clone() {
                 Some(headsign) => Some(headsign),
                 None => match itinerary.stop_sequences.last() {
-                    Some(last_stop) => match gtfs.stops.get(&last_stop.stop_id) {
+                    Some(last_stop) => match gtfs.stops.get(last_stop.stop_id.as_str()) {
                         Some(stop) => stop.name.clone(),
                         None => None,
                     },
@@ -387,10 +388,10 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
     }
 }
 
-fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<String>) -> u64 {
-    let mut hash_of_direction_pattern_temp: Vec<String> = Vec::new();
+fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<CompactString>) -> u64 {
+    let mut hash_of_direction_pattern_temp: Vec<CompactString> = Vec::new();
 
-    hash_of_direction_pattern_temp.push(route_id.to_string());
+    hash_of_direction_pattern_temp.push(route_id.into());
 
     for stop_id in stop_sequence {
         hash_of_direction_pattern_temp.push(stop_id);

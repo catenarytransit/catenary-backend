@@ -8,6 +8,7 @@ use diesel::FromSqlRow;
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;
+use compact_str::CompactString;
 
 use diesel::sql_types::*;
 
@@ -21,7 +22,7 @@ pub struct ItineraryPatternRow {
     pub arrival_time_since_start: Option<i32>,
     pub departure_time_since_start: Option<i32>,
     pub interpolated_time_since_start: Option<i32>,
-    pub stop_id: String,
+    pub stop_id: CompactString,
     pub chateau: String,
     pub gtfs_stop_sequence: u32,
 }
@@ -70,7 +71,7 @@ pub struct ItineraryPatternMeta {
     pub trip_headsign_translations: Option<Value>,
     pub shape_id: Option<String>,
     pub timezone: String,
-    pub route_id: String,
+    pub route_id: CompactString,
     pub direction_pattern_id: Option<String>,
 }
 
@@ -80,8 +81,8 @@ pub struct CompressedTrip {
     pub onestop_feed_id: String,
     pub trip_id: String,
     pub attempt_id: String,
-    pub service_id: String,
-    pub trip_short_name: Option<String>,
+    pub service_id: CompactString,
+    pub trip_short_name: Option<CompactString>,
     pub direction_id: Option<bool>,
     pub block_id: Option<String>,
     pub wheelchair_accessible: i16,
@@ -367,7 +368,7 @@ pub struct AdminCredentials {
 pub struct DirectionPatternRow {
     pub chateau: String,
     pub direction_pattern_id: String,
-    pub stop_id: String,
+    pub stop_id: CompactString,
     pub stop_sequence: u32,
     pub arrival_time_since_start: Option<i32>,
     pub departure_time_since_start: Option<i32>,
@@ -388,7 +389,7 @@ pub struct DirectionPatternMeta {
     pub fake_shape: bool,
     pub onestop_feed_id: String,
     pub attempt_id: String,
-    pub route_id: Option<String>,
+    pub route_id: Option<CompactString>,
     pub route_type: Option<i16>,
     pub direction_id: Option<bool>,
 }

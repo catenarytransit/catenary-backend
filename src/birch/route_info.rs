@@ -6,6 +6,7 @@ use catenary::aspen_dataset::AspenisedAlert;
 use catenary::models::DirectionPatternMeta;
 use catenary::models::DirectionPatternRow;
 use catenary::EtcdConnectionIps;
+use compact_str::CompactString;
 use diesel::ExpressionMethods;
 use diesel::QueryDsl;
 use diesel::SelectableHelper;
@@ -262,7 +263,7 @@ pub async fn route_info(
     let list_of_stop_ids = direction_rows
         .iter()
         .map(|x| x.stop_id.clone())
-        .collect::<HashSet<String>>();
+        .collect::<HashSet<CompactString>>();
 
     let stops_pg: Vec<catenary::models::Stop> = catenary::schema::gtfs::stops::dsl::stops
         .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&query.chateau))

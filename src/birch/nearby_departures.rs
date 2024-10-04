@@ -26,6 +26,7 @@ use catenary::schema::gtfs::trips_compressed;
 use catenary::CalendarUnified;
 use catenary::EtcdConnectionIps;
 use chrono::TimeZone;
+use compact_str::CompactString;
 use diesel::dsl::sql;
 use diesel::dsl::sql_query;
 use diesel::query_dsl::methods::FilterDsl;
@@ -75,16 +76,16 @@ struct DeparturesDebug {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DepartingTrip {
-    pub trip_id: String,
-    pub gtfs_frequency_start_time: Option<String>,
+    pub trip_id: CompactString,
+    pub gtfs_frequency_start_time: Option<CompactString>,
     pub gtfs_schedule_start_day: chrono::NaiveDate,
     pub is_frequency: bool,
     pub departure_schedule: Option<u64>,
     pub departure_realtime: Option<u64>,
     pub arrival_schedule: Option<u64>,
     pub arrival_realtime: Option<u64>,
-    pub stop_id: String,
-    pub trip_short_name: Option<String>,
+    pub stop_id: CompactString,
+    pub trip_short_name: Option<CompactString>,
     pub tz: String,
     pub is_interpolated: bool,
     pub cancelled: bool,
@@ -100,10 +101,10 @@ pub struct DepartingHeadsignGroup {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct DepartureRouteGroup {
     pub chateau_id: String,
-    pub route_id: String,
-    pub color: Option<String>,
-    pub text_color: Option<String>,
-    pub short_name: Option<String>,
+    pub route_id: CompactString,
+    pub color: Option<CompactString>,
+    pub text_color: Option<CompactString>,
+    pub short_name: Option<CompactString>,
     pub long_name: Option<String>,
     pub route_type: i16,
     pub directions: HashMap<String, DepartingHeadsignGroup>,
@@ -113,17 +114,17 @@ pub struct DepartureRouteGroup {
 #[derive(Clone, Debug, Serialize)]
 pub struct ValidTripSet {
     pub chateau_id: String,
-    pub trip_id: String,
+    pub trip_id: CompactString,
     pub frequencies: Option<Vec<gtfs_structures::Frequency>>,
     pub trip_service_date: chrono::NaiveDate,
     pub itinerary_options: Vec<ItineraryPatternRowNearbyLookup>,
     pub reference_start_of_service_date: chrono::DateTime<chrono_tz::Tz>,
     pub itinerary_pattern_id: String,
     pub direction_pattern_id: String,
-    pub route_id: String,
+    pub route_id: CompactString,
     pub timezone: Option<chrono_tz::Tz>,
     pub trip_start_time: u32,
-    pub trip_short_name: Option<String>,
+    pub trip_short_name: Option<CompactString>,
 }
 
 // final datastructure ideas?
@@ -173,7 +174,7 @@ stop_reference: stop_id -> stop
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StopOutput {
-    pub gtfs_id: String,
+    pub gtfs_id: CompactString,
     pub name: String,
     pub lat: f64,
     pub lon: f64,
@@ -187,7 +188,7 @@ pub struct DepartingTripsDataAnswer {
     pub bus_limited_metres: f64,
     pub rail_and_other_limited_metres: f64,
     pub departures: Vec<DepartureRouteGroup>,
-    pub stop: HashMap<String, HashMap<String, StopOutput>>,
+    pub stop: HashMap<String, HashMap<CompactString, StopOutput>>,
 }
 
 #[actix_web::get("/nearbydeparturesfromcoords")]
@@ -332,7 +333,7 @@ pub async fn nearby_from_coords(
     let directions_rows = directions_fetch_sql.unwrap();
 
     //store the direction id and the index
-    let mut stops_to_directions: HashMap<(String, String), Vec<(u64, u32)>> = HashMap::new();
+    let mut stops_to_directions: HashMap<(String, CompactString), Vec<(u64, u32)>> = HashMap::new();
 
     for d in directions_rows {
         let id = d.direction_pattern_id.parse::<u64>().unwrap();
@@ -367,16 +368,16 @@ pub async fn nearby_from_coords(
 
     //sorting finished
 
-    let mut directions_to_closest_stop: HashMap<(String, u64), (String, u32)> = HashMap::new();
+    let mut directions_to_closest_stop: HashMap<(String, u64), (CompactString, u32)> = HashMap::new();
 
     for ((chateau, stop_id), distance_m) in sorted_order_stops.iter() {
-        let direction_at_this_stop = stops_to_directions.get(&(chateau.clone(), stop_id.clone()));
+        let direction_at_this_stop = stops_to_directions.get(&(chateau.clone(), stop_id.into()));
 
         if let Some(direction_at_this_stop) = direction_at_this_stop {
             for (direction_id, sequence) in direction_at_this_stop {
                 match directions_to_closest_stop.entry((chateau.clone(), *direction_id)) {
                     Entry::Vacant(ve) => {
-                        ve.insert((stop_id.clone(), *sequence));
+                        ve.insert((stop_id.into(), *sequence));
                     }
                     _ => {}
                 }
@@ -526,7 +527,7 @@ pub async fn nearby_from_coords(
 
     let mut compressed_trips_table: HashMap<String, Vec<CompressedTrip>> = HashMap::new();
 
-    let mut services_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut services_to_lookup_table: HashMap<String, BTreeSet<CompactString>> = HashMap::new();
 
     let mut routes_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
 
@@ -538,7 +539,7 @@ pub async fn nearby_from_coords(
                 let service_ids = compressed_trip_group
                     .iter()
                     .map(|x| x.service_id.clone())
-                    .collect::<BTreeSet<String>>();
+                    .collect::<BTreeSet<CompactString>>();
 
                 let route_ids = compressed_trip_group
                     .iter()
@@ -681,7 +682,7 @@ pub async fn nearby_from_coords(
         Ok(calendar_structure) => {
             // iterate through all trips and produce a timezone and timeoffset.
 
-            let mut stops_answer: HashMap<String, HashMap<String, StopOutput>> = HashMap::new();
+            let mut stops_answer: HashMap<String, HashMap<CompactString, StopOutput>> = HashMap::new();
             let mut departures: Vec<DepartureRouteGroup> = vec![];
 
             for (chateau_id, calendar_in_chateau) in calendar_structure.iter() {
@@ -731,7 +732,7 @@ pub async fn nearby_from_coords(
                         direction_id: itin_ref.direction_pattern_id.clone(),
                     };
 
-                    let service = calendar_in_chateau.get(&trip.service_id);
+                    let service = calendar_in_chateau.get(trip.service_id.as_str());
 
                     if let Some(service) = service {
                         let dates = catenary::find_service_ranges(
@@ -746,7 +747,7 @@ pub async fn nearby_from_coords(
                             for date in dates {
                                 let t = ValidTripSet {
                                     chateau_id: chateau_id.clone(),
-                                    trip_id: trip.trip_id.clone(),
+                                    trip_id: (&trip.trip_id).into(),
                                     timezone: chrono_tz::Tz::from_str(itin_ref.timezone.as_str())
                                         .ok(),
                                     frequencies: freq_converted.clone(),
@@ -755,7 +756,7 @@ pub async fn nearby_from_coords(
                                     reference_start_of_service_date: date.1,
                                     itinerary_pattern_id: itin_ref.itinerary_pattern_id.clone(),
                                     direction_pattern_id: itin_ref.direction_pattern_id.clone(),
-                                    route_id: itin_ref.route_id.clone(),
+                                    route_id: (&itin_ref.route_id).into(),
                                     trip_start_time: trip.start_time,
                                     trip_short_name: trip.trip_short_name.clone(),
                                 };
@@ -809,17 +810,17 @@ pub async fn nearby_from_coords(
                 //  temp_answer.insert(chateau_id.clone(), valid_trips);
 
                 for (trip_id, trip_grouping) in valid_trips {
-                    let route = routes.get(&trip_grouping[0].route_id).unwrap();
+                    let route = routes.get(trip_grouping[0].route_id.as_str()).unwrap();
 
                     if !directions_route_group_for_this_chateau.contains_key(&route.route_id) {
                         directions_route_group_for_this_chateau.insert(
                             route.route_id.clone(),
                             DepartureRouteGroup {
                                 chateau_id: chateau_id.clone(),
-                                route_id: route.route_id.clone(),
-                                color: route.color.clone(),
-                                text_color: route.text_color.clone(),
-                                short_name: route.short_name.clone(),
+                                route_id: (&route.route_id).into(),
+                                color: route.color.as_ref().map(|x| x.into()),
+                                text_color: route.text_color.as_ref().map(|x| x.into()),
+                                short_name: route.short_name.as_ref().map(|x| x.into()),
                                 long_name: route.long_name.clone(),
                                 route_type: route.route_type,
                                 directions: HashMap::new(),
@@ -867,7 +868,7 @@ pub async fn nearby_from_coords(
                         if let Some(gtfs_trip_aspenised) = gtfs_trips_aspenised.as_ref() {
                             if let Some(trip_update_ids) = gtfs_trip_aspenised
                                 .trip_id_to_trip_update_ids
-                                .get(&trip.trip_id)
+                                .get(trip.trip_id.as_str())
                             {
                                 if !trip_update_ids.is_empty() {
                                     // let trip_update_id = trip_rt[0].clone();
@@ -941,7 +942,7 @@ pub async fn nearby_from_coords(
                             departure_realtime: departure_time_rt,
                             arrival_schedule: None,
                             arrival_realtime: None,
-                            stop_id: trip.itinerary_options[0].stop_id.clone(),
+                            stop_id: (&trip.itinerary_options[0].stop_id).into(),
                             trip_short_name: trip.trip_short_name.clone(),
                             tz: trip.timezone.as_ref().unwrap().name().to_string(),
                             is_frequency: trip.frequencies.is_some(),
@@ -984,7 +985,7 @@ pub async fn nearby_from_coords(
                         .sort_by_key(|x| x.departure_schedule.unwrap_or(0));
 
                     let stop = stops_table
-                        .get(&(chateau_id.clone(), headsign_group.trips[0].stop_id.clone()).clone())
+                        .get(&(chateau_id.clone(), headsign_group.trips[0].stop_id.to_string()).clone())
                         .unwrap();
 
                     if !stops_answer.contains_key(chateau_id) {
@@ -993,11 +994,11 @@ pub async fn nearby_from_coords(
 
                     let stop_group = stops_answer.get_mut(chateau_id).unwrap();
 
-                    if !stop_group.contains_key(&headsign_group.trips[0].stop_id) {
+                    if !stop_group.contains_key(headsign_group.trips[0].stop_id.as_str()) {
                         stop_group.insert(
                             headsign_group.trips[0].stop_id.clone(),
                             StopOutput {
-                                gtfs_id: stop.0.gtfs_id.clone(),
+                                gtfs_id: (&stop.0.gtfs_id).into(),
                                 name: stop.0.name.clone().unwrap_or("".to_string()),
                                 lat: stop.0.point.as_ref().unwrap().x,
                                 lon: stop.0.point.as_ref().unwrap().y,

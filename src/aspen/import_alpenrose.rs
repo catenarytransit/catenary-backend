@@ -433,7 +433,7 @@ pub async fn new_rt_data(
                                             let trip = trip_id_to_trip.get(&trip_id.clone());
                                             match trip {
                                                 Some(trip) => {
-                                                    trip.trip_short_name.clone()
+                                                    trip.trip_short_name.as_ref().map(|x| x.to_string())
                                                 },
                                                 None => None
                                             }
