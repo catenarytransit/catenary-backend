@@ -361,6 +361,7 @@ pub mod aspen_dataset {
         pub delay: Option<i32>,
         pub stop_time_update: Vec<AspenisedStopTimeUpdate>,
         pub trip_properties: Option<AspenTripProperties>,
+        pub trip_headsign: Option<CompactString>
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]

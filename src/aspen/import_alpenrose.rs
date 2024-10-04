@@ -286,97 +286,103 @@ pub async fn new_rt_data(
 
                 for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
                     if let Some(vehicle_pos) = &vehicle_entity.vehicle {
-                        aspenised_vehicle_positions.insert(vehicle_entity.id.clone(), AspenisedVehiclePosition {
-                                trip: vehicle_pos.trip.as_ref().map(|trip| {
-                                    AspenisedVehicleTripInfo {
-                                        trip_id: trip.trip_id.clone(),
-                                        direction_id: trip.direction_id,
-                                       start_date: trip.start_date.clone(),
-                                       start_time: trip.start_time.clone(),
-                                        schedule_relationship: trip.schedule_relationship,
-                                        route_id: match &trip.route_id {
-                                            Some(route_id) => Some(route_id.clone()),
-                                            None => match &trip.trip_id {
-                                                Some(trip_id) => {
-                                                    let trip = trip_id_to_trip.get(&trip_id.clone());
-                                                    trip.map(|trip| trip.route_id.clone())
-                                                },
-                                                None => None
-                                            }
-                                        },
-                                        trip_headsign: match &trip.trip_id {
-                                                Some(trip_id) => {
-                                                    let trip = trip_id_to_trip.get(&trip_id.clone());
-                                                    match trip {
-                                                        Some(trip) => {
-                                                            let itinerary_pattern = itinerary_pattern_id_to_itinerary_pattern_meta.get(&trip.itinerary_pattern_id);
-                                                            match itinerary_pattern {
-                                                                Some(itinerary_pattern) => {
-                                                                    itinerary_pattern.trip_headsign.clone()
-                                                                },
-                                                                None => None
-                                                            }
-                                                        },
-                                                        None => None
-                                                    }
-                                                },
-                                                None => None
-                                            }.map(|headsign| headsign.replace("-Exact Fare", "").replace(" - Funded in part by/SB County Measure A", "")),
-                                        trip_short_name: match &trip.trip_id {
+
+                        let pos_aspenised = AspenisedVehiclePosition {
+                            trip: vehicle_pos.trip.as_ref().map(|trip| {
+                                AspenisedVehicleTripInfo {
+                                    trip_id: trip.trip_id.clone(),
+                                    direction_id: trip.direction_id,
+                                   start_date: trip.start_date.clone(),
+                                   start_time: trip.start_time.clone(),
+                                    schedule_relationship: trip.schedule_relationship,
+                                    route_id: match &trip.route_id {
+                                        Some(route_id) => Some(route_id.clone()),
+                                        None => match &trip.trip_id {
+                                            Some(trip_id) => {
+                                                let trip = trip_id_to_trip.get(&trip_id.clone());
+                                                trip.map(|trip| trip.route_id.clone())
+                                            },
+                                            None => None
+                                        }
+                                    },
+                                    trip_headsign: match &trip.trip_id {
                                             Some(trip_id) => {
                                                 let trip = trip_id_to_trip.get(&trip_id.clone());
                                                 match trip {
                                                     Some(trip) => {
-                                                        trip.trip_short_name.clone()
+                                                        let itinerary_pattern = itinerary_pattern_id_to_itinerary_pattern_meta.get(&trip.itinerary_pattern_id);
+                                                        match itinerary_pattern {
+                                                            Some(itinerary_pattern) => {
+                                                                itinerary_pattern.trip_headsign.clone()
+                                                            },
+                                                            None => None
+                                                        }
                                                     },
                                                     None => None
                                                 }
                                             },
                                             None => None
-                                        }
+                                        }.map(|headsign| headsign.replace("-Exact Fare", "").replace(" - Funded in part by/SB County Measure A", "")),
+                                    trip_short_name: match &trip.trip_id {
+                                        Some(trip_id) => {
+                                            let trip = trip_id_to_trip.get(&trip_id.clone());
+                                            match trip {
+                                                Some(trip) => {
+                                                    trip.trip_short_name.clone()
+                                                },
+                                                None => None
+                                            }
+                                        },
+                                        None => None
                                     }
+                                }
+                            }),
+                            position: vehicle_pos.position.as_ref().map(|position| CatenaryRtVehiclePosition {
+                                latitude: position.latitude,
+                                longitude: position.longitude,
+                                bearing: position.bearing,
+                                odometer: position.odometer,
+                                speed: position.speed,
                                 }),
-                                position: vehicle_pos.position.as_ref().map(|position| CatenaryRtVehiclePosition {
-                                    latitude: position.latitude,
-                                    longitude: position.longitude,
-                                    bearing: position.bearing,
-                                    odometer: position.odometer,
-                                    speed: position.speed,
-                                    }),
-                                timestamp: vehicle_pos.timestamp,
-                                vehicle: vehicle_pos.vehicle.as_ref().map(|vehicle| AspenisedVehicleDescriptor {
-                                    id: vehicle.id.clone(),
-                                    label: match realtime_feed_id.as_str() {
-                                        "f-trimet~rt" => vehicle.id.clone(),
-                                        _ => vehicle.label.clone()
-                                    },
-                                    license_plate: vehicle.license_plate.clone(),
-                                    wheelchair_accessible: vehicle.wheelchair_accessible,
-                                    }),
-                                route_type: match realtime_feed_id.as_str() {
-                                    "f-mta~nyc~rt~lirr" => 2,
-                                    "f-mta~nyc~rt~mnr" => 2,
-                                    "f-amtrak~rt" => 2,
-                                    _ => match &vehicle_pos.trip {
-                                        Some(trip) => match &trip.route_id {
-                                            Some(route_id) => {
-                                                let route = route_id_to_route.get(route_id);
-                                                match route {
-                                                    Some(route) => route.route_type,
-                                                    None => 3
-                                                }
-                                            },
-                                            None => 3
+                            timestamp: vehicle_pos.timestamp,
+                            vehicle: vehicle_pos.vehicle.as_ref().map(|vehicle| AspenisedVehicleDescriptor {
+                                id: vehicle.id.clone(),
+                                label: match realtime_feed_id.as_str() {
+                                    "f-trimet~rt" => vehicle.id.clone(),
+                                    _ => vehicle.label.clone()
+                                },
+                                license_plate: vehicle.license_plate.clone(),
+                                wheelchair_accessible: vehicle.wheelchair_accessible,
+                                }),
+                            route_type: match realtime_feed_id.as_str() {
+                                "f-mta~nyc~rt~lirr" => 2,
+                                "f-mta~nyc~rt~mnr" => 2,
+                                "f-amtrak~rt" => 2,
+                                _ => match &vehicle_pos.trip {
+                                    Some(trip) => match &trip.route_id {
+                                        Some(route_id) => {
+                                            let route = route_id_to_route.get(route_id);
+                                            match route {
+                                                Some(route) => route.route_type,
+                                                None => 3
+                                            }
                                         },
                                         None => 3
-                                    }
-                                },
-                                current_status: vehicle_pos.current_status,
-                                current_stop_sequence: vehicle_pos.current_stop_sequence,
-                                occupancy_status: vehicle_pos.occupancy_status,
-                                occupancy_percentage: vehicle_pos.occupancy_percentage,
-                                congestion_level: vehicle_pos.congestion_level
-                            });
+                                    },
+                                    None => 3
+                                }
+                            },
+                            current_status: vehicle_pos.current_status,
+                            current_stop_sequence: vehicle_pos.current_stop_sequence,
+                            occupancy_status: vehicle_pos.occupancy_status,
+                            occupancy_percentage: vehicle_pos.occupancy_percentage,
+                            congestion_level: vehicle_pos.congestion_level
+                        };
+
+
+
+                        aspenised_vehicle_positions.insert(vehicle_entity.id.clone(), 
+                        pos_aspenised);
 
                         //insert the route cache
 
@@ -409,6 +415,7 @@ pub async fn new_rt_data(
                         let trip_update = AspenisedTripUpdate {
                             trip: trip_update.trip.clone().into(),
                             vehicle: trip_update.vehicle.clone().map(|x| x.into()),
+                            trip_headsign: None,
                             stop_time_update: trip_update
                                 .stop_time_update
                                 .iter()
@@ -583,6 +590,11 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
         _ => TrackData::None,
     }
 }
+
+fn vehicle_pos_supplement(pos_aspenised: AspenisedVehiclePosition) -> AspenisedVehiclePosition {
+    pos_aspenised
+}
+
 
 #[cfg(test)]
 mod tests {
