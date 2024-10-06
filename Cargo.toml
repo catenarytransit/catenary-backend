@@ -135,6 +135,7 @@ wyhash2 = "0.2.1"
 console-subscriber = "0.4.0"
 strumbra = "0.4.0"
 compact_str = { version = "0.8.0", features = ["serde", "diesel"] }
+urlencoding = "2.1.3"
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"

@@ -699,13 +699,24 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
     match chateau_id {
         "metrolinktrains" => {
             let url = "https://rtt.metrolinktrains.com/StationScheduleList.json";
-            let response = reqwest::get(url)
-                .await
-                .unwrap()
-                .json::<Vec<MetrolinkTrackData>>()
-                .await
-                .unwrap();
-            TrackData::Metrolink(Some(response))
+
+            match reqwest::get(url).await {
+                Ok(r) => {
+                    let response = r.json::<Vec<MetrolinkTrackData>>().await;
+
+                    match response {
+                        Ok(response) => TrackData::Metrolink(Some(response)),
+                        Err(e) => {
+                            println!("Error decoding Metrolink data: {}", e);
+                            TrackData::Metrolink(None)
+                        }
+                    }
+                },
+                Err(e) => {
+                    println!("Error fetching Metrolink data: {}", e);
+                    TrackData::Metrolink(None)
+                }
+            }
         }
         _ => TrackData::None,
     }

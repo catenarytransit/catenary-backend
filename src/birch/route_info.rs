@@ -90,12 +90,14 @@ pub async fn route_info(
 
     let conn = &mut conn_pre.unwrap();
 
+    let route_id = urlencoding::decode(&query.route_id).unwrap();
+
     // fetch route information
 
     let route_information_pg: Result<Vec<catenary::models::Route>, _> =
         catenary::schema::gtfs::routes::dsl::routes
             .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(&query.chateau))
-            .filter(catenary::schema::gtfs::routes::dsl::route_id.eq(&query.route_id))
+            .filter(catenary::schema::gtfs::routes::dsl::route_id.eq(&route_id))
             .select(catenary::models::Route::as_select())
             .load(conn)
             .await;
@@ -174,7 +176,7 @@ pub async fn route_info(
         catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
             .filter(catenary::schema::gtfs::direction_pattern_meta::dsl::chateau.eq(&query.chateau))
             .filter(
-                catenary::schema::gtfs::direction_pattern_meta::dsl::route_id.eq(&query.route_id),
+                catenary::schema::gtfs::direction_pattern_meta::dsl::route_id.eq(&route_id),
             )
             .select(catenary::models::DirectionPatternMeta::as_select())
             .load(conn)
