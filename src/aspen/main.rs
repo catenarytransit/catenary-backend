@@ -407,7 +407,7 @@ impl AspenRpc for AspenServer {
                     save_timestamps(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
             }
 
-            if new_data {
+            if new_data || chateau_id == "uc~irvine~anteater~express" {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
                     self.authoritative_gtfs_rt_store
                         .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
@@ -439,7 +439,7 @@ impl AspenRpc for AspenServer {
 
             //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
-            if new_data {
+            if new_data || chateau_id == "uc~irvine~anteater~express"  {
                 let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
 
                 if !lock_chateau_queue.contains(&chateau_id) {
