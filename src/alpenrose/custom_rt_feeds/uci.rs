@@ -27,14 +27,14 @@ pub async fn fetch_uci_data(
                     tarpc::context::current(),
                     data.chateau_id.clone(),
                     String::from(feed_id),
+                    Some(vehicle_data.clone()),
                     Some(vehicle_data),
                     None,
-                    None,
+                    true,
                     true,
                     false,
-                    false,
                     Some(200),
-                    None,
+                    Some(200),
                     None,
                     duration_since_unix_epoch().as_millis() as u64,
                 )
@@ -45,7 +45,7 @@ pub async fn fetch_uci_data(
                     println!("Successfully sent UCI data sent to {}", feed_id);
                 }
                 Err(e) => {
-                    eprintln!("{}: Error sending data to {}: {}", feed_id, worker_id, e);
+                    eprintln!("{}: Error sending UCI data to {}: {}", feed_id, worker_id, e);
                 }
             }
         } else {
