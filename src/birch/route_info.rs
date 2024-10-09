@@ -175,9 +175,7 @@ pub async fn route_info(
     let direction_patterns_pg: Vec<catenary::models::DirectionPatternMeta> =
         catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
             .filter(catenary::schema::gtfs::direction_pattern_meta::dsl::chateau.eq(&query.chateau))
-            .filter(
-                catenary::schema::gtfs::direction_pattern_meta::dsl::route_id.eq(&route_id),
-            )
+            .filter(catenary::schema::gtfs::direction_pattern_meta::dsl::route_id.eq(&route_id))
             .select(catenary::models::DirectionPatternMeta::as_select())
             .load(conn)
             .await

@@ -711,7 +711,7 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
                             TrackData::Metrolink(None)
                         }
                     }
-                },
+                }
                 Err(e) => {
                     println!("Error fetching Metrolink data: {}", e);
                     TrackData::Metrolink(None)

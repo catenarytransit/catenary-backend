@@ -3,10 +3,7 @@ use catenary::get_node_for_realtime_feed_id;
 use prost::Message;
 use zotgtfs::get_gtfs_rt;
 
-pub async fn fetch_uci_data(
-    etcd: &mut etcd_client::Client,
-    feed_id: &str,
-) {
+pub async fn fetch_uci_data(etcd: &mut etcd_client::Client, feed_id: &str) {
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
 
     if let Some(data) = fetch_assigned_node_meta {
@@ -45,7 +42,10 @@ pub async fn fetch_uci_data(
                     println!("Successfully sent UCI data sent to {}", feed_id);
                 }
                 Err(e) => {
-                    eprintln!("{}: Error sending UCI data to {}: {}", feed_id, worker_id, e);
+                    eprintln!(
+                        "{}: Error sending UCI data to {}: {}",
+                        feed_id, worker_id, e
+                    );
                 }
             }
         } else {
