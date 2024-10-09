@@ -105,7 +105,7 @@ fn mph_to_mps(mph: &CompactString) -> Option<f32> {
 
 fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
     //Split into 3 parts based on :
-    let parts: Vec<&str> = coord.split(":").collect();
+    let parts: Vec<&str> = coord.split(':').collect();
 
     if parts.len() != 3 {
         return None;
