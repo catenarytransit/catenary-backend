@@ -4,3 +4,4 @@ pub mod chicagotransit;
 pub mod mta;
 pub mod uk;
 pub mod viarail;
+pub mod uci;
