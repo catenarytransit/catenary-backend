@@ -109,7 +109,7 @@ pub fn flatten_feed(
             subfolder_to_get.as_str(),
         );
 
-        match subfolder_answer {
+        match &subfolder_answer {
             Ok(_) => {
                 println!("Subfolder extracted successfully");
             }
