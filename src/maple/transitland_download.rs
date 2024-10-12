@@ -115,6 +115,8 @@ pub async fn download_return_eligible_feeds(
                     async move {
                             //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
                             let client = reqwest::ClientBuilder::new()
+                                .use_rustls_tls()
+                                .user_agent("Catenary Maple")
                                 //timeout queries after 4 minutes
                                 .timeout(Duration::from_secs(60 * 4))
                                 .connect_timeout(Duration::from_secs(20))
