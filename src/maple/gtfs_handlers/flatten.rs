@@ -32,6 +32,8 @@ pub fn extract_sub_zip(
     let source_path = format!("{}/{}.zip", gtfs_temp_storage, feed_id);
     let target_path = format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id);
 
+    println!("Extracting feed {} inside {}", feed_id, source_path);
+
     // Attempt to open file and pass back error if failed
     let mut file = File::open(source_path)?;
     let mut buf: Vec<u8> = vec![];
@@ -58,8 +60,6 @@ pub fn flatten_feed(
 
     let source_path = format!("{}/{}.zip", gtfs_temp_storage, feed_id);
     let target_path = format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id);
-
-    println!("Extracting feed {} inside {}", feed_id, source_path);
 
     // Attempt to open file and pass back error if failed
     let mut file = File::open(source_path)?;
