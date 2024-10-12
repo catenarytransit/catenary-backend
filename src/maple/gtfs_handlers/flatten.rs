@@ -59,6 +59,8 @@ pub fn flatten_feed(
     let source_path = format!("{}/{}.zip", gtfs_temp_storage, feed_id);
     let target_path = format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id);
 
+    println!("Extracting feed {} inside {}", feed_id, source_path);
+
     // Attempt to open file and pass back error if failed
     let mut file = File::open(source_path)?;
     let mut buf: Vec<u8> = vec![];
@@ -91,17 +93,24 @@ pub fn flatten_feed(
 
     //if feed id starts with f-r1-ptv
     if feed_id.contains("-ptv") {
+        let subfolder_to_get = feed
+            .urls
+            .static_current
+            .as_ref()
+            .unwrap()
+            .replace("http://data.ptv.vic.gov.au/downloads/gtfs.zip#", "")
+            .replace(".zip", "");
+
+        println!(
+            "Extracting subfolder {} for Victoria Australia",
+            subfolder_to_get.as_str()
+        );
+
         extract_sub_zip(
             gtfs_temp_storage,
             gtfs_uncompressed_temp_storage,
             feed_id,
-            feed.urls
-                .static_current
-                .as_ref()
-                .unwrap()
-                .replace("http://data.ptv.vic.gov.au/downloads/gtfs.zip#", "")
-                .replace(".zip", "")
-                .as_str(),
+            subfolder_to_get.as_str(),
         )?;
     }
 
