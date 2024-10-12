@@ -126,24 +126,6 @@ pub fn fix_foreground_colour_rgb_feed(
     foreground: RGB<u8>,
 ) -> RGB<u8> {
     match feed_id {
-        "f-bus~dft~gov~uk" => match &route.short_name {
-            Some(short_name) => match short_name.as_str() {
-                "Bakerloo" => RGB::new(255, 255, 255),
-                "Central" => RGB::new(255, 255, 255),
-                "Circle" => RGB::new(0, 0, 0),
-                "District" => RGB::new(255, 255, 255),
-                "Hammersmith & City" => RGB::new(0, 0, 0),
-                "Jubilee" => RGB::new(255, 255, 255),
-                "Metropolitan" => RGB::new(255, 255, 255),
-                "Northern" => RGB::new(255, 255, 255),
-                "Piccadilly" => RGB::new(255, 255, 255),
-                "Victoria" => RGB::new(255, 255, 255),
-                "Waterloo & City" => RGB::new(255, 255, 255),
-                _ => fix_background_colour_rgb(background),
-            },
-
-            _ => fix_background_colour_rgb(background),
-        },
         "f-9q5b-longbeachtransit" => WHITE_RGB,
         _ => fix_foreground_colour_rgb(background, foreground),
     }
