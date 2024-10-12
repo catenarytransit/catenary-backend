@@ -70,8 +70,11 @@ struct DeparturesFromStop {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct DeparturesDebug {
-    directions_count: usize,
-    itineraries_count: usize,
+    stop_lookup_ms: u128,
+    directions_ms: u128,
+    itineraries_ms: u128,
+    trips_ms: u128,
+    total_time_ms: u128,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -189,6 +192,7 @@ pub struct DepartingTripsDataAnswer {
     pub rail_and_other_limited_metres: f64,
     pub departures: Vec<DepartureRouteGroup>,
     pub stop: HashMap<String, HashMap<CompactString, StopOutput>>,
+    pub debug: DeparturesDebug,
 }
 
 #[actix_web::get("/nearbydeparturesfromcoords")]
@@ -200,6 +204,8 @@ pub async fn nearby_from_coords(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
 ) -> impl Responder {
+    let start = Instant::now();
+
     let mut etcd = etcd_client::Client::connect(
         etcd_connection_ips.ip_addresses.as_slice(),
         etcd_connection_options.as_ref().as_ref().to_owned(),
@@ -1032,12 +1038,21 @@ pub async fn nearby_from_coords(
                     .unwrap_or(a.route_id.cmp(&b.route_id))
             });
 
+            let total_elapsed_time = start.elapsed();
+
             HttpResponse::Ok().json(DepartingTripsDataAnswer {
                 number_of_stops_searched_through: stops.len(),
                 bus_limited_metres: bus_distance_limit as f64,
                 rail_and_other_limited_metres: rail_and_other_distance_limit as f64,
                 departures: departures,
                 stop: stops_answer,
+                debug: DeparturesDebug {
+                    stop_lookup_ms: end_stops_duration.as_millis(),
+                    directions_ms: directions_timer.elapsed().as_millis(),
+                    itineraries_ms: itineraries_timer.elapsed().as_millis(),
+                    trips_ms: timer_trips.elapsed().as_millis(),
+                    total_time_ms: total_elapsed_time.as_millis(),
+                }
             })
         }
     }
