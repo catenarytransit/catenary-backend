@@ -333,6 +333,8 @@ pub async fn nearby_from_coords(
         directions_timer.elapsed()
     );
 
+    let directions_lookup_duration = directions_timer.elapsed();
+
     let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> =
         directions_fetch_query.get_results(conn).await;
 
@@ -473,6 +475,8 @@ pub async fn nearby_from_coords(
         itineraries_timer.elapsed()
     );
 
+    let itinerary_duration = itineraries_timer.elapsed();
+
     // println!("Itins: {:#?}", seek_for_itineraries);
 
     let mut itins_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
@@ -529,6 +533,8 @@ pub async fn nearby_from_coords(
         .buffer_unordered(8)
         .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CompressedTrip>>>>()
         .await;
+
+    let trip_lookup_elapsed = timer_trips.elapsed();
 
     println!("Finished looking up trips in {:?}", timer_trips.elapsed());
 
@@ -1048,9 +1054,9 @@ pub async fn nearby_from_coords(
                 stop: stops_answer,
                 debug: DeparturesDebug {
                     stop_lookup_ms: end_stops_duration.as_millis(),
-                    directions_ms: directions_timer.elapsed().as_millis(),
-                    itineraries_ms: itineraries_timer.elapsed().as_millis(),
-                    trips_ms: timer_trips.elapsed().as_millis(),
+                    directions_ms: directions_lookup_duration.as_millis(),
+                    itineraries_ms: itinerary_duration.as_millis(),
+                    trips_ms: trip_lookup_elapsed.as_millis(),
                     total_time_ms: total_elapsed_time.as_millis(),
                 },
             })
