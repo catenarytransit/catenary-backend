@@ -24,12 +24,11 @@ fn delete_zip_files(dir_path: &str) -> std::io::Result<()> {
 
 // Extracts a sub zip file and uses it as the parent folder
 pub fn extract_sub_zip(
-    gtfs_temp_storage: &str,
     gtfs_uncompressed_temp_storage: &str,
     feed_id: &str,
     sub_folder: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let source_path = format!("{}/{}.zip", gtfs_temp_storage, feed_id);
+    let source_path = format!("{}/{}/{}.zip", gtfs_uncompressed_temp_storage, feed_id, sub_folder);
     let target_path = format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id);
 
     println!("Extracting feed {} inside {}", feed_id, source_path);
@@ -75,7 +74,6 @@ pub fn flatten_feed(
     // go into folder and unnest folders
     if feed_id == "f-dr4-septa~rail" {
         extract_sub_zip(
-            gtfs_temp_storage,
             gtfs_uncompressed_temp_storage,
             "f-dr4-septa~rail",
             "google_rail",
@@ -84,7 +82,6 @@ pub fn flatten_feed(
 
     if feed_id == "f-dr4-septa~bus" {
         extract_sub_zip(
-            gtfs_temp_storage,
             gtfs_uncompressed_temp_storage,
             "f-dr4-septa~bus",
             "google_bus",
@@ -106,12 +103,22 @@ pub fn flatten_feed(
             subfolder_to_get.as_str()
         );
 
-        extract_sub_zip(
-            gtfs_temp_storage,
+       let subfolder_answer = extract_sub_zip(
             gtfs_uncompressed_temp_storage,
             feed_id,
             subfolder_to_get.as_str(),
-        )?;
+        );
+
+        match subfolder_answer {
+            Ok(_) => {
+                println!("Subfolder extracted successfully");
+            }
+            Err(e) => {
+                println!("Error extracting subfolder: {:?}", e);
+            }
+        }
+
+        subfolder_answer?;
     }
 
     Ok(())
