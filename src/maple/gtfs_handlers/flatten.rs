@@ -5,6 +5,10 @@ use std::fs::{read_dir, remove_file};
 use std::io::Cursor;
 use std::io::Read;
 use std::path::PathBuf;
+use std::rc::Rc;
+
+use dmfr::Feed;
+use dmfr_dataset_reader::ReturnDmfrAnalysis;
 
 fn delete_zip_files(dir_path: &str) -> std::io::Result<()> {
     for entry in read_dir(dir_path)? {
@@ -48,6 +52,7 @@ pub fn flatten_feed(
     gtfs_temp_storage: &str,
     gtfs_uncompressed_temp_storage: &str,
     feed_id: &str,
+    feed: Rc<Feed>,
 ) -> Result<(), Box<dyn Error>> {
     let _ = fs::create_dir(gtfs_uncompressed_temp_storage);
 
@@ -81,6 +86,22 @@ pub fn flatten_feed(
             gtfs_uncompressed_temp_storage,
             "f-dr4-septa~bus",
             "google_bus",
+        )?;
+    }
+
+    //if feed id starts with f-r1-ptv
+    if feed_id.contains("-ptv") {
+        extract_sub_zip(
+            gtfs_temp_storage,
+            gtfs_uncompressed_temp_storage,
+            feed_id,
+            feed.urls
+                .static_current
+                .as_ref()
+                .unwrap()
+                .replace("http://data.ptv.vic.gov.au/downloads/gtfs.zip#", "")
+                .replace(".zip", "")
+                .as_str(),
         )?;
     }
 

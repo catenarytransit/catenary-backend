@@ -321,11 +321,20 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 futures::stream::iter(to_ingest_feeds.into_iter().map(|to_ingest_feed| {
                     let gtfs_temp_storage = gtfs_temp_storage.clone();
                     let gtfs_uncompressed_temp_storage = gtfs_uncompressed_temp_storage.clone();
+                    let feed = &dmfr_result
+                        .feed_hashmap
+                        .get(&to_ingest_feed.feed_id)
+                        .unwrap()
+                        .clone();
+
+                    let rc_feed = std::rc::Rc::new(feed.clone());
+
                     async move {
                         let flatten_feed_result = gtfs_handlers::flatten::flatten_feed(
                             gtfs_temp_storage.as_str(),
                             gtfs_uncompressed_temp_storage.as_str(),
                             to_ingest_feed.feed_id.as_str(),
+                            rc_feed,
                         );
 
                         (to_ingest_feed.feed_id.clone(), flatten_feed_result.is_ok())
