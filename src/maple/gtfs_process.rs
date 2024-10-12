@@ -65,6 +65,8 @@ pub async fn gtfs_process_feed(
 
     let gtfs = gtfs_structures::Gtfs::new(path.as_str())?;
 
+    println!("Finished reading GTFS for {}, took {:?}", feed_id, gtfs.read_duration);
+
     // Read Translations.txt, don't fail if it doesn't exist
     let translation_path = format!("{}/{}/translations.txt", gtfs_unzipped_path, feed_id);
     let translation_data = std::fs::read_to_string(translation_path);
