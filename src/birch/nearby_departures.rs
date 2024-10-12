@@ -1052,7 +1052,7 @@ pub async fn nearby_from_coords(
                     itineraries_ms: itineraries_timer.elapsed().as_millis(),
                     trips_ms: timer_trips.elapsed().as_millis(),
                     total_time_ms: total_elapsed_time.as_millis(),
-                }
+                },
             })
         }
     }
