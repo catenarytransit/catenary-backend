@@ -1016,6 +1016,7 @@ pub async fn shapes_bus(
 
     let tile_width_degrees = tile_width_degrees_from_z(z);
 
+    //lower means better detail
     let simplification_threshold = tile_width_degrees * 0.005;
 
     // let grid = tile_grid::Grid::wgs84();
