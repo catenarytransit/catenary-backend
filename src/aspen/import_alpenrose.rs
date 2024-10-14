@@ -483,7 +483,22 @@ pub async fn new_rt_data(
                                                 None => 3
                                             }
                                         },
-                                        None => 3
+                                        None => match &trip.trip_id {
+                                            Some(trip_id) => {
+                                                let trip = trip_id_to_trip.get(trip_id);
+                                                match trip {
+                                                    Some(trip) => {
+                                                        let route = route_id_to_route.get(&trip.route_id);
+                                                        match route {
+                                                            Some(route) => route.route_type,
+                                                            None => 3
+                                                        }
+                                                    },
+                                                    None => 3
+                                                }
+                                            },
+                                            None => 3
+                                        }
                                     },
                                     None => 3
                                 }
