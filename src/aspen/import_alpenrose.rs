@@ -412,7 +412,20 @@ pub async fn new_rt_data(
                                    start_time: trip.start_time.clone(),
                                     schedule_relationship: trip.schedule_relationship,
                                     route_id: match &trip.route_id {
-                                        Some(route_id) => Some(route_id.clone()),
+                                        Some(route_id) => {
+                                            let mut route_id_to_use = Some(route_id.clone());
+
+                                            if route_id_to_route.get(route_id).is_none() {
+                                                if let Some(trip_id) = &trip.trip_id {
+                                                    let trip = trip_id_to_trip.get(trip_id);
+                                                    if let Some(trip) = trip {
+                                                        route_id_to_use = Some(trip.route_id.clone());
+                                                    }
+                                                }
+                                            }
+
+                                            route_id_to_use
+                                        },
                                         None => match &trip.trip_id {
                                             Some(trip_id) => {
                                                 let trip = trip_id_to_trip.get(&trip_id.clone());
