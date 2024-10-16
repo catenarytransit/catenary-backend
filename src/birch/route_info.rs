@@ -356,5 +356,5 @@ pub async fn route_info(
         alert_id_to_alert: BTreeMap::new(),
     };
 
-    HttpResponse::InternalServerError().json(response)
+    HttpResponse::Ok().json(response)
 }
