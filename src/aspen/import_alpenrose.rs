@@ -490,8 +490,6 @@ pub async fn new_rt_data(
                                 "f-mta~nyc~rt~lirr" => 2,
                                 "f-mta~nyc~rt~mnr" => 2,
                                 "f-amtrak~rt" => 2,
-                                "f-r6-nsw~sydneytrains~rt" => 2,
-                                "f-r6-nsw~nswtrains~rt" => 2,
                                 _ => match &vehicle_pos.trip {
                                     Some(trip) => match &recalculate_route_id {
                                         Some(route_id) => {
