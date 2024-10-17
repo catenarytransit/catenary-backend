@@ -92,6 +92,7 @@ pub struct DepartingTrip {
     pub tz: String,
     pub is_interpolated: bool,
     pub cancelled: bool,
+    pub platform: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -878,6 +879,7 @@ pub async fn nearby_from_coords(
                         let mut is_cancelled: bool = false;
 
                         let mut departure_time_rt: Option<u64> = None;
+                        let mut platform: Option<String> = None;
 
                         if let Some(gtfs_trip_aspenised) = gtfs_trips_aspenised.as_ref() {
                             if let Some(trip_update_ids) = gtfs_trip_aspenised
@@ -943,6 +945,12 @@ pub async fn nearby_from_coords(
                                                         }
                                                     }
                                                 }
+
+                                                if let Some(platform_id) =
+                                                    &relevant_stop_time_update.platform_string
+                                                {
+                                                    platform = Some(platform_id.clone());
+                                                }
                                             }
                                         }
                                     }
@@ -960,6 +968,7 @@ pub async fn nearby_from_coords(
                             trip_short_name: trip.trip_short_name.clone(),
                             tz: trip.timezone.as_ref().unwrap().name().to_string(),
                             is_frequency: trip.frequencies.is_some(),
+                            platform: platform,
                             departure_schedule: match trip.itinerary_options[0]
                                 .departure_time_since_start
                             {
