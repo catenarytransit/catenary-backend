@@ -223,7 +223,7 @@ pub struct InProgressStaticIngest {
     pub ingest_start_unix_time_ms: i64,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::gtfs::agencies)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct Agency {
