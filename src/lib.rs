@@ -898,3 +898,23 @@ mod test_calendar {
         };
     }
 }
+
+// Metrolink date fix
+pub fn metrolink_unix_fix(date: &str) -> u64 {
+    ///Date(1729199040000)/
+    
+
+    //extract all the numbers
+
+    let mut numbers = date.chars().filter(|x| x.is_numeric()).collect::<String>();
+
+    //remove the last 3 digits
+
+    numbers.pop();
+    numbers.pop();
+    numbers.pop();
+
+    //convert to number
+
+    numbers.parse::<u64>().unwrap()
+}
