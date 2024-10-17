@@ -1,3 +1,4 @@
+use actix_web::rt;
 use actix_web::{web, HttpResponse, Responder};
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenStopTimeEvent;
@@ -260,6 +261,7 @@ struct StopTimeIntroduction {
     pub name: Option<String>,
     pub translations: Option<BTreeMap<String, String>>,
     pub platform_code: Option<String>,
+    pub rt_platform_string: Option<String>,
     pub timezone: Option<Tz>,
     pub code: Option<String>,
     pub longitude: Option<f64>,
@@ -773,6 +775,7 @@ pub async fn get_trip_init(
             rt_arrival: None,
             rt_departure: None,
             schedule_relationship: None,
+            rt_platform_string: None,
         };
 
         stop_times_for_this_trip.push(stop_time);
@@ -917,6 +920,12 @@ pub async fn get_trip_init(
                                     {
                                         stop_time.schedule_relationship =
                                             Some(schedule_relationship);
+                                    }
+
+                                    if let Some(rt_platform_string) =
+                                        stop_time_update.platform_string.clone()
+                                    {
+                                        stop_time.rt_platform_string = Some(rt_platform_string);
                                     }
                                 }
                             }
