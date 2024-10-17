@@ -537,7 +537,9 @@ pub async fn new_rt_data(
                         if let Some(trip) = &vehicle_pos.trip {
                             if let Some(route_id) = &trip.route_id {
                                 route_ids_to_insert.insert(route_id.clone());
-                            } else if let Some(trip_id) = &trip.trip_id {
+                            }
+
+                            if let Some(trip_id) = &trip.trip_id {
                                 let trip = trip_id_to_trip.get(trip_id);
                                 if let Some(trip) = &trip {
                                     route_ids_to_insert.insert(trip.route_id.clone());
