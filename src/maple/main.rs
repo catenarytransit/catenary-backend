@@ -221,6 +221,12 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                     "{} feeds marked ready for schedule ingestion.",
                     counter_of_eligible_feeds
                 );
+
+                if counter_of_eligible_feeds == 0 {
+                    if let Some(eligible_feeds) = &eligible_feeds {
+                        println!("Eligible feeds: {:?}", eligible_feeds);
+                    }
+                }
             }
             None => {
                 println!("Unable to get eligible feed list.");
