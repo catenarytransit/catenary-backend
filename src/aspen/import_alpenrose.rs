@@ -425,7 +425,7 @@ pub async fn new_rt_data(
                                     None => trip.route_id.clone()
                                 }
                             },
-                            None => trip.route_id.clone()
+                            None => None
                         };
                         
                         let pos_aspenised = AspenisedVehiclePosition {
