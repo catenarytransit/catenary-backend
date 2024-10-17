@@ -403,6 +403,31 @@ pub async fn new_rt_data(
 
                 for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
                     if let Some(vehicle_pos) = &vehicle_entity.vehicle {
+
+                        let recalculate_route_id: Option<String> = match &vehicle_pos.trip {
+                            Some(trip) => {
+                                match &trip.trip_id {
+                                    Some(trip_id) => {
+                                        let compressed_trip = trip_id_to_trip.get(trip_id);
+                                        match compressed_trip {
+                                            Some(compressed_trip) => {
+                                                let route = route_id_to_route.get(&compressed_trip.route_id);
+                                                match route {
+                                                    Some(route) => {
+                                                        Some(route.route_id.clone())
+                                                    },
+                                                    None => trip.route_id.clone()
+                                                }
+                                            },
+                                            None => trip.route_id.clone()
+                                        }     
+                                    },
+                                    None => trip.route_id.clone()
+                                }
+                            },
+                            None => trip.route_id.clone()
+                        };
+                        
                         let pos_aspenised = AspenisedVehiclePosition {
                             trip: vehicle_pos.trip.as_ref().map(|trip| {
                                 AspenisedVehicleTripInfo {
@@ -411,29 +436,7 @@ pub async fn new_rt_data(
                                    start_date: trip.start_date.clone(),
                                    start_time: trip.start_time.clone(),
                                     schedule_relationship: trip.schedule_relationship,
-                                    route_id: match &trip.route_id {
-                                        Some(route_id) => {
-                                            let mut route_id_to_use = Some(route_id.clone());
-
-                                            if route_id_to_route.get(route_id).is_none() {
-                                                if let Some(trip_id) = &trip.trip_id {
-                                                    let trip = trip_id_to_trip.get(trip_id);
-                                                    if let Some(trip) = trip {
-                                                        route_id_to_use = Some(trip.route_id.clone());
-                                                    }
-                                                }
-                                            }
-
-                                            route_id_to_use
-                                        },
-                                        None => match &trip.trip_id {
-                                            Some(trip_id) => {
-                                                let trip = trip_id_to_trip.get(&trip_id.clone());
-                                                trip.map(|trip| trip.route_id.clone())
-                                            },
-                                            None => None
-                                        }
-                                    },
+                                    route_id: recalculate_route_id.clone(),
                                     trip_headsign: match &trip.trip_id {
                                             Some(trip_id) => {
                                                 let trip = trip_id_to_trip.get(&trip_id.clone());
@@ -487,8 +490,10 @@ pub async fn new_rt_data(
                                 "f-mta~nyc~rt~lirr" => 2,
                                 "f-mta~nyc~rt~mnr" => 2,
                                 "f-amtrak~rt" => 2,
+                                "f-r6-nsw~sydneytrains~rt" => 2,
+                                "f-r6-nsw~nswtrains~rt" => 2,
                                 _ => match &vehicle_pos.trip {
-                                    Some(trip) => match &trip.route_id {
+                                    Some(trip) => match &recalculate_route_id {
                                         Some(route_id) => {
                                             let route = route_id_to_route.get(route_id);
                                             match route {
@@ -496,22 +501,7 @@ pub async fn new_rt_data(
                                                 None => 3
                                             }
                                         },
-                                        None => match &trip.trip_id {
-                                            Some(trip_id) => {
-                                                let trip = trip_id_to_trip.get(trip_id);
-                                                match trip {
-                                                    Some(trip) => {
-                                                        let route = route_id_to_route.get(&trip.route_id);
-                                                        match route {
-                                                            Some(route) => route.route_type,
-                                                            None => 3
-                                                        }
-                                                    },
-                                                    None => 3
-                                                }
-                                            },
-                                            None => 3
-                                        }
+                                        None => 3
                                     },
                                     None => 3
                                 }
