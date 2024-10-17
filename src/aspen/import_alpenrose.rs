@@ -404,31 +404,27 @@ pub async fn new_rt_data(
 
                 for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
                     if let Some(vehicle_pos) = &vehicle_entity.vehicle {
-
                         let recalculate_route_id: Option<String> = match &vehicle_pos.trip {
-                            Some(trip) => {
-                                match &trip.trip_id {
-                                    Some(trip_id) => {
-                                        let compressed_trip = trip_id_to_trip.get(trip_id);
-                                        match compressed_trip {
-                                            Some(compressed_trip) => {
-                                                let route = route_id_to_route.get(&compressed_trip.route_id);
-                                                match route {
-                                                    Some(route) => {
-                                                        Some(route.route_id.clone())
-                                                    },
-                                                    None => trip.route_id.clone()
-                                                }
-                                            },
-                                            None => trip.route_id.clone()
-                                        }     
-                                    },
-                                    None => trip.route_id.clone()
+                            Some(trip) => match &trip.trip_id {
+                                Some(trip_id) => {
+                                    let compressed_trip = trip_id_to_trip.get(trip_id);
+                                    match compressed_trip {
+                                        Some(compressed_trip) => {
+                                            let route =
+                                                route_id_to_route.get(&compressed_trip.route_id);
+                                            match route {
+                                                Some(route) => Some(route.route_id.clone()),
+                                                None => trip.route_id.clone(),
+                                            }
+                                        }
+                                        None => trip.route_id.clone(),
+                                    }
                                 }
+                                None => trip.route_id.clone(),
                             },
-                            None => None
+                            None => None,
                         };
-                        
+
                         let pos_aspenised = AspenisedVehiclePosition {
                             trip: vehicle_pos.trip.as_ref().map(|trip| {
                                 AspenisedVehicleTripInfo {
@@ -584,28 +580,41 @@ pub async fn new_rt_data(
                                         "metrolinktrains" => {
                                             let mut track_resp = None;
 
-                                            if let TrackData::Metrolink(Some(track_data_scax)) = &fetched_track_data {
+                                            if let TrackData::Metrolink(Some(track_data_scax)) =
+                                                &fetched_track_data
+                                            {
                                                 let mut metrolink_code = String::from("M");
 
                                                 if let Some(compressed_trip) = compressed_trip {
-                                                    if let Some(trip_short_name) = compressed_trip.trip_short_name.as_ref() {
+                                                    if let Some(trip_short_name) =
+                                                        compressed_trip.trip_short_name.as_ref()
+                                                    {
                                                         metrolink_code.push_str(trip_short_name);
                                                     }
                                                 }
 
-                                                if let Some(train_data) = track_data_scax.track_lookup.get(&metrolink_code) {
-                                                   
+                                                if let Some(train_data) = track_data_scax
+                                                    .track_lookup
+                                                    .get(&metrolink_code)
+                                                {
                                                     if let Some(stop_id) = &stu.stop_id {
-                                                        if let Some(train_and_stop_scax) = train_data.get(stop_id) {
-                                                            track_resp = Some(train_and_stop_scax.formatted_track_designation.clone().replace("Platform ", ""));
+                                                        if let Some(train_and_stop_scax) =
+                                                            train_data.get(stop_id)
+                                                        {
+                                                            track_resp = Some(
+                                                                train_and_stop_scax
+                                                                    .formatted_track_designation
+                                                                    .clone()
+                                                                    .replace("Platform ", ""),
+                                                            );
                                                         }
                                                     }
                                                 }
                                             }
 
                                             track_resp
-                                        },
-                                        _ => None
+                                        }
+                                        _ => None,
                                     },
                                     schedule_relationship: stu.schedule_relationship,
                                     departure_occupancy_status: stu.departure_occupancy_status,
@@ -758,46 +767,65 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
 
                     match response {
                         Ok(response) => {
-                            let mut track_lookup: HashMap<String, HashMap<String, MetrolinkTrackDataCleaned>> = HashMap::new();
+                            let mut track_lookup: HashMap<
+                                String,
+                                HashMap<String, MetrolinkTrackDataCleaned>,
+                            > = HashMap::new();
 
                             for t in response {
                                 if !track_lookup.contains_key(&t.train_designation) {
-                                    track_lookup.insert(t.train_designation.clone(), HashMap::new());
+                                    track_lookup
+                                        .insert(t.train_designation.clone(), HashMap::new());
                                 }
 
-                                let mut train_lookup_entry = track_lookup.get_mut(&t.train_designation).unwrap();
+                                let mut train_lookup_entry =
+                                    track_lookup.get_mut(&t.train_designation).unwrap();
 
-                                let stop_id_find = catenary::metrolink_ptc_to_stop_id::METROLINK_STOP_LIST.iter().find(|x| x.1 == &t.platform_name);
+                                let stop_id_find =
+                                    catenary::metrolink_ptc_to_stop_id::METROLINK_STOP_LIST
+                                        .iter()
+                                        .find(|x| x.1 == &t.platform_name);
 
                                 if let Some((stop_id, _)) = stop_id_find {
-                                   if !train_lookup_entry.contains_key(*stop_id) {
-                                    train_lookup_entry.insert(stop_id.to_string(), MetrolinkTrackDataCleaned {
-                                             track_movement_time_arrival: None,
-                                             track_movement_time_departure: None,
-                                             stop_id: stop_id.to_string(),
-                                             formatted_track_designation: t.formatted_track_designation.clone(),
-                                        });
-                                   }
+                                    if !train_lookup_entry.contains_key(*stop_id) {
+                                        train_lookup_entry.insert(
+                                            stop_id.to_string(),
+                                            MetrolinkTrackDataCleaned {
+                                                track_movement_time_arrival: None,
+                                                track_movement_time_departure: None,
+                                                stop_id: stop_id.to_string(),
+                                                formatted_track_designation: t
+                                                    .formatted_track_designation
+                                                    .clone(),
+                                            },
+                                        );
+                                    }
 
-                                   let train_and_stop_entry = train_lookup_entry.get_mut(&stop_id.to_string()).unwrap();
+                                    let train_and_stop_entry =
+                                        train_lookup_entry.get_mut(&stop_id.to_string()).unwrap();
 
-                                      match t.event_type.as_str() {
+                                    match t.event_type.as_str() {
                                         "Arrival" => {
-                                             train_and_stop_entry.track_movement_time_arrival = Some(catenary::metrolink_unix_fix(&t.train_movement_time));
-                                        },
+                                            train_and_stop_entry.track_movement_time_arrival =
+                                                Some(catenary::metrolink_unix_fix(
+                                                    &t.train_movement_time,
+                                                ));
+                                        }
                                         "Departure" => {
-                                             train_and_stop_entry.track_movement_time_departure = Some(catenary::metrolink_unix_fix(&t.train_movement_time));
-                                        },
+                                            train_and_stop_entry.track_movement_time_departure =
+                                                Some(catenary::metrolink_unix_fix(
+                                                    &t.train_movement_time,
+                                                ));
+                                        }
                                         _ => {}
-                                      }
+                                    }
                                 }
-                            
                             }
 
                             TrackData::Metrolink(Some(MetrolinkOutputTrackData {
                                 track_lookup: track_lookup,
                             }))
-                        },
+                        }
                         Err(e) => {
                             println!("Error decoding Metrolink data: {}", e);
                             TrackData::Metrolink(None)

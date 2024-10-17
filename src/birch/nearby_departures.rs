@@ -331,12 +331,11 @@ pub async fn nearby_from_coords(
     let directions_fetch_sql: Result<Vec<DirectionPatternRow>, diesel::result::Error> =
         directions_fetch_query.get_results(conn).await;
 
+    println!(
+        "Finished getting direction-stops in {:?}",
+        directions_timer.elapsed()
+    );
 
-        println!(
-            "Finished getting direction-stops in {:?}",
-            directions_timer.elapsed()
-        );
-    
     let directions_lookup_duration = directions_timer.elapsed();
 
     let directions_rows = directions_fetch_sql.unwrap();

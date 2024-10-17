@@ -26,7 +26,7 @@ struct StaticFeedToDownload {
 //It's giving UC Berkeley lab assignment!!! 🐻💅🐻💅
 //context for this joke: https://inst.eecs.berkeley.edu/~cs162/fa22/static/hw/hw-map-reduce-rs/
 // UC Berkeley has exercises from their Rust computing courses that pack massive structs as result
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DownloadedFeedsInformation {
     pub feed_id: String,
     pub url: String,

@@ -832,7 +832,6 @@ FROM (
     }
 }
 
-
 #[actix_web::get("/shapes_bus/{z}/{x}/{y}")]
 pub async fn shapes_bus(
     sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,

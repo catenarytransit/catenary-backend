@@ -28,7 +28,10 @@ pub fn extract_sub_zip(
     feed_id: &str,
     sub_folder: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let source_path = format!("{}/{}/{}.zip", gtfs_uncompressed_temp_storage, feed_id, sub_folder);
+    let source_path = format!(
+        "{}/{}/{}.zip",
+        gtfs_uncompressed_temp_storage, feed_id, sub_folder
+    );
     let target_path = format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id);
 
     println!("Extracting feed {} inside {}", feed_id, source_path);
@@ -103,7 +106,7 @@ pub fn flatten_feed(
             subfolder_to_get.as_str()
         );
 
-       let subfolder_answer = extract_sub_zip(
+        let subfolder_answer = extract_sub_zip(
             gtfs_uncompressed_temp_storage,
             feed_id,
             subfolder_to_get.as_str(),

@@ -62,10 +62,10 @@ use tilejson::TileJSON;
 mod api_key_management;
 mod aspenised_data_over_https;
 mod chicago_proxy;
+mod get_agencies;
 mod get_vehicle_trip_information;
 mod gtfs_rt_api;
 mod nearby_departures;
-mod get_agencies;
 mod route_info;
 
 #[derive(Clone, Debug)]
