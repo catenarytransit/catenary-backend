@@ -223,7 +223,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 );
 
                 if counter_of_eligible_feeds == 0 {
-                    if let Some(eligible_feeds) = &eligible_feeds {
+                    if let Ok(eligible_feeds) = &eligible_feeds {
                         println!("Eligible feeds: {:?}", eligible_feeds);
                     }
                 }
