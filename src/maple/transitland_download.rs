@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use url::{ParseError, Url};
 
 #[derive(Clone)]
 struct StaticFeedToDownload {
@@ -104,37 +105,47 @@ pub async fn download_return_eligible_feeds(
         let download_progress: Arc<std::sync::Mutex<u16>> = Arc::new(std::sync::Mutex::new(0));
         let total_feeds_to_download = feeds_to_download.len();
         use futures::StreamExt;
+
+        //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
+        let client = reqwest::ClientBuilder::new()
+            .use_rustls_tls()
+            .user_agent("Catenary Maple")
+            //timeout queries after 4 minutes
+            .timeout(Duration::from_secs(60 * 4))
+            .connect_timeout(Duration::from_secs(20))
+            .danger_accept_invalid_certs(true)
+            .deflate(true)
+            .gzip(true)
+            .brotli(true)
+            .cookie_store(true)
+            .build()
+            .unwrap();
+
         let static_fetches =
         //perform the downloads as a future stream, so only the thread count is allowed
             futures::stream::iter(feeds_to_download.into_iter().map(
                 |staticfeed|
                 {
-
+                    let client = client.clone();
                     let download_progress = Arc::clone(&download_progress);
                     let pool = Arc::clone(pool);
                     async move {
-                            //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
-                            let client = reqwest::ClientBuilder::new()
-                                .use_rustls_tls()
-                                .user_agent("Catenary Maple")
-                                //timeout queries after 4 minutes
-                                .timeout(Duration::from_secs(60 * 4))
-                                .connect_timeout(Duration::from_secs(20))
-                                .danger_accept_invalid_certs(true)
-                                .deflate(true)
-                                .gzip(true)
-                                .brotli(true)
-                                .cookie_store(true)
-                                .build()
-                                .unwrap();
+                            
 
                             let url = transform_for_bay_area(staticfeed.url.clone());
             
                             let request = client.get(url);
 
                             let request = add_auth_headers(request, &staticfeed.feed_id);
-            
-                            //calculate how long the download takes
+
+                            // get hostname
+                            let parse_url = Url::parse(&staticfeed.url);
+
+                            if let Ok(parse_url) = parse_url {
+                                let host = parse_url.host_str().unwrap();
+                                let request = request.header("Host", "");
+
+                                //calculate how long the download takes
                             let start = SystemTime::now();
                             let current_unix_ms_time = start
                                 .duration_since(UNIX_EPOCH)
@@ -273,6 +284,9 @@ pub async fn download_return_eligible_feeds(
                                         &staticfeed.feed_id, &staticfeed.url
                                     );
                                 }
+                            }
+                            } else {
+                                println!("Could not parse URL: {}", &staticfeed.url);
                             }
             
                             answer
