@@ -281,8 +281,8 @@ pub async fn download_return_eligible_feeds(
                                     *download_progress += 1;
 
                                     println!(
-                                        "Error with downloading {}: {}",
-                                        &staticfeed.feed_id, &staticfeed.url
+                                        "Error with downloading {}: {}, {:?}",
+                                        &staticfeed.feed_id, &staticfeed.url, error
                                     );
                                 }
                             }
@@ -292,6 +292,9 @@ pub async fn download_return_eligible_feeds(
                             }
                             Err(e) => {
                                 println!("Could not parse URL: {}", &staticfeed.url);
+
+                                let mut download_progress  = download_progress.lock().unwrap();
+                                *download_progress += 1;
 
                                 DownloadedFeedsInformation {
                                     feed_id: staticfeed.feed_id.clone(),
