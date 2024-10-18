@@ -144,7 +144,7 @@ pub async fn download_return_eligible_feeds(
                            match parse_url {
                            Ok(parse_url) => {
                                 let host = parse_url.host_str().unwrap();
-                                let request = request.header("Host", "");
+                                let request = request.header("Host", host);
 
                                 //calculate how long the download takes
                             let start = SystemTime::now();
