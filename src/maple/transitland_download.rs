@@ -141,7 +141,8 @@ pub async fn download_return_eligible_feeds(
                             // get hostname
                             let parse_url = Url::parse(&staticfeed.url);
 
-                            if let Ok(parse_url) = parse_url {
+                           match parse_url {
+                           Ok(parse_url) => {
                                 let host = parse_url.host_str().unwrap();
                                 let request = request.header("Host", "");
 
@@ -285,11 +286,26 @@ pub async fn download_return_eligible_feeds(
                                     );
                                 }
                             }
-                            } else {
-                                println!("Could not parse URL: {}", &staticfeed.url);
-                            }
-            
+
+                            
                             answer
+                            }
+                            Err(e) => {
+                                println!("Could not parse URL: {}", &staticfeed.url);
+
+                                DownloadedFeedsInformation {
+                                    feed_id: staticfeed.feed_id.clone(),
+                                    url: staticfeed.url.clone(),
+                                    hash: None,
+                                    download_timestamp_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
+                                    operation_success: false,
+                                    ingest: false,
+                                    byte_size: None,
+                                    duration_download: None,
+                                    http_response_code: None,
+                                }
+                            }}
+
                         }
                 }
                 
