@@ -66,7 +66,7 @@ pub async fn gtfs_process_feed(
     let gtfs = gtfs_structures::Gtfs::new(path.as_str())?;
 
     println!(
-        "Finished reading GTFS for {}, took {:?}",
+        "Finished reading GTFS for {}, took {:?}ms",
         feed_id, gtfs.read_duration
     );
 
@@ -326,7 +326,7 @@ pub async fn gtfs_process_feed(
             })
             .collect();
 
-        for dir_chunk in direction_pattern_rows.chunks(100) {
+        for dir_chunk in direction_pattern_rows.chunks(50) {
             diesel::insert_into(catenary::schema::gtfs::direction_pattern::dsl::direction_pattern)
                 .values(dir_chunk)
                 .execute(conn)
@@ -384,7 +384,7 @@ pub async fn gtfs_process_feed(
             })
             .collect::<Vec<_>>();
 
-        for itinerary_chunk in itinerary_pg.chunks(100) {
+        for itinerary_chunk in itinerary_pg.chunks(50) {
             diesel::insert_into(catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern)
                 .values(itinerary_chunk)
                 .execute(conn)
@@ -480,7 +480,7 @@ pub async fn gtfs_process_feed(
         })
         .collect();
 
-    for routes_chunk in routes_pg.chunks(100) {
+    for routes_chunk in routes_pg.chunks(50) {
         diesel::insert_into(catenary::schema::gtfs::routes::dsl::routes)
             .values(routes_chunk)
             .execute(conn)
