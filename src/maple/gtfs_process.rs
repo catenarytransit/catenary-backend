@@ -92,6 +92,20 @@ pub async fn gtfs_process_feed(
         },
     };
 
+    let start_reduction_timer = Instant::now();
+    let reduction = maple_syrup::reduce(&gtfs);
+    println!(
+        "Reduced schedule for {} in {:?}",
+        feed_id,
+        start_reduction_timer.elapsed()
+    );
+    println!(
+        "{} itineraries, {} trips, {:.2} ratio",
+        reduction.itineraries.len(),
+        reduction.trips_to_itineraries.len(),
+        reduction.trips_to_itineraries.len() as f64 / reduction.itineraries.len() as f64
+    );
+
     let feed_info: Option<FeedInfo> = match !gtfs.feed_info.is_empty() {
         true => Some(gtfs.feed_info[0].clone()),
         false => None,
@@ -209,19 +223,6 @@ pub async fn gtfs_process_feed(
 
     // insert trip and itineraries
 
-    let start_reduction_timer = Instant::now();
-    let reduction = maple_syrup::reduce(&gtfs);
-    println!(
-        "Reduced schedule for {} in {:?}",
-        feed_id,
-        start_reduction_timer.elapsed()
-    );
-    println!(
-        "{} itineraries, {} trips, {:.2} ratio",
-        reduction.itineraries.len(),
-        reduction.trips_to_itineraries.len(),
-        reduction.trips_to_itineraries.len() as f64 / reduction.itineraries.len() as f64
-    );
     for (direction_pattern_id, direction_pattern) in &reduction.direction_patterns {
         let gtfs_shape_id = match &direction_pattern.gtfs_shape_id {
             Some(gtfs_shape_id) => gtfs_shape_id.clone(),
