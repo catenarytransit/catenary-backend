@@ -343,6 +343,14 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                             rc_feed,
                         );
 
+                        let fix_stops_file = gtfs_handlers::fix_files::fix_files_in_gtfs_directory(
+                            format!(
+                                "{}/{}",
+                                gtfs_uncompressed_temp_storage, to_ingest_feed.feed_id
+                            )
+                            .as_str(),
+                        );
+
                         (to_ingest_feed.feed_id.clone(), flatten_feed_result.is_ok())
                     }
                 }))
