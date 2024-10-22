@@ -49,6 +49,7 @@ pub mod ip_to_location;
 pub mod maple_syrup;
 pub mod models;
 pub mod postgis_to_diesel;
+pub mod cholla;
 pub mod postgres_tools;
 pub mod schema;
 pub mod validate_gtfs_rt;
