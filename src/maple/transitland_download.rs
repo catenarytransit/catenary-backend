@@ -39,7 +39,9 @@ async fn try_to_download(feed_id: &str, client: &reqwest::Client, url: &str, par
 
     match response {
         Ok(response) => {
-            if response.status().is_redirection() {
+            match response.status().is_redirection() {
+                true => {
+                    
                 let location = response.headers().get("Location").unwrap().to_str().unwrap();
 
                 println!("Redirecting to {}", location);
@@ -53,9 +55,9 @@ async fn try_to_download(feed_id: &str, client: &reqwest::Client, url: &str, par
                 let request = request.header("Host", new_host);
 
                 request.send().await
+                },
+                false => Ok(response)
             }
-
-            Ok(response)
         }
         Err(error) => {
             Err(error)
@@ -199,7 +201,7 @@ pub async fn download_return_eligible_feeds(
                                 &parse_url,
                             ).await;
             
-                            let duration = 1SystemTime::now()
+                            let duration = SystemTime::now()
                                 .duration_since(start)
                                 .expect("Time went backwards");
 
