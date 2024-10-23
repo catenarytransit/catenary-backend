@@ -10,6 +10,7 @@ use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
+use reqwest::redirect::Policy;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -38,10 +39,26 @@ async fn try_to_download(feed_id: &str, client: &reqwest::Client, url: &str, par
 
     match response {
         Ok(response) => {
+            if response.status().is_redirection() {
+                let location = response.headers().get("Location").unwrap().to_str().unwrap();
+
+                println!("Redirecting to {}", location);
+
+                let new_url = Url::parse(location);
+
+                let new_host = new_url.as_ref().unwrap().host_str().unwrap();
+
+                let request = client.get(location);
+                let request = add_auth_headers(request, feed_id);
+                let request = request.header("Host", new_host);
+
+                request.send().await
+            }
+
             Ok(response)
         }
         Err(error) => {
-            reqwest::get(&url).await
+            Err(error)
         }
     }
 }
@@ -182,7 +199,7 @@ pub async fn download_return_eligible_feeds(
                                 &parse_url,
                             ).await;
             
-                            let duration = SystemTime::now()
+                            let duration = 1SystemTime::now()
                                 .duration_since(start)
                                 .expect("Time went backwards");
 
