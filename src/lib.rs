@@ -40,6 +40,7 @@ extern crate serde;
 
 pub mod agency_secret;
 pub mod aspen;
+pub mod cholla;
 pub mod custom_pg_types;
 pub mod enum_to_int;
 pub mod gtfs_rt_handlers;
@@ -49,7 +50,6 @@ pub mod ip_to_location;
 pub mod maple_syrup;
 pub mod models;
 pub mod postgis_to_diesel;
-pub mod cholla;
 pub mod postgres_tools;
 pub mod schema;
 pub mod validate_gtfs_rt;

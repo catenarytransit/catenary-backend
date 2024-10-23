@@ -4,13 +4,13 @@ use catenary::models::StaticDownloadAttempt;
 use diesel::prelude::*;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
+use reqwest::redirect::Policy;
 use reqwest::RequestBuilder;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
-use reqwest::redirect::Policy;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -22,10 +22,31 @@ struct StaticFeedToDownload {
     pub url: String,
 }
 
-async fn try_to_download(feed_id: &str, client: &reqwest::Client, url: &str, parsed_url: &Url) -> Result<reqwest::Response, reqwest::Error> {
-    let url = transform_for_bay_area(url.to_string());
-            
-    let request = client.get(&url);
+fn make_reqwest_client() -> reqwest::Client {
+    reqwest::ClientBuilder::new()
+        .use_rustls_tls()
+        .user_agent("Catenary Maple")
+        //timeout queries after 4 minutes
+        .timeout(Duration::from_secs(60 * 4))
+        .connect_timeout(Duration::from_secs(20))
+        .danger_accept_invalid_certs(true)
+        .deflate(true)
+        .gzip(true)
+        .brotli(true)
+        .cookie_store(true)
+        .build()
+        .unwrap()
+}
+
+async fn try_to_download(
+    feed_id: &str,
+    client: &reqwest::Client,
+    url: &str,
+    parsed_url: &Url,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let new_url = transform_for_bay_area(url.to_string());
+
+    let request = client.get(&new_url);
 
     let request = add_auth_headers(request, feed_id);
 
@@ -38,29 +59,17 @@ async fn try_to_download(feed_id: &str, client: &reqwest::Client, url: &str, par
     let response = request.send().await;
 
     match response {
-        Ok(response) => {
-            match response.status().is_redirection() {
-                true => {
-                    
-                let location = response.headers().get("Location").unwrap().to_str().unwrap();
-
-                println!("Redirecting to {}", location);
-
-                let new_url = Url::parse(location);
-
-                let new_host = new_url.as_ref().unwrap().host_str().unwrap();
-
-                let request = client.get(location);
-                let request = add_auth_headers(request, feed_id);
-                let request = request.header("Host", new_host);
-
-                request.send().await
-                },
-                false => Ok(response)
-            }
-        }
+        Ok(response) => Ok(response),
         Err(error) => {
-            Err(error)
+            //trying again with a different client
+
+            let client = reqwest::ClientBuilder::new()
+                .use_rustls_tls()
+                .user_agent("Catenary Maple")
+                .build()
+                .unwrap();
+
+            client.get(&new_url).send().await
         }
     }
 }
@@ -151,18 +160,7 @@ pub async fn download_return_eligible_feeds(
         use futures::StreamExt;
 
         //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
-        let client = reqwest::ClientBuilder::new()
-            .user_agent("Catenary Maple")
-            //timeout queries after 4 minutes
-            .timeout(Duration::from_secs(60 * 4))
-            .connect_timeout(Duration::from_secs(20))
-            .danger_accept_invalid_certs(true)
-            .deflate(true)
-            .gzip(true)
-            .brotli(true)
-            .cookie_store(true)
-            .build()
-            .unwrap();
+        let client = make_reqwest_client();
 
         let static_fetches =
         //perform the downloads as a future stream, so only the thread count is allowed
