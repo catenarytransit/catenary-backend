@@ -21,6 +21,31 @@ struct StaticFeedToDownload {
     pub url: String,
 }
 
+async fn try_to_download(feed_id: &str, client: &reqwest::Client, url: &str, parsed_url: &Url) -> Result<reqwest::Response, reqwest::Error> {
+    let url = transform_for_bay_area(url.to_string());
+            
+    let request = client.get(&url);
+
+    let request = add_auth_headers(request, feed_id);
+
+    // get hostname
+
+    let host = parsed_url.host_str().unwrap();
+
+    let request = request.header("Host", host);
+
+    let response = request.send().await;
+
+    match response {
+        Ok(response) => {
+            Ok(response)
+        }
+        Err(error) => {
+            reqwest::get(&url).await
+        }
+    }
+}
+
 //Written by Kyler Chin
 //You are required under the APGL license to retain this annotation
 
@@ -130,21 +155,12 @@ pub async fn download_return_eligible_feeds(
                     let pool = Arc::clone(pool);
                     async move {
                             
-
-                            let url = transform_for_bay_area(staticfeed.url.clone());
-            
-                            let request = client.get(url);
-
-                            let request = add_auth_headers(request, &staticfeed.feed_id);
-
                             // get hostname
                             let parse_url = Url::parse(&staticfeed.url);
 
                            match parse_url {
                            Ok(parse_url) => {
-                                let host = parse_url.host_str().unwrap();
-                                let request = request.header("Host", host);
-
+                                
                                 //calculate how long the download takes
                             let start = SystemTime::now();
                             let current_unix_ms_time = start
@@ -159,7 +175,12 @@ pub async fn download_return_eligible_feeds(
                                 ))
                                 .expect("failed to create file");
             
-                            let response = request.send().await;
+                            let response = try_to_download(
+                                &staticfeed.feed_id,
+                                &client,
+                                &staticfeed.url,
+                                &parse_url,
+                            ).await;
             
                             let duration = SystemTime::now()
                                 .duration_since(start)
