@@ -50,12 +50,6 @@ async fn try_to_download(
 
     let request = add_auth_headers(request, feed_id);
 
-    // get hostname
-
-    let host = parsed_url.host_str().unwrap();
-
-    let request = request.header("Host", host);
-
     let response = request.send().await;
 
     match response {
