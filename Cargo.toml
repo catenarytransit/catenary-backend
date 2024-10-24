@@ -20,12 +20,12 @@ memoffset = "0.9.1"
 time = "0.3.36"
 rouille = "3.0"
 reqwest = {version = "0.12", features = ["gzip","brotli","rustls-tls","deflate","cookies"]}
-protobuf = "3.6"
+protobuf = "3.7.1"
 csv = "1.3"
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.40", features = ["full", "tracing"] }
+tokio = { version = "1.41", features = ["full", "tracing"] }
 futures = "0.3"
-gtfs-structures = "0.41.3"
+gtfs-structures = "0.42.0"
 geofabrik-handler = {git = "https://github.com/catenarytransit/geofabrik-catenary-handler/"}
 tungstenite = "0.24.0"
 postgres = "0.19.7"
@@ -115,7 +115,7 @@ fasthash = "0.4.0"
 clap = "4.5.20"
 rgb = "0.8.37"
 zotgtfs = "0.3.7"
-amtrak-gtfs-rt = "0.3.2"
+amtrak-gtfs-rt = "0.4.0"
 chrono-tz = { version = "0.10.0", features = ["case-insensitive", "serde"] }
 ping = "0.5.2"
 online = { version = "4.0.2", features = ["tokio-runtime"] }
@@ -124,7 +124,7 @@ etcd-client = "0.14.0"
 ipnet = { version = "2.9.0", features = ["serde"] }
 flate2 = "1.0.30"
 tar = "0.4.41"
-bytes = "1.7.2"
+bytes = "1.8.0"
 polyline = "0.11.0"
 simple-server-timing-header = "0.1.1"
 osmpbfreader = "0.16.1"
@@ -168,7 +168,7 @@ name = "alpenrose"
 path = "src/alpenrose/main.rs"
 
 [build-dependencies]
-prost-build = "0.11"
+prost-build = "0.13"
 
 [[bin]]
 name = "manual_login_manager"
