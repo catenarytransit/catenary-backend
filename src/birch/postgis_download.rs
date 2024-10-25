@@ -20,6 +20,8 @@ use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 use tilejson::TileJSON;
 
+// smaller simplification threshold means more detail
+
 #[actix_web::get("/busstops")]
 pub async fn bus_stops_meta(req: HttpRequest) -> impl Responder {
     let mut fields = std::collections::BTreeMap::new();
@@ -640,7 +642,7 @@ pub async fn shapes_intercity_rail(
 
     let tile_width_degrees = tile_width_degrees_from_z(z);
 
-    let simplification_threshold = tile_width_degrees * 0.005;
+    let simplification_threshold = tile_width_degrees * 0.003;
 
     // let grid = tile_grid::Grid::wgs84();
 
@@ -778,7 +780,7 @@ pub async fn shapes_local_rail(
 
     let tile_width_degrees = tile_width_degrees_from_z(z);
 
-    let simplification_threshold = tile_width_degrees * 0.005;
+    let simplification_threshold = tile_width_degrees * 0.003;
 
     // let grid = tile_grid::Grid::wgs84();
 
