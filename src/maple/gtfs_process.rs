@@ -132,11 +132,15 @@ pub async fn gtfs_process_feed(
         }
     }
 
+    println!("Making stop to route type and route id hashmaps for {}", feed_id);
+    let timer_stop_id_table = Instant::now();
     let (stop_ids_to_route_types, stop_ids_to_route_ids) =
         make_hashmap_stops_to_route_types_and_ids(&gtfs);
 
     let (stop_id_to_children_ids, stop_ids_to_children_route_types) =
         make_hashmaps_of_children_stop_info(&gtfs, &stop_ids_to_route_types);
+    
+    println!("Finished making stop to route type and route id hashmaps in {:?} for {}", timer_stop_id_table.elapsed(), feed_id);
 
     //identify colours of shapes based on trip id's route id
     // also make reverse lookup for route ids to shape ids
@@ -181,7 +185,11 @@ pub async fn gtfs_process_feed(
         }
     }
 
+    println!("Agency insertion done for {}", feed_id);
+
     drop(agency_id_already_done);
+
+    println!("Inserting shapes for {}", feed_id);
 
     //shove raw geometry into postgresql
     if chateau_id != "amtrak" {
@@ -198,6 +206,13 @@ pub async fn gtfs_process_feed(
         .await?;
     }
 
+    println!("Shapes inserted for {}", feed_id);
+
+    //insert calendar
+
+
+    println!("Inserting calendar for {}", feed_id);
+
     calendar_into_postgres(
         &gtfs,
         feed_id,
@@ -206,6 +221,9 @@ pub async fn gtfs_process_feed(
         attempt_id,
     )
     .await?;
+
+    println!("Calendar inserted for {}", feed_id);
+    println!("Inserting stops for {}", feed_id);
 
     //insert stops
     stops_into_postgres(
@@ -221,7 +239,11 @@ pub async fn gtfs_process_feed(
     )
     .await?;
 
+    println!("Stops inserted for {}", feed_id);
+
     // insert trip and itineraries
+
+    println!("Inserting directions for {}", feed_id);
 
     for (direction_pattern_id, direction_pattern) in &reduction.direction_patterns {
         let gtfs_shape_id = match &direction_pattern.gtfs_shape_id {
@@ -335,6 +357,9 @@ pub async fn gtfs_process_feed(
         }
     }
 
+    println!("Directions inserted for {}", feed_id);
+    println!("Inserting itineraries for {}", feed_id);
+
     for (itinerary_id, itinerary) in &reduction.itineraries {
         let itinerary_pg_meta = ItineraryPatternMeta {
             onestop_feed_id: feed_id.to_string(),
@@ -393,6 +418,12 @@ pub async fn gtfs_process_feed(
         }
     }
 
+    println!("Itineraries inserted for {}", feed_id);
+
+    //insert trips
+
+    println!("Inserting trips for {}", feed_id);
+
     for (itinerary_id, compressed_trip_list) in &reduction.itineraries_to_trips {
         let trip_pg = compressed_trip_list
             .iter()
@@ -433,6 +464,8 @@ pub async fn gtfs_process_feed(
     }
 
     //insert routes
+
+    println!("Inserting routes for {}", feed_id);
 
     let routes_pg: Vec<RoutePgModel> = gtfs
         .routes
@@ -488,6 +521,8 @@ pub async fn gtfs_process_feed(
             .await?;
     }
 
+    println!("Routes inserted for {}", feed_id);
+
     //calculate concave hull
     let hull = crate::gtfs_handlers::hull_from_gtfs::hull_from_gtfs(&gtfs);
 
@@ -516,6 +551,8 @@ pub async fn gtfs_process_feed(
             .await?;
     }
     //submit hull
+
+    println!("Insert hull for {}", feed_id);
 
     let hull_pg: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>> =
         hull.map(|polygon_geo| postgis_diesel::types::Polygon {
