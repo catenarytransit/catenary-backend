@@ -357,7 +357,7 @@ pub async fn get_trip_rt_update(
                                             matches!(
                                                 each_update.trip.start_time.as_ref().map(
                                                     |start_time| {
-                                                        start_time.clone() == *query_start_time
+                                                        start_time == query_start_time
                                                     }
                                                 ),
                                                 Some(true)
