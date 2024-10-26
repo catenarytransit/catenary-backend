@@ -132,15 +132,22 @@ pub async fn gtfs_process_feed(
         }
     }
 
-    println!("Making stop to route type and route id hashmaps for {}", feed_id);
+    println!(
+        "Making stop to route type and route id hashmaps for {}",
+        feed_id
+    );
     let timer_stop_id_table = Instant::now();
     let (stop_ids_to_route_types, stop_ids_to_route_ids) =
         make_hashmap_stops_to_route_types_and_ids(&gtfs);
 
     let (stop_id_to_children_ids, stop_ids_to_children_route_types) =
         make_hashmaps_of_children_stop_info(&gtfs, &stop_ids_to_route_types);
-    
-    println!("Finished making stop to route type and route id hashmaps in {:?} for {}", timer_stop_id_table.elapsed(), feed_id);
+
+    println!(
+        "Finished making stop to route type and route id hashmaps in {:?} for {}",
+        timer_stop_id_table.elapsed(),
+        feed_id
+    );
 
     //identify colours of shapes based on trip id's route id
     // also make reverse lookup for route ids to shape ids
@@ -209,7 +216,6 @@ pub async fn gtfs_process_feed(
     println!("Shapes inserted for {}", feed_id);
 
     //insert calendar
-
 
     println!("Inserting calendar for {}", feed_id);
 
@@ -457,10 +463,12 @@ pub async fn gtfs_process_feed(
             })
             .collect::<Vec<_>>();
 
-        diesel::insert_into(catenary::schema::gtfs::trips_compressed::dsl::trips_compressed)
-            .values(trip_pg)
-            .execute(conn)
-            .await?;
+        for trip_chunk in trip_pg.chunks(50) {
+            diesel::insert_into(catenary::schema::gtfs::trips_compressed::dsl::trips_compressed)
+                .values(trip_chunk)
+                .execute(conn)
+                .await?;
+        }
     }
 
     //insert routes
