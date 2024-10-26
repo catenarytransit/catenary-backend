@@ -17,6 +17,8 @@ pub async fn calendar_into_postgres(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
+    let mut vec_of_calendar = Vec::new();
+
     for (service_id, calendar) in &gtfs.calendar {
         let calendar_into_pg = catenary::models::Calendar {
             onestop_feed_id: feed_id.to_string(),
@@ -34,11 +36,17 @@ pub async fn calendar_into_postgres(
             attempt_id: attempt_id.to_string(),
         };
 
+        vec_of_calendar.push(calendar_into_pg);
+    }
+
+    for calendar_chunk in vec_of_calendar.chunks(400) {
         let _ = diesel::insert_into(catenary::schema::gtfs::calendar::table)
-            .values(calendar_into_pg)
+            .values(calendar_chunk)
             .execute(conn)
             .await?;
     }
+
+    let mut vec_of_calendar_dates = Vec::new();
 
     for (service_id, calendar_dates) in &gtfs.calendar_dates {
         for date in calendar_dates {
@@ -54,11 +62,15 @@ pub async fn calendar_into_postgres(
                 attempt_id: attempt_id.to_string(),
             };
 
-            let _ = diesel::insert_into(catenary::schema::gtfs::calendar_dates::table)
-                .values(calendar_date_pg)
-                .execute(conn)
-                .await?;
+            vec_of_calendar_dates.push(calendar_date_pg);
         }
+    }
+
+    for calendar_date_chunk in vec_of_calendar_dates.chunks(400) {
+        let _ = diesel::insert_into(calendar_dates::table)
+            .values(calendar_date_chunk)
+            .execute(conn)
+            .await?;
     }
 
     Ok(())
