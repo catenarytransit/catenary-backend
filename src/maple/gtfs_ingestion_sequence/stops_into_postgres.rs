@@ -25,6 +25,7 @@ pub async fn stops_into_postgres(
         let name: Option<String> = titlecase_process_new(stop.name.as_ref());
         let display_name: Option<String> = name.as_ref().map(|name| {
             name.clone()
+                .replace("Station ", "")
                 .replace(" Station", "")
                 .replace(", Bahnhof", "")
                 .replace(" Banhhof", "")
