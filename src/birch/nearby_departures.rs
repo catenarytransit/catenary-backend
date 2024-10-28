@@ -678,18 +678,13 @@ pub async fn nearby_from_coords(
             )
             .await;
 
-       
-
         if let Ok(etcd_data) = etcd_data {
             if let Some(first_value) = etcd_data.kvs().first() {
-                let this_chateau_metadata = bincode::deserialize::<ChateauMetadataEtcd>(
-                    first_value.value(),
-                )
-                .unwrap();
-            }
+                let this_chateau_metadata =
+                    bincode::deserialize::<ChateauMetadataEtcd>(first_value.value()).unwrap();
 
-            chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
-            
+                chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
+            }
         }
     }
 

@@ -389,11 +389,11 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
                 "api_key",
                 "3be3d48087754c4998e6b33b65ec9700".parse().unwrap(),
             );
-        },
+        }
         "f-rb6b-metrochristchurch" => {
             headers.insert(
                 "Ocp-Apim-Subscription-Key",
-                "286e6dff5afe4565a08f3d453f8d28e2".parse().unwrap()
+                "286e6dff5afe4565a08f3d453f8d28e2".parse().unwrap(),
             );
         }
         _ => {}

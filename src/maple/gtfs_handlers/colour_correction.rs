@@ -34,11 +34,9 @@ pub fn fix_background_colour_rgb_feed_route(
 
             _ => fix_background_colour_rgb(background),
         },
-        "f-ez-renfeoperadora" => {
-            match route.short_name.as_deref() {
-                Some("AVE") => RGB::new(214, 5, 95),
-                _ => RGB::new(184, 183, 189)
-            }
+        "f-ez-renfeoperadora" => match route.short_name.as_deref() {
+            Some("AVE") => RGB::new(214, 5, 95),
+            _ => RGB::new(184, 183, 189),
         },
         "f-9q5b-longbeachtransit" => {
             match route.id.as_str() {
