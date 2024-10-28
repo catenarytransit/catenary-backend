@@ -58,7 +58,6 @@ async fn try_to_download(
             //trying again with a different client
 
             let client = reqwest::ClientBuilder::new()
-                .use_rustls_tls()
                 .user_agent("Catenary Maple")
                 .build()
                 .unwrap();
