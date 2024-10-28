@@ -499,11 +499,11 @@ async fn main() -> std::io::Result<()> {
     let arc_pool = Arc::clone(&pool);
 
     let conn_pre = arc_pool.as_ref().get().await;
-    let conn = &mut conn_pre.unwrap();
+   // let conn = &mut conn_pre.unwrap();
 
     let sqlx_pool: Arc<sqlx::Pool<sqlx::Postgres>> = Arc::new(
         PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(16)
             .connect(std::env::var("DATABASE_URL").unwrap().as_str())
             .await
             .unwrap(),
