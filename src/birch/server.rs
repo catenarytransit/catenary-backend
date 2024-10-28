@@ -498,7 +498,7 @@ async fn main() -> std::io::Result<()> {
     let pool = Arc::new(make_async_pool().await.unwrap());
     let arc_pool = Arc::clone(&pool);
 
-    let conn_pre = arc_pool.as_ref().get().await;
+    //let conn_pre = arc_pool.as_ref().get().await;
    // let conn = &mut conn_pre.unwrap();
 
     let sqlx_pool: Arc<sqlx::Pool<sqlx::Postgres>> = Arc::new(
