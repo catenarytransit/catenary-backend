@@ -40,6 +40,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let file_list = [
         "north-america/canada/quebec",
+        "europe/france/alsace",
+    "europe/france/aquitaine",
+    "europe/france/auvergne",
+    "europe/france/basse-normandie",
+    "europe/france/bourgogne",
+    "europe/france/bretagne",
+    "europe/france/centre",
+    "europe/france/champagne-ardenne",
+    "europe/france/corse",
+    "europe/france/franche-comte",
+    "europe/france/haute-normandie",
+    "europe/france/ile-de-france",
+    "europe/france/languedoc-roussillon",
+    "europe/france/limousin",
+    "europe/france/lorraine",
+    "europe/france/midi-pyrenees",
+    "europe/france/nord-pas-de-calais",
+    "europe/france/pays-de-la-loire",
+    "europe/france/picardie",
+    "europe/france/poitou-charentes",
+    "europe/france/provence-alpes-cote-d-azur",
+    "europe/france/rhone-alpes",
+    "europe/switzerland",
+    "europe/germany",
+    "europe/austria"
         //"north-america/canada/new-brunswick"
     ];
 
@@ -73,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let mut file = OpenOptions::new()
             .write(true)
-            .create(true)
+            .truncate(true)
             .open(path.clone())
             .expect("Failed to open file");
 
@@ -87,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let mut poly_file = OpenOptions::new()
             .write(true)
-            .create(true)
+            .truncate(true)
             .open(poly_export_path.clone())
             .unwrap();
 
@@ -337,7 +362,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let mut ped_bike_file = OpenOptions::new()
             .write(true)
-            .create(true)
+            .truncate(true)
             .open(ped_bike_file_path.clone())
             .expect("Failed to open file");
 
@@ -346,11 +371,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ways: kept_ped_bike_ways,
         };
 
-        let bincoded_ped_bike = bincode::serialize(&export_ped_bike)?;
+        //let bincoded_ped_bike = bincode::serialize(&export_ped_bike)?;
 
-        ped_bike_file.write_all(&bincoded_ped_bike)?;
+        //ped_bike_file.write_all(&bincoded_ped_bike)?;
 
-        println!("Wrote to {}", ped_bike_file_path);
+        //println!("Wrote to {}", ped_bike_file_path);
     }
 
     Ok(())
