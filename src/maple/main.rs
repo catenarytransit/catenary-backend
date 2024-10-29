@@ -41,6 +41,7 @@ use git2::Repository;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
+mod delete_overlapping_feeds_dmfr;
 use std::sync::Arc;
 
 use crate::cleanup::delete_attempt_objects;
@@ -171,6 +172,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     // See https://github.com/catenarytransit/dmfr-folder-reader
     println!("Reading transitland directory");
     let dmfr_result = read_folders("./transitland-atlas/")?;
+
+    //delete overlapping feeds
+    let dmfr_result = delete_overlapping_feeds_dmfr::delete_overlapping_feeds(dmfr_result);
 
     println!("Broken feeds: {:?}", dmfr_result.list_of_bad_files);
 
