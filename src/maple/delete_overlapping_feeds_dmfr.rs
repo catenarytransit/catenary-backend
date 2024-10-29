@@ -8,20 +8,17 @@ pub fn delete_overlapping_feeds(input: ReturnDmfrAnalysis) -> ReturnDmfrAnalysis
     let feed_hashmap = input.feed_hashmap;
 
     let feed_hashmap = feed_hashmap
-    .into_iter()
-    .filter(|(key, feed)| {
-        match feed.tags.get("exclude_from_global_query") {
-            Some(value) => {
-                match value {
-                    Value::String(value) => {
-                       value != "true"
-                    },
-                    _ => true
-                }
-            }
-            None => true
-        }
-    }).collect::<HashMap<String, _>>();
+        .into_iter()
+        .filter(
+            |(key, feed)| match feed.tags.get("exclude_from_global_query") {
+                Some(value) => match value {
+                    Value::String(value) => value != "true",
+                    _ => true,
+                },
+                None => true,
+            },
+        )
+        .collect::<HashMap<String, _>>();
 
     input.feed_hashmap = feed_hashmap;
 
