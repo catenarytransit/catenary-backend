@@ -368,6 +368,8 @@ fn transform_for_bay_area(x: String) -> String {
 }
 
 fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
+    let mut request = request;
+
     let mut headers = reqwest::header::HeaderMap::new();
 
     match feed_id {
@@ -398,6 +400,21 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
         }
         _ => {}
     };
+
+    if request.url().to_string().contains("grandlyon.com") {
+
+        //ENV vars get GRAND_LYON_USERNAME
+        //ENV vars get GRAND_LYON_PASSWORD
+
+        let username = std::env::var("GRAND_LYON_USERNAME");
+        let password = std::env::var("GRAND_LYON_PASSWORD");
+
+        if let Ok(username) = username {
+            if let Ok(password) = password {
+                request = request.basic_auth(username, Some(password));
+            }
+        }
+    }
 
     request.headers(headers)
 }
