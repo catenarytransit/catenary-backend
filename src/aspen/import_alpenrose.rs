@@ -3,6 +3,7 @@
 // Attribution cannot be removed
 
 extern crate catenary;
+use crate::metrolink_california_additions::vehicle_pos_supplement;
 use ahash::{AHashMap, AHashSet};
 use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -18,7 +19,6 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use crate::metrolink_california_additions::vehicle_pos_supplement;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-mta~nyc~rt~subway~1~2~3~4~5~6~7",
