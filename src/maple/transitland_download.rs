@@ -401,7 +401,7 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
         _ => {}
     };
 
-    if request.url().to_string().contains("grandlyon.com") {
+    if feed_id == "f-u05-tcl~systral" {
 
         //ENV vars get GRAND_LYON_USERNAME
         //ENV vars get GRAND_LYON_PASSWORD
