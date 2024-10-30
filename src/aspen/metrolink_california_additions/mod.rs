@@ -1,6 +1,7 @@
 use catenary::aspen_dataset::*;
 use compact_str::CompactString;
 use ahash::AHashMap;
+use crate::import_alpenrose::MetrolinkPos;
 
 pub fn vehicle_pos_supplement(
     pos_aspenised: AspenisedVehiclePosition,

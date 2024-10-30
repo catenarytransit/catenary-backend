@@ -76,24 +76,24 @@ pub enum TrackData {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct MetrolinkPosRaw {
-    symbol: CompactString,
-    direction: CompactString,
-    lat: CompactString,
-    long: CompactString,
-    speed: CompactString,
-    line: CompactString,
-    ptc_time: CompactString,
-    ptc_status: CompactString,
-    delay_status: CompactString,
+pub struct MetrolinkPosRaw {
+    pub symbol: CompactString,
+    pub direction: CompactString,
+    pub lat: CompactString,
+    pub long: CompactString,
+    pub speed: CompactString,
+    pub line: CompactString,
+    pub ptc_time: CompactString,
+    pub ptc_status: CompactString,
+    pub delay_status: CompactString,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct MetrolinkPos {
-    lat: f32,
-    lon: f32,
-    speed: f32,
-    symbol: CompactString,
+pub struct MetrolinkPos {
+    pub lat: f32,
+    pub lon: f32,
+    pub speed: f32,
+    pub symbol: CompactString,
 }
 
 fn mph_to_mps(mph: &CompactString) -> Option<f32> {
