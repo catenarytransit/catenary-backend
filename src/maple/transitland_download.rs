@@ -411,6 +411,7 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
 
         if let Ok(username) = username {
             if let Ok(password) = password {
+                println!("Password found for grand lyon!");
                 request = request.basic_auth(username, Some(password));
             }
         }
