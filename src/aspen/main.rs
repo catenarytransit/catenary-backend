@@ -59,6 +59,7 @@ use crossbeam::deque::Injector;
 use gtfs_realtime::FeedMessage;
 use scc::HashMap as SccHashMap;
 use std::error::Error;
+mod metrolink_california_additions;
 mod async_threads_alpenrose;
 use crate::id_cleanup::gtfs_rt_correct_route_id_string;
 use catenary::parse_gtfs_rt_message;

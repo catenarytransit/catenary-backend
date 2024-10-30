@@ -18,6 +18,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
+use crate::metrolink_california_additions::vehicle_pos_supplement;
 
 const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
     "f-mta~nyc~rt~subway~1~2~3~4~5~6~7",
@@ -177,9 +178,9 @@ pub async fn new_rt_data(
                                         metrolink_positions.insert(
                                             pos.symbol.clone(),
                                             MetrolinkPos {
-                                                lat: lat,
-                                                lon: lon,
-                                                speed: speed,
+                                                lat,
+                                                lon,
+                                                speed,
                                                 symbol: pos.symbol.clone(),
                                             },
                                         );
@@ -840,41 +841,6 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
         }
         _ => TrackData::None,
     }
-}
-
-fn vehicle_pos_supplement(
-    pos_aspenised: AspenisedVehiclePosition,
-    fetch_supplemental_data_positions_metrolink: &Option<AHashMap<CompactString, MetrolinkPos>>,
-    chateau_id: &String,
-) -> AspenisedVehiclePosition {
-    let mut pos_aspenised = pos_aspenised;
-
-    match chateau_id.as_str() {
-        "metrolinktrains" => match fetch_supplemental_data_positions_metrolink {
-            Some(supp_metrolink_data) => {
-                if let Some(vehicle_ids) = &pos_aspenised.vehicle {
-                    if let Some(vehicle_id) = &vehicle_ids.id {
-                        if let Some(metrolink_pos) = supp_metrolink_data.get(vehicle_id.as_str()) {
-                            if pos_aspenised.position.is_none() {
-                                println!("Set new pos for Metrolink {}", vehicle_id);
-                                pos_aspenised.position = Some(CatenaryRtVehiclePosition {
-                                    latitude: metrolink_pos.lat,
-                                    longitude: metrolink_pos.lon,
-                                    bearing: None,
-                                    odometer: None,
-                                    speed: Some(metrolink_pos.speed),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            None => {}
-        },
-        _ => {}
-    }
-
-    pos_aspenised
 }
 
 #[cfg(test)]
