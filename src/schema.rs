@@ -289,6 +289,9 @@ pub mod gtfs {
             previous_chateau_name -> Text,
             chateau -> Text,
             fetch_interval_ms -> Nullable<Int4>,
+            realtime_vehicle_positions -> Nullable<Text>,
+            realtime_trip_updates -> Nullable<Text>,
+            realtime_alerts -> Nullable<Text>,
         }
     }
 

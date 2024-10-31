@@ -156,6 +156,9 @@ pub struct RealtimeFeed {
     pub chateau: String,
     pub previous_chateau_name: String,
     pub fetch_interval_ms: Option<i32>,
+    pub realtime_vehicle_positions: Option<String>,
+    pub realtime_trip_updates: Option<String>,
+    pub realtime_alerts: Option<String>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
