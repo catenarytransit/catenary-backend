@@ -17,8 +17,6 @@ pub async fn perform_leader_job(
     //Get data from postgres
     let feeds = get_feed_metadata(Arc::clone(&arc_conn_pool)).await?;
 
-    let dmfr_result = read_folders("./transitland-atlas/")?;
-
     //get everything out of realtime feeds table and realtime password tables
 
     let conn_pool = arc_conn_pool.as_ref();

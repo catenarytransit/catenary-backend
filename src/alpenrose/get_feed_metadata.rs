@@ -27,7 +27,7 @@ pub async fn get_feed_metadata(
     arc_conn_pool: Arc<CatenaryPostgresPool>,
 ) -> Result<Vec<RealtimeFeedFetch>, Box<dyn Error + Sync + Send>> {
     //Get feed metadata from postgres
-    let dmfr_result = read_folders("./transitland-atlas/")?;
+    //let dmfr_result = read_folders("./transitland-atlas/")?;
 
     //get everything out of realtime feeds table and realtime password tables
 
@@ -76,23 +76,16 @@ pub async fn get_feed_metadata(
 
     let mut realtime_feed_fetches: Vec<RealtimeFeedFetch> = Vec::new();
 
-    for (feed_id, realtime_feed_dmfr) in dmfr_result
-        .feed_hashmap
-        .iter()
-        //filter dmfr database for only GTFS rt feeds
-        .filter(|(_, feed)| matches!(feed.spec, dmfr::FeedSpec::GtfsRt))
-    {
+    for (feed_id, realtime_feed) in realtime_feeds_hashmap.iter() {
         let vehicles_url = match realtime_passwords_hashmap.get(feed_id) {
             Some(password_format) => match &password_format.override_realtime_vehicle_positions {
                 Some(url) => Some(url.to_string()),
-                None => realtime_feed_dmfr
-                    .urls
+                None => realtime_feed
                     .realtime_vehicle_positions
                     .as_ref()
                     .map(|url| url.as_str().to_string()),
             },
-            None => realtime_feed_dmfr
-                .urls
+            None => realtime_feed
                 .realtime_vehicle_positions
                 .as_ref()
                 .map(|url| url.as_str().to_string()),
@@ -101,14 +94,12 @@ pub async fn get_feed_metadata(
         let trip_updates_url = match realtime_passwords_hashmap.get(feed_id) {
             Some(password_format) => match &password_format.override_realtime_trip_updates {
                 Some(url) => Some(url.to_string()),
-                None => realtime_feed_dmfr
-                    .urls
+                None => realtime_feed
                     .realtime_trip_updates
                     .as_ref()
                     .map(|url| url.as_str().to_string()),
             },
-            None => realtime_feed_dmfr
-                .urls
+            None => realtime_feed
                 .realtime_trip_updates
                 .as_ref()
                 .map(|url| url.as_str().to_string()),
@@ -117,14 +108,12 @@ pub async fn get_feed_metadata(
         let alerts_url = match realtime_passwords_hashmap.get(feed_id) {
             Some(password_format) => match &password_format.override_alerts {
                 Some(url) => Some(url.to_string()),
-                None => realtime_feed_dmfr
-                    .urls
+                None => realtime_feed
                     .realtime_alerts
                     .as_ref()
                     .map(|url| url.as_str().to_string()),
             },
-            None => realtime_feed_dmfr
-                .urls
+            None => realtime_feed
                 .realtime_alerts
                 .as_ref()
                 .map(|url| url.as_str().to_string()),
@@ -146,7 +135,7 @@ pub async fn get_feed_metadata(
                 Some(realtime_feed) => realtime_feed.fetch_interval_ms,
                 None => None,
             },
-        })
+        });
     }
 
     Ok(realtime_feed_fetches)

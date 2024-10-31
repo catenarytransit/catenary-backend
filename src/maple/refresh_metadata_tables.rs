@@ -198,9 +198,13 @@ pub async fn refresh_metadata_assignments(
                         Some(existing_realtime_feed) => existing_realtime_feed.fetch_interval_ms,
                         None => None,
                     },
-                    realtime_vehicle_positions: feed.urls.realtime_vehicle_positions.as_deref().cloned(),
+                    realtime_vehicle_positions: feed
+                        .urls
+                        .realtime_vehicle_positions
+                        .as_deref()
+                        .cloned(),
                     realtime_trip_updates: feed.urls.realtime_trip_updates.as_deref().cloned(),
-                    realtime_alerts: feed.urls.realtime_alerts.as_deref().cloned()
+                    realtime_alerts: feed.urls.realtime_alerts.as_deref().cloned(),
                 })
         })
         .collect::<Vec<catenary::models::RealtimeFeed>>();
@@ -214,13 +218,11 @@ pub async fn refresh_metadata_assignments(
                 gtfs_schema::realtime_feeds::dsl::fetch_interval_ms
                     .eq(new_realtime.fetch_interval_ms),
                 gtfs_schema::realtime_feeds::dsl::chateau.eq(new_realtime.chateau),
-                gtfs_schema::realtime_feeds::dsl::realtime_vehicle_positions.eq(new_realtime.realtime_vehicle_positions),
-                gtfs_schema::realtime_feeds::dsl::realtime_trip_updates.eq(
-                    new_realtime.realtime_trip_updates
-                ),
-                gtfs_schema::realtime_feeds::dsl::realtime_alerts.eq(
-                    new_realtime.realtime_alerts
-                )
+                gtfs_schema::realtime_feeds::dsl::realtime_vehicle_positions
+                    .eq(new_realtime.realtime_vehicle_positions),
+                gtfs_schema::realtime_feeds::dsl::realtime_trip_updates
+                    .eq(new_realtime.realtime_trip_updates),
+                gtfs_schema::realtime_feeds::dsl::realtime_alerts.eq(new_realtime.realtime_alerts),
             ))
             .execute(conn)
             .await?;
