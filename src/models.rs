@@ -418,8 +418,8 @@ pub struct IpToGeoAddr {
 pub struct TileStorage {
     pub category: i16,
     pub z: i16,
-    pub x: i16,
-    pub y: i16,
+    pub x: i32,
+    pub y: i32,
     pub mvt_data: Vec<u8>,
     pub added_time: chrono::DateTime<chrono::Utc>
 }

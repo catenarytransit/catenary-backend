@@ -465,8 +465,8 @@ pub mod gtfs {
         gtfs.tile_storage (category, z, x, y) {
             category -> Int2,
             z -> Int2,
-            x -> Int2,
-            y -> Int2,
+            x -> Int4,
+            y -> Int4,
             mvt_data -> Bytea,
             added_time -> Timestamptz,
         }
