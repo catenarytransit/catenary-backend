@@ -468,6 +468,7 @@ pub mod gtfs {
             x -> Int2,
             y -> Int2,
             mvt_data -> Bytea,
+            added_time -> Timestamptz,
         }
     }
 
