@@ -462,6 +462,20 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.tile_storage (category, z, x, y) {
+            category -> Int2,
+            z -> Int2,
+            x -> Int2,
+            y -> Int2,
+            mvt_data -> Bytea,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.trip_frequencies (onestop_feed_id, attempt_id, trip_id, index) {
             onestop_feed_id -> Text,
             trip_id -> Text,
@@ -524,6 +538,7 @@ pub mod gtfs {
         static_passwords,
         stops,
         stopsforroute,
+        tile_storage,
         trip_frequencies,
         trips_compressed,
     );

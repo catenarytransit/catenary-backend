@@ -412,3 +412,13 @@ pub struct IpToGeoAddr {
     pub longitude: f64,
     pub timezone: Option<String>,
 }
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::gtfs::tile_storage)]
+pub struct TileStorage {
+    pub category: i16,
+    pub z: i16,
+    pub x: i16,
+    pub y: i16,
+    pub mvt_data: Vec<u8>
+}
