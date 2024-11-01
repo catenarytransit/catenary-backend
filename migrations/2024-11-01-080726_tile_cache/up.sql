@@ -5,5 +5,7 @@ CREATE TABLE gtfs.tile_storage (
     x smallint not null,
     y smallint not null,
     mvt_data bytea not null,
+    added_time Timestamptz not null,
+    
     primary key (category, z, x, y)
 );

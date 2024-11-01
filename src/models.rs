@@ -420,5 +420,5 @@ pub struct TileStorage {
     pub z: i16,
     pub x: i16,
     pub y: i16,
-    pub mvt_data: Vec<u8>
+    pub mvt_data: Vec<u8>,
 }
