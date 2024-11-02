@@ -199,19 +199,18 @@ pub async fn gtfs_process_feed(
     println!("Inserting shapes for {}", feed_id);
 
     //shove raw geometry into postgresql
-    if chateau_id != "amtrak" {
-        shapes_into_postgres(
-            &gtfs,
-            &shape_to_color_lookup,
-            &shape_to_text_color_lookup,
-            feed_id,
-            Arc::clone(&arc_conn_pool),
-            chateau_id,
-            attempt_id,
-            &shape_id_to_route_ids_lookup,
-        )
-        .await?;
-    }
+
+    shapes_into_postgres(
+        &gtfs,
+        &shape_to_color_lookup,
+        &shape_to_text_color_lookup,
+        feed_id,
+        Arc::clone(&arc_conn_pool),
+        chateau_id,
+        attempt_id,
+        &shape_id_to_route_ids_lookup,
+    )
+    .await?;
 
     println!("Shapes inserted for {}", feed_id);
 
