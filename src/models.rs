@@ -421,5 +421,5 @@ pub struct TileStorage {
     pub x: i32,
     pub y: i32,
     pub mvt_data: Vec<u8>,
-    pub added_time: chrono::DateTime<chrono::Utc>
+    pub added_time: chrono::DateTime<chrono::Utc>,
 }

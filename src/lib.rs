@@ -917,9 +917,3 @@ pub fn metrolink_unix_fix(date: &str) -> u64 {
 
     numbers.parse::<u64>().unwrap()
 }
-
-pub enum TileCategory {
-    IntercityRailShapesRaw = 0,
-    LocalRailShapesRaw = 1,
-    BusShapesRaw = 2,
-}
