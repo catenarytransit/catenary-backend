@@ -159,19 +159,24 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
             match schedule_bytes {
                 Ok(schedule_bytes) => {
-                    let mut archive = ZipArchive::new(io::Cursor::new(schedule_bytes)).unwrap();
+                    let mut archive = ZipArchive::new(io::Cursor::new(schedule_bytes));
 
-                    // Find and open the desired file
-                    let mut trips_file = archive
-                        .by_name("trips.txt")
-                        .expect("trips.txt doesn't exist");
-                    let mut buffer = Vec::new();
-                    io::copy(&mut trips_file, &mut buffer).unwrap();
+                    match archive {
+                        Ok(mut archive) => {
+                            // Find and open the desired file
+                            let mut trips_file = archive
+                                .by_name("trips.txt")
+                                .expect("trips.txt doesn't exist");
+                            let mut buffer = Vec::new();
+                            io::copy(&mut trips_file, &mut buffer).unwrap();
 
-                    // Convert the buffer to a string
-                    let trips_content = String::from_utf8(buffer).unwrap();
+                            // Convert the buffer to a string
+                            let trips_content = String::from_utf8(buffer).unwrap();
 
-                    Some(trips_content)
+                            Some(trips_content)
+                        }
+                        Err(_) => None,
+                    }
                 }
                 Err(e) => {
                     eprintln!("{:#?}", e);
