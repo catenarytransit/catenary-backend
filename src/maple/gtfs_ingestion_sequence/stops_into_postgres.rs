@@ -35,6 +35,8 @@ pub async fn stops_into_postgres(
                 .replace("Eastbound", "E.B.")
                 .replace("Southbound", "S.B.")
                 .replace("Westbound", "W.B.")
+                .replace(" (Railway) ", "")
+                .replace(" Light Rail", "")
         });
 
         let stop_pg = catenary::models::Stop {
