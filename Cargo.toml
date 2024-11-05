@@ -137,6 +137,7 @@ strumbra = "0.5.1"
 compact_str = { version = "0.8.0", features = ["serde", "diesel"] }
 urlencoding = "2.1.3"
 url = "2.5.2"
+slippy-map-tiles = "0.16.0"
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"

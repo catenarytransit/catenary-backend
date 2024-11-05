@@ -83,3 +83,20 @@ pub async fn get_tile(
         .first::<crate::models::TileStorage>(conn)
         .await
 }
+
+pub fn delete_all_tiles_in_bbox(
+    conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
+    rect: &geo::Rect<f64>,
+    z: u8,
+    c: TileCategory,
+) -> Result<(), anyhow::Error> {
+    //make bbox
+    let bbox = slippy_map_tiles::BBox::new(
+        rect.max().y as f32,
+        rect.min().x as f32,
+        rect.min().y as f32,
+        rect.max().x as f32,
+    );
+
+    Ok(())
+}
