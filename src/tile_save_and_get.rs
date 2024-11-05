@@ -65,6 +65,28 @@ pub async fn delete_tile(
     Ok(())
 }
 
+pub async fn delete_in_bbox(conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
+category: TileCategory,
+z: u8,
+min_x: i32,
+max_x: i32,
+min_y: i32,
+max_y: i32
+)  -> Result<(), anyhow::Error> {
+    let category_i16 = tile_enum_to_i16(category);
+
+    let _ = diesel::delete(
+        crate::schema::gtfs::tile_storage::dsl::tile_storage
+            .filter(crate::schema::gtfs::tile_storage::dsl::category.eq(category_i16))
+            .filter(crate::schema::gtfs::tile_storage::dsl::x.ge(min_x))
+            .filter(crate::schema::gtfs::tile_storage::dsl::x.le(max_x))
+            .filter(crate::schema::gtfs::tile_storage::dsl::y.ge(min_y))
+            .filter(crate::schema::gtfs::tile_storage::dsl::y.le(max_y))
+    );
+    
+    Ok(())
+}
+
 pub async fn get_tile(
     conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
     category: TileCategory,
