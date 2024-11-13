@@ -2,6 +2,7 @@ use crate::CatenaryPostgresPool;
 use actix_web::web;
 use actix_web::HttpResponse;
 use actix_web::Responder;
+use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenisedAlert;
 use catenary::models::DirectionPatternMeta;
 use catenary::models::DirectionPatternRow;
@@ -21,6 +22,7 @@ use std::sync::Arc;
 use catenary::SerializableStop;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use tarpc::context;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RouteInfoResponse {
@@ -77,7 +79,7 @@ pub async fn route_info(
             .body("Could not connect to etcd");
     }
 
-    let etcd = etcd.unwrap();
+    let mut etcd = etcd.unwrap();
 
     //connect to postgres
     let conn_pool = pool.as_ref();
@@ -308,7 +310,50 @@ pub async fn route_info(
 
     //query realtime data pool for alerts
 
-    //TODO!
+    let fetch_assigned_node_for_this_chateau = etcd
+        .get(
+            format!("/aspen_assigned_chateaus/{}", &query.chateau).as_str(),
+            None,
+        )
+        .await;
+
+    let mut alerts_for_route_send: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
+    let mut alert_ids = vec![];
+
+    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
+        let fetch_assigned_node_for_this_chateau_kv_first =
+            fetch_assigned_node_for_this_chateau.kvs().first();
+
+        if let Some(fetch_assigned_node_for_this_chateau_data) =
+            fetch_assigned_node_for_this_chateau_kv_first
+        {
+            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+                fetch_assigned_node_for_this_chateau_data.value(),
+            )
+            .unwrap();
+
+            let aspen_client =
+                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+                    .await;
+
+            if let Ok(aspen_client) = aspen_client {
+                let alerts_for_route = aspen_client
+                    .get_alerts_from_route_id(
+                        context::current(),
+                        query.chateau.clone(),
+                        route.route_id.clone(),
+                    )
+                    .await;
+
+                if let Ok(Some(alerts_for_route)) = alerts_for_route {
+                    for (alert_id, alert) in alerts_for_route {
+                        alert_ids.push(alert_id.clone());
+                        alerts_for_route_send.insert(alert_id.clone(), alert);
+                    }
+                }
+            }
+        }
+    }
 
     //return as struct
     //pdf is none for now
@@ -352,8 +397,8 @@ pub async fn route_info(
                 )
             })
             .collect(),
-        alert_ids_for_this_route: vec![],
-        alert_id_to_alert: BTreeMap::new(),
+        alert_ids_for_this_route: alert_ids,
+        alert_id_to_alert: alerts_for_route_send,
     };
 
     HttpResponse::Ok().json(response)
