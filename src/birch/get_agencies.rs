@@ -5,7 +5,6 @@ use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use catenary::EtcdConnectionIps;
 use diesel::prelude::*;
-use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, JsonValue};

@@ -44,10 +44,7 @@ use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use catenary::EtcdConnectionIps;
-use diesel::query_dsl::methods::FilterDsl;
-use diesel::query_dsl::select_dsl::SelectDsl;
-use diesel::ExpressionMethods;
-use diesel::SelectableHelper;
+use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, JsonValue};
 use ordered_float::Pow;
@@ -268,6 +265,13 @@ struct ChateauToSend {
     schedule_feeds: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct ChateauToSendNoGeom {
+    chateau: String,
+    realtime_feeds: Vec<String>,
+    schedule_feeds: Vec<String>,
+}
+
 #[actix_web::get("/getchateaus")]
 async fn chateaus(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
@@ -399,6 +403,43 @@ async fn chateaus(
         .insert_header(("Content-Type", "application/json"))
         .insert_header(("Cache-Control", "max-age=60,public"))
         .body(serialized)
+}
+
+#[actix_web::get("/getchateausnogeom")]
+async fn chateaus_no_geom(
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    req: HttpRequest,
+) -> impl Responder {
+    let conn_pool = pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre.unwrap();
+
+    // fetch out of table
+    let existing_chateaus = catenary::schema::gtfs::chateaus::table
+        .select(catenary::models::Chateau::as_select())
+        .load::<catenary::models::Chateau>(conn)
+        .await
+        .unwrap();
+
+    // convert hulls to standardised `geo` crate
+    let mut formatted_chateaus = existing_chateaus
+        .into_iter()
+        .filter(|pg_chateau| pg_chateau.hull.is_some())
+        .map(|pg_chateau| ChateauToSendNoGeom {
+            chateau: pg_chateau.chateau,
+            realtime_feeds: pg_chateau.realtime_feeds.into_iter().flatten().collect(),
+            schedule_feeds: pg_chateau.static_feeds.into_iter().flatten().collect(),
+        })
+        .collect::<Vec<ChateauToSendNoGeom>>();
+
+    formatted_chateaus.sort_by_key(|x| x.chateau.clone());
+
+    let serialised_chateaus = serde_json::to_string(&formatted_chateaus).unwrap();
+
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "application/json"))
+        .insert_header(("Cache-Control", "max-age=60,public"))
+        .body(serialised_chateaus)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -577,6 +618,7 @@ async fn main() -> std::io::Result<()> {
             .service(station_features_meta)
             .service(other_stops)
             .service(other_stops_meta)
+            .service(chateaus_no_geom)
             .service(api_key_management::get_realtime_keys)
             .service(api_key_management::set_realtime_key)
             .service(aspenised_data_over_https::get_realtime_locations)
