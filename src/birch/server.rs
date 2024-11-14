@@ -308,7 +308,7 @@ async fn chateaus(
         .unwrap();
 
     // convert hulls to standardised `geo` crate
-    let formatted_chateaus = existing_chateaus
+    let mut formatted_chateaus = existing_chateaus
         .into_iter()
         .filter(|pg_chateau| pg_chateau.hull.is_some())
         .map(|pg_chateau| ChateauToSend {
@@ -318,6 +318,8 @@ async fn chateaus(
             hull: diesel_multi_polygon_to_geo(pg_chateau.hull.unwrap()),
         })
         .collect::<Vec<ChateauToSend>>();
+
+    formatted_chateaus.sort_by_key(|x| x.chateau.clone());
 
     // conversion to `geojson` structs
     let features = formatted_chateaus

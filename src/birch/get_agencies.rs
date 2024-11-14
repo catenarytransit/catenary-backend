@@ -4,11 +4,10 @@ use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
 use catenary::EtcdConnectionIps;
-use diesel::query_dsl::methods::FilterDsl;
-use diesel::query_dsl::select_dsl::SelectDsl;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
+use diesel::prelude::*;
 use geojson::{Feature, GeoJson, JsonValue};
 use ordered_float::Pow;
 use serde::Deserialize;
@@ -38,6 +37,7 @@ pub async fn get_agencies_raw(
     let agencies_pg: Result<Vec<catenary::models::Agency>, _> =
         catenary::schema::gtfs::agencies::dsl::agencies
             .select(catenary::models::Agency::as_select())
+            .order(catenary::schema::gtfs::agencies::dsl::agency_name)
             .load(conn)
             .await;
 
