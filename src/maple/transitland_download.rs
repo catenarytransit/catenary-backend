@@ -46,6 +46,23 @@ async fn try_to_download(
 ) -> Result<reqwest::Response, reqwest::Error> {
     let new_url = transform_for_bay_area(url.to_string());
 
+    if feed_id == "f-dr5-nj~transit~rail" {
+        let form = reqwest::multipart::Form::new()
+            //i dont care, whatever, leak it, so what?
+            .text("token", "638671989162459331");
+
+        let request = client
+            .request(
+                reqwest::Method::POST,
+                "https://raildata.njtransit.com/api/GTFSRT/getGTFS",
+            )
+            .multipart(form);
+
+        let request = add_auth_headers(request, feed_id);
+
+        return request.send().await;
+    }
+
     let request = client.get(&new_url);
 
     let request = add_auth_headers(request, feed_id);

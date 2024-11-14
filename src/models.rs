@@ -5,12 +5,10 @@
 use compact_str::CompactString;
 use diesel::pg::Pg;
 use diesel::prelude::*;
-use diesel::FromSqlRow;
+use diesel::sql_types::*;
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;
-
-use diesel::sql_types::*;
 
 #[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize, QueryableByName)]
 #[diesel(table_name = crate::schema::gtfs::itinerary_pattern)]
