@@ -35,6 +35,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Instant;
+use gtfs_structures::Gtfs;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -64,6 +65,17 @@ pub async fn gtfs_process_feed(
     let path = format!("{}/{}", gtfs_unzipped_path, feed_id);
 
     let gtfs = gtfs_structures::Gtfs::new(path.as_str())?;
+
+    let gtfs: Gtfs = match feed_id {
+        "f-dpz8-ttc" => {
+            use catenary::schedule_filtering::include_only_route_types;
+
+            let route_types = vec![gtfs_structures::RouteType::Subway];
+
+            include_only_route_types(gtfs, route_types)
+        },
+        _ => gtfs
+    };
 
     println!(
         "Finished reading GTFS for {}, took {:?}ms",
