@@ -72,7 +72,11 @@ pub async fn gtfs_process_feed(
 
             let route_types = vec![gtfs_structures::RouteType::Subway];
 
-            include_only_route_types(gtfs, route_types)
+            let gtfs = include_only_route_types(gtfs, route_types);
+
+            println!("Filtered TTC Subway");
+            gtfs.print_stats();
+            gtfs
         }
         _ => gtfs,
     };
