@@ -28,6 +28,7 @@ use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::FeedInfo;
+use gtfs_structures::Gtfs;
 use gtfs_translations::translation_csv_text_to_translations;
 use gtfs_translations::TranslationResult;
 use prost::Message;
@@ -35,7 +36,6 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Instant;
-use gtfs_structures::Gtfs;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -73,8 +73,8 @@ pub async fn gtfs_process_feed(
             let route_types = vec![gtfs_structures::RouteType::Subway];
 
             include_only_route_types(gtfs, route_types)
-        },
-        _ => gtfs
+        }
+        _ => gtfs,
     };
 
     println!(

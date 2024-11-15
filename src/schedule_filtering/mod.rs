@@ -73,13 +73,12 @@ mod tests {
     #[tokio::test]
     async fn filter_ttc() {
         let gtfs = gtfs_structures::Gtfs::from_url_async("https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/7795b45e-e65a-4465-81fc-c36b9dfff169/resource/cfb6b2b8-6191-41e3-bda1-b175c51148cb/download/TTC%20Routes%20and%20Schedules%20Data.zip").await.unwrap();
-    
-       
+
         println!("starts with");
         gtfs.print_stats();
-    
+
         let gtfs = include_only_route_types(gtfs, vec![gtfs_structures::RouteType::Subway]);
-    
+
         println!("ends with");
         let final_stats = gtfs.print_stats();
     }
