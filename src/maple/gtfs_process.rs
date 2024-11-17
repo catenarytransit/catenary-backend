@@ -77,6 +77,25 @@ pub async fn gtfs_process_feed(
             println!("Filtered TTC Subway");
             gtfs.print_stats();
             gtfs
+        },
+        "f-uc~irvine~anteater~express" => {
+            let mut gtfs = gtfs;
+
+            gtfs.feed_info = vec![
+                gtfs_structures::FeedInfo {
+                    name: "TransLoc, Inc.".to_string(),
+                    url: "https://transloc.com".to_string(),
+                    lang: "en".to_string(),
+                    start_date: Some(chrono::NaiveDate::from_ymd_opt(2024, 07, 10).unwrap()),
+                    end_date: Some(chrono::NaiveDate::from_ymd_opt(2099, 12, 31).unwrap()),
+                    version: None,
+                    default_lang: Some("en".to_string()),
+                    contact_email: None,
+                    contact_url: None,
+                }
+            ];
+
+            gtfs
         }
         _ => gtfs,
     };
