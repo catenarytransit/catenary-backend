@@ -870,7 +870,7 @@ FROM (
     FROM
         gtfs.shapes
     WHERE
-        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND route_type IN (3,11,200) AND routes != \'{}}\'
+        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND route_type IN (3,11,200) AND routes != \'{{}}\'
 ) q", z = z, x = x, y= y);
 
     match sqlx::query(query_str.as_str())
