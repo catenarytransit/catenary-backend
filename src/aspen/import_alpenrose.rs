@@ -18,18 +18,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-const MAKE_VEHICLES_FEED_LIST: [&str; 9] = [
-    "f-mta~nyc~rt~subway~1~2~3~4~5~6~7",
-    "f-mta~nyc~rt~subway~a~c~e",
-    "f-mta~nyc~rt~subway~b~d~f~m",
-    "f-mta~nyc~rt~subway~g",
-    "f-mta~nyc~rt~subway~j~z",
-    "f-mta~nyc~rt~subway~l",
-    "f-mta~nyc~rt~subway~n~q~r~w",
-    "f-mta~nyc~rt~subway~sir",
-    "f-bart~rt",
-];
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct MetrolinkTrackData {
     #[serde(rename = "TrainDesignation")]
