@@ -382,6 +382,11 @@ pub async fn new_rt_data(
             trip_id_to_trip.insert(trip.trip_id.clone(), trip);
         }
 
+        for (trip_id, trips_in_cache) in 
+        compressed_trip_internal_cache.compressed_trips {
+            trip_id_to_trip.insert(trip_id.clone(), trips_in_cache.clone());
+        }
+
         let trip_id_to_trip = trip_id_to_trip;
 
         //also lookup all the headsigns from the trips via itinerary patterns
@@ -391,6 +396,8 @@ pub async fn new_rt_data(
         for trip in trip_id_to_trip.values() {
             list_of_itinerary_patterns_to_lookup.insert(trip.itinerary_pattern_id.clone());
         }
+
+        compressed_trip_internal_cache.compressed_trips = trip_id_to_trip.clone();
 
         let itin_lookup_start = std::time::Instant::now();
 
