@@ -193,6 +193,38 @@ pub mod aspen_dataset {
     use std::hash::Hash;
 
     #[derive(Clone, Serialize, Deserialize)]
+    pub struct ItineraryPatternInternalCache {
+        pub itinerary_pattern_meta: AHashMap<String, crate::models::ItineraryPatternMeta>,
+        pub itinerary_pattern_rows: AHashMap<String, Vec<crate::models::ItineraryPatternRow>>,
+        pub last_time_full_refreshed: chrono::DateTime<chrono::Utc>,
+    }
+
+    impl ItineraryPatternInternalCache {
+        pub fn new() -> Self {
+            ItineraryPatternInternalCache {
+                itinerary_pattern_meta: AHashMap::new(),
+                itinerary_pattern_rows: AHashMap::new(),
+                last_time_full_refreshed: chrono::Utc::now(),
+            }
+        }
+    }
+
+    #[derive(Clone, Serialize, Deserialize)]
+    pub struct CompressedTripInternalCache {
+        pub compressed_trips: AHashMap<String, crate::models::CompressedTrip>,
+        pub last_time_full_refreshed: chrono::DateTime<chrono::Utc>,
+    }
+
+    impl CompressedTripInternalCache {
+        pub fn new() -> Self {
+            CompressedTripInternalCache {
+                compressed_trips: AHashMap::new(),
+                last_time_full_refreshed: chrono::Utc::now(),
+            }
+        }
+    }
+
+    #[derive(Clone, Serialize, Deserialize)]
     pub struct AspenisedData {
         pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
         pub vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache>,
@@ -207,6 +239,8 @@ pub mod aspen_dataset {
         pub impacted_stops_alerts: AHashMap<String, Vec<String>>,
         pub impacted_trips_alerts: AHashMap<String, Vec<String>>,
         pub last_updated_time_ms: u64,
+        pub itinerary_pattern_internal_cache: ItineraryPatternInternalCache,
+        pub compressed_trip_internal_cache: CompressedTripInternalCache,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]

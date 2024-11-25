@@ -152,6 +152,14 @@ pub async fn new_rt_data(
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let start = std::time::Instant::now();
 
+    //either fetch the mutable reference to trip compressed cache or make an empty one
+
+    let mut compressed_trip_internal_cache: CompressedTripInternalCache =
+        match authoritative_data_store.get(&chateau_id) {
+            Some(data) => data.compressed_trip_internal_cache.clone(),
+            None => CompressedTripInternalCache::new(),
+        };
+
     let fetch_supplemental_data_positions_metrolink: Option<AHashMap<CompactString, MetrolinkPos>> =
         match realtime_feed_id.as_str() {
             "f-metrolinktrains~rt" => {
@@ -306,7 +314,7 @@ pub async fn new_rt_data(
             for trip_entity in trip_gtfs_rt_for_feed_id.entity.iter() {
                 if let Some(trip_update) = &trip_entity.trip_update {
                     if let Some(trip_id) = &trip_update.trip.trip_id {
-                        //trip_ids_to_lookup.insert(trip_id.clone());
+                        trip_ids_to_lookup.insert(trip_id.clone());
                     }
                 }
             }
@@ -333,12 +341,35 @@ pub async fn new_rt_data(
 
         //now look up all the trips
 
+        let trips_to_remove_from_cache = compressed_trip_internal_cache
+            .compressed_trips
+            .keys()
+            .filter(|x| !trip_ids_to_lookup.contains(x.as_str()))
+            .map(|x| x.clone())
+            .collect::<Vec<String>>();
+
+        for trip_id in trips_to_remove_from_cache {
+            compressed_trip_internal_cache
+                .compressed_trips
+                .remove(&trip_id);
+        }
+
         let trip_start = std::time::Instant::now();
+
+        let trip_ids_to_lookup_to_hit = trip_ids_to_lookup
+            .iter()
+            .filter(|x| {
+                !compressed_trip_internal_cache
+                    .compressed_trips
+                    .contains_key(x.as_str())
+            })
+            .collect::<Vec<&String>>();
+
         let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
             .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(&chateau_id))
             .filter(
                 catenary::schema::gtfs::trips_compressed::dsl::trip_id
-                    .eq_any(trip_ids_to_lookup.iter()),
+                    .eq_any(trip_ids_to_lookup_to_hit.iter()),
             )
             .load::<catenary::models::CompressedTrip>(conn)
             .await?;
@@ -730,6 +761,8 @@ pub async fn new_rt_data(
                 impacted_stops_alerts: AHashMap::new(),
                 vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
                 impacted_trips_alerts: impact_trip_id_to_alert_ids,
+                compressed_trip_internal_cache,
+                itinerary_pattern_internal_cache: ItineraryPatternInternalCache::new(),
                 last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
             }
         }
@@ -745,6 +778,8 @@ pub async fn new_rt_data(
                 impacted_stops_alerts: AHashMap::new(),
                 vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
                 impacted_trips_alerts: impact_trip_id_to_alert_ids,
+                compressed_trip_internal_cache,
+                itinerary_pattern_internal_cache: ItineraryPatternInternalCache::new(),
                 last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
             });
         }

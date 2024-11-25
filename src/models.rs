@@ -57,7 +57,9 @@ pub struct ItineraryPatternRowNearbyLookup {
     pub route_id: String,
 }
 
-#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize, QueryableByName)]
+#[derive(
+    Queryable, Debug, Selectable, Insertable, Clone, Serialize, Deserialize, QueryableByName,
+)]
 #[diesel(table_name = crate::schema::gtfs::itinerary_pattern_meta)]
 pub struct ItineraryPatternMeta {
     pub onestop_feed_id: String,
