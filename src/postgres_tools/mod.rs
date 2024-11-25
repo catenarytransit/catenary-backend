@@ -4,6 +4,8 @@
 use diesel_async::pooled_connection::bb8::Pool;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use std::env;
+use diesel_async::pooled_connection::ManagerConfig;
+use diesel_async::pooled_connection::RecyclingMethod;
 
 /// This type alias is the pool, which can be quried for connections.
 /// It is typically wrapped in Arc to allow thread safe cloning to the same pool
@@ -21,9 +23,13 @@ pub async fn make_async_pool() -> Result<
     bb8::Pool<AsyncDieselConnectionManager<diesel_async::AsyncPgConnection>>,
     Box<dyn std::error::Error + Sync + Send>,
 > {
+    let mut custom_conf = ManagerConfig::default();
+
+    custom_conf.recycling_method = RecyclingMethod::Fast;
+
     // create a new connection pool with the default config
     let config: AsyncDieselConnectionManager<diesel_async::AsyncPgConnection> =
-        AsyncDieselConnectionManager::<diesel_async::AsyncPgConnection>::new(database_url_for_env());
+        AsyncDieselConnectionManager::<diesel_async::AsyncPgConnection>::new_with_config(database_url_for_env(), custom_conf);
     let pool = Pool::builder().build(config).await?;
 
     Ok(pool)
