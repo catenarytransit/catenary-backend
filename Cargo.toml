@@ -51,10 +51,10 @@ rand = "0.8.5"
 titlecase = "3.2"
 rayon = "1.8.0"
 chrono = "0.4.31"
-geo-types = "0.7.13"
+geo-types = "0.7.14"
 geo-postgis = "0.2.2"
-geo = "0.28.0"
-tarpc = {version = "0.34.0", features = ["full"]}
+geo = "0.29.0"
+tarpc = {version = "0.35.0", features = ["full"]}
 anyhow = "1.0.75"
 tracing = "0.1.40"
 tokio-serde = "0.9"
@@ -72,7 +72,7 @@ dmfr = "0.1.0"
 chateau = {git = "https://github.com/catenarytransit/chateau"}
 dmfr-dataset-reader = "0.2.0"
 uuid = {version = "1.8.0", features = ["v4", "fast-rng", "macro-diagnostics"]}
-zip = "2.2.0"
+zip = "2.2.1"
 git2 = "0.19"
 zip-extract = "0.2.1"
 serde_derive = "1.0.197"
