@@ -191,15 +191,12 @@ pub async fn export_realtime_keys(
 
     let mut wtr = WriterBuilder::new().from_writer(vec![]);
 
-    wtr.serialize(("onestop_feed_id", "passwords", "last_updated_ms")).unwrap();
-    
-    for row in realtime_passwords.unwrap() {
-        wtr.serialize((
-            row.onestop_feed_id,
-            row.passwords,
-            row.last_updated_ms,
-        ))
+    wtr.serialize(("onestop_feed_id", "passwords", "last_updated_ms"))
         .unwrap();
+
+    for row in realtime_passwords.unwrap() {
+        wtr.serialize((row.onestop_feed_id, row.passwords, row.last_updated_ms))
+            .unwrap();
     }
 
     let data_str = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
@@ -207,7 +204,6 @@ pub async fn export_realtime_keys(
     HttpResponse::Ok()
         .append_header(("Cache-Control", "no-cache"))
         .body(data_str)
-
 }
 
 #[actix_web::get("/getrealtimekeys/")]

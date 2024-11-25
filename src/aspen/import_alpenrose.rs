@@ -370,8 +370,7 @@ pub async fn new_rt_data(
             trip_id_to_trip.insert(trip.trip_id.clone(), trip);
         }
 
-        for (trip_id, trips_in_cache) in 
-        compressed_trip_internal_cache.compressed_trips {
+        for (trip_id, trips_in_cache) in compressed_trip_internal_cache.compressed_trips {
             trip_id_to_trip.insert(trip_id.clone(), trips_in_cache.clone());
         }
 

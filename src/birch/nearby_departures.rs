@@ -275,6 +275,7 @@ pub async fn nearby_from_coords(
 
     let stops_table = stops
         .iter()
+        .filter(|stop| stop.chateau.as_str() != "greyhound~flix")
         .map(|stop| {
             (
                 (stop.chateau.clone(), stop.gtfs_id.clone()),
