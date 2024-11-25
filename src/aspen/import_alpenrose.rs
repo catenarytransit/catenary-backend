@@ -369,7 +369,7 @@ pub async fn new_rt_data(
             .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(&chateau_id))
             .filter(
                 catenary::schema::gtfs::trips_compressed::dsl::trip_id
-                    .eq_any(trip_ids_to_lookup_to_hit.iter()),
+                    .eq_any(&trip_ids_to_lookup_to_hit),
             )
             .load::<catenary::models::CompressedTrip>(conn)
             .await?;
@@ -408,7 +408,7 @@ pub async fn new_rt_data(
                 )
                 .filter(
                     catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_id
-                        .eq_any(list_of_itinerary_patterns_to_lookup.iter()),
+                        .eq_any(&list_of_itinerary_patterns_to_lookup),
                 )
                 .select(catenary::models::ItineraryPatternMeta::as_select())
                 .load::<catenary::models::ItineraryPatternMeta>(conn)
