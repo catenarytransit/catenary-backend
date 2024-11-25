@@ -28,12 +28,9 @@ use catenary::EtcdConnectionIps;
 use chrono::TimeZone;
 use compact_str::CompactString;
 use diesel::dsl::sql;
-use diesel::dsl::sql_query;
-use diesel::query_dsl::methods::FilterDsl;
-use diesel::query_dsl::methods::SelectDsl;
+use diesel::prelude::*;
+use diesel::sql_query;
 use diesel::sql_types::Bool;
-use diesel::ExpressionMethods;
-use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use futures::stream::futures_unordered;
 use futures::stream::FuturesUnordered;
@@ -266,12 +263,11 @@ pub async fn nearby_from_coords(
     let where_query_for_stops = format!("ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
     query.lon, query.lat, spatial_resolution_in_degs);
 
-    let stops: diesel::prelude::QueryResult<Vec<catenary::models::Stop>> =
-        catenary::schema::gtfs::stops::dsl::stops
-            .filter(sql::<Bool>(&where_query_for_stops))
-            .select(catenary::models::Stop::as_select())
-            .load::<catenary::models::Stop>(conn)
-            .await;
+    let stops: QueryResult<Vec<catenary::models::Stop>> = catenary::schema::gtfs::stops::dsl::stops
+        .filter(sql::<Bool>(&where_query_for_stops))
+        .select(catenary::models::Stop::as_select())
+        .load::<catenary::models::Stop>(conn)
+        .await;
 
     let end_stops_duration = start_stops_query.elapsed();
 

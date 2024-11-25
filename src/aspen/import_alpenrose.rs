@@ -8,9 +8,7 @@ use ahash::{AHashMap, AHashSet};
 use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use compact_str::CompactString;
-use diesel::ExpressionMethods;
-use diesel::QueryDsl;
-use diesel::SelectableHelper;
+use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use gtfs_realtime::FeedMessage;
 use scc::HashMap as SccHashMap;
@@ -712,6 +710,8 @@ pub async fn new_rt_data(
                 }
             }
         }
+
+        println!("Finished processing {} chateau took {:?} for route lookup, {:?} for trips, {:?} for itins", chateau_id,routes_query_elapsed, trip_duration, itin_lookup_duration);
     }
 
     //Insert data back into process-wide authoritative_data_store
@@ -750,7 +750,7 @@ pub async fn new_rt_data(
         }
     }
 
-    println!("Updated Chateau {}", chateau_id,);
+    println!("Updated Chateau {}", chateau_id);
 
     Ok(true)
 }
