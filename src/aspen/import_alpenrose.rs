@@ -306,7 +306,7 @@ pub async fn new_rt_data(
             for trip_entity in trip_gtfs_rt_for_feed_id.entity.iter() {
                 if let Some(trip_update) = &trip_entity.trip_update {
                     if let Some(trip_id) = &trip_update.trip.trip_id {
-                        trip_ids_to_lookup.insert(trip_id.clone());
+                        //trip_ids_to_lookup.insert(trip_id.clone());
                     }
                 }
             }
