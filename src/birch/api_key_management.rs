@@ -161,6 +161,55 @@ pub async fn set_realtime_key(
         .finish()
 }
 
+#[actix_web::get("/exportrealtimekeys/")]
+pub async fn export_realtime_keys(
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    req: HttpRequest,
+) -> impl Responder {
+    let email = req.headers().get("email").unwrap().to_str().unwrap();
+    let password = req.headers().get("password").unwrap().to_str().unwrap();
+
+    let is_authorised = login(pool.as_ref().clone(), email, password).await.unwrap();
+
+    if !is_authorised {
+        return HttpResponse::Unauthorized().finish();
+    }
+
+    let conn_pool = pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre.unwrap();
+
+    use catenary::schema::gtfs::realtime_passwords as realtime_passwords_table;
+
+    let realtime_passwords = realtime_passwords_table::table
+        .select(catenary::models::RealtimePasswordRow::as_select())
+        .load::<catenary::models::RealtimePasswordRow>(conn)
+        .await;
+
+    //convert to csv
+    use csv::WriterBuilder;
+
+    let mut wtr = WriterBuilder::new().from_writer(vec![]);
+
+    wtr.serialize(("onestop_feed_id", "passwords", "last_updated_ms")).unwrap();
+    
+    for row in realtime_passwords.unwrap() {
+        wtr.serialize((
+            row.onestop_feed_id,
+            row.passwords,
+            row.last_updated_ms,
+        ))
+        .unwrap();
+    }
+
+    let data_str = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
+
+    HttpResponse::Ok()
+        .append_header(("Cache-Control", "no-cache"))
+        .body(data_str)
+
+}
+
 #[actix_web::get("/getrealtimekeys/")]
 pub async fn get_realtime_keys(
     pool: web::Data<Arc<CatenaryPostgresPool>>,

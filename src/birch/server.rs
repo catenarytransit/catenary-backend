@@ -621,6 +621,7 @@ async fn main() -> std::io::Result<()> {
             .service(chateaus_no_geom)
             .service(api_key_management::get_realtime_keys)
             .service(api_key_management::set_realtime_key)
+            .service(api_key_management::export_realtime_keys)
             .service(aspenised_data_over_https::get_realtime_locations)
             .service(chicago_proxy::ttarrivals_proxy)
             .service(nearby_departures::nearby_from_coords)
