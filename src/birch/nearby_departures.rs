@@ -428,15 +428,19 @@ pub async fn nearby_from_coords(
     let seek_for_itineraries_list = futures::stream::iter(hashmap_of_directions_lookup.into_iter().map(
         |(chateau, set_of_directions)|
         {
-            let formatted_ask = format!(
-                "({})",
-                set_of_directions
-                    .into_iter()
-                    .map(|x| format!("('{}',{})" , x.0, x.1))
-                    .collect::<Vec<String>>()
-                    .join(",")
-            );
+            let formatted_ask = match chateau.as_str() {
+                "bus~dft~gov~uk" => String::from("()"),
+                _ => format!(
+                    "({})",
+                    set_of_directions
+                        .into_iter()
+                        .map(|x| format!("('{}',{})" , x.0, x.1))
+                        .collect::<Vec<String>>()
+                        .join(",")
+                )
+            };
 
+            //EXTREMELY SLOW QUERY
             diesel::sql_query(
                 format!(
                 "SELECT 
