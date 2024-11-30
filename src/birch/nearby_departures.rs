@@ -22,6 +22,7 @@ use catenary::models::ItineraryPatternMeta;
 use catenary::models::ItineraryPatternRowNearbyLookup;
 use catenary::models::{CompressedTrip, ItineraryPatternRow};
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::schema::gtfs::itinerary_pattern;
 use catenary::schema::gtfs::trips_compressed;
 use catenary::CalendarUnified;
 use catenary::EtcdConnectionIps;
@@ -455,6 +456,82 @@ pub async fn nearby_from_coords(
         "Finished getting itinerary metas in {:?}",
         itin_meta_timer.elapsed()
     );
+
+    let itineraries_meta_duration = itin_meta_timer.elapsed();
+
+    //chateau -> itinerary_pattern_id -> ItineraryPatternMeta
+    let mut itin_meta_table: HashMap<String, HashMap<String, ItineraryPatternMeta>> =
+        HashMap::new();
+    let mut chateau_direction_to_itin_meta_id: HashMap<String, HashMap<String, String>> =
+        HashMap::new();
+
+    for itineraries_meta_search in itineraries_meta_search_list {
+        match itineraries_meta_search {
+            Ok(itineraries_meta) => {
+                for itinerary_meta in itineraries_meta {
+                    if let Some(direction_pattern_id) = &itinerary_meta.direction_pattern_id {
+                        match chateau_direction_to_itin_meta_id
+                            .entry(itinerary_meta.chateau.clone())
+                        {
+                            Entry::Occupied(mut oe) => {
+                                oe.get_mut().insert(
+                                    direction_pattern_id.clone(),
+                                    itinerary_meta.itinerary_pattern_id.clone(),
+                                );
+                            }
+                            Entry::Vacant(ve) => {
+                                ve.insert(HashMap::from_iter([(
+                                    direction_pattern_id.clone(),
+                                    itinerary_meta.itinerary_pattern_id.clone(),
+                                )]));
+                            }
+                        }
+                    }
+
+                    match itin_meta_table.entry(itinerary_meta.chateau.clone()) {
+                        Entry::Occupied(mut oe) => {
+                            oe.get_mut().insert(
+                                itinerary_meta.itinerary_pattern_id.clone(),
+                                itinerary_meta,
+                            );
+                        }
+                        Entry::Vacant(mut ve) => {
+                            ve.insert(HashMap::from_iter([(
+                                itinerary_meta.itinerary_pattern_id.clone(),
+                                itinerary_meta,
+                            )]));
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                //do nothing
+                eprintln!("{:#?}", err);
+            }
+        }
+    }
+
+    let itin_meta_table = itin_meta_table;
+
+    //make a hashmap of Chateau -> (itinerary_pattern_id, stop_sequence)
+    let mut itineraries_and_seq_to_lookup: HashMap<String, Vec<(String, u32)>> = HashMap::new();
+
+    for (chateau, set_of_directions) in hashmap_of_directions_lookup.iter() {
+        let mut vec_to_insert = vec![];
+
+        for (direction_id, stop_sequence) in set_of_directions.iter() {
+            if let Some(itinerary_pattern_id) = chateau_direction_to_itin_meta_id.get(chateau) {
+                if let Some(itinerary_pattern_id) = itinerary_pattern_id.get(direction_id) {
+                    vec_to_insert.push((itinerary_pattern_id.clone(), *stop_sequence));
+                }
+            }
+        }
+
+        itineraries_and_seq_to_lookup.insert(chateau.clone(), vec_to_insert);
+    }
+
+    //lock the table to prevent further changes
+    let itineraries_and_seq_to_lookup = itineraries_and_seq_to_lookup;
 
     println!("Starting to search for itineraries");
 
