@@ -421,6 +421,29 @@ pub async fn nearby_from_coords(
             .join(",")
     );*/
 
+    println!("Search for matching itinerary ids");
+
+    let itin_meta_timer = Instant::now();
+
+    let itineraries_meta_search_list = futures::stream::iter(hashmap_of_directions_lookup.iter().map(
+        |(chateau, set_of_directions)|
+        {
+            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                .filter(catenary::schema::gtfs::itinerary_pattern_meta::dsl::chateau.eq(chateau.clone()))
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern_meta::dsl::direction_pattern_id
+                        .eq_any(set_of_directions.iter().map(|x| x.0.clone()).collect::<Vec<String>>()),
+                )
+                .select(catenary::models::ItineraryPatternMeta::as_select())
+                .load::<catenary::models::ItineraryPatternMeta>(conn)
+        }
+    )).buffer_unordered(10).collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternMeta>>>>().await;
+
+    println!(
+        "Finished getting itinerary metas in {:?}",
+        itin_meta_timer.elapsed()
+    );
+
     println!("Starting to search for itineraries");
 
     let itineraries_timer = Instant::now();
@@ -428,17 +451,14 @@ pub async fn nearby_from_coords(
     let seek_for_itineraries_list = futures::stream::iter(hashmap_of_directions_lookup.into_iter().map(
         |(chateau, set_of_directions)|
         {
-            let formatted_ask = match chateau.as_str() {
-                "bus~dft~gov~uk" => String::from("()"),
-                _ => format!(
-                    "({})",
-                    set_of_directions
-                        .into_iter()
-                        .map(|x| format!("('{}',{})" , x.0, x.1))
-                        .collect::<Vec<String>>()
-                        .join(",")
-                )
-            };
+            let formatted_ask = format!(
+                "({})",
+                set_of_directions
+                    .into_iter()
+                    .map(|x| format!("('{}',{})" , x.0, x.1))
+                    .collect::<Vec<String>>()
+                    .join(",")
+            );
 
             //EXTREMELY SLOW QUERY
             diesel::sql_query(
