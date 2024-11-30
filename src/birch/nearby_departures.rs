@@ -398,7 +398,8 @@ pub async fn nearby_from_coords(
         .map(|(k, v)| (k.0.clone(), k.1.to_string(), v.1))
         .collect::<Vec<_>>();
 
-    let mut hashmap_of_directions_lookup: HashMap<String, HashSet<(String, u32)>> = HashMap::new();
+    let mut hashmap_of_directions_lookup: AHashMap<String, HashSet<(String, u32)>> =
+        AHashMap::new();
 
     for (chateau, direction_id, stop_sequence) in directions_idx_to_get {
         match hashmap_of_directions_lookup.entry(chateau.clone()) {
@@ -425,19 +426,30 @@ pub async fn nearby_from_coords(
 
     let itin_meta_timer = Instant::now();
 
-    let itineraries_meta_search_list = futures::stream::iter(hashmap_of_directions_lookup.iter().map(
-        |(chateau, set_of_directions)|
-        {
-            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(catenary::schema::gtfs::itinerary_pattern_meta::dsl::chateau.eq(chateau.clone()))
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern_meta::dsl::direction_pattern_id
-                        .eq_any(set_of_directions.iter().map(|x| x.0.clone()).collect::<Vec<String>>()),
-                )
-                .select(catenary::models::ItineraryPatternMeta::as_select())
-                .load::<catenary::models::ItineraryPatternMeta>(conn)
-        }
-    )).buffer_unordered(10).collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternMeta>>>>().await;
+    let itineraries_meta_search_list =
+        futures::stream::iter(hashmap_of_directions_lookup.iter().map(
+            |(chateau, set_of_directions)| {
+                catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern_meta::dsl::chateau
+                            .eq(chateau.clone()),
+                    )
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern_meta::dsl::direction_pattern_id
+                            .eq_any(
+                                set_of_directions
+                                    .iter()
+                                    .map(|x| x.0.clone())
+                                    .collect::<Vec<String>>(),
+                            ),
+                    )
+                    .select(catenary::models::ItineraryPatternMeta::as_select())
+                    .load::<catenary::models::ItineraryPatternMeta>(conn)
+            },
+        ))
+        .buffer_unordered(10)
+        .collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternMeta>>>>()
+        .await;
 
     println!(
         "Finished getting itinerary metas in {:?}",
