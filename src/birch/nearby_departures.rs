@@ -84,13 +84,13 @@ struct DeparturesFromStop {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
-struct DeparturesDebug {
-    stop_lookup_ms: u128,
-    directions_ms: u128,
-    itinerary_meta_ms: u128,
-    itinerary_row_ms: u128,
-    trips_ms: u128,
-    total_time_ms: u128,
+pub struct DeparturesDebug {
+    pub  stop_lookup_ms: u128,
+    pub  directions_ms: u128,
+    pub  itinerary_meta_ms: u128,
+    pub  itinerary_row_ms: u128,
+    pub  trips_ms: u128,
+    pub  total_time_ms: u128,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -271,11 +271,11 @@ pub async fn nearby_from_coords(
         false => -90.,
     };
 
-    let mut rail_and_other_distance_limit = 3000;
+    let mut rail_and_other_distance_limit = 3500;
 
-    let mut bus_distance_limit = 3000;
+    let mut bus_distance_limit = 3500;
 
-    let spatial_resolution_in_degs = make_degree_length_as_distance_from_point(&input_point, 3000.);
+    let spatial_resolution_in_degs = make_degree_length_as_distance_from_point(&input_point, 3500.);
 
     let start_stops_query = Instant::now();
 
@@ -308,16 +308,6 @@ pub async fn nearby_from_coords(
             )
         })
         .collect::<HashMap<(String, String), (catenary::models::Stop, f64)>>();
-
-    if stops.len() > 100 {
-        bus_distance_limit = 1500;
-        rail_and_other_distance_limit = 2000;
-    }
-
-    if stops.len() > 800 {
-        bus_distance_limit = 1200;
-        rail_and_other_distance_limit = 1200;
-    }
 
     //SELECT * FROM gtfs.direction_pattern JOIN gtfs.stops ON direction_pattern.chateau = stops.chateau AND direction_pattern.stop_id = stops.gtfs_id AND direction_pattern.attempt_id = stops.attempt_id WHERE ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT(-87.6295735 41.8799279)', 0.02) AND allowed_spatial_query = TRUE;
 
@@ -417,6 +407,7 @@ pub async fn nearby_from_coords(
         .map(|(k, v)| (k.0.clone(), k.1.to_string(), v.1))
         .collect::<Vec<_>>();
 
+        //chateau -> (direction_id, stop_sequence)
     let mut hashmap_of_directions_lookup: AHashMap<String, HashSet<(String, u32)>> =
         AHashMap::new();
 
@@ -480,7 +471,8 @@ pub async fn nearby_from_coords(
     //chateau -> itinerary_pattern_id -> ItineraryPatternMeta
     let mut itin_meta_table: HashMap<String, HashMap<String, ItineraryPatternMeta>> =
         HashMap::new();
-    let mut chateau_direction_to_itin_meta_id: HashMap<String, HashMap<String, String>> =
+        //chateau -> direction_id -> Vec<itinerary_pattern_id>
+    let mut chateau_direction_to_itin_meta_id: HashMap<String, HashMap<String, Vec<String>>> =
         HashMap::new();
 
     for itineraries_meta_search in itineraries_meta_search_list {
@@ -492,15 +484,19 @@ pub async fn nearby_from_coords(
                             .entry(itinerary_meta.chateau.clone())
                         {
                             Entry::Occupied(mut oe) => {
-                                oe.get_mut().insert(
-                                    direction_pattern_id.clone(),
-                                    itinerary_meta.itinerary_pattern_id.clone(),
-                                );
+                                match oe.get_mut().entry(direction_pattern_id.clone()) {
+                                    Entry::Occupied(mut oe) => {
+                                        oe.get_mut().push(itinerary_meta.itinerary_pattern_id.clone());
+                                    }
+                                    Entry::Vacant(mut ve) => {
+                                        ve.insert(vec![itinerary_meta.itinerary_pattern_id.clone()]);
+                                    }
+                                }
                             }
-                            Entry::Vacant(ve) => {
+                            Entry::Vacant(mut ve) => {
                                 ve.insert(HashMap::from_iter([(
                                     direction_pattern_id.clone(),
-                                    itinerary_meta.itinerary_pattern_id.clone(),
+                                    vec![itinerary_meta.itinerary_pattern_id.clone()],
                                 )]));
                             }
                         }
@@ -535,12 +531,14 @@ pub async fn nearby_from_coords(
     let mut itineraries_and_seq_to_lookup: HashMap<String, Vec<(String, u32)>> = HashMap::new();
 
     for (chateau, set_of_directions) in hashmap_of_directions_lookup.iter() {
-        let mut vec_to_insert = vec![];
+        let mut vec_to_insert: Vec<(String, u32)> = vec![];
 
         for (direction_id, stop_sequence) in set_of_directions.iter() {
-            if let Some(itinerary_pattern_id) = chateau_direction_to_itin_meta_id.get(chateau) {
-                if let Some(itinerary_pattern_id) = itinerary_pattern_id.get(direction_id) {
-                    vec_to_insert.push((itinerary_pattern_id.clone(), *stop_sequence));
+            if let Some(itinerary_pattern_ids_in_chateau) = chateau_direction_to_itin_meta_id.get(chateau) {
+                if let Some(itinerary_pattern_ids) = itinerary_pattern_ids_in_chateau.get(direction_id) {
+                    for itinerary_pattern_id in itinerary_pattern_ids.iter() {
+                        vec_to_insert.push((itinerary_pattern_id.clone(), *stop_sequence));
+                    }
                 }
             }
         }
