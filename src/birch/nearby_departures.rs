@@ -575,7 +575,7 @@ pub async fn nearby_from_coords(
             .select(catenary::models::ItineraryPatternRow::as_select())
             .load::<catenary::models::ItineraryPatternRow>(conn)            
         }
-    )).buffer_unordered(24).collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternRow>>>>().await;
+    )).buffer_unordered(32).collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternRow>>>>().await;
 
     println!(
         "Finished getting itineraries in {:?}",
