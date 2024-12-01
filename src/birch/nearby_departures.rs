@@ -666,7 +666,7 @@ pub async fn nearby_from_coords(
                 .select(catenary::models::CompressedTrip::as_select())
                 .load::<catenary::models::CompressedTrip>(conn)
         }))
-        .buffer_unordered(8)
+        .buffer_unordered(16)
         .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CompressedTrip>>>>()
         .await;
 
