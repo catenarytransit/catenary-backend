@@ -1199,7 +1199,7 @@ pub async fn nearby_from_coords(
                 debug: DeparturesDebug {
                     stop_lookup_ms: end_stops_duration.as_millis(),
                     directions_ms: directions_lookup_duration.as_millis(),
-                    itinerary_meta_ms: itin_meta_timer.elapsed().as_millis(),
+                    itinerary_meta_ms: itineraries_meta_duration.as_millis(),
                     itinerary_row_ms: itinerary_duration.as_millis(),
                     trips_ms: trip_lookup_elapsed.as_millis(),
                     total_time_ms: total_elapsed_time.as_millis(),
