@@ -275,16 +275,6 @@ pub async fn nearby_from_coords(
 
     let mut bus_distance_limit = 3500;
 
-    if stops.len() > 400 {
-        bus_distance_limit = 1500;
-        rail_and_other_distance_limit = 2000;
-    }
-
-    if stops.len() > 800 {
-        bus_distance_limit = 1500;
-        rail_and_other_distance_limit = 1500;
-    }
-
     let spatial_resolution_in_degs = make_degree_length_as_distance_from_point(&input_point, rail_and_other_distance_limit as f64);
 
     let start_stops_query = Instant::now();
@@ -301,6 +291,16 @@ pub async fn nearby_from_coords(
     let end_stops_duration = start_stops_query.elapsed();
 
     let stops = stops.unwrap();
+    
+    if stops.len() > 400 {
+        bus_distance_limit = 1500;
+        rail_and_other_distance_limit = 2000;
+    }
+
+    if stops.len() > 800 {
+        bus_distance_limit = 1500;
+        rail_and_other_distance_limit = 1500;
+    }
 
     let stops_table = stops
         .iter()
