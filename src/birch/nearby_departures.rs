@@ -275,7 +275,17 @@ pub async fn nearby_from_coords(
 
     let mut bus_distance_limit = 3500;
 
-    let spatial_resolution_in_degs = make_degree_length_as_distance_from_point(&input_point, 3500.);
+    if stops.len() > 400 {
+        bus_distance_limit = 1500;
+        rail_and_other_distance_limit = 2000;
+    }
+
+    if stops.len() > 800 {
+        bus_distance_limit = 1500;
+        rail_and_other_distance_limit = 1500;
+    }
+
+    let spatial_resolution_in_degs = make_degree_length_as_distance_from_point(&input_point, rail_and_other_distance_limit as f64);
 
     let start_stops_query = Instant::now();
 
@@ -662,7 +672,7 @@ pub async fn nearby_from_coords(
                 .select(catenary::models::CompressedTrip::as_select())
                 .load::<catenary::models::CompressedTrip>(conn)
         }))
-        .buffer_unordered(16)
+        .buffer_unordered(32)
         .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CompressedTrip>>>>()
         .await;
 
@@ -768,9 +778,11 @@ pub async fn nearby_from_coords(
             .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Route>>>>(),
         );
 
+    let calendar_timer_finish = calendar_timer.elapsed();
+
     println!(
         "Finished getting calendar, routes, and calendar dates, took {:?}",
-        calendar_timer.elapsed()
+        calendar_timer_finish
     );
 
     let calendar_structure = make_calendar_structure_from_pg(
