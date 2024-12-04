@@ -66,7 +66,7 @@ pub struct ItineraryPatternRowMerge {
     pub trip_headsign: Option<String>,
     pub trip_headsign_translations: Option<serde_json::Value>,
     pub timezone: String,
-    pub route_id: CompactString
+    pub route_id: CompactString,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -85,12 +85,12 @@ struct DeparturesFromStop {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct DeparturesDebug {
-    pub  stop_lookup_ms: u128,
-    pub  directions_ms: u128,
-    pub  itinerary_meta_ms: u128,
-    pub  itinerary_row_ms: u128,
-    pub  trips_ms: u128,
-    pub  total_time_ms: u128,
+    pub stop_lookup_ms: u128,
+    pub directions_ms: u128,
+    pub itinerary_meta_ms: u128,
+    pub itinerary_row_ms: u128,
+    pub trips_ms: u128,
+    pub total_time_ms: u128,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -275,7 +275,10 @@ pub async fn nearby_from_coords(
 
     let mut bus_distance_limit = 3500;
 
-    let spatial_resolution_in_degs = make_degree_length_as_distance_from_point(&input_point, rail_and_other_distance_limit as f64);
+    let spatial_resolution_in_degs = make_degree_length_as_distance_from_point(
+        &input_point,
+        rail_and_other_distance_limit as f64,
+    );
 
     let start_stops_query = Instant::now();
 
@@ -291,7 +294,7 @@ pub async fn nearby_from_coords(
     let end_stops_duration = start_stops_query.elapsed();
 
     let stops = stops.unwrap();
-    
+
     if stops.len() > 400 {
         bus_distance_limit = 1500;
         rail_and_other_distance_limit = 2000;
@@ -417,7 +420,7 @@ pub async fn nearby_from_coords(
         .map(|(k, v)| (k.0.clone(), k.1.to_string(), v.1))
         .collect::<Vec<_>>();
 
-        //chateau -> (direction_id, stop_sequence)
+    //chateau -> (direction_id, stop_sequence)
     let mut hashmap_of_directions_lookup: AHashMap<String, HashSet<(String, u32)>> =
         AHashMap::new();
 
@@ -481,7 +484,7 @@ pub async fn nearby_from_coords(
     //chateau -> itinerary_pattern_id -> ItineraryPatternMeta
     let mut itin_meta_table: HashMap<String, HashMap<String, ItineraryPatternMeta>> =
         HashMap::new();
-        //chateau -> direction_id -> Vec<itinerary_pattern_id>
+    //chateau -> direction_id -> Vec<itinerary_pattern_id>
     let mut chateau_direction_to_itin_meta_id: HashMap<String, HashMap<String, Vec<String>>> =
         HashMap::new();
 
@@ -496,10 +499,13 @@ pub async fn nearby_from_coords(
                             Entry::Occupied(mut oe) => {
                                 match oe.get_mut().entry(direction_pattern_id.clone()) {
                                     Entry::Occupied(mut oe) => {
-                                        oe.get_mut().push(itinerary_meta.itinerary_pattern_id.clone());
+                                        oe.get_mut()
+                                            .push(itinerary_meta.itinerary_pattern_id.clone());
                                     }
                                     Entry::Vacant(mut ve) => {
-                                        ve.insert(vec![itinerary_meta.itinerary_pattern_id.clone()]);
+                                        ve.insert(vec![itinerary_meta
+                                            .itinerary_pattern_id
+                                            .clone()]);
                                     }
                                 }
                             }
@@ -544,8 +550,12 @@ pub async fn nearby_from_coords(
         let mut vec_to_insert: Vec<(String, u32)> = vec![];
 
         for (direction_id, stop_sequence) in set_of_directions.iter() {
-            if let Some(itinerary_pattern_ids_in_chateau) = chateau_direction_to_itin_meta_id.get(chateau) {
-                if let Some(itinerary_pattern_ids) = itinerary_pattern_ids_in_chateau.get(direction_id) {
+            if let Some(itinerary_pattern_ids_in_chateau) =
+                chateau_direction_to_itin_meta_id.get(chateau)
+            {
+                if let Some(itinerary_pattern_ids) =
+                    itinerary_pattern_ids_in_chateau.get(direction_id)
+                {
                     for itinerary_pattern_id in itinerary_pattern_ids.iter() {
                         vec_to_insert.push((itinerary_pattern_id.clone(), *stop_sequence));
                     }
@@ -575,17 +585,28 @@ pub async fn nearby_from_coords(
 
     let itineraries_timer = Instant::now();
 
-    let new_seek_itinerary_list = futures::stream::iter(itineraries_and_seq_to_lookup_join.into_iter()
-    .map(
-        |(chateau, itin_id, stop_seq)| {
-            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-            .filter(catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(chateau.clone()))
-            .filter(catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id.eq(itin_id.clone()))
-            .filter(catenary::schema::gtfs::itinerary_pattern::dsl::stop_sequence.eq(stop_seq as i32))
-            .select(catenary::models::ItineraryPatternRow::as_select())
-            .first::<catenary::models::ItineraryPatternRow>(conn)            
-        }
-    )).buffer_unordered(64).collect::<Vec<diesel::QueryResult<ItineraryPatternRow>>>().await;
+    let new_seek_itinerary_list =
+        futures::stream::iter(itineraries_and_seq_to_lookup_join.into_iter().map(
+            |(chateau, itin_id, stop_seq)| {
+                catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(chateau.clone()),
+                    )
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id
+                            .eq(itin_id.clone()),
+                    )
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern::dsl::stop_sequence
+                            .eq(stop_seq as i32),
+                    )
+                    .select(catenary::models::ItineraryPatternRow::as_select())
+                    .first::<catenary::models::ItineraryPatternRow>(conn)
+            },
+        ))
+        .buffer_unordered(64)
+        .collect::<Vec<diesel::QueryResult<ItineraryPatternRow>>>()
+        .await;
 
     println!(
         "Finished getting itineraries in {:?}",
@@ -621,35 +642,36 @@ pub async fn nearby_from_coords(
                     .unwrap();
 
                 if let Some(itinerary_direction_id) = &itin_meta_ref.direction_pattern_id {
-                    
-                let new_itinerary = ItineraryPatternRowMerge {
-                    onestop_feed_id: itinerary.onestop_feed_id.clone(),
-                    attempt_id: itinerary.attempt_id.clone(),
-                    itinerary_pattern_id: itinerary.itinerary_pattern_id.clone(),
-                    arrival_time_since_start: itinerary.arrival_time_since_start,
-                    departure_time_since_start: itinerary.departure_time_since_start,
-                    interpolated_time_since_start: itinerary.interpolated_time_since_start,
-                    stop_id: itinerary.stop_id.clone(),
-                    chateau: itinerary.chateau.clone().into(),
-                    gtfs_stop_sequence: itinerary.gtfs_stop_sequence,
-                    direction_pattern_id: itinerary_direction_id.clone(),
-                    trip_headsign: itin_meta_ref.trip_headsign.clone(),
-                    trip_headsign_translations: itin_meta_ref.trip_headsign_translations.clone(),
-                    timezone: itin_meta_ref.timezone.clone(),
-                    route_id: itin_meta_ref.route_id.clone()
-                };
+                    let new_itinerary = ItineraryPatternRowMerge {
+                        onestop_feed_id: itinerary.onestop_feed_id.clone(),
+                        attempt_id: itinerary.attempt_id.clone(),
+                        itinerary_pattern_id: itinerary.itinerary_pattern_id.clone(),
+                        arrival_time_since_start: itinerary.arrival_time_since_start,
+                        departure_time_since_start: itinerary.departure_time_since_start,
+                        interpolated_time_since_start: itinerary.interpolated_time_since_start,
+                        stop_id: itinerary.stop_id.clone(),
+                        chateau: itinerary.chateau.clone().into(),
+                        gtfs_stop_sequence: itinerary.gtfs_stop_sequence,
+                        direction_pattern_id: itinerary_direction_id.clone(),
+                        trip_headsign: itin_meta_ref.trip_headsign.clone(),
+                        trip_headsign_translations: itin_meta_ref
+                            .trip_headsign_translations
+                            .clone(),
+                        timezone: itin_meta_ref.timezone.clone(),
+                        route_id: itin_meta_ref.route_id.clone(),
+                    };
 
-                match itinerary_table.entry((
-                    itinerary.chateau.clone(),
-                    itinerary.itinerary_pattern_id.clone(),
-                )) {
-                    Entry::Occupied(mut oe) => {
-                        oe.get_mut().push(new_itinerary);
+                    match itinerary_table.entry((
+                        itinerary.chateau.clone(),
+                        itinerary.itinerary_pattern_id.clone(),
+                    )) {
+                        Entry::Occupied(mut oe) => {
+                            oe.get_mut().push(new_itinerary);
+                        }
+                        Entry::Vacant(mut ve) => {
+                            ve.insert(vec![new_itinerary]);
+                        }
                     }
-                    Entry::Vacant(mut ve) => {
-                        ve.insert(vec![new_itinerary]);
-                    }
-                }
                 }
             }
             Err(err) => {

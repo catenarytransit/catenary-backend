@@ -1,44 +1,188 @@
+use actix_web::Route;
 use catenary::is_null_island;
 use geo::algorithm::concave_hull::ConcaveHull;
-use geo::{MultiPoint, Point, Polygon};
+use geo::algorithm::convex_hull::ConvexHull;
+use geo::Centroid;
+use gtfs_structures::RouteType;
+use geo::HaversineDistance;
+use geo::{convex_hull, Coord, MultiPoint, Point, Polygon};
+use geo::Distance;
+use geo::RhumbBearing;
+use geo::RhumbDestination;
 
 pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
-    match gtfs.shapes.len() > 3 {
-        // hull shapes with parameter of 50
-        // it's still better than convex hull
-        true => {
-            let points: MultiPoint = gtfs
-                .shapes
-                .iter()
-                .flat_map(|(id, points)| {
-                    points
-                        .iter()
-                        .filter(|point| !is_null_island(point.longitude, point.latitude))
-                        .map(|point| Point::new(point.longitude, point.latitude))
-                })
-                .collect::<MultiPoint>();
-            Some(points.concave_hull(1.5))
-        }
-        false => {
-            match gtfs.stops.len() > 3 {
-                true => {
-                    //hull stops with parameter of 10
+    let bus_only = gtfs
+        .routes
+        .iter()
+        .all(|(_, route)| route.route_type == RouteType::Bus);
 
-                    let points: MultiPoint = gtfs
-                        .stops
-                        .iter()
-                        .filter(|(_, stop)| stop.longitude.is_some() && stop.latitude.is_some())
-                        .filter(|(_, stop)| {
-                            !is_null_island(stop.latitude.unwrap(), stop.longitude.unwrap())
-                        })
-                        .map(|(_, stop)| {
-                            Point::new(stop.longitude.unwrap(), stop.latitude.unwrap())
-                        })
-                        .collect::<MultiPoint>();
-                    Some(points.concave_hull(1.5))
-                }
-                false => None,
-            }
+    let contains_metro_and_bus_only = gtfs
+        .routes
+        .iter()
+        .any(|(_, route)| route.route_type == RouteType::Subway || route.route_type == RouteType::Bus);
+
+    let list_of_coordinates_to_use_from_shapes = gtfs
+        .shapes
+        .iter()
+        .flat_map(|(id, points)| {
+            points
+                .iter()
+                .filter(|point| !is_null_island(point.longitude, point.latitude))
+                .map(|point| Point::new(point.longitude, point.latitude))
+        })
+        .collect::<Vec<Point>>();
+
+    let stop_points = gtfs
+        .stops
+        .iter()
+        .filter(|(_, stop)| stop.longitude.is_some() && stop.latitude.is_some())
+        .filter(|(_, stop)| !is_null_island(stop.latitude.unwrap(), stop.longitude.unwrap()))
+        .map(|(_, stop)| Point::new(stop.longitude.unwrap(), stop.latitude.unwrap()))
+        .collect::<Vec<Point>>();
+
+    //join vecs together
+
+    let new_point_collection = list_of_coordinates_to_use_from_shapes
+        .into_iter()
+        .chain(stop_points.into_iter())
+        .collect::<Vec<Point>>();
+
+    if new_point_collection.len() < 4 {
+        return None;
+    }
+
+    let multi_point = MultiPoint(new_point_collection);
+
+    let concave_hull = multi_point.concave_hull(1.0);
+    let convex_hull = multi_point.convex_hull();
+
+    //buffer the convex hull by 5km if bus only, 10km for metros, but 50km if contains rail or other modes
+
+    let buffer_distance = match bus_only {
+        true => 5000.0,
+        false => match contains_metro_and_bus_only {
+            true => 10000.0,
+            false => 50000.0,
+        },
+    };
+
+    let mut buffered_convex_hull = buffer_geo_polygon(convex_hull, buffer_distance).unwrap();
+
+    //convert concave hull back into multipoint 
+
+    //let concave_hull_points = concave_hull.exterior().points().collect::<MultiPoint<_>>();
+
+    //let mut longest_side = longest_side_length_metres(&buffered_convex_hull);
+
+    //while the convex hull is still long or too simple, try to shrink it
+
+    /*while !(longest_side.length < 80000.0 || concave_hull_points.0.len() > 30) {
+
+        //find the midpoint of the longest side
+
+        let midpoint = buffered_convex_hull.exterior().points_iter().nth(longest_side.starting_index).unwrap().midpoint(
+            &buffered_convex_hull.exterior().points_iter().nth(longest_side.ending_index).unwrap()
+        );
+
+        //find the closest point on the concave hull to the midpoint
+
+        let closest_point = concave_hull_points.0.iter().min_by_key(|point| point.haversine_distance(&midpoint)).unwrap();
+
+        //if the vector of convex hull coordinates contains the closest point coordinate , then we can't shrink it any further
+
+        let closest_point_is_on_convex_hull = buffered_convex_hull.exterior().points_iter().any(|point| point == closest_point);
+
+        if closest_point_is_on_convex_hull {
+            break;
         }
+
+        //if the closest point is within 5km of the midpoint, 
+
+        //recompute longest side of the polygon
+        longest_side = longest_side_length_metres(&buffered_convex_hull);
+    }*/
+
+    let buffer_concave_hull = buffer_geo_polygon(concave_hull, buffer_distance);
+
+    match buffer_concave_hull {
+        Some(buffer_concave_hull) => Some(buffer_concave_hull),
+        None => Some(buffered_convex_hull)
+    }
+}
+
+struct PolygonSide {
+    starting_index: usize,
+    ending_index: usize,
+    length: f64,
+}
+
+pub fn longest_side_length_metres(
+    polygon: &geo::Polygon<f64>,
+) -> PolygonSide {
+   let exterior = polygon.exterior();
+
+    let points = exterior.points_iter().collect::<Vec<_>>();
+
+    let mut longest_side = PolygonSide {
+        starting_index: 0,
+        ending_index: 1,
+        length: 0.0,
+    };
+
+    for (index, point) in points.iter().enumerate() {
+        //skip the last one
+        if index == points.len() - 1 {
+            break;
+        }
+
+        let next_point = points[index + 1];
+
+        let distance = point.haversine_distance(&next_point);
+
+        if distance > longest_side.length {
+            longest_side = PolygonSide {
+                starting_index: index,
+                ending_index: index + 1,
+                length: distance,
+            };
+        }
+    }
+
+    longest_side
+}
+
+pub fn buffer_geo_polygon(
+    polygon: geo::Polygon<f64>,
+    distance_metres: f64,
+) -> Option<geo::Polygon<f64>> {
+    let centre = polygon.centroid();
+
+    match centre {
+        Some(centre) => {
+            let mut points = Vec::new();
+
+            let points_of_polygon = polygon.exterior().points_iter().collect::<Vec<_>>();
+
+            for original_point in points_of_polygon {
+                //calculate bearing between the centre and the point
+
+                let bearing = centre.rhumb_bearing(original_point);
+
+                // calculate the distance_metres between the centre and the point
+
+                let distance = centre.haversine_distance(&original_point);
+
+                // calculate the new point
+
+                let new_point = centre.rhumb_destination(distance + distance_metres, bearing);
+
+                points.push(new_point);
+            }
+
+            let new_polygon = geo::Polygon::new(geo::LineString::new(points.into_iter().map(|x| Coord::from(x)).collect()), vec![]);
+
+            Some(new_polygon)
+        }
+        None => None,
     }
 }
