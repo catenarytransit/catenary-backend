@@ -73,58 +73,9 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
 
     //convert concave hull back into multipoint
 
-    //let concave_hull_points = concave_hull.exterior().points().collect::<MultiPoint<_>>();
+    let concave_hull_points = concave_hull.exterior().points().collect::<MultiPoint<_>>();
 
-    //let mut longest_side = longest_side_length_metres(&buffered_convex_hull);
-
-    //while the convex hull is still long or too simple, try to shrink it
-
-    /*while !(longest_side.length < 80000.0 || concave_hull_points.0.len() > 30) {
-
-        //find the midpoint of the longest side
-
-        let midpoint = buffered_convex_hull.exterior().points_iter().nth(longest_side.starting_index).unwrap().midpoint(
-            &buffered_convex_hull.exterior().points_iter().nth(longest_side.ending_index).unwrap()
-        );
-
-        //find the closest point on the concave hull to the midpoint
-
-        let closest_point = concave_hull_points.0.iter().min_by_key(|point| point.haversine_distance(&midpoint)).unwrap();
-
-        //if the vector of convex hull coordinates contains the closest point coordinate , then we can't shrink it any further
-
-        let closest_point_is_on_convex_hull = buffered_convex_hull.exterior().points_iter().any(|point| point == closest_point);
-
-        if closest_point_is_on_convex_hull {
-            break;
-        }
-
-        //if the closest point is within 5km of the midpoint,
-
-        //recompute longest side of the polygon
-        longest_side = longest_side_length_metres(&buffered_convex_hull);
-    }*/
-
-    //let buffer_concave_hull = buffer_geo_polygon(concave_hull, buffer_distance);
-
-    let buffer_amount_bad_degs = match bus_only {
-        true => 0.05,
-        false => match contains_metro_and_bus_only {
-            true => 0.05,
-            false => 0.02,
-        },
-    };
-
-
-    let buffer_concave_hull = buffer_polygon(&concave_hull, buffer_amount_bad_degs);
-
-    let buffer_concave_exterior = buffer_concave_hull.rings().next().unwrap().clone();
-
-    //convert to polygon
-
-    let polygon_concave = geo::Polygon::new(buffer_concave_exterior, vec![]);
-
-    Some(polygon_concave)
+    Some(buffered_convex_hull)
 }
 
 struct PolygonSide {

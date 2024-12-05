@@ -401,4 +401,15 @@ fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<CompactStri
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn irvine_interpolation_test() {
+        let gtfs = gtfs_structures::Gtfs::from_url_async("https://passio3.com/irvine/passioTransit/gtfs/google_transit.zip").await.unwrap();
+
+        let response = reduce(&gtfs);
+
+        println!("Irvine has {} itineraries", response.itineraries.len());
+    }
+}

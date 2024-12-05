@@ -15,3 +15,9 @@ We can answer a direct-connection query of A@t -> B by looking at all itinerarie
 Remember that trip ids must be filtered by service ids that use the day of the query.
 
 Those resulting times can then be compared to return the cost of A@t -> B.
+
+### Testing
+
+```bash
+cargo test maple_syrup::tests::irvine_interpolation_test
+```
