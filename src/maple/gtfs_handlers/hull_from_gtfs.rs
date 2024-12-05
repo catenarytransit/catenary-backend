@@ -171,7 +171,7 @@ pub fn buffer_geo_polygon(
 
                 // calculate the new point
 
-                let new_point = centre.rhumb_destination(distance + distance_metres, bearing);
+                let new_point = centre.rhumb_destination(bearing, distance + distance_metres);
 
                 points.push(new_point);
             }
