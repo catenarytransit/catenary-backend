@@ -2,15 +2,15 @@ use actix_web::Route;
 use catenary::is_null_island;
 use geo::algorithm::concave_hull::ConcaveHull;
 use geo::algorithm::convex_hull::ConvexHull;
+use geo::BooleanOps;
 use geo::Centroid;
 use geo::Distance;
 use geo::HaversineDistance;
 use geo::RhumbBearing;
 use geo::RhumbDestination;
 use geo::{convex_hull, Coord, MultiPoint, Point, Polygon};
-use gtfs_structures::RouteType;
-use geo::BooleanOps;
 use geo_buffer::buffer_polygon;
+use gtfs_structures::RouteType;
 
 pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
     let bus_only = gtfs
@@ -69,7 +69,8 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
         },
     };
 
-    let mut buffered_convex_hull = buffer_geo_polygon_internal(convex_hull, buffer_distance).unwrap();
+    let mut buffered_convex_hull =
+        buffer_geo_polygon_internal(convex_hull, buffer_distance).unwrap();
 
     //convert concave hull back into multipoint
 

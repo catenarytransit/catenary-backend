@@ -9,6 +9,8 @@ use compact_str::CompactString;
 use gtfs_structures::DirectionType;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use std::collections::hash_map::Entry::Occupied;
+use std::collections::hash_map::Entry::Vacant;
 use std::hash::Hash;
 use tzf_rs::DefaultFinder;
 
@@ -131,93 +133,6 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             };
 
             stop_diffs.push(stop_diff);
-        }
-
-        //interpolate times for stops that don't have times
-        let stop_indicies_requiring_interpolation: Vec<usize> = stop_diffs
-            .iter()
-            .enumerate()
-            .filter(|(_, stop_diff)| {
-                stop_diff.arrival_time_since_start.is_none()
-                    && stop_diff.departure_time_since_start.is_none()
-            })
-            .map(|(index, _)| index)
-            .collect();
-
-        let mut ranges: Vec<Vec<usize>> = Vec::new();
-
-        if !stop_indicies_requiring_interpolation.is_empty() {
-            //group into ranges of consecutive indicies
-
-            let mut current_range: Vec<usize> = Vec::new();
-
-            for stop_indice in stop_indicies_requiring_interpolation {
-                if current_range.is_empty() {
-                    current_range.push(stop_indice);
-                } else if current_range.last().unwrap() + 1 == stop_indice {
-                    current_range.push(stop_indice);
-                } else {
-                    ranges.push(current_range);
-                    current_range = vec![stop_indice];
-                }
-            }
-        }
-
-        let new_interpolated_times: AHashMap<usize, i32> = {
-            //interpolate times
-
-            let mut interpolated_times: AHashMap<usize, i32> = AHashMap::new();
-
-            for range in ranges {
-                let start_index = range[0];
-                let end_index = range[range.len() - 1];
-
-                if start_index == 0 || end_index == stop_diffs.len() - 1 {
-                    println!("Invalid range for interpolation");
-                    continue;
-                }
-
-                let start_time = match stop_diffs[start_index - 1].departure_time_since_start {
-                    Some(time) => Some(time),
-                    None => stop_diffs[start_index - 1].arrival_time_since_start,
-                };
-
-                let end_time = match stop_diffs[end_index + 1].arrival_time_since_start {
-                    Some(time) => Some(time),
-                    None => stop_diffs[end_index + 1].departure_time_since_start,
-                };
-
-                if start_time.is_none() || end_time.is_none() {
-                    println!("Invalid start or end time for interpolation");
-                    continue;
-                }
-
-                let start_time = start_time.unwrap();
-                let end_time = end_time.unwrap();
-
-                let time_difference = end_time - start_time;
-                let number_of_stops = end_index - start_index + 1;
-
-                let time_difference_per_stop = time_difference / number_of_stops as i32;
-
-                //assume basic time interpolation for now
-                for (index, stop_index) in range.iter().enumerate() {
-                    interpolated_times.insert(
-                        *stop_index,
-                        start_time + time_difference_per_stop * (index as i32 + 1),
-                    );
-                }
-            }
-
-            interpolated_times
-        };
-
-        //apply the interpolations back to the stop_diffs
-        for (index, stop_diff) in stop_diffs.iter_mut().enumerate() {
-            if let Some(interpolated_time) = new_interpolated_times.get(&index) {
-                stop_diff.interpolated_time_since_start = Some(*interpolated_time);
-                stop_diff.interpolation_by_catenary = true;
-            }
         }
 
         let stated_timezone = match gtfs.agencies.len() {
@@ -379,6 +294,120 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             .or_insert(AHashSet::from_iter([*itinerary_id]));
     }
 
+    let itin_list = itineraries.keys().cloned().collect::<Vec<u64>>();
+
+    for itinerary_id in itin_list {
+        match itineraries.entry(itinerary_id) {
+            Occupied(mut entry) => {
+                let mut itinerary = entry.get_mut();
+
+                //interpolate times for stops that don't have times
+                let stop_indicies_requiring_interpolation: Vec<usize> = itinerary
+                    .stop_sequences
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, stop_diff)| {
+                        stop_diff.arrival_time_since_start.is_none()
+                            && stop_diff.departure_time_since_start.is_none()
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+
+                let mut ranges = Vec::new();
+
+                if !stop_indicies_requiring_interpolation.is_empty() {
+                    //group into ranges of consecutive indicies
+
+                    let mut current_range: Vec<usize> = Vec::new();
+
+                    for stop_indice in stop_indicies_requiring_interpolation {
+                        if current_range.is_empty() {
+                            current_range.push(stop_indice);
+                        } else if current_range.last().unwrap() + 1 == stop_indice {
+                            current_range.push(stop_indice);
+                        } else {
+                            ranges.push(current_range);
+                            current_range = vec![stop_indice];
+                        }
+                    }
+
+                    if !current_range.is_empty() {
+                        ranges.push(current_range);
+                        current_range = vec![];
+                    }
+                }
+
+                let new_interpolated_times: AHashMap<usize, i32> = {
+                    //interpolate times
+
+                    let mut interpolated_times: AHashMap<usize, i32> = AHashMap::new();
+
+                    for range in ranges {
+                        let start_index = range[0];
+                        let end_index = range[range.len() - 1];
+
+                        if start_index == 0 || end_index == itinerary.stop_sequences.len() - 1 {
+                            println!("Invalid range for interpolation");
+                            continue;
+                        }
+
+                        let start_time = match itinerary.stop_sequences[start_index - 1]
+                            .departure_time_since_start
+                        {
+                            Some(time) => Some(time),
+                            None => {
+                                itinerary.stop_sequences[start_index - 1].arrival_time_since_start
+                            }
+                        };
+
+                        let end_time = match itinerary.stop_sequences[end_index + 1]
+                            .arrival_time_since_start
+                        {
+                            Some(time) => Some(time),
+                            None => {
+                                itinerary.stop_sequences[end_index + 1].departure_time_since_start
+                            }
+                        };
+
+                        if start_time.is_none() || end_time.is_none() {
+                            println!("Invalid start or end time for interpolation");
+                            continue;
+                        }
+
+                        let start_time = start_time.unwrap();
+                        let end_time = end_time.unwrap();
+
+                        let time_difference = end_time - start_time;
+                        let number_of_stops = end_index - start_index + 1;
+
+                        let time_difference_per_stop = time_difference / number_of_stops as i32;
+
+                        //assume basic time interpolation for now
+                        for (index, stop_index) in range.iter().enumerate() {
+                            interpolated_times.insert(
+                                *stop_index,
+                                start_time + time_difference_per_stop * (index as i32 + 1),
+                            );
+                        }
+                    }
+
+                    interpolated_times
+                };
+
+                //apply the interpolations back to the stop_diffs
+                for (index, stop_diff) in itinerary.stop_sequences.iter_mut().enumerate() {
+                    if let Some(interpolated_time) = new_interpolated_times.get(&index) {
+                        stop_diff.interpolated_time_since_start = Some(*interpolated_time);
+                        stop_diff.interpolation_by_catenary = true;
+                    }
+                }
+            }
+            Vacant(_) => {
+                println!("Vacant entry in itineraries");
+            }
+        }
+    }
+
     ResponseFromReduce {
         itineraries,
         trips_to_itineraries,
@@ -406,7 +435,11 @@ mod tests {
 
     #[tokio::test]
     async fn irvine_interpolation_test() {
-        let gtfs = gtfs_structures::Gtfs::from_url_async("https://passio3.com/irvine/passioTransit/gtfs/google_transit.zip").await.unwrap();
+        let gtfs = gtfs_structures::Gtfs::from_url_async(
+            "https://passio3.com/irvine/passioTransit/gtfs/google_transit.zip",
+        )
+        .await
+        .unwrap();
 
         let response = reduce(&gtfs);
 
