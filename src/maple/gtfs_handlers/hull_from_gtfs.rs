@@ -9,6 +9,8 @@ use geo::RhumbBearing;
 use geo::RhumbDestination;
 use geo::{convex_hull, Coord, MultiPoint, Point, Polygon};
 use gtfs_structures::RouteType;
+use geo::BooleanOps;
+use geo_buffer::buffer_polygon;
 
 pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
     let bus_only = gtfs
@@ -55,17 +57,19 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
     let concave_hull = multi_point.concave_hull(1.0);
     let convex_hull = multi_point.convex_hull();
 
+    let centroid = convex_hull.centroid().unwrap();
+
     //buffer the convex hull by 5km if bus only, 10km for metros, but 50km if contains rail or other modes
 
     let buffer_distance = match bus_only {
         true => 5000.0,
         false => match contains_metro_and_bus_only {
-            true => 10000.0,
-            false => 50000.0,
+            true => 5000.0,
+            false => 30000.0,
         },
     };
 
-    let mut buffered_convex_hull = buffer_geo_polygon(convex_hull, buffer_distance).unwrap();
+    let mut buffered_convex_hull = buffer_geo_polygon_internal(convex_hull, buffer_distance).unwrap();
 
     //convert concave hull back into multipoint
 
@@ -101,12 +105,26 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
         longest_side = longest_side_length_metres(&buffered_convex_hull);
     }*/
 
-    let buffer_concave_hull = buffer_geo_polygon(concave_hull, buffer_distance);
+    //let buffer_concave_hull = buffer_geo_polygon(concave_hull, buffer_distance);
 
-    match buffer_concave_hull {
-        Some(buffer_concave_hull) => Some(buffer_concave_hull),
-        None => Some(buffered_convex_hull),
-    }
+    let buffer_amount_bad_degs = match bus_only {
+        true => 0.05,
+        false => match contains_metro_and_bus_only {
+            true => 0.05,
+            false => 0.02,
+        },
+    };
+
+
+    let buffer_concave_hull = buffer_polygon(&concave_hull, buffer_amount_bad_degs);
+
+    let buffer_concave_exterior = buffer_concave_hull.rings().next().unwrap().clone();
+
+    //convert to polygon
+
+    let polygon_concave = geo::Polygon::new(buffer_concave_exterior, vec![]);
+
+    Some(polygon_concave)
 }
 
 struct PolygonSide {
@@ -148,7 +166,7 @@ pub fn longest_side_length_metres(polygon: &geo::Polygon<f64>) -> PolygonSide {
     longest_side
 }
 
-pub fn buffer_geo_polygon(
+pub fn buffer_geo_polygon_internal(
     polygon: geo::Polygon<f64>,
     distance_metres: f64,
 ) -> Option<geo::Polygon<f64>> {
