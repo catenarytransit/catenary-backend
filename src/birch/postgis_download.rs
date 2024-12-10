@@ -1007,8 +1007,11 @@ pub async fn shapes_intercity_rail_meta(req: HttpRequest) -> impl Responder {
         version: None,
         other: std::collections::BTreeMap::new(),
         tiles: vec![String::from(
-            "https://birch.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}",
-        )],
+            "birch_intercity_rail_shape_1.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}"
+        ),
+            String::from(
+                "birch_intercity_rail_shape_2.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}")
+        ],
         attribution: None,
     };
 
@@ -1050,8 +1053,9 @@ pub async fn shapes_local_rail_meta(req: HttpRequest) -> impl Responder {
         version: None,
         other: std::collections::BTreeMap::new(),
         tiles: vec![String::from(
-            "https://birch.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}",
-        )],
+            "https://birch_local_rail_shape_1.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}"
+        ), String::from(
+            "https://birch_local_rail_shape_2.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}")],
         attribution: None,
     };
 
