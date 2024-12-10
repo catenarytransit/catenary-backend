@@ -1007,10 +1007,10 @@ pub async fn shapes_intercity_rail_meta(req: HttpRequest) -> impl Responder {
         version: None,
         other: std::collections::BTreeMap::new(),
         tiles: vec![String::from(
-            "birch_intercity_rail_shape_1.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}"
+            "https://birch_intercity_rail_shape_1.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}"
         ),
             String::from(
-                "birch_intercity_rail_shape_2.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}")
+                "https://birch_intercity_rail_shape_2.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}")
         ],
         attribution: None,
     };
@@ -1035,29 +1035,30 @@ pub async fn shapes_local_rail_meta(req: HttpRequest) -> impl Responder {
 
     let fields = tilejson::VectorLayer::new(String::from("data"), fields);
 
-    let tile_json = TileJSON {
-        vector_layers: Some(vec![fields]),
-        tilejson: String::from("3.0.0"),
-        bounds: None,
-        center: None,
-        data: None,
-        description: None,
-        fillzoom: None,
-        grids: None,
-        legend: None,
-        maxzoom: Some(15),
-        minzoom: None,
-        name: Some(String::from("shapes_local_rail")),
-        scheme: None,
-        template: None,
-        version: None,
-        other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from(
+    let tile_json =
+        TileJSON {
+            vector_layers: Some(vec![fields]),
+            tilejson: String::from("3.0.0"),
+            bounds: None,
+            center: None,
+            data: None,
+            description: None,
+            fillzoom: None,
+            grids: None,
+            legend: None,
+            maxzoom: Some(15),
+            minzoom: None,
+            name: Some(String::from("shapes_local_rail")),
+            scheme: None,
+            template: None,
+            version: None,
+            other: std::collections::BTreeMap::new(),
+            tiles: vec![String::from(
             "https://birch_local_rail_shape_1.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}"
         ), String::from(
             "https://birch_local_rail_shape_2.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}")],
-        attribution: None,
-    };
+            attribution: None,
+        };
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
