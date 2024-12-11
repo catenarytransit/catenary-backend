@@ -345,13 +345,14 @@ pub fn make_reqwest_for_url(
     match url {
         Some(url) => {
             if url.contains("raildata.njtransit.com") {
+                //i really dont care about this key.... so what?
                 let form = reqwest::multipart::Form::new().text("token", "638671989162459331");
 
                 return Some(
                     client
                         .request(
                             reqwest::Method::POST,
-                            "https://raildata.njtransit.com/api/GTFSRT/getGTFS",
+                            url,
                         )
                         .multipart(form)
                         .build()
