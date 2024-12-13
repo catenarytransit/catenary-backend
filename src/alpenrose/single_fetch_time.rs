@@ -25,7 +25,6 @@ lazy_static! {
         "f-bus~dft~gov~uk~rt",
         "f-dp3-cta~rt",
         "f-viarail~rt",
-        "f-uc~irvine~anteater~express~rt",
         "f-tlms~rt"
     ]);
 }
@@ -279,9 +278,6 @@ pub async fn single_fetch_time(
                     }
                     "f-bus~dft~gov~uk~rt" => {
                         custom_rt_feeds::uk::fetch_dft_bus_data(&mut etcd, feed_id, &client).await;
-                    }
-                    "f-uc~irvine~anteater~express~rt" => {
-                        custom_rt_feeds::uci::fetch_uci_data(&mut etcd, feed_id).await;
                     }
                     "f-dp3-cta~rt" => match chicago_text_str.as_ref() {
                         Some(chicago_text_str) => {
