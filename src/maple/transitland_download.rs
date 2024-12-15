@@ -155,6 +155,7 @@ pub async fn download_return_eligible_feeds(
                         _ => false,
                     }
                     && feed.urls.static_current.is_some()
+                    && !feed.id.ends_with("~flex")
             })
             .filter(|(_, feed)| {
                 if let Some(restrict_to_feed_id) = restrict_to_feed_id {
