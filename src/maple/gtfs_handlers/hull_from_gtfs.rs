@@ -39,8 +39,8 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
         .iter()
         .filter(|(_, stop)| stop.longitude.is_some() && stop.latitude.is_some())
         .filter(|(_, stop)| !is_null_island(stop.latitude.unwrap(), stop.longitude.unwrap()))
+        .filter(|(_, stop)| stop.longitude.unwrap().is_finite() && stop.latitude.unwrap().is_finite())
         .map(|(_, stop)| Point::new(stop.longitude.unwrap(), stop.latitude.unwrap()))
-        .filter(|point| point.longitude.is_finite() && point.latitude.is_finite())
         .collect::<Vec<Point>>();
 
     //join vecs together
