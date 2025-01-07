@@ -346,10 +346,7 @@ pub fn make_reqwest_for_url(
 
                 return Some(
                     client
-                        .request(
-                            reqwest::Method::POST,
-                            url,
-                        )
+                        .request(reqwest::Method::POST, url)
                         .multipart(form)
                         .build()
                         .unwrap(),

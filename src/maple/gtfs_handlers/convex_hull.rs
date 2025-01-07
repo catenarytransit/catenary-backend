@@ -4,7 +4,7 @@ use geo::Coord;
 
 //graham scan
 pub fn convex_hull(input: &Vec<(f64, f64)>) -> geo::Polygon {
-    let  pnts = input
+    let pnts = input
         .iter()
         .filter(|coords| {
             let (x, y) = coords;
@@ -23,5 +23,4 @@ pub fn convex_hull(input: &Vec<(f64, f64)>) -> geo::Polygon {
     let hull = multipoint.convex_hull();
 
     hull
-
 }

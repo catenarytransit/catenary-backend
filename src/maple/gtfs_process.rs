@@ -23,6 +23,7 @@ use catenary::models::{
 };
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::route_id_transform;
+use catenary::schedule_filtering::minimum_day_filter;
 use chrono::NaiveDate;
 use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
@@ -97,6 +98,10 @@ pub async fn gtfs_process_feed(
         }
         _ => gtfs,
     };
+
+    let today = chrono::Utc::now().naive_utc().date();
+
+    let gtfs = minimum_day_filter(gtfs, today - chrono::Duration::days(30));
 
     println!(
         "Finished reading GTFS for {}, took {:?}ms",

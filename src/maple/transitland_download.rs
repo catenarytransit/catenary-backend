@@ -72,14 +72,17 @@ async fn try_to_download(
     match response {
         Ok(response) => Ok(response),
         Err(error) => {
-            println!("Error with downloading {}: {}, {:?}, trying again", feed_id, url, error);
+            println!(
+                "Error with downloading {}: {}, {:?}, trying again",
+                feed_id, url, error
+            );
 
             //trying again with a different client
 
             let client = reqwest::ClientBuilder::new()
                 .user_agent("Catenary Maple")
                 .timeout(Duration::from_secs(60 * 3))
-            .connect_timeout(Duration::from_secs(20))
+                .connect_timeout(Duration::from_secs(20))
                 .build()
                 .unwrap();
 
