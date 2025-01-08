@@ -847,11 +847,21 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    async fn flatten_stopping_is_err<T>(
+        handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
+    ) -> Result<T, Box<dyn Error + Sync + Send>> {
+        match handle.await {
+            Ok(Ok(result)) => panic!("Stopping wasn't supposed to happen!"),
+            Ok(Err(err)) => Err(err),
+            Err(err) => Err(Box::new(err)),
+        }
+    }
+
     let result_series = tokio::try_join!(
-        flatten(leader_thread_handler),
-        flatten(async_from_alpenrose_processor_handler),
-        flatten(tarpc_server),
-        flatten(etcd_lease_renewer)
+        flatten_stopping_is_err(leader_thread_handler),
+        flatten_stopping_is_err(async_from_alpenrose_processor_handler),
+        flatten_stopping_is_err(tarpc_server),
+        flatten_stopping_is_err(etcd_lease_renewer)
     )
     .unwrap();
 
