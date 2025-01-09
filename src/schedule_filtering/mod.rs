@@ -125,7 +125,7 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
         let mark_for_deletion = trip_ids.iter().all(|x| trips_removed.contains(x));
 
         if mark_for_deletion {
-            gtfs.shapes.remove(&shape_id);
+            //gtfs.shapes.remove(&shape_id);
         }
     }
 
