@@ -432,6 +432,43 @@ pub async fn get_trip_rt_update(
 //How to do it
 //Use a centralised table and progressively update it
 
+
+#[actix_web::get("/get_trip_information_v2/{chateau}/")]
+pub async fn get_trip_init_v2(
+    path: web::Path<String>,
+    query: web::Query<QueryTripInformationParams>,
+    // sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+) -> impl Responder {
+    let mut timer = simple_server_timing_header::Timer::new();
+    let chateau = path.into_inner();
+
+    let query = query.into_inner();
+
+    // connect to pool
+    let conn_pool = pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+
+    if let Err(conn_pre) = &conn_pre {
+        eprintln!("{}", conn_pre);
+        return HttpResponse::InternalServerError().body("Error connecting to database");
+    }
+
+    let conn: &mut bb8::PooledConnection<
+        '_,
+        diesel_async::pooled_connection::AsyncDieselConnectionManager<
+            diesel_async::AsyncPgConnection,
+        >,
+    > = &mut conn_pre.unwrap();
+
+    timer.add("open_pg_connection");
+
+    HttpResponse::Ok().body("Not Implemented Yet")
+}
+
+
 #[actix_web::get("/get_trip_information/{chateau}/")]
 pub async fn get_trip_init(
     path: web::Path<String>,
