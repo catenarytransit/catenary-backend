@@ -432,7 +432,6 @@ pub async fn get_trip_rt_update(
 //How to do it
 //Use a centralised table and progressively update it
 
-
 #[actix_web::get("/get_trip_information_v2/{chateau}/")]
 pub async fn get_trip_init_v2(
     path: web::Path<String>,
@@ -467,7 +466,6 @@ pub async fn get_trip_init_v2(
 
     HttpResponse::Ok().body("Not Implemented Yet")
 }
-
 
 #[actix_web::get("/get_trip_information/{chateau}/")]
 pub async fn get_trip_init(

@@ -634,6 +634,7 @@ async fn main() -> std::io::Result<()> {
             .service(calfireproxy)
             .service(ip_addr_to_geo_api)
             .service(route_info::route_info)
+            .service(proxy_for_watchduty_tiles)
             .service(gtfs_rt_api::gtfs_rt)
             .service(shapes_local_rail)
             .service(shapes_local_rail_meta)
@@ -648,4 +649,36 @@ async fn main() -> std::io::Result<()> {
     let _ = builder.bind("127.0.0.1:17419").unwrap().run().await;
 
     Ok(())
+}
+
+#[actix_web::get("/watchduty_tiles_proxy/{z}/{x}/{y}")]
+pub async fn proxy_for_watchduty_tiles(
+    path: web::Path<(u8, u32, u32)>,
+    req: HttpRequest,
+) -> impl Responder {
+    let (z, x, y) = path.into_inner();
+
+    let client = reqwest::Client::builder().build().unwrap();
+
+    let url = format!("https://tiles.watchduty.org/maptiles/evac_zones_ca/{z}/{x}/{y}.pbf");
+
+    let request = client.request(reqwest::Method::GET, url);
+
+    let response = request.send().await;
+
+    match response {
+        Ok(response) => {
+            let bytes = response.bytes().await.unwrap();
+
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/x-protobuf"))
+                .body(bytes)
+        }
+        Err(err) => {
+            eprintln!("{:#?}", err);
+            HttpResponse::InternalServerError()
+                .insert_header(("Content-Type", "text/plain"))
+                .body("Could not fetch data")
+        }
+    }
 }
