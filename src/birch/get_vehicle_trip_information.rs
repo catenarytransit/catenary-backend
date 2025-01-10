@@ -280,6 +280,7 @@ struct QueryTripInformationParams {
     pub trip_id: String,
     pub start_time: Option<String>,
     pub start_date: Option<String>,
+    pub route_id: Option<String>,
 }
 
 #[actix_web::get("/get_trip_information_rt_update/{chateau}/")]
@@ -424,6 +425,13 @@ pub async fn get_trip_rt_update(
     }
 }
 
+// TODO!
+// - Allow for Swiftly Scheduleless no trip system
+// - Allow for detours, looking up of new stops
+
+//How to do it
+//Use a centralised table and progressively update it
+
 #[actix_web::get("/get_trip_information/{chateau}/")]
 pub async fn get_trip_init(
     path: web::Path<String>,
@@ -447,7 +455,12 @@ pub async fn get_trip_init(
         return HttpResponse::InternalServerError().body("Error connecting to database");
     }
 
-    let conn = &mut conn_pre.unwrap();
+    let conn: &mut bb8::PooledConnection<
+        '_,
+        diesel_async::pooled_connection::AsyncDieselConnectionManager<
+            diesel_async::AsyncPgConnection,
+        >,
+    > = &mut conn_pre.unwrap();
 
     timer.add("open_pg_connection");
 
