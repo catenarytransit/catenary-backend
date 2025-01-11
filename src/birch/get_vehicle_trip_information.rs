@@ -464,6 +464,20 @@ pub async fn get_trip_init_v2(
 
     timer.add("open_pg_connection");
 
+    //ask postgres first about the compressed trip
+    let trip_compressed = trips_compressed_pg_schema::dsl::trips_compressed
+        .filter(trips_compressed_pg_schema::dsl::chateau.eq(&chateau))
+        .filter(trips_compressed_pg_schema::dsl::trip_id.eq(&query.trip_id))
+        .select(catenary::models::CompressedTrip::as_select())
+        .load(conn)
+        .await;
+
+    timer.add("query_compressed_trip");
+
+    //if the trip compressed cannot be found in the database and the route id is invalid, reject.
+
+    //also calculate detour information?
+
     HttpResponse::Ok().body("Not Implemented Yet")
 }
 
