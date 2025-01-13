@@ -683,3 +683,37 @@ pub async fn proxy_for_watchduty_tiles(
         }
     }
 }
+
+#[actix_web::get("/terrain_tiles_proxy/{z}/{x}/{y}")]
+pub async fn proxy_for_maptiler_terrain_tiles(
+    path: web::Path<(u8, u32, u32)>,
+    req: HttpRequest,
+) -> impl Responder {
+    let (z, x, y) = path.into_inner();
+
+    let client = reqwest::Client::builder().build().unwrap();
+
+    let url = format!("https://api.maptiler.com/tiles/terrain-rgb-v2/{z}/{x}/{y}.webp?key=tK5B8WtNfkv7u3Ro8waG");
+
+    let request = client.request(reqwest::Method::GET, url);
+
+    let response = request.send().await;
+
+    match response {
+        Ok(response) => {
+            let bytes = response.bytes().await.unwrap();
+
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/x-protobuf"))
+                .insert_header(("Cache-Control", "no-cache"))
+                .insert_header(("Access-Control-Allow-Origin", "*"))
+                .body(bytes)
+        }
+        Err(err) => {
+            eprintln!("{:#?}", err);
+            HttpResponse::InternalServerError()
+                .insert_header(("Content-Type", "text/plain"))
+                .body("Could not fetch data")
+        }
+    }
+}
