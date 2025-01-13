@@ -254,6 +254,7 @@ struct TripIntroductionInformation {
     pub alert_ids_for_this_route: Vec<String>,
     pub alert_ids_for_this_trip: Vec<String>,
     pub shape_polyline: Option<String>,
+    pub trip_id_found_in_db: bool
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -463,6 +464,35 @@ pub async fn get_trip_init_v2(
     > = &mut conn_pre.unwrap();
 
     timer.add("open_pg_connection");
+
+    //ask postgres first about the compressed trip
+    let trip_compressed = trips_compressed_pg_schema::dsl::trips_compressed
+        .filter(trips_compressed_pg_schema::dsl::chateau.eq(&chateau))
+        .filter(trips_compressed_pg_schema::dsl::trip_id.eq(&query.trip_id))
+        .select(catenary::models::CompressedTrip::as_select())
+        .load(conn)
+        .await;
+
+    timer.add("query_compressed_trip");
+
+    if let Err(trip_compressed_err) = &trip_compressed {
+        eprintln!("{}", trip_compressed_err);
+        return HttpResponse::InternalServerError().body("Error fetching trip compressed");
+    }
+
+    let trip_compressed: Vec<catenary::models::CompressedTrip> = trip_compressed.unwrap();
+
+    //if the trip compressed cannot be found in the database and the route id is invalid, reject (maybe in the future, keep?)
+
+    if trip_compressed.is_empty() {
+        if query.route_id.is_none() {
+            return HttpResponse::NotFound().body("Compressed trip not found and route id is empty");
+        }
+
+        // build it's own made up trip compressed?
+    }
+
+    //also calculate detour information?
 
     HttpResponse::Ok().body("Not Implemented Yet")
 }
@@ -1048,6 +1078,7 @@ pub async fn get_trip_init(
         alert_ids_for_this_trip,
         alert_id_to_alert,
         shape_polyline,
+        trip_id_found_in_db: true
     };
 
     let text = serde_json::to_string(&response).unwrap();
