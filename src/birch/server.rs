@@ -694,9 +694,13 @@ pub async fn proxy_for_maptiler_terrain_tiles(
 
     let client = reqwest::Client::builder().build().unwrap();
 
-    let url = format!("https://api.maptiler.com/tiles/terrain-rgb-v2/{z}/{x}/{y}.webp?key=tK5B8WtNfkv7u3Ro8waG");
+    let url = format!(
+        "https://api.maptiler.com/tiles/terrain-rgb-v2/{z}/{x}/{y}.webp?key=tK5B8WtNfkv7u3Ro8waG"
+    );
 
-    let request = client.request(reqwest::Method::GET, url);
+    let request = client
+        .request(reqwest::Method::GET, url)
+        .header("Origin", "https://maps.catenarymaps.org");
 
     let response = request.send().await;
 
