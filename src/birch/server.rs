@@ -700,19 +700,27 @@ pub async fn proxy_for_maptiler_terrain_tiles(
 
     let request = client
         .request(reqwest::Method::GET, url)
-        .header("Origin", "https://maps.catenarymaps.org");
+        .header("Origin", "https://maps.catenarymaps.org")
+        .header("Referer", "https://maps.catenarymaps.org")
+        .header("Host", "api.maptiler.com");
 
     let response = request.send().await;
 
     match response {
         Ok(response) => {
-            let bytes = response.bytes().await.unwrap();
+           if response.status().is_success() {
+                let bytes = response.bytes().await.unwrap();
 
-            HttpResponse::Ok()
-                .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "no-cache"))
-                .insert_header(("Access-Control-Allow-Origin", "*"))
-                .body(bytes)
+                HttpResponse::Ok()
+                    .insert_header(("Content-Type", "image/webp"))
+                    .insert_header(("Cache-Control", "public, max-age=604800"))
+                    .insert_header(("Access-Control-Allow-Origin", "*"))
+                    .body(bytes)
+            } else {
+                HttpResponse::NotFound()
+                    .insert_header(("Content-Type", "text/plain"))
+                    .body("Tile not found")
+            }
         }
         Err(err) => {
             eprintln!("{:#?}", err);
