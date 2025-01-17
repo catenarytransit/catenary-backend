@@ -708,34 +708,28 @@ pub async fn proxy_for_maptiler_terrain_tiles(
 
     match response {
         Ok(response) => {
+            let status = response.status();
 
-            
-                let status = response.status();
+            //get header content type
 
-                //get header content type
+            let content_type = match (&response).headers().get("content-type") {
+                Some(content_type) => content_type.to_str().unwrap_or_default(),
+                None => "application/octet-stream",
+            }
+            .to_owned();
 
-                let content_type = match (&response).headers().get("content-type") {
-                    Some(content_type) => content_type.to_str().unwrap_or_default(),
-                    None => "application/octet-stream",
-                }.to_owned();
+            let bytes = response.bytes().await.unwrap();
 
-                let bytes = response.bytes().await.unwrap();
-
-                match status.is_success() {
-                    true => {
-
-                        HttpResponse::Ok()
-                            .insert_header(("Content-Type", content_type))
-                            .insert_header(("Cache-Control", "public, max-age=604800"))
-                            .insert_header(("Access-Control-Allow-Origin", "*"))
-                            .body(bytes)
-                    }
-                    false => {
-                        HttpResponse::NotFound()
-                            .insert_header(("Content-Type", content_type))
-                            .body(bytes)
-                    }
-                }
+            match status.is_success() {
+                true => HttpResponse::Ok()
+                    .insert_header(("Content-Type", content_type))
+                    .insert_header(("Cache-Control", "public, max-age=604800"))
+                    .insert_header(("Access-Control-Allow-Origin", "*"))
+                    .body(bytes),
+                false => HttpResponse::NotFound()
+                    .insert_header(("Content-Type", content_type))
+                    .body(bytes),
+            }
         }
         Err(err) => {
             eprintln!("{:#?}", err);
