@@ -643,7 +643,7 @@ async fn main() -> std::io::Result<()> {
             .service(shapes_ferry)
             .service(shapes_ferry_meta)
             .service(get_agencies::get_agencies_raw)
-            .service(proxy_for_maptiler_terrain_tiles)
+            .service(proxy_for_aws_terrain_tiles)
     })
     .workers(16);
 
@@ -684,6 +684,65 @@ pub async fn proxy_for_watchduty_tiles(
         }
     }
 }
+
+#[actix_web::get("/terrain_tiles_proxy_aws/{z}/{x}/{y}")]
+pub async fn proxy_for_aws_terrain_tiles(
+    path: web::Path<(u8, u32, u32)>,
+    req: HttpRequest,
+) -> impl Responder {
+    let (z, x, y) = path.into_inner();
+
+    let client = reqwest::Client::builder().build().unwrap();
+
+    let url = format!(
+        "https://elevation-tiles-prod.s3.amazonaws.com/v2/terrarium/{z}/{x}/{y}.png"
+    );
+
+    let request = client
+        .request(reqwest::Method::GET, url)
+        .header("Origin", "https://maps.catenarymaps.org")
+        .header("Referer", "https://maps.catenarymaps.org");
+
+    let response = request.send().await;
+
+    match response {
+        Ok(response) => {
+                let status = response.status();
+
+                //get header content type
+
+                let content_type = match (&response).headers().get("content-type") {
+                    Some(content_type) => content_type.to_str().unwrap_or_default(),
+                    None => "application/octet-stream",
+                }.to_owned();
+
+                let bytes = response.bytes().await.unwrap();
+
+                match status.is_success() {
+                    true => {
+
+                        HttpResponse::Ok()
+                            .insert_header(("Content-Type", content_type))
+                            .insert_header(("Cache-Control", "public, max-age=6048000"))
+                            .insert_header(("Access-Control-Allow-Origin", "*"))
+                            .body(bytes)
+                    }
+                    false => {
+                        HttpResponse::NotFound()
+                            .insert_header(("Content-Type", content_type))
+                            .body(bytes)
+                    }
+                }
+        }
+        Err(err) => {
+            eprintln!("{:#?}", err);
+            HttpResponse::InternalServerError()
+                .insert_header(("Content-Type", "text/plain"))
+                .body("Could not fetch data")
+        }
+    }
+}
+
 
 #[actix_web::get("/terrain_tiles_proxy/{z}/{x}/{y}")]
 pub async fn proxy_for_maptiler_terrain_tiles(
