@@ -423,6 +423,15 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
                 "286e6dff5afe4565a08f3d453f8d28e2".parse().unwrap(),
             );
         }
+        "f-u3h-koleje~dolnoslaskie" => {
+            headers.insert(
+                "Authorization",
+                "Basic a2Q6QmFld29uZ29od3VnM0Fv".parse().unwrap(),
+            );
+            //login: kd
+            //password: Baewongohwug3Ao
+            //https://kolejedolnoslaskie.pl/rozklady-gtfs/
+        }
         _ => {}
     };
 
