@@ -25,7 +25,8 @@ lazy_static! {
         "f-bus~dft~gov~uk~rt",
         "f-dp3-cta~rt",
         "f-viarail~rt",
-        "f-tlms~rt"
+        "f-tlms~rt",
+        "f-uc~irvine~anteater~express~rt",
     ]);
 }
 
@@ -293,6 +294,9 @@ pub async fn single_fetch_time(
                     },
                     "f-tlms~rt" => {
                         custom_rt_feeds::tlms::fetch_tlms_data(&mut etcd, feed_id, &client).await;
+                    }
+                    "f-uc~irvine~anteater~express~rt" => {
+                        custom_rt_feeds::uci::fetch_uci_data(&mut etcd, feed_id).await;
                     }
                     _ => {}
                 }
