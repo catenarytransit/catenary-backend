@@ -149,7 +149,7 @@ async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
         .join("\n");
 
     let robots_banned_bots = format!(
-        "{}\nDisallow: /\n",
+        "{}\nDisallow: /\n\nUser-agent: *\nDisallow: /wp-login.php\nDisallow: /.git\nDisallow: /.env\nDisallow: /wp-login\nDisallow: /wp-admin\nDisallow: /wp-admin.php",
         robots_banned_bots_list
     );
 
