@@ -667,6 +667,12 @@ async fn main() -> std::io::Result<()> {
             .service(shapes_ferry_meta)
             .service(get_agencies::get_agencies_raw)
             .service(proxy_for_aws_terrain_tiles)
+            //we do some trolling
+            .service(web::redirect(".env", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+            .service(web::redirect("wp-admin", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+            .service(web::redirect("wp-admin.php", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+            .service(web::redirect("wp-login", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+            .service(web::redirect("wp-login.php", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
     })
     .workers(16);
 
