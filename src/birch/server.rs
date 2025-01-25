@@ -135,7 +135,8 @@ async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
         "Meta-ExternalAgent",
         "Meta-ExternalFetcher",
         "Kangaroo Bot",
-        "Crawlspace"
+        "Crawlspace",
+        "Timpibot"
     ];
 
     let robots_banned_bots_list = banned_bots
