@@ -676,7 +676,7 @@ async fn main() -> std::io::Result<()> {
             //favicon
             .service(web::redirect("/favicon.ico", "https://catenarymaps.org/favicon.ico"))
     })
-    .workers(16);
+    .workers(32);
 
     let _ = builder.bind("127.0.0.1:17419").unwrap().run().await;
 
