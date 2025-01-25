@@ -138,7 +138,7 @@ async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
 
     let robots_banned_bots_list = banned_bots
         .into_iter()
-        .map(|x| format!("User-agent: {}\n", x))
+        .map(|x| format!("User-agent: {}", x))
         .collect::<Vec<String>>()
         .join("\n");
 
