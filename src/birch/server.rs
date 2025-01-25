@@ -673,6 +673,8 @@ async fn main() -> std::io::Result<()> {
             .service(web::redirect("/wp-admin.php", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
             .service(web::redirect("/wp-login", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
             .service(web::redirect("/wp-login.php", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+            //favicon
+            .service(web::redirect("/favicon.ico", "https://catenarymaps.org/favicon.ico"))
     })
     .workers(16);
 
