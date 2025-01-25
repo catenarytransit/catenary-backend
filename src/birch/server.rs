@@ -122,13 +122,30 @@ async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
         "Bytespider",
         "ImagesiftBot",
         "cohere-ai",
+        "Applebot-Extended",
+        "YouBot",
+        "AI2Bot",
+        "Claude-Web",
+        "Scrapy",
+        "PerplexityBot",
+        "iaskspider/2.0",
+        "cohere-training-data-crawler",
+        "SemrushBot",
+        "Sidetrade indexer bot",
+        "Meta-ExternalAgent",
+        "Meta-ExternalFetcher"
     ];
 
-    let robots_banned_bots = banned_bots
+    let robots_banned_bots_list = banned_bots
         .into_iter()
-        .map(|x| format!("User-agent: {}\nDisallow: /", x))
+        .map(|x| format!("User-agent: {}\n", x))
         .collect::<Vec<String>>()
-        .join("\n\n");
+        .join("\n");
+
+    let robots_banned_bots = format!(
+        "{}\nDisallow: /\n",
+        robots_banned_bots_list
+    );
 
     actix_web::HttpResponse::Ok()
         .insert_header(("Content-Type", "text/plain"))
