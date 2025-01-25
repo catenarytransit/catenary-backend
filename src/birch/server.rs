@@ -133,7 +133,8 @@ async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
         "SemrushBot",
         "Sidetrade indexer bot",
         "Meta-ExternalAgent",
-        "Meta-ExternalFetcher"
+        "Meta-ExternalFetcher",
+        "Kangaroo Bot"
     ];
 
     let robots_banned_bots_list = banned_bots
