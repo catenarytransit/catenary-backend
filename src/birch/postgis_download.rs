@@ -706,7 +706,7 @@ pub async fn shapes_ferry(
 
     let tile_width_degrees = tile_width_degrees_from_z(z);
 
-    let simplification_threshold = tile_width_degrees * 0.005;
+    let simplification_threshold = tile_width_degrees * 0.004;
 
     // let grid = tile_grid::Grid::wgs84();
 
@@ -775,7 +775,7 @@ pub async fn shapes_local_rail(
 
     let tile_width_degrees = tile_width_degrees_from_z(z);
 
-    let simplification_threshold = tile_width_degrees * 0.003;
+    let simplification_threshold = tile_width_degrees * 0.002;
 
     // let grid = tile_grid::Grid::wgs84();
 
@@ -844,8 +844,15 @@ pub async fn shapes_bus(
 
     let tile_width_degrees = tile_width_degrees_from_z(z);
 
+    let simp_amount: f32 = match z {
+        6 => 0.005,
+        7 => 0.004,
+        8 => 0.003,
+        _ => 0.003,
+    };
+
     //lower means better detail
-    let simplification_threshold = tile_width_degrees * 0.005;
+    let simplification_threshold = tile_width_degrees * simp_amount;
 
     // let grid = tile_grid::Grid::wgs84();
     // let bbox = grid.tile_extent(x, y, z);
