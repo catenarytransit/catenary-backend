@@ -139,7 +139,7 @@ async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
         "Timpibot",
         "VelenPublicWebCrawler",
         "Webzio-Extended",
-        "Ai2Bot-Dolma"
+        "Ai2Bot-Dolma",
     ];
 
     let robots_banned_bots_list = banned_bots
@@ -668,13 +668,31 @@ async fn main() -> std::io::Result<()> {
             .service(get_agencies::get_agencies_raw)
             .service(proxy_for_aws_terrain_tiles)
             //we do some trolling
-            .service(web::redirect("/.env", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
-            .service(web::redirect("/wp-admin", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
-            .service(web::redirect("/wp-admin.php", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
-            .service(web::redirect("/wp-login", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
-            .service(web::redirect("/wp-login.php", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+            .service(web::redirect(
+                "/.env",
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            ))
+            .service(web::redirect(
+                "/wp-admin",
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            ))
+            .service(web::redirect(
+                "/wp-admin.php",
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            ))
+            .service(web::redirect(
+                "/wp-login",
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            ))
+            .service(web::redirect(
+                "/wp-login.php",
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            ))
             //favicon
-            .service(web::redirect("/favicon.ico", "https://catenarymaps.org/favicon.ico"))
+            .service(web::redirect(
+                "/favicon.ico",
+                "https://catenarymaps.org/favicon.ico",
+            ))
     })
     .workers(32);
 
