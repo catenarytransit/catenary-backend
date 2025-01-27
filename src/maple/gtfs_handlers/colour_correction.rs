@@ -98,7 +98,7 @@ pub fn fix_background_colour_rgb_feed_route(
                         "N92" => RGB::new(53, 10, 59),
                         _ => fix_background_colour_rgb(background),
                     },
-                    Some("Newcastle and Hunter Network") => match short_name.as_str() {
+                    Some("Hunter Buses Network") => match short_name.as_str() {
                         "10X" => RGB::new(46, 49, 146),
                         "12" => RGB::new(0, 146, 144),
                         "13" => RGB::new(247, 167, 27),
@@ -112,6 +112,7 @@ pub fn fix_background_colour_rgb_feed_route(
                         "28" => RGB::new(146, 108, 87),
                         "29" => RGB::new(118, 112, 179),
                         "41" => RGB::new(110, 192, 93),
+                        "43" => RGB::new(244,133,128),
                         "44" => RGB::new(58, 153, 139),
                         "47" => RGB::new(248, 159, 109),
                         "48" => RGB::new(82, 136, 181),
