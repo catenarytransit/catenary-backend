@@ -38,6 +38,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Instant;
+use std::collections::BTreeSet;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -80,18 +81,25 @@ pub async fn gtfs_process_feed(
         }
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
             //there's 8184 school buses in the feed. I'm removing them lmfao.
-            let route_types = gtfs
-                .routes
-                .values()
-                .map(|x| x.route_type)
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .filter(|x| *x != gtfs_structures::RouteType::Other(712))
-                .collect::<Vec<_>>();
+            let mut gtfs = gtfs;
 
-            println!("Only include route types: {:?}", route_types);
+            let route_ids_to_keep = gtfs.routes.iter().filter_map(|(route_id, route)| {
+                match route.desc {
+                    Some(ref desc) if desc.contains("School") => None,
+                    _ => Some(route_id),
+                }
+            }).cloned().collect::<BTreeSet<_>>();
 
-            let gtfs = include_only_route_types(gtfs, route_types, true);
+            let trips_to_keep = gtfs.trips.iter().filter_map(|(trip_id, trip)| {
+                match trip.shape_id {
+                    Some(ref shape_id) if route_ids_to_keep.contains(&trip.route_id) => None,
+                    _ => Some(trip_id),
+                }
+            }).cloned().collect::<BTreeSet<_>>();
+
+            gtfs.trips = gtfs.trips.into_iter().filter(|(trip_id, _)| trips_to_keep.contains(trip_id)).collect();
+
+            gtfs.routes = gtfs.routes.into_iter().filter(|(route_id, _)| route_ids_to_keep.contains(route_id)).collect();
 
             println!("Filtered NSW, removed school buses");
             gtfs.print_stats();
