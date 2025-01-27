@@ -83,7 +83,11 @@ pub async fn gtfs_process_feed(
             //there's 8184 school buses in the feed. I'm removing them lmfao.
             use catenary::schedule_filtering::include_only_route_types;
 
-            let route_types = gtfs.routes.values().map(|x| x.route_type).collect::<HashSet<_>>()
+            let route_types = gtfs
+                .routes
+                .values()
+                .map(|x| x.route_type)
+                .collect::<HashSet<_>>()
                 .into_iter()
                 .filter(|x| *x != gtfs_structures::RouteType::Other(712))
                 .collect::<Vec<_>>();
@@ -93,7 +97,7 @@ pub async fn gtfs_process_feed(
             println!("Filtered NSW, removed school buses");
             gtfs.print_stats();
             gtfs
-        },
+        }
         "f-uc~irvine~anteater~express" => {
             let mut gtfs = gtfs;
 
