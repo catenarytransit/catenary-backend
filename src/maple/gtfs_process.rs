@@ -37,6 +37,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Instant;
+use catenary::schedule_filtering::include_only_route_types;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -69,8 +70,6 @@ pub async fn gtfs_process_feed(
 
     let gtfs: Gtfs = match feed_id {
         "f-dpz8-ttc" => {
-            use catenary::schedule_filtering::include_only_route_types;
-
             let route_types = vec![gtfs_structures::RouteType::Subway];
 
             let gtfs = include_only_route_types(gtfs, route_types, true);
@@ -81,8 +80,6 @@ pub async fn gtfs_process_feed(
         }
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
             //there's 8184 school buses in the feed. I'm removing them lmfao.
-            use catenary::schedule_filtering::include_only_route_types;
-
             let route_types = gtfs
                 .routes
                 .values()
