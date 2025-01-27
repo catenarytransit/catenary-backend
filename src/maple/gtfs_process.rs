@@ -73,7 +73,7 @@ pub async fn gtfs_process_feed(
 
             let route_types = vec![gtfs_structures::RouteType::Subway];
 
-            let gtfs = include_only_route_types(gtfs, route_types);
+            let gtfs = include_only_route_types(gtfs, route_types, true);
 
             println!("Filtered TTC Subway");
             gtfs.print_stats();
@@ -92,7 +92,9 @@ pub async fn gtfs_process_feed(
                 .filter(|x| *x != gtfs_structures::RouteType::Other(712))
                 .collect::<Vec<_>>();
 
-            let gtfs = include_only_route_types(gtfs, route_types);
+            println!("Only include route types: {:?}", route_types);
+
+            let gtfs = include_only_route_types(gtfs, route_types, true);
 
             println!("Filtered NSW, removed school buses");
             gtfs.print_stats();

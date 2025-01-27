@@ -4,7 +4,11 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
-pub fn include_only_route_types(gtfs: Gtfs, route_types: Vec<gtfs_structures::RouteType>) -> Gtfs {
+pub fn include_only_route_types(
+    gtfs: Gtfs,
+    route_types: Vec<gtfs_structures::RouteType>,
+    delete_shapes_and_stops: bool,
+) -> Gtfs {
     let mut gtfs = gtfs;
 
     let route_ids_to_keep: BTreeSet<String> = gtfs
@@ -53,17 +57,19 @@ pub fn include_only_route_types(gtfs: Gtfs, route_types: Vec<gtfs_structures::Ro
         .filter(|(trip_id, trip)| trips_to_keep.contains(trip_id))
         .collect();
 
-    gtfs.stops = gtfs
-        .stops
-        .into_iter()
-        .filter(|(stop_id, stop)| keep_stop_ids.contains(stop_id))
-        .collect();
+    if (delete_shapes_and_stops) {
+        gtfs.stops = gtfs
+            .stops
+            .into_iter()
+            .filter(|(stop_id, stop)| keep_stop_ids.contains(stop_id))
+            .collect();
 
-    gtfs.shapes = gtfs
-        .shapes
-        .into_iter()
-        .filter(|(shape_id, shape)| keep_shapes.contains(shape_id))
-        .collect();
+        gtfs.shapes = gtfs
+            .shapes
+            .into_iter()
+            .filter(|(shape_id, shape)| keep_shapes.contains(shape_id))
+            .collect();
+    }
 
     gtfs
 }
