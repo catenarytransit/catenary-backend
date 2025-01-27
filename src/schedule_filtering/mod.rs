@@ -19,7 +19,11 @@ pub fn include_only_route_types(
         .cloned()
         .collect();
 
-    println!("keeping {} routes, removing {} routes", route_ids_to_keep.len(), gtfs.routes.len() - route_ids_to_keep.len());
+    println!(
+        "keeping {} routes, removing {} routes",
+        route_ids_to_keep.len(),
+        gtfs.routes.len() - route_ids_to_keep.len()
+    );
 
     let trips_to_keep: BTreeSet<String> = gtfs
         .trips
@@ -29,7 +33,11 @@ pub fn include_only_route_types(
         .cloned()
         .collect();
 
-    println!("keeping {} trips, removing {} trips", trips_to_keep.len(), gtfs.trips.len() - trips_to_keep.len());
+    println!(
+        "keeping {} trips, removing {} trips",
+        trips_to_keep.len(),
+        gtfs.trips.len() - trips_to_keep.len()
+    );
 
     let mut keep_stop_ids: BTreeSet<String> = BTreeSet::new();
 

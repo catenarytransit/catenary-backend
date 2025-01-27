@@ -23,6 +23,7 @@ use catenary::models::{
 };
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::route_id_transform;
+use catenary::schedule_filtering::include_only_route_types;
 use catenary::schedule_filtering::minimum_day_filter;
 use chrono::NaiveDate;
 use diesel::ExpressionMethods;
@@ -37,7 +38,6 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Instant;
-use catenary::schedule_filtering::include_only_route_types;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
