@@ -87,7 +87,13 @@ pub async fn gtfs_process_feed(
                 .routes
                 .iter()
                 .filter_map(|(route_id, route)| match route.desc {
-                    Some(ref desc) if desc.contains("School") => None,
+                    Some(ref desc) => {
+                        if desc.contains("School") {
+                            None
+                        } else {
+                            Some(route_id)
+                        }
+                    }
                     _ => Some(route_id),
                 })
                 .cloned()
