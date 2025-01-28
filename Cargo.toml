@@ -141,7 +141,7 @@ slippy-map-tiles = "0.16.0"
 geo-buffer = "0.2.0"
 actix-cors = "0.7.0"
 finite = "0.0.1"
-scraper = "0.22.0"
+scraper = { version = "0.22.0", features = ["atomic"] }
 html-escape = "0.2.13"
 [[bin]]
 name = "maple"

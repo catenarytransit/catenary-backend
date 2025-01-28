@@ -717,36 +717,35 @@ pub async fn new_rt_data(
                             if let Some(alert) = metrolink_alert_entity.alert {
                                 let alert: AspenisedAlert = alert.into();
 
-                            for informed_entity in alert.informed_entity.iter() {
-                                if let Some(route_id) = &informed_entity.route_id {
-                                    impacted_route_id_to_alert_ids
-                                        .entry(route_id.clone())
-                                        .and_modify(|x| x.push(alert_id.clone()))
-                                        .or_insert(vec![alert_id.clone()]);
-                                }
-
-                                if let Some(trip) = &informed_entity.trip {
-                                    if let Some(trip_id) = &trip.trip_id {
-                                        impact_trip_id_to_alert_ids
-                                            .entry(trip_id.clone())
-                                            .and_modify(|x| x.push(alert_id.clone()))
-                                            .or_insert(vec![alert_id.clone()]);
-                                    }
-
-                                    if let Some(route_id) = &trip.route_id {
+                                for informed_entity in alert.informed_entity.iter() {
+                                    if let Some(route_id) = &informed_entity.route_id {
                                         impacted_route_id_to_alert_ids
                                             .entry(route_id.clone())
                                             .and_modify(|x| x.push(alert_id.clone()))
                                             .or_insert(vec![alert_id.clone()]);
                                     }
-                                }
-                            }
 
-                            alerts.insert(alert_id.clone(), alert);
+                                    if let Some(trip) = &informed_entity.trip {
+                                        if let Some(trip_id) = &trip.trip_id {
+                                            impact_trip_id_to_alert_ids
+                                                .entry(trip_id.clone())
+                                                .and_modify(|x| x.push(alert_id.clone()))
+                                                .or_insert(vec![alert_id.clone()]);
+                                        }
+
+                                        if let Some(route_id) = &trip.route_id {
+                                            impacted_route_id_to_alert_ids
+                                                .entry(route_id.clone())
+                                                .and_modify(|x| x.push(alert_id.clone()))
+                                                .or_insert(vec![alert_id.clone()]);
+                                        }
+                                    }
+                                }
+
+                                alerts.insert(alert_id.clone(), alert);
                             }
                         }
                     }
-
                 }
             }
         }
