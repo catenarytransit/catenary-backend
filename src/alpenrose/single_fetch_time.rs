@@ -28,6 +28,7 @@ lazy_static! {
         "f-viarail~rt",
         "f-tlms~rt",
         "f-uc~irvine~anteater~express~rt",
+        "f-metrolinktrains~extra~rt"
     ]);
 }
 
@@ -278,6 +279,7 @@ pub async fn single_fetch_time(
                         )
                         .await;
                     }
+                    "f-metrolinktrains~extra~rt" => custom_rt_feeds::metrolink_extra::fetch_data(&mut etcd, feed_id, &client).await,
                     "f-bus~dft~gov~uk~rt" => {
                         custom_rt_feeds::uk::fetch_dft_bus_data(&mut etcd, feed_id, &client).await;
                     }
