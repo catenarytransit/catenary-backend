@@ -17,7 +17,6 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct MetrolinkTrackData {
     #[serde(rename = "TrainDesignation")]
@@ -711,6 +710,8 @@ pub async fn new_rt_data(
                     let metrolink_alerts = catenary::custom_alerts::metrolink_alerts::gtfs_rt_alerts_from_metrolink_website().await;
 
                     if let Ok(metrolink_alerts) = metrolink_alerts {
+                        println!("Got {} supplemental Metrolink alerts", metrolink_alerts.len());
+
                         for metrolink_alert_entity in metrolink_alerts {
                             let alert_id = metrolink_alert_entity.id.clone();
 
@@ -745,6 +746,8 @@ pub async fn new_rt_data(
                                 alerts.insert(alert_id.clone(), alert);
                             }
                         }
+                    } else {
+                        eprintln!("Metrolink alerts failed");
                     }
                 }
             }

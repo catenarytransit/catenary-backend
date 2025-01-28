@@ -136,7 +136,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     println!("Connected to etcd");
 
-    let etcd_lease_id: i64 = rand::thread_rng().gen_range(0..i64::MAX);
+    let etcd_lease_id: i64 = rand::thread_rng().random_range(0..i64::MAX);
 
     let make_lease = etcd
         .lease_grant(
