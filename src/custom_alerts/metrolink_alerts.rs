@@ -115,7 +115,7 @@ pub async fn fetch_alert_page_data(
 
     //match all routes .alertsDetail__line-station
 
-    let header_selector = scraper::Selector::parse(".h-L.alertsDetail__description")?;
+    let header_selector = scraper::Selector::parse(".h-L.alertsDetail__description").unwrap();
     //pick first element or return error
     let header = document
         .select(&header_selector)
@@ -124,7 +124,7 @@ pub async fn fetch_alert_page_data(
         .text()
         .collect::<String>();
 
-    let description_selector = scraper::Selector::parse(".alertsDetail__details")?;
+    let description_selector = scraper::Selector::parse(".alertsDetail__details").unwrap();
     let description = document
         .select(&description_selector)
         .next()
@@ -136,7 +136,7 @@ pub async fn fetch_alert_page_data(
             "",
         );
 
-    let start_date_selector = scraper::Selector::parse(".alertsDetail__date--start")?;
+    let start_date_selector = scraper::Selector::parse(".alertsDetail__date--start").unwrap();
     //pick first optionally
     let start_date = document
         .select(&start_date_selector)
@@ -147,7 +147,7 @@ pub async fn fetch_alert_page_data(
         .map(date_string_to_chrono_naive)
         .flatten();
 
-    let end_date_selector = scraper::Selector::parse(".alertsDetail__date--end")?;
+    let end_date_selector = scraper::Selector::parse(".alertsDetail__date--end").unwrap();
     //pick first optionally
     let end_date = document
         .select(&end_date_selector)
@@ -158,7 +158,7 @@ pub async fn fetch_alert_page_data(
         .map(date_string_to_chrono_naive)
         .flatten();
 
-    let route_selector = scraper::Selector::parse(".alertsDetail__line-station")?;
+    let route_selector = scraper::Selector::parse(".alertsDetail__line-station").unwrap();
     let route_ids = document
         .select(&route_selector)
         .map(|x| x.text().collect::<String>())
@@ -197,7 +197,7 @@ pub async fn fetch_alerts_from_root_metrolink(
 
     // look for those big orange banners on the main page
     //document.querySelectorAll(".alert")
-    let selector = scraper::Selector::parse(".alert")?;
+    let selector = scraper::Selector::parse(".alert").unwrap();
 
     let alerts = document.select(&selector);
 
