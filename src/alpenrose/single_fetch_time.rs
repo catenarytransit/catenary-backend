@@ -6,6 +6,7 @@ use catenary::get_node_for_realtime_feed_id;
 use dashmap::DashMap;
 use futures::StreamExt;
 use lazy_static::lazy_static;
+use rand::prelude::*;
 use rand::seq::SliceRandom;
 use reqwest::Response;
 use scc::HashMap as SccHashMap;
@@ -14,7 +15,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use rand::prelude::*;
 
 use crate::custom_rt_feeds;
 
