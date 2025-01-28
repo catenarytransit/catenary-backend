@@ -175,7 +175,7 @@ mod tests {
         println!("starts with");
         gtfs.print_stats();
 
-        let gtfs = include_only_route_types(gtfs, vec![gtfs_structures::RouteType::Subway]);
+        let gtfs = include_only_route_types(gtfs, vec![gtfs_structures::RouteType::Subway], true);
 
         println!("ends with");
         gtfs.print_stats();
