@@ -14,7 +14,7 @@ pub async fn fetch_data(
     if let Some(assigned_chateau_data) = fetch_assigned_node_meta {
         let worker_id = assigned_chateau_data.worker_id;
 
-        let metrolink_extra_gtfs_rt_data = catenary::custom_alerts::metrolink_alerts::gtfs_rt_alerts_from_metrolink_website().await;
+        let metrolink_extra_gtfs_rt_data = catenary::custom_alerts::metrolink_alerts::gtfs_rt_alerts_from_metrolink_website(client).await;
 
         if let Ok(metrolink_extra_gtfs_rt_data) = metrolink_extra_gtfs_rt_data {
             //extract the binary data

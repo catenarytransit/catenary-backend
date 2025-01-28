@@ -100,8 +100,9 @@ fn date_string_to_chrono_naive(date_string: &str) -> Option<chrono::NaiveDate> {
 
 pub async fn fetch_alert_page_data(
     url: &str,
+    client: &reqwest::Client,
 ) -> Result<RawAlertDetailsPage, Box<dyn Error + Send + Sync>> {
-    let raw_html = reqwest::get(url).await?.text().await?;
+    let raw_html = client.get(url).send().await?.text().await?;
 
     let document = Html::parse_document(&raw_html);
 
@@ -183,12 +184,14 @@ pub async fn fetch_alert_page_data(
 }
 
 pub async fn fetch_alerts_from_root_metrolink(
+    client: &reqwest::Client,
 ) -> Result<Vec<RawAlertDetailsPage>, Box<dyn Error + Send + Sync>> {
     //query the root page for text
 
     //https://metrolinktrains.com/
 
-    let main_page = reqwest::get("https://metrolinktrains.com/")
+    let main_page = client.get("https://metrolinktrains.com/")
+        .send()
         .await?
         .text()
         .await?;
@@ -220,7 +223,7 @@ pub async fn fetch_alerts_from_root_metrolink(
     let mut alert_details = vec![];
 
     for href in hrefs {
-        let alert = fetch_alert_page_data(&href).await?;
+        let alert = fetch_alert_page_data(&href, client).await?;
         alert_details.push(alert);
     }
 
@@ -283,10 +286,11 @@ pub fn make_en_translated_string(text: String) -> gtfs_realtime::TranslatedStrin
 }
 
 pub async fn gtfs_rt_alerts_from_metrolink_website(
+    client: &reqwest::Client,
 ) -> Result<Vec<gtfs_realtime::FeedEntity>, Box<dyn Error + Send + Sync>> {
     let mut entities = vec![];
 
-    let raw_from_homepage = fetch_alerts_from_root_metrolink().await?;
+    let raw_from_homepage = fetch_alerts_from_root_metrolink(client).await?;
 
     //conversion to gtfs rt
     for raw_homepage_alert in raw_from_homepage {
@@ -350,7 +354,7 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
         });
     }
 
-    let body_of_alerts = reqwest::get(METROLINK_ALERTS_URL).await?.text().await?;
+    let body_of_alerts = client.get(METROLINK_ALERTS_URL).send().await?.text().await?;
 
     //individual advisories
 
