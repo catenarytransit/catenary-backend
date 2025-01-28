@@ -703,56 +703,6 @@ pub async fn new_rt_data(
                         alerts.insert(alert_id.clone(), alert);
                     }
                 }
-
-                //TODO: clean up duplicated code
-
-                if realtime_feed_id == "f-metrolinktrains~rt" {
-                    let metrolink_alerts = catenary::custom_alerts::metrolink_alerts::gtfs_rt_alerts_from_metrolink_website().await;
-
-                    if let Ok(metrolink_alerts) = metrolink_alerts {
-                        println!(
-                            "Got {} supplemental Metrolink alerts",
-                            metrolink_alerts.len()
-                        );
-
-                        for metrolink_alert_entity in metrolink_alerts {
-                            let alert_id = metrolink_alert_entity.id.clone();
-
-                            if let Some(alert) = metrolink_alert_entity.alert {
-                                let alert: AspenisedAlert = alert.into();
-
-                                for informed_entity in alert.informed_entity.iter() {
-                                    if let Some(route_id) = &informed_entity.route_id {
-                                        impacted_route_id_to_alert_ids
-                                            .entry(route_id.clone())
-                                            .and_modify(|x| x.push(alert_id.clone()))
-                                            .or_insert(vec![alert_id.clone()]);
-                                    }
-
-                                    if let Some(trip) = &informed_entity.trip {
-                                        if let Some(trip_id) = &trip.trip_id {
-                                            impact_trip_id_to_alert_ids
-                                                .entry(trip_id.clone())
-                                                .and_modify(|x| x.push(alert_id.clone()))
-                                                .or_insert(vec![alert_id.clone()]);
-                                        }
-
-                                        if let Some(route_id) = &trip.route_id {
-                                            impacted_route_id_to_alert_ids
-                                                .entry(route_id.clone())
-                                                .and_modify(|x| x.push(alert_id.clone()))
-                                                .or_insert(vec![alert_id.clone()]);
-                                        }
-                                    }
-                                }
-
-                                alerts.insert(alert_id.clone(), alert);
-                            }
-                        }
-                    } else {
-                        eprintln!("Metrolink alerts failed");
-                    }
-                }
             }
         }
 
