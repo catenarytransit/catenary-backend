@@ -6,6 +6,7 @@ use catenary::get_node_for_realtime_feed_id;
 use dashmap::DashMap;
 use futures::StreamExt;
 use lazy_static::lazy_static;
+use rand::prelude::*;
 use rand::seq::SliceRandom;
 use reqwest::Response;
 use scc::HashMap as SccHashMap;
@@ -27,6 +28,7 @@ lazy_static! {
         "f-viarail~rt",
         "f-tlms~rt",
         "f-uc~irvine~anteater~express~rt",
+        "f-metrolinktrains~extra~rt"
     ]);
 }
 
@@ -277,6 +279,7 @@ pub async fn single_fetch_time(
                         )
                         .await;
                     }
+                    "f-metrolinktrains~extra~rt" => custom_rt_feeds::metrolink_extra::fetch_data(&mut etcd, feed_id, &client).await,
                     "f-bus~dft~gov~uk~rt" => {
                         custom_rt_feeds::uk::fetch_dft_bus_data(&mut etcd, feed_id, &client).await;
                     }
@@ -362,7 +365,7 @@ pub fn make_reqwest_for_url(
             if let Some(passwords) = &assignment.passwords {
                 //choose random account to use
                 if !passwords.is_empty() {
-                    let password_info = passwords.choose(&mut rand::thread_rng());
+                    let password_info = passwords.choose(&mut rand::rng());
 
                     if let Some(password_info) = password_info {
                         if password_info.password.len() == assignment.key_formats.len() {

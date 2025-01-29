@@ -15,7 +15,7 @@ non_ascii_idents = "deny"
 
 [dependencies]
 ahash = { version = "0.8.11", features = ["serde"] }
-crossbeam-utils = "0.8.20"
+crossbeam-utils = "0.8.21"
 memoffset = "0.9.1"
 time = "0.3.37"
 rouille = "3.0"
@@ -23,11 +23,11 @@ reqwest = {version = "0.12", features = ["gzip","brotli","rustls-tls","deflate",
 protobuf = "3.7.1"
 csv = "1.3"
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.42", features = ["full", "tracing"] }
+tokio = { version = "1.43", features = ["full", "tracing"] }
 futures = "0.3"
 gtfs-structures = "0.42.0"
 geofabrik-handler = {git = "https://github.com/catenarytransit/geofabrik-catenary-handler/"}
-tungstenite = "0.24.0"
+tungstenite = "0.26.0"
 postgres = "0.19.7"
 postgis = "0.9.0"
 arguments = "0.8.0"
@@ -40,18 +40,18 @@ serde_json = "1.0.107"
 actix-web = "4.4.0"
 regress = "0.10"
 color-eyre = {version = "0.6.2", features = ["url", "issue-url"]}
-itertools = "0.13.0"
+itertools = "0.14.0"
 fs_extra = "1.3.0"
 r2d2 = "0.8.10"
-bb8 = "0.8.1"
+bb8 = "0.8.5"
 threadpool = "1.8.1"
 tokio-threadpool = "0.1.18"
 qstring = "0.7.2"
-rand = "0.8.5"
+rand = "0.9.0"
 titlecase = "3.2"
 rayon = "1.8.0"
 chrono = "0.4.31"
-geo-types = "0.7.14"
+geo-types = "0.7.15"
 geo-postgis = "0.2.2"
 geo = "0.29.3"
 tarpc = {version = "0.35.0", features = ["full"]}
@@ -103,7 +103,7 @@ serde_bytes = "0.11.14"
 bincode = "1.3.3"
 evmap = "10.0.2"
 dashmap = "6.0"
-ipnetwork = "0.20.0"
+ipnetwork = "0.21.0"
 pnet = "0.35.0"
 crossbeam = "0.8.4"
 leapfrog = { version = "0.3.0", features = ["stable_alloc"] }
@@ -116,7 +116,7 @@ clap = "4.5.20"
 rgb = "0.8.37"
 zotgtfs = "0.3.7"
 amtrak-gtfs-rt = "0.4.1"
-chrono-tz = { version = "0.10.0", features = ["case-insensitive", "serde"] }
+chrono-tz = { version = "0.10.1", features = ["case-insensitive", "serde"] }
 ping = "0.5.2"
 online = { version = "4.0.2", features = ["tokio-runtime"] }
 chicago-gtfs-rt = "0.2.2"
@@ -127,7 +127,7 @@ tar = "0.4.41"
 bytes = "1.9.0"
 polyline = "0.11.0"
 simple-server-timing-header = "0.1.1"
-osmpbfreader = "0.16.1"
+osmpbfreader = "0.17.0"
 mime = "0.3.17"
 gtfs-realtime = "0.1.3"
 via-rail-gtfsrt = "0.1.2"
@@ -141,6 +141,8 @@ slippy-map-tiles = "0.16.0"
 geo-buffer = "0.2.0"
 actix-cors = "0.7.0"
 finite = "0.0.1"
+scraper = { version = "0.22.0", features = ["atomic"] }
+html-escape = "0.2.13"
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"

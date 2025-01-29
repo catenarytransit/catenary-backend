@@ -54,6 +54,7 @@ pub mod postgres_tools;
 pub mod schema;
 pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataEtcd;
+pub mod custom_alerts;
 use ahash::AHasher;
 use chrono::Datelike;
 use chrono::NaiveDate;
@@ -153,36 +154,6 @@ pub fn gx_fast_hash<T: Hash>(t: &T) -> u64 {
 
 pub fn duration_since_unix_epoch() -> Duration {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap()
-}
-
-pub mod tailscale {
-    //stolen from tailscale-rs
-    //significantly adapted by Kyler Chin to use ipv6 addressing
-    extern crate ipnetwork;
-    extern crate pnet;
-
-    use pnet::datalink;
-    use std::net::IpAddr;
-
-    fn maybe_tailscale(s: &str) -> bool {
-        s.starts_with("tailscale")
-    }
-
-    /// Retrieve the IP address of the current machine's Tailscale interface, if any.
-    /// ```
-    /// let iface = catenary::tailscale::interface().expect( "no tailscale interface found");
-    /// ```
-    pub fn interface() -> Option<IpAddr> {
-        let ifaces = datalink::interfaces();
-        //let netmask: IpNetwork = "100.64.0.0/10".parse().unwrap();
-        ifaces
-            .iter()
-            .filter(|iface| maybe_tailscale(&iface.name))
-            .flat_map(|iface| iface.ips.clone())
-            .filter(|ipnet| ipnet.is_ipv6())
-            .map(|ipnet| ipnet.ip())
-            .next()
-    }
 }
 
 pub mod aspen_dataset {

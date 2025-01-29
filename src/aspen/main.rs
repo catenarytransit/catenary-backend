@@ -30,10 +30,7 @@ use catenary::{aspen::lib::*, id_cleanup};
 use clap::Parser;
 use compact_str::CompactString;
 use futures::{future, prelude::*};
-use rand::{
-    distributions::{Distribution, Uniform},
-    thread_rng,
-};
+use rand::prelude::*;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::{
@@ -71,6 +68,8 @@ mod aspen_assignment;
 use catenary::rt_recent_history::RtCacheEntry;
 use catenary::rt_recent_history::RtKey;
 use prost::Message;
+use rand::distr::Uniform;
+use rand::thread_rng;
 use std::time::Instant;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -108,8 +107,11 @@ pub struct AspenServer {
 
 impl AspenRpc for AspenServer {
     async fn hello(self, _: context::Context, name: String) -> String {
-        let sleep_time =
-            Duration::from_millis(Uniform::new_inclusive(1, 10).sample(&mut thread_rng()));
+        let sleep_time = Duration::from_millis(
+            Uniform::new_inclusive(1, 10)
+                .expect("NOT VALID RANGE")
+                .sample(&mut thread_rng()),
+        );
         time::sleep(sleep_time).await;
         format!("Hello, {name}! You are connected from {}", self.addr)
     }

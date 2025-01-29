@@ -23,6 +23,7 @@ use catenary::models::{
 };
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::route_id_transform;
+use catenary::schedule_filtering::include_only_route_types;
 use catenary::schedule_filtering::minimum_day_filter;
 use chrono::NaiveDate;
 use diesel::ExpressionMethods;
@@ -33,6 +34,7 @@ use gtfs_structures::Gtfs;
 use gtfs_translations::translation_csv_text_to_translations;
 use gtfs_translations::TranslationResult;
 use prost::Message;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
@@ -69,13 +71,58 @@ pub async fn gtfs_process_feed(
 
     let gtfs: Gtfs = match feed_id {
         "f-dpz8-ttc" => {
-            use catenary::schedule_filtering::include_only_route_types;
-
             let route_types = vec![gtfs_structures::RouteType::Subway];
 
-            let gtfs = include_only_route_types(gtfs, route_types);
+            let gtfs = include_only_route_types(gtfs, route_types, true);
 
             println!("Filtered TTC Subway");
+            gtfs.print_stats();
+            gtfs
+        }
+        "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
+            //there's 8184 school buses in the feed. I'm removing them lmfao.
+            let mut gtfs = gtfs;
+
+            let route_ids_to_keep = gtfs
+                .routes
+                .iter()
+                .filter_map(|(route_id, route)| match route.desc {
+                    Some(ref desc) => {
+                        if desc.contains("School") {
+                            None
+                        } else {
+                            Some(route_id)
+                        }
+                    }
+                    _ => Some(route_id),
+                })
+                .cloned()
+                .collect::<BTreeSet<_>>();
+
+            let trips_to_keep = gtfs
+                .trips
+                .iter()
+                .filter_map(|(trip_id, trip)| {
+                    route_ids_to_keep
+                        .contains(&trip.route_id)
+                        .then_some(trip_id)
+                })
+                .cloned()
+                .collect::<BTreeSet<_>>();
+
+            gtfs.trips = gtfs
+                .trips
+                .into_iter()
+                .filter(|(trip_id, _)| trips_to_keep.contains(trip_id))
+                .collect();
+
+            gtfs.routes = gtfs
+                .routes
+                .into_iter()
+                .filter(|(route_id, _)| route_ids_to_keep.contains(route_id))
+                .collect();
+
+            println!("Filtered NSW, removed school buses");
             gtfs.print_stats();
             gtfs
         }

@@ -17,7 +17,6 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct MetrolinkTrackData {
     #[serde(rename = "TrainDesignation")]
