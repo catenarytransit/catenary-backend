@@ -38,6 +38,7 @@ pub struct RouteInfoResponse {
     pub shapes_polyline: BTreeMap<String, String>,
     pub alert_ids_for_this_route: Vec<String>,
     pub alert_id_to_alert: BTreeMap<String, AspenisedAlert>,
+    pub stop_id_to_alert_ids: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -316,6 +317,7 @@ pub async fn route_info(
         .await;
 
     let mut alerts_for_route_send: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
+    let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut alert_ids = vec![];
 
     if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
@@ -347,6 +349,27 @@ pub async fn route_info(
                     for (alert_id, alert) in alerts_for_route {
                         alert_ids.push(alert_id.clone());
                         alerts_for_route_send.insert(alert_id.clone(), alert);
+                    }
+                }
+
+                let alerts_for_stops = aspen_client
+                    .get_alert_from_stop_ids(
+                        context::current(),
+                        query.chateau.clone(),
+                        list_of_stop_ids.iter().map(|x| x.to_string()).collect(),
+                    )
+                    .await;
+
+                if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
+                    for (alert_id, alert) in alerts_for_stops.alerts {
+                        alert_ids.push(alert_id.clone());
+                    }
+
+                    for (stop_id, alert_ids) in alerts_for_stops.stops_to_alert_ids {
+                        stop_id_to_alert_ids.insert(
+                            stop_id.clone(),
+                            alert_ids.iter().cloned().collect::<Vec<_>>(),
+                        );
                     }
                 }
             }
@@ -397,6 +420,7 @@ pub async fn route_info(
             .collect(),
         alert_ids_for_this_route: alert_ids,
         alert_id_to_alert: alerts_for_route_send,
+        stop_id_to_alert_ids,
     };
 
     HttpResponse::Ok().json(response)

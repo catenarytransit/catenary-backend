@@ -21,6 +21,7 @@ use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use geo::coord;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -638,7 +639,7 @@ pub async fn get_trip_init(
     ) = futures::join!(
         stops_pg_schema::dsl::stops
             .filter(stops_pg_schema::dsl::chateau.eq(&chateau))
-            .filter(stops_pg_schema::dsl::gtfs_id.eq_any(stop_ids_to_lookup))
+            .filter(stops_pg_schema::dsl::gtfs_id.eq_any(&stop_ids_to_lookup))
             .select(catenary::models::Stop::as_select())
             .load(conn),
         async {
@@ -720,7 +721,7 @@ pub async fn get_trip_init(
     let mut alert_ids_for_this_route: Vec<String> = vec![];
     let mut alert_ids_for_this_trip: Vec<String> = vec![];
 
-    let stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     //map start date to a YYYY, MM, DD format
     let start_naive_date = if let Some(start_date) = query.start_date {
@@ -1048,6 +1049,32 @@ pub async fn get_trip_init(
                             alert_id_to_alert.insert(alert_id.clone(), alert.clone());
                             alert_ids_for_this_trip.push(alert_id.clone());
                         }
+                    }
+                }
+
+                // GET ALERTS FOR STOPS
+
+                let alerts_for_stops = aspen_client
+                    .get_alert_from_stop_ids(
+                        context::current(),
+                        chateau.clone(),
+                        stop_ids_to_lookup
+                            .iter()
+                            .map(|x| x.to_string())
+                            .collect_vec(),
+                    )
+                    .await;
+
+                if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
+                    for (alert_id, alerts) in alerts_for_stops.alerts {
+                        alert_id_to_alert.insert(alert_id.clone(), alerts.clone());
+                    }
+
+                    for (stop_id, alert_ids) in alerts_for_stops.stops_to_alert_ids {
+                        stop_id_to_alert_ids.insert(
+                            stop_id.clone(),
+                            alert_ids.iter().cloned().collect::<Vec<_>>(),
+                        );
                     }
                 }
             } else {
