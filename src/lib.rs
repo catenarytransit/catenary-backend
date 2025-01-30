@@ -214,13 +214,13 @@ pub mod aspen_dataset {
         pub compressed_trip_internal_cache: CompressedTripInternalCache,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
     pub struct AspenTimeRange {
         pub start: Option<u64>,
         pub end: Option<u64>,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
     pub struct AspenEntitySelector {
         pub agency_id: Option<String>,
         pub route_id: Option<String>,
@@ -230,23 +230,23 @@ pub mod aspen_dataset {
         pub direction_id: Option<u32>,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
     pub struct AspenTranslatedString {
         pub translation: Vec<AspenTranslation>,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
     pub struct AspenTranslation {
         pub text: String,
         pub language: Option<String>,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
     pub struct AspenTranslatedImage {
         pub localised_image: Vec<AspenLocalisedImage>,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
     pub struct AspenLocalisedImage {
         pub url: String,
         pub media_type: String,
@@ -343,7 +343,7 @@ pub mod aspen_dataset {
         }
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
     pub struct AspenisedAlert {
         pub active_period: Vec<AspenTimeRange>,
         pub informed_entity: Vec<AspenEntitySelector>,
@@ -380,7 +380,7 @@ pub mod aspen_dataset {
         pub shape_id: Option<String>,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
     pub struct AspenRawTripInfo {
         pub trip_id: Option<String>,
         pub route_id: Option<String>,
@@ -391,7 +391,7 @@ pub mod aspen_dataset {
         pub modified_trip: Option<ModifiedTripSelector>,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
     pub struct ModifiedTripSelector {
         pub modifications_id: Option<String>,
         pub affected_trip_id: Option<String>,

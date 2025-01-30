@@ -190,7 +190,8 @@ pub async fn fetch_alerts_from_root_metrolink(
 
     //https://metrolinktrains.com/
 
-    let main_page = client.get("https://metrolinktrains.com/")
+    let main_page = client
+        .get("https://metrolinktrains.com/")
         .send()
         .await?
         .text()
@@ -354,7 +355,12 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
         });
     }
 
-    let body_of_alerts = client.get(METROLINK_ALERTS_URL).send().await?.text().await?;
+    let body_of_alerts = client
+        .get(METROLINK_ALERTS_URL)
+        .send()
+        .await?
+        .text()
+        .await?;
 
     //individual advisories
 

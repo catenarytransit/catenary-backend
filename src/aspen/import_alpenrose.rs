@@ -673,7 +673,16 @@ pub async fn new_rt_data(
                     if let Some(alert) = &alert_entity.alert {
                         let alert_id = alert_entity.id.clone();
 
-                        let alert: AspenisedAlert = alert.clone().into();
+                        let mut alert: AspenisedAlert = alert.clone().into();
+
+                        //if the alert yaps the same thing twice, delete the description
+                        if alert.header_text.is_some() {
+                            if alert.header_text == alert.description_text {
+                                alert.description_text = None;
+                            }
+                        }
+
+                        let alert = alert;
 
                         for informed_entity in alert.informed_entity.iter() {
                             if let Some(route_id) = &informed_entity.route_id {

@@ -4,28 +4,29 @@ use gtfs_realtime::FeedHeader;
 use gtfs_realtime::FeedMessage;
 use prost::Message;
 
-pub async fn fetch_data(
-    etcd: &mut etcd_client::Client,
-    feed_id: &str,
-    client: &reqwest::Client,
-) {
+pub async fn fetch_data(etcd: &mut etcd_client::Client, feed_id: &str, client: &reqwest::Client) {
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
 
     if let Some(assigned_chateau_data) = fetch_assigned_node_meta {
         let worker_id = assigned_chateau_data.worker_id;
 
-        let metrolink_extra_gtfs_rt_data = catenary::custom_alerts::metrolink_alerts::gtfs_rt_alerts_from_metrolink_website(client).await;
+        let metrolink_extra_gtfs_rt_data =
+            catenary::custom_alerts::metrolink_alerts::gtfs_rt_alerts_from_metrolink_website(
+                client,
+            )
+            .await;
 
         if let Ok(metrolink_extra_gtfs_rt_data) = metrolink_extra_gtfs_rt_data {
             //extract the binary data
             let alerts_msg = FeedMessage {
                 header: FeedHeader {
                     gtfs_realtime_version: String::from("2.0"),
-                    incrementality: Some(gtfs_realtime::feed_header::Incrementality::FullDataset.into()),
+                    incrementality: Some(
+                        gtfs_realtime::feed_header::Incrementality::FullDataset.into(),
+                    ),
                     timestamp: Some(duration_since_unix_epoch().as_secs() as u64),
-                    
                 },
-                entity: metrolink_extra_gtfs_rt_data
+                entity: metrolink_extra_gtfs_rt_data,
             };
 
             let alerts_proto = alerts_msg.encode_to_vec();
@@ -40,7 +41,8 @@ pub async fn fetch_data(
                     tarpc::context::current(),
                     assigned_chateau_data.chateau_id.clone(),
                     String::from(feed_id),
-                    None, None,
+                    None,
+                    None,
                     Some(alerts_proto),
                     false,
                     false,
@@ -54,7 +56,10 @@ pub async fn fetch_data(
 
             match tarpc_send_to_aspen {
                 Ok(_) => {
-                    println!("Successfully sent Metrolink Alerts Extra feed data sent to {}", feed_id);
+                    println!(
+                        "Successfully sent Metrolink Alerts Extra feed data sent to {}",
+                        feed_id
+                    );
                 }
                 Err(e) => {
                     eprintln!(

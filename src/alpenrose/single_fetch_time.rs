@@ -279,7 +279,10 @@ pub async fn single_fetch_time(
                         )
                         .await;
                     }
-                    "f-metrolinktrains~extra~rt" => custom_rt_feeds::metrolink_extra::fetch_data(&mut etcd, feed_id, &client).await,
+                    "f-metrolinktrains~extra~rt" => {
+                        custom_rt_feeds::metrolink_extra::fetch_data(&mut etcd, feed_id, &client)
+                            .await
+                    }
                     "f-bus~dft~gov~uk~rt" => {
                         custom_rt_feeds::uk::fetch_dft_bus_data(&mut etcd, feed_id, &client).await;
                     }
