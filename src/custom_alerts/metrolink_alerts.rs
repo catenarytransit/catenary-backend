@@ -1,5 +1,6 @@
 use chrono::{TimeZone, Utc};
 use chrono_tz::US::Pacific;
+use gtfs_realtime::FeedEntity;
 use itertools::Itertools;
 use scraper::Html;
 use serde::Deserialize;
@@ -18,8 +19,10 @@ pub const GREETING: &str = "Good morning! We'll be posting your train status upd
 #[serde(rename_all = "camelCase")]
 pub struct RawMetrolinkEachRoute {
     #[serde(rename = "Line")]
+    //Looks like Antelope Valley Line
     pub line: String,
     #[serde(rename = "LineAbbreviation")]
+    //Looks like AV
     pub line_abbreviation: String,
     #[serde(rename = "ServiceAdvisories")]
     pub service_advisories: Vec<ServiceAdvisory>,
@@ -33,6 +36,7 @@ pub struct ServiceAdvisory {
     #[serde(rename = "Message")]
     pub message: String,
     #[serde(rename = "Line")]
+    //looks like "VC"
     pub line: String,
     #[serde(rename = "Platform")]
     pub platform: String,
@@ -383,6 +387,51 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
         })
         .collect_vec();
 
+    let gtfs_rt_entities_from_advisories_page = raw_data
+        .into_iter()
+        .map(|each_route| {
+            let route_id = website_name_to_route_id(&each_route.line).map(|x| x.to_string());
+
+            if let Some(route_id) = route_id {
+                Some(
+                    each_route
+                        .service_advisories
+                        .into_iter()
+                        .map(move |service_advisory| FeedEntity {
+                            id: format!("alert-{}", service_advisory.id),
+                            is_deleted: None,
+                            alert: Some(gtfs_realtime::Alert {
+                                cause: Some(1),
+                                effect: Some(7),
+                                url: None,
+                                header_text: Some(make_en_translated_string(format!(
+                                    "{}: {}",
+                                    service_advisory.timestamp, service_advisory.message
+                                ))),
+                                description_text: None,
+                                active_period: vec![gtfs_realtime::TimeRange {
+                                    start: None,
+                                    end: None,
+                                }],
+                                informed_entity: vec![gtfs_realtime::EntitySelector {
+                                    route_id: Some((&route_id).to_string()),
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                )
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .flatten()
+        .collect::<Vec<gtfs_realtime::FeedEntity>>();
+
+    entities.extend(gtfs_rt_entities_from_advisories_page);
+
     //println!("{:#?}", raw_data);
 
     Ok(entities)
@@ -401,7 +450,9 @@ mod tests {
     async fn metrolink_alerts_fetch() {
         //fetch json from url
 
-        let test = gtfs_rt_alerts_from_metrolink_website().await;
+        let reqwest_client = reqwest::Client::new();
+
+        let test = gtfs_rt_alerts_from_metrolink_website(&reqwest_client).await;
 
         assert!(test.is_ok());
 
