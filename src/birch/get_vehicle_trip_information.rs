@@ -23,7 +23,7 @@ use diesel_async::RunQueryDsl;
 use geo::coord;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tarpc::context;
 
@@ -1066,14 +1066,44 @@ pub async fn get_trip_init(
                     .await;
 
                 if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
+                    let relevant_alert_ids = alerts_for_stops
+                        .alerts
+                        .iter()
+                        .filter(|(alert_id, alert)| {
+                            alert.informed_entity.iter().any(|entity| {
+                                let route_id_covered = match &entity.route_id {
+                                    None => true,
+                                    Some(route_id) => route_id == &route.route_id,
+                                };
+
+                                let trip_covered = match &entity.trip {
+                                    None => true,
+                                    Some(trip) => match &trip.trip_id {
+                                        None => true,
+                                        Some(entity_trip_id) => entity_trip_id == &query.trip_id,
+                                    },
+                                };
+
+                                route_id_covered && trip_covered
+                            })
+                        })
+                        .map(|(alert_id, _)| alert_id.clone())
+                        .collect::<BTreeSet<_>>();
+
                     for (alert_id, alerts) in alerts_for_stops.alerts {
-                        alert_id_to_alert.insert(alert_id.clone(), alerts.clone());
+                        if relevant_alert_ids.contains(&alert_id) {
+                            alert_id_to_alert.insert(alert_id.clone(), alerts.clone());
+                        }
                     }
 
                     for (stop_id, alert_ids) in alerts_for_stops.stops_to_alert_ids {
                         stop_id_to_alert_ids.insert(
                             stop_id.clone(),
-                            alert_ids.iter().cloned().collect::<Vec<_>>(),
+                            alert_ids
+                                .iter()
+                                .filter(|alert_id| relevant_alert_ids.contains(alert_id.as_str()))
+                                .cloned()
+                                .collect::<Vec<_>>(),
                         );
                     }
                 }
