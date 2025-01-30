@@ -161,6 +161,7 @@ pub mod aspen_dataset {
     use crate::RtKey;
     use ahash::AHashMap;
     use compact_str::CompactString;
+    use gtfs_realtime::FeedEntity;
     use std::hash::Hash;
 
     #[derive(Clone, Serialize, Deserialize)]
@@ -552,6 +553,48 @@ pub mod aspen_dataset {
                 start_time: trip_properties.start_time,
                 shape_id: trip_properties.shape_id,
             }
+        }
+    }
+
+    pub trait ReplaceVehicleLabelWithVehicleId {
+        fn replace_vehicle_label_with_vehicle_id(self) -> Self;
+    }
+
+    impl ReplaceVehicleLabelWithVehicleId for AspenisedVehicleDescriptor {
+        fn replace_vehicle_label_with_vehicle_id(self) -> Self {
+            let mut input = self;
+
+            input.label = input.id.clone();
+
+            input
+        }
+    }
+
+    impl ReplaceVehicleLabelWithVehicleId for AspenisedVehiclePosition {
+        fn replace_vehicle_label_with_vehicle_id(self) -> Self {
+            let mut input = self;
+
+            if let Some(vehicle) = input.vehicle {
+                input.vehicle = Some(
+                    AspenisedVehicleDescriptor::replace_vehicle_label_with_vehicle_id(vehicle),
+                );
+            }
+
+            input
+        }
+    }
+
+    impl ReplaceVehicleLabelWithVehicleId for AspenisedTripUpdate {
+        fn replace_vehicle_label_with_vehicle_id(self) -> Self {
+            let mut input = self;
+
+            if let Some(vehicle) = input.vehicle {
+                input.vehicle = Some(
+                    AspenisedVehicleDescriptor::replace_vehicle_label_with_vehicle_id(vehicle),
+                );
+            }
+
+            input
         }
     }
 }
