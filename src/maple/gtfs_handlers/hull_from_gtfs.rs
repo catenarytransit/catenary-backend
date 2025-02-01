@@ -2,6 +2,8 @@ use actix_web::Route;
 use catenary::is_null_island;
 use geo::algorithm::concave_hull::ConcaveHull;
 use geo::algorithm::convex_hull::ConvexHull;
+use geo::coord;
+use geo::prelude::*;
 use geo::BooleanOps;
 use geo::Centroid;
 use geo::Distance;
@@ -11,32 +13,30 @@ use geo::RhumbDestination;
 use geo::{convex_hull, Coord, MultiPoint, Point, Polygon};
 use geo_buffer::buffer_polygon;
 use gtfs_structures::RouteType;
-use geo::prelude::*;
-use geo::coord;
 use lazy_static::lazy_static;
 
 lazy_static! {
-    static ref BANNED_OCEAN_GEO:geo::MultiPolygon<f64> = geo::MultiPolygon::new(vec![geo::Polygon::new(
-        geo::LineString::new(vec![
-            coord! { x: 5.2, y: 3.6 },
-            coord! { x: -13.84, y: 3.62 },
-            coord! { x: -13.84, y: -15.28 },
-            coord! { x: 5.2, y: -15.28 },
-            coord! { x: 5.2, y: 3.6 },
-        ]),
-        
-        vec![],
-    ),
-    geo::Polygon::new(
-        geo::LineString::new(vec![
-            coord! { x: 51.8397440696757, y: 11.036088030014866 },
-            coord! { x: 51.8397440696757, y: -3.1282014955991713 },
-            coord! { x: 71.36372595923046, y: -3.1282014955991713 },
-            coord! { x: 71.36372595923046, y: 11.036088030014866 },
-            coord! { x: 51.8397440696757, y: 11.036088030014866 },
-        ]),
-        vec![],
-    ),
+    static ref BANNED_OCEAN_GEO: geo::MultiPolygon<f64> = geo::MultiPolygon::new(vec![
+        geo::Polygon::new(
+            geo::LineString::new(vec![
+                coord! { x: 5.2, y: 3.6 },
+                coord! { x: -13.84, y: 3.62 },
+                coord! { x: -13.84, y: -15.28 },
+                coord! { x: 5.2, y: -15.28 },
+                coord! { x: 5.2, y: 3.6 },
+            ]),
+            vec![],
+        ),
+        geo::Polygon::new(
+            geo::LineString::new(vec![
+                coord! { x: 51.8397440696757, y: 11.036088030014866 },
+                coord! { x: 51.8397440696757, y: -3.1282014955991713 },
+                coord! { x: 71.36372595923046, y: -3.1282014955991713 },
+                coord! { x: 71.36372595923046, y: 11.036088030014866 },
+                coord! { x: 51.8397440696757, y: 11.036088030014866 },
+            ]),
+            vec![],
+        ),
     ]);
 }
 

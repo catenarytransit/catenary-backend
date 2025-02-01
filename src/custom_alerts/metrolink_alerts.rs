@@ -379,7 +379,9 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
             let service_advisories = each_line_alerts
                 .service_advisories
                 .into_iter()
-                .filter(|x| x.message.as_str() != GREETING && x.message.as_str() != GREETING_WEEKEND)
+                .filter(|x| {
+                    x.message.as_str() != GREETING && x.message.as_str() != GREETING_WEEKEND
+                })
                 .collect_vec();
 
             each_line_alerts.service_advisories = service_advisories;
