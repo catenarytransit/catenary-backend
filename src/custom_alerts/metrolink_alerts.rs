@@ -14,6 +14,7 @@ pub type RawMetrolinkAlerts = Vec<RawMetrolinkEachRoute>;
 pub const METROLINK_ALERTS_URL: &str = "https://metrolinktrains.com/advisories/getadvisories?lines=AV&lines=IEOC&lines=OC&lines=RIV&lines=SB&lines=VC&lines=91/PV";
 
 pub const GREETING: &str = "Good morning! We'll be posting your train status updates from 4:00 a.m. to 12:30 a.m. Be safe and have a great day!";
+pub const GREETING_WEEKEND: &str = "Good morning! We'll be posting your train status updates from 6:00 a.m. to 11:00 p.m. Be safe and have a great day!";
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -378,7 +379,7 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
             let service_advisories = each_line_alerts
                 .service_advisories
                 .into_iter()
-                .filter(|x| x.message.as_str() != GREETING)
+                .filter(|x| x.message.as_str() != GREETING && x.message.as_str() != GREETING_WEEKEND)
                 .collect_vec();
 
             each_line_alerts.service_advisories = service_advisories;
