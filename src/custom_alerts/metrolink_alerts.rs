@@ -2,6 +2,7 @@ use chrono::{TimeZone, Utc};
 use chrono_tz::US::Pacific;
 use gtfs_realtime::FeedEntity;
 use itertools::Itertools;
+use futures::stream::{self, StreamExt};
 use scraper::Html;
 use serde::Deserialize;
 use serde::Serialize;
@@ -403,30 +404,42 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
         })
         .collect_vec();
 
-    let attempt_to_fetch_more_full_alerts = raw_data
+    let attempt_to_fetch_more_full_alerts = stream::iter(raw_data
         .iter()
-        .map(|each_route| each_route.service_advisories.map(|x| x.id))
+        .map(|each_route| each_route.service_advisories.iter().map(|x| x.id.to_owned()))
         .flatten()
         //list of alert ids
         // only ids over the number 1000000 have reported been containing text
-        .filter(|id_num| id_num > 1000000)
+        .filter(|id_num| *id_num > 1000000)
         .filter(|id_num| !finished_id_list.contains(&id_num.to_string()))
         .map(|id_num| format!("{}{}", ALERT_URL_PREFIX, id_num))
-        .map(|url| fetch_alert_page_data(url.as_str(), client))
+        .map(|url| {
+            let url = url.to_owned();
+            async move {
+                fetch_alert_page_data(&url, &client).await
+            }
+        })
+        )
+        .buffer_unordered(10)
+        .collect::<Vec<Result<RawAlertDetailsPage, Box<dyn Error + Send + Sync>>>>()
+        .await
+        .into_iter()
         .filter_map(|x| x.ok())
         .collect::<Vec<RawAlertDetailsPage>>();
+
+     
+        finished_id_list.extend(
+            attempt_to_fetch_more_full_alerts
+                .iter()
+                .map(|x| x.id.clone()),
+        );
 
     let gtfs_rt_entities_from_advisories_page_full_text = attempt_to_fetch_more_full_alerts
         .into_iter()
         .map(page_to_gtfs_rt_alerts)
         .collect::<Vec<gtfs_realtime::FeedEntity>>();
-
+       
     entities.extend(gtfs_rt_entities_from_advisories_page_full_text);
-    finished_id_list.extend(
-        attempt_to_fetch_more_full_alerts
-            .iter()
-            .map(|x| x.id.clone()),
-    );
 
     let gtfs_rt_entities_from_advisories_page = raw_data
         .into_iter()
