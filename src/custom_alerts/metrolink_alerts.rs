@@ -149,7 +149,7 @@ pub async fn fetch_alert_page_data(
         )
         .replace(REMOVE_DELUSION, "")
         .replace(REMOVE_YAP, "")
-        .replace("METROLINK ALERTS DETAIL\n", "")
+        .replace("METROLINK ALERTS DETAIL", "")
         .trim()
         .to_string();
 
