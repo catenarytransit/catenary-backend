@@ -145,7 +145,9 @@ pub async fn fetch_alert_page_data(
         .replace(
             " For real-time updates, follow us on Facebook and Twitter (X).",
             "",
-        ).replace(REMOVE_DELUSION, "").replace(REMOVE_YAP, "");
+        )
+        .replace(REMOVE_DELUSION, "")
+        .replace(REMOVE_YAP, "");
 
     let start_date_selector = scraper::Selector::parse(".alertsDetail__date--start").unwrap();
     //pick first optionally
@@ -183,12 +185,7 @@ pub async fn fetch_alert_page_data(
         start_date,
         end_date,
         route_ids,
-        id: url
-            .replace(
-                ALERT_URL_PREFIX,
-                "",
-            )
-            .to_string(),
+        id: url.replace(ALERT_URL_PREFIX, "").to_string(),
         url: url.to_string(),
     })
 }
@@ -406,17 +403,18 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
         })
         .collect_vec();
 
-    let attempt_to_fetch_more_full_alerts = raw_data.iter().map(|each_route| each_route.service_advisories.map(|x| x.id)).flatten()
-    //list of alert ids
-    // only ids over the number 1000000 have reported been containing text
-    .filter(|id_num| id_num > 1000000)
-    .filter(|id_num| !finished_id_list.contains(&id_num.to_string()))
-    .map(|id_num| {
-        format!("{}{}", ALERT_URL_PREFIX, id_num)
-    })
-    .map(|url| fetch_alert_page_data(url.as_str(), client))
-    .filter_map(|x| x.ok())
-    .collect::<Vec<RawAlertDetailsPage>>();
+    let attempt_to_fetch_more_full_alerts = raw_data
+        .iter()
+        .map(|each_route| each_route.service_advisories.map(|x| x.id))
+        .flatten()
+        //list of alert ids
+        // only ids over the number 1000000 have reported been containing text
+        .filter(|id_num| id_num > 1000000)
+        .filter(|id_num| !finished_id_list.contains(&id_num.to_string()))
+        .map(|id_num| format!("{}{}", ALERT_URL_PREFIX, id_num))
+        .map(|url| fetch_alert_page_data(url.as_str(), client))
+        .filter_map(|x| x.ok())
+        .collect::<Vec<RawAlertDetailsPage>>();
 
     let gtfs_rt_entities_from_advisories_page_full_text = attempt_to_fetch_more_full_alerts
         .into_iter()
@@ -424,7 +422,11 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
         .collect::<Vec<gtfs_realtime::FeedEntity>>();
 
     entities.extend(gtfs_rt_entities_from_advisories_page_full_text);
-    finished_id_list.extend(attempt_to_fetch_more_full_alerts.iter().map(|x| x.id.clone()));
+    finished_id_list.extend(
+        attempt_to_fetch_more_full_alerts
+            .iter()
+            .map(|x| x.id.clone()),
+    );
 
     let gtfs_rt_entities_from_advisories_page = raw_data
         .into_iter()
@@ -436,7 +438,9 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
                     each_route
                         .service_advisories
                         .into_iter()
-                        .filter(|service_advisory| !finished_id_list.contains(&service_advisory.id.to_string()))
+                        .filter(|service_advisory| {
+                            !finished_id_list.contains(&service_advisory.id.to_string())
+                        })
                         .map(move |service_advisory| FeedEntity {
                             id: format!("alert-{}", service_advisory.id),
                             is_deleted: None,
