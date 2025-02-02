@@ -148,7 +148,10 @@ pub async fn fetch_alert_page_data(
             "",
         )
         .replace(REMOVE_DELUSION, "")
-        .replace(REMOVE_YAP, "");
+        .replace(REMOVE_YAP, "")
+        .replace("METROLINK ALERTS DETAIL\n", "")
+        .trim()
+        .to_string();
 
     let start_date_selector = scraper::Selector::parse(".alertsDetail__date--start").unwrap();
     //pick first optionally
