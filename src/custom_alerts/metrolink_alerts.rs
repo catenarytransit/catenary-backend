@@ -104,9 +104,7 @@ fn date_string_to_chrono_naive(date_string: &str) -> Option<chrono::NaiveDate> {
 
     //parse the date string
 
-    let date = chrono::NaiveDate::parse_from_str(&date_string, "%m/%d/%Y").ok();
-
-    date
+    chrono::NaiveDate::parse_from_str(&date_string, "%m/%d/%Y").ok()
 }
 
 pub async fn fetch_alert_page_data(
