@@ -19,6 +19,7 @@ pub async fn fetch_amtrak_data(
             //extract the binary data
             let vehicle_data = amtrak_gtfs_rt.vehicle_positions.encode_to_vec();
             let trip_data = amtrak_gtfs_rt.trip_updates.encode_to_vec();
+            let alert_data = amtrak_gtfs_rt.alerts.encode_to_vec();
 
             let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
                 .await
@@ -31,13 +32,13 @@ pub async fn fetch_amtrak_data(
                     String::from(feed_id),
                     Some(vehicle_data),
                     Some(trip_data),
-                    None,
+                    Some(alert_data),
                     true,
                     true,
                     false,
                     Some(200),
                     Some(200),
-                    None,
+                    Some(200),
                     duration_since_unix_epoch().as_millis() as u64,
                 )
                 .await;
