@@ -45,7 +45,7 @@ pub struct StopDifference {
     pub pickup_type: i16,
     //true is exact, false is approximate
     pub timepoint: bool,
-    pub gtfs_stop_sequence: u16,
+    pub gtfs_stop_sequence: u32,
 }
 
 pub struct DirectionPattern {
