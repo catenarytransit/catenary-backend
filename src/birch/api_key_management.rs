@@ -174,7 +174,9 @@ pub async fn export_realtime_keys(
     }
 
     let email = email.unwrap().to_str().unwrap();
-    let password = password.unwrap().to_str().unwrap();    
+    let password = password.unwrap().to_str().unwrap();   
+
+    println!("email: {}, password: {}", email, password); 
 
     let is_authorised = login(pool.as_ref().clone(), email, password).await.unwrap();
 
@@ -219,8 +221,17 @@ pub async fn get_realtime_keys(
     req: HttpRequest,
 ) -> impl Responder {
     //check if the user is authorised
-    let email = req.headers().get("email").unwrap().to_str().unwrap();
-    let password = req.headers().get("password").unwrap().to_str().unwrap();
+    let email = req.headers().get("email");
+    let password = req.headers().get("password");
+
+    if email.is_none() || password.is_none() {
+        return HttpResponse::Unauthorized().finish();
+    }
+
+    let email = email.unwrap().to_str().unwrap();
+    let password = password.unwrap().to_str().unwrap();   
+
+    println!("login attempt: email: {}, password: {}", email, password); 
 
     let is_authorised = login(pool.as_ref().clone(), email, password).await.unwrap();
 
