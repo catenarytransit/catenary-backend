@@ -166,8 +166,10 @@ pub async fn export_realtime_keys(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     req: HttpRequest,
 ) -> impl Responder {
-    let email = req.headers().get("email").unwrap().to_str().unwrap();
-    let password = req.headers().get("password").unwrap().to_str().unwrap();
+    let email = req.headers().get("email");
+    let password = req.headers().get("password");
+
+
 
     let is_authorised = login(pool.as_ref().clone(), email, password).await.unwrap();
 
