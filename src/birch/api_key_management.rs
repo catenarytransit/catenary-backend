@@ -169,7 +169,12 @@ pub async fn export_realtime_keys(
     let email = req.headers().get("email");
     let password = req.headers().get("password");
 
+    if email.is_none() || password.is_none() {
+        return HttpResponse::Unauthorized().finish();
+    }
 
+    let email = email.unwrap().to_str().unwrap();
+    let password = password.unwrap().to_str().unwrap();    
 
     let is_authorised = login(pool.as_ref().clone(), email, password).await.unwrap();
 
