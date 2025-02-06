@@ -70,6 +70,7 @@ pub fn remove_transloc_prefix(gtfs_uncompressed_temp_storage: &str, feed_id: &st
             //read first, then write back
             let file = File::open(&file_path).unwrap();
             let reader = std::io::BufReader::new(file);
+            println!("Fixing Transloc file: {}", file_path);
             let mut finished_data = String::new();
 
             for line in reader.lines() {
