@@ -123,7 +123,7 @@ pub async fn bulk_realtime_fetch_v1(
             )
         }
     }))
-    .buffer_unordered(32)
+    .buffer_unordered(64)
     .collect::<Vec<_>>()
     .await;
 
