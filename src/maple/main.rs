@@ -143,7 +143,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             //PRIVATE STUPID BUS COMPANY THAT CHARGES $60 TO DROP YOU OFF IN OLD TOWN FROM LAX
             "f-relaxsan~ca~us",
             //low quality feed that teleports you to antartica.
-            "f-wests~bus~service"
+            "f-wests~bus~service",
         ]
         .into_iter()
         .map(String::from),
@@ -574,18 +574,28 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .await?;
 
             for feed in inserted_feeds {
-                if dmfr_result
-                    .feed_hashmap
-                    .get(&feed.onestop_feed_id)
-                    .is_none()
-                {
+                if !dmfr_result.feed_hashmap.contains_key(&feed.onestop_feed_id) {
                     println!(
                         "Deleting whole feed {}, no longer exists",
                         feed.onestop_feed_id
                     );
-                    let _ =
+                    let delete_result =
                         wipe_whole_feed(&feed.onestop_feed_id, Arc::clone(&arc_conn_pool)).await;
-                    println!("Deleted whole feed {}", feed.onestop_feed_id);
+
+                    if delete_result.is_ok() {
+                        println!("Deleted whole feed {}", feed.onestop_feed_id);
+
+                        let _ = catenary::schema::gtfs::static_feeds::dsl::static_feeds
+                            .filter(
+                                catenary::schema::gtfs::static_feeds::dsl::onestop_feed_id
+                                    .eq(&feed.onestop_feed_id),
+                            )
+                            .delete()
+                            .execute(conn)
+                            .await?;
+                    } else {
+                        eprintln!("Failed to delete whole feed {}", feed.onestop_feed_id);
+                    }
                 }
             }
 
