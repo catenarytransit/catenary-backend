@@ -221,7 +221,7 @@ struct RetrieveReq {
     password: String,
 }
 
-#[actix_web::post("/getrealtimekeys/")]
+#[actix_web::post("/getrealtimekeys")]
 pub async fn get_realtime_keys(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     req: HttpRequest,
