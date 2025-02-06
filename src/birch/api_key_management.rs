@@ -215,25 +215,23 @@ pub async fn export_realtime_keys(
         .body(data_str)
 }
 
-#[actix_web::get("/getrealtimekeys/")]
+#[derive(Deserialize)]
+struct RetrieveReq {
+    email: String,
+    password: String,
+}
+
+#[actix_web::post("/getrealtimekeys/")]
 pub async fn get_realtime_keys(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     req: HttpRequest,
+    web::Form(RetrieveReq { email, password }): web::Form<RetrieveReq>,
 ) -> impl Responder {
-    //check if the user is authorised
-    let email = req.headers().get("email");
-    let password = req.headers().get("password");
-
-    if email.is_none() || password.is_none() {
-        return HttpResponse::Unauthorized().finish();
-    }
-
-    let email = email.unwrap().to_str().unwrap();
-    let password = password.unwrap().to_str().unwrap();   
+    //check if the user is authorised 
 
     println!("login attempt: email: {}, password: {}", email, password); 
 
-    let is_authorised = login(pool.as_ref().clone(), email, password).await.unwrap();
+    let is_authorised = login(pool.as_ref().clone(), &email, &password).await.unwrap();
 
     if !is_authorised {
         return HttpResponse::Unauthorized().finish();
