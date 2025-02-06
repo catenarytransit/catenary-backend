@@ -6,6 +6,8 @@ use std::io::Cursor;
 use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::io::BufRead;
+use std::io::Write;
 
 use dmfr::Feed;
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
@@ -50,6 +52,37 @@ pub fn extract_sub_zip(
     delete_zip_files(target_path.as_str())?;
 
     Ok(())
+}
+
+pub fn remove_transloc_prefix(gtfs_uncompressed_temp_storage: &str, feed_id: &str) -> () {
+    //for every file in the folder, read file, remove all "TL-" matches, write file
+
+    let target_path = format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id);
+
+    let paths = fs::read_dir(target_path).unwrap();
+
+    for path in paths {
+        let path = path.unwrap().path();
+        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
+        let file_path = path.to_str().unwrap().to_string();
+
+        if file_name.ends_with(".txt") {
+            //read first, then write back
+            let file = File::open(&file_path).unwrap();
+            let reader = std::io::BufReader::new(file);
+            let mut finished_data = String::new();
+
+            for line in reader.lines() {
+                let line = line.unwrap();
+                let new_line = line.replace("TL-", "");
+                finished_data.push_str(new_line.as_str());
+            }
+
+            let mut file = File::create(&file_path).unwrap();
+
+            file.write_all(finished_data.as_bytes()).unwrap();
+        }
+    }
 }
 
 pub fn flatten_feed(
@@ -115,6 +148,10 @@ pub fn flatten_feed(
         match &subfolder_answer {
             Ok(_) => {
                 println!("Subfolder extracted successfully");
+
+                if feed_id == "f-uc~irvine~anteater~express" || feed_id == "f-9muq-lagunabeach~ca~us" {
+                    remove_transloc_prefix(gtfs_uncompressed_temp_storage, feed_id);
+                }
             }
             Err(e) => {
                 println!("Error extracting subfolder: {:?}", e);
