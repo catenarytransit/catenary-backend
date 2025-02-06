@@ -8,6 +8,7 @@ use catenary::EtcdConnectionIps;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use futures::StreamExt;
 use tarpc::context;
 
 #[derive(Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
@@ -101,69 +102,76 @@ pub async fn bulk_realtime_fetch_v1(
         .flatten()
         .collect::<Vec<CategoryOfRealtimeVehicleData>>();
 
-    for (chateau_id, chateau_params) in params.chateaus.iter() {
-        let fetch_assigned_node_for_this_realtime_feed = etcd
-            .get(
-                format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
-                None,
+        let etcd_data_list: Vec<(&String, &ChateauAskParams, Result<etcd_client::GetResponse, etcd_client::Error>)> = futures::stream::iter(params.chateaus.iter().map(
+            |(chateau_id, chateau_params)| 
+            {
+             let mut etcd = etcd.clone();
+              async move {
+                let  fetch_assigned_node_for_this_realtime_feed = etcd
+                .get(
+                    format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
+                    None,
+                ).await;
+
+                (chateau_id, chateau_params, fetch_assigned_node_for_this_realtime_feed)
+              }
+
+            }
+        ))
+        .buffer_unordered(32)
+        .collect::<Vec<_>>().await;
+
+    let parallel_chateau_data_fetch = futures::stream::iter(
+        etcd_data_list.iter()
+        .filter(|x| x.2.is_ok())
+        .map(|(chateau_id, chateau_params, etcd_data)|
+        (chateau_id, chateau_params, etcd_data.as_ref().unwrap()))
+        .map(|(chateau_id, chateau_params, etcd_data_list)| 
+        async move {
+            if etcd_data_list.kvs().is_empty() {
+                return (chateau_id, None, chateau_param);
+            }
+
+            //deserialise into ChateauMetadataZookeeper
+
+            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+                etcd_data_list
+                    .kvs()
+                    .first()
+                    .unwrap()
+                    .value(),
             )
-            .await;
-
-        if let Err(err_fetch) = &fetch_assigned_node_for_this_realtime_feed {
-            eprintln!("{}", err_fetch);
-            return HttpResponse::InternalServerError()
-                .append_header(("Cache-Control", "no-cache"))
-                .body(format!(
-                    "Error fetching assigned node: {}, failed to connect to etcd",
-                    err_fetch
-                ));
-        }
-
-        let fetch_assigned_node_for_this_realtime_feed =
-            fetch_assigned_node_for_this_realtime_feed.unwrap();
-
-        if fetch_assigned_node_for_this_realtime_feed.kvs().is_empty() {
-            return HttpResponse::Ok()
-                .append_header(("Cache-Control", "no-cache"))
-                .body("No assigned node found for this chateau");
-        }
-
-        //deserialise into ChateauMetadataZookeeper
-
-        let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
-            fetch_assigned_node_for_this_realtime_feed
-                .kvs()
-                .first()
-                .unwrap()
-                .value(),
-        )
-        .unwrap();
-
-        //then connect to the node via tarpc
-
-        let aspen_client =
-            catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
-
-        if aspen_client.is_err() {
-            return HttpResponse::InternalServerError()
-                .append_header(("Cache-Control", "no-cache"))
-                .body("Error connecting to assigned node. Failed to connect to tarpc");
-        }
-
-        let aspen_client = aspen_client.unwrap();
-
-        //then call the get_vehicle_locations method
-
-        let response = aspen_client
-            .get_vehicle_locations(
-                context::current(),
-                chateau_id.clone(),
-                Some(chateau_params.existing_fasthash_of_routes),
-            )
-            .await
             .unwrap();
 
-        if let Some(response) = response {
+            //then connect to the node via tarpc
+
+            let aspen_client =
+                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
+
+            if aspen_client.is_err() {
+                return (chateau_id, None, chateau_params);
+            }
+
+            let aspen_client = aspen_client.unwrap();
+
+            //then call the get_vehicle_locations method
+
+            let response = aspen_client
+                .get_vehicle_locations(
+                    context::current(),
+                    chateau_id.to_string(),
+                    Some(chateau_params.existing_fasthash_of_routes),
+                )
+                .await;
+
+            (chateau_id, Some(response), chateau_params)
+        }
+    )).buffer_unordered(32)
+        .collect::<Vec<_>>().await;
+
+    for (chateau_id, response, chateau_params) in parallel_chateau_data_fetch {
+    
+        if let Some(Ok(Some(response))) = response {
             let mut each_chateau_response = EachChateauResponse {
                 categories: None,
                 hash_of_routes: response.hash_of_routes,
@@ -229,7 +237,7 @@ pub async fn bulk_realtime_fetch_v1(
 
             bulk_fetch_response
                 .chateaus
-                .insert(chateau_id.clone(), each_chateau_response);
+                .insert(chateau_id.to_string(), each_chateau_response);
         }
     }
 
