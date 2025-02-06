@@ -65,7 +65,7 @@ pub struct BulkFetchResponse {
     chateaus: BTreeMap<String, EachChateauResponse>
 }
 
-#[actix_web::get("/bulk_realtime_fetch_v1")]
+#[actix_web::post("/bulk_realtime_fetch_v1")]
 pub async fn bulk_realtime_fetch_v1(
     req: HttpRequest,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
