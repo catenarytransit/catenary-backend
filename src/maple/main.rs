@@ -585,14 +585,14 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                     if delete_result.is_ok() {
                         println!("Deleted whole feed {}", feed.onestop_feed_id);
 
-                        let _ = catenary::schema::gtfs::static_feeds::dsl::static_feeds
-                            .filter(
+                        let _ = diesel::delete(
+                            catenary::schema::gtfs::static_feeds::dsl::static_feeds.filter(
                                 catenary::schema::gtfs::static_feeds::dsl::onestop_feed_id
                                     .eq(&feed.onestop_feed_id),
-                            )
-                            .delete()
-                            .execute(conn)
-                            .await?;
+                            ),
+                        )
+                        .execute(conn)
+                        .await?;
                     } else {
                         eprintln!("Failed to delete whole feed {}", feed.onestop_feed_id);
                     }
