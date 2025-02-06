@@ -174,9 +174,9 @@ pub async fn export_realtime_keys(
     }
 
     let email = email.unwrap().to_str().unwrap();
-    let password = password.unwrap().to_str().unwrap();   
+    let password = password.unwrap().to_str().unwrap();
 
-    println!("email: {}, password: {}", email, password); 
+    println!("email: {}, password: {}", email, password);
 
     let is_authorised = login(pool.as_ref().clone(), email, password).await.unwrap();
 
@@ -227,11 +227,13 @@ pub async fn get_realtime_keys(
     req: HttpRequest,
     web::Form(RetrieveReq { email, password }): web::Form<RetrieveReq>,
 ) -> impl Responder {
-    //check if the user is authorised 
+    //check if the user is authorised
 
-    println!("login attempt: email: {}, password: {}", email, password); 
+    println!("login attempt: email: {}, password: {}", email, password);
 
-    let is_authorised = login(pool.as_ref().clone(), &email, &password).await.unwrap();
+    let is_authorised = login(pool.as_ref().clone(), &email, &password)
+        .await
+        .unwrap();
 
     if !is_authorised {
         return HttpResponse::Unauthorized().finish();

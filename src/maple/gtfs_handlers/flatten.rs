@@ -2,12 +2,12 @@ use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::fs::{read_dir, remove_file};
+use std::io::BufRead;
 use std::io::Cursor;
 use std::io::Read;
+use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::io::BufRead;
-use std::io::Write;
 
 use dmfr::Feed;
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
@@ -71,7 +71,8 @@ pub fn remove_transloc_prefix(gtfs_uncompressed_temp_storage: &str, feed_id: &st
             let file = File::open(&file_path).unwrap();
             let reader = std::io::BufReader::new(file);
             println!("Fixing Transloc file: {}", file_path);
-            let mut finished_data = reader.lines()
+            let mut finished_data = reader
+                .lines()
                 .map(|line| {
                     let line = line.as_ref().unwrap();
                     line.replace("TL-", "")
