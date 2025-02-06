@@ -71,13 +71,13 @@ pub fn remove_transloc_prefix(gtfs_uncompressed_temp_storage: &str, feed_id: &st
             let file = File::open(&file_path).unwrap();
             let reader = std::io::BufReader::new(file);
             println!("Fixing Transloc file: {}", file_path);
-            let mut finished_data = String::new();
-
-            for line in reader.lines() {
-                let line = line.unwrap();
-                let new_line = line.replace("TL-", "");
-                finished_data.push_str(new_line.as_str());
-            }
+            let mut finished_data = reader.lines()
+                .map(|line| {
+                    let line = line.as_ref().unwrap();
+                    line.replace("TL-", "")
+                })
+                .collect::<Vec<String>>()
+                .join("\n");
 
             let mut file = File::create(&file_path).unwrap();
 
