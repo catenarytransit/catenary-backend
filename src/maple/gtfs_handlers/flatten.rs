@@ -108,6 +108,10 @@ pub fn flatten_feed(
     //extract file
     zip_extract::extract(Cursor::new(buf), &target_dir, true)?;
 
+    if feed_id == "f-uc~irvine~anteater~express" || feed_id == "f-9muq-lagunabeach~ca~us" {
+        remove_transloc_prefix(gtfs_uncompressed_temp_storage, feed_id);
+    }
+
     // go into folder and unnest folders
     if feed_id == "f-dr4-septa~rail" {
         extract_sub_zip(
@@ -149,10 +153,6 @@ pub fn flatten_feed(
         match &subfolder_answer {
             Ok(_) => {
                 println!("Subfolder extracted successfully");
-
-                if feed_id == "f-uc~irvine~anteater~express" || feed_id == "f-9muq-lagunabeach~ca~us" {
-                    remove_transloc_prefix(gtfs_uncompressed_temp_storage, feed_id);
-                }
             }
             Err(e) => {
                 println!("Error extracting subfolder: {:?}", e);
