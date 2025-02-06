@@ -646,6 +646,7 @@ async fn main() -> std::io::Result<()> {
             .service(api_key_management::set_realtime_key)
             .service(api_key_management::export_realtime_keys)
             .service(aspenised_data_over_https::get_realtime_locations)
+            .service(aspenised_data_over_https::bulk_realtime_fetch_v1)
             .service(chicago_proxy::ttarrivals_proxy)
             .service(nearby_departures::nearby_from_coords)
             .service(departures_at_stop::departures_at_stop)
