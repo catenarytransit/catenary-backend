@@ -142,6 +142,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             //BAN HAMMER SECTION
             //PRIVATE STUPID BUS COMPANY THAT CHARGES $60 TO DROP YOU OFF IN OLD TOWN FROM LAX
             "f-relaxsan~ca~us",
+            //low quality feed that teleports you to antartica.
+            "f-wests~bus~service"
         ]
         .into_iter()
         .map(String::from),
