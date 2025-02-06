@@ -610,6 +610,12 @@ async fn main() -> std::io::Result<()> {
                         "https://maps.catenarymaps.org",
                     )),
             )
+            .wrap(
+                actix_cors::Cors::default()
+                .allow_any_origin()
+                .allow_any_method()
+                .allow_any_header()
+            )
             .wrap(actix_block_ai_crawling::BlockAi)
             .wrap(middleware::Compress::default())
             .app_data(actix_web::web::Data::new(Arc::clone(&sqlx_pool)))
