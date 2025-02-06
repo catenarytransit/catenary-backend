@@ -136,7 +136,7 @@ pub async fn bulk_realtime_fetch_v1(
             })
             .map(|(chateau_id, chateau_params, etcd_data_list)| async move {
                 if etcd_data_list.kvs().is_empty() {
-                    return (chateau_id, None, chateau_param);
+                    return (chateau_id, None, chateau_params);
                 }
 
                 //deserialise into ChateauMetadataZookeeper
