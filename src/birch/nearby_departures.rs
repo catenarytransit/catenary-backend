@@ -812,15 +812,15 @@ pub async fn nearby_from_coords(
         services_calendar_dates_lookup_queries_to_perform,
     );
 
-    let mut routes_table: HashMap<String, HashMap<String, catenary::models::Route>> =
-        HashMap::new();
+    let mut routes_table: AHashMap<String, AHashMap<String, catenary::models::Route>> =
+        AHashMap::new();
 
     for route_group in routes_query {
         match route_group {
             Ok(route_group) => {
                 let chateau = route_group[0].chateau.clone();
 
-                let mut route_table = HashMap::new();
+                let mut route_table = AHashMap::new();
 
                 for route in route_group {
                     route_table.insert(route.route_id.clone(), route);
