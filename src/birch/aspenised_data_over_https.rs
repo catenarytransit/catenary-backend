@@ -194,6 +194,14 @@ pub async fn bulk_realtime_fetch_v1(
                 let mut categories: PositionDataCategory = PositionDataCategory::default();
 
                 for category in &categories_requested {
+
+                    let chateau_params_for_this_category = match category {
+                        CategoryOfRealtimeVehicleData::Metro => &chateau_params.category_params.metro,
+                        CategoryOfRealtimeVehicleData::Bus => &chateau_params.category_params.bus,
+                        CategoryOfRealtimeVehicleData::Rail => &chateau_params.category_params.rail,
+                        CategoryOfRealtimeVehicleData::Other => &chateau_params.category_params.other,
+                    };
+
                     let route_ids_allowed = category_to_allowed_route_ids(category);
 
                     let filtered_vehicle_positions = response
@@ -221,9 +229,25 @@ pub async fn bulk_realtime_fetch_v1(
                         None => None,
                     };
 
+                    let hash_of_routes_param = match chateau_params_for_this_category {
+                        Some(chateau_params) => chateau_params.hash_of_routes,
+                        None => 0,
+                    };
+
+                    let time_param = match chateau_params_for_this_category {
+                        Some(chateau_params) => chateau_params.last_updated_time_ms,
+                        None => 0,
+                    };
+
                     let payload = EachCategoryPayload {
-                        vehicle_positions: Some(filtered_vehicle_positions),
-                        vehicle_route_cache: filtered_routes_cache,
+                        vehicle_positions: match time_param != response.last_updated_time_ms {
+                            true => Some(filtered_vehicle_positions),
+                            false => None
+                        },
+                        vehicle_route_cache: match hash_of_routes_param != response.hash_of_routes {
+                            true => filtered_routes_cache,
+                            false => None
+                        },
                         hash_of_routes: response.hash_of_routes,
                         last_updated_time_ms: response.last_updated_time_ms,
                     };
