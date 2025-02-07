@@ -56,8 +56,6 @@ pub struct SubCategoryAskParams {
 #[derive(Serialize, Deserialize)]
 pub struct EachChateauResponse {
     categories: Option<PositionDataCategory>,
-    hash_of_routes: u64,
-    last_updated_time_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -190,8 +188,6 @@ pub async fn bulk_realtime_fetch_v1(
         if let Some(Ok(Some(response))) = response {
             let mut each_chateau_response = EachChateauResponse {
                 categories: None,
-                hash_of_routes: response.hash_of_routes,
-                last_updated_time_ms: response.last_updated_time_ms,
             };
 
             if true {
