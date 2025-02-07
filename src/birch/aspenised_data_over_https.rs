@@ -58,7 +58,9 @@ pub struct PositionDataCategory {
 #[derive(Serialize, Deserialize)]
 pub struct EachCategoryPayload {
     pub vehicle_route_cache: Option<AHashMap<String, AspenisedVehicleRouteCache>>,
-    pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
+    pub vehicle_positions: Option<AHashMap<String, AspenisedVehiclePosition>>,
+    pub last_updated_time_ms: u64,
+    pub hash_of_routes: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -161,11 +163,7 @@ pub async fn bulk_realtime_fetch_v1(
                 //then call the get_vehicle_locations method
 
                 let response = aspen_client
-                    .get_vehicle_locations(
-                        context::current(),
-                        chateau_id.to_string(),
-                        Some(chateau_params.existing_fasthash_of_routes),
-                    )
+                    .get_vehicle_locations(context::current(), chateau_id.to_string(), None)
                     .await;
 
                 (chateau_id, Some(response), chateau_params)
@@ -215,8 +213,10 @@ pub async fn bulk_realtime_fetch_v1(
                     };
 
                     let payload = EachCategoryPayload {
-                        vehicle_positions: filtered_vehicle_positions,
+                        vehicle_positions: Some(filtered_vehicle_positions),
                         vehicle_route_cache: filtered_routes_cache,
+                        hash_of_routes: response.hash_of_routes,
+                        last_updated_time_ms: response.last_updated_time_ms,
                     };
 
                     //add to categories hashmap
