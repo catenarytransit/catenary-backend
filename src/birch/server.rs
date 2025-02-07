@@ -153,10 +153,15 @@ async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
         robots_banned_bots_list
     );
 
+    let final_robots = format!(
+        "{}\n\nUser-agent: *\nDisallow: /cdn-cgi/",
+        robots_banned_bots
+    );
+
     actix_web::HttpResponse::Ok()
         .insert_header(("Content-Type", "text/plain"))
         .insert_header(("Cache-Control", "no-cache"))
-        .body(robots_banned_bots)
+        .body(final_robots)
 }
 
 #[actix_web::get("/microtime")]
