@@ -470,7 +470,7 @@ pub async fn nearby_from_coords(
                     .load::<catenary::models::ItineraryPatternMeta>(conn)
             },
         ))
-        .buffer_unordered(10)
+        .buffer_unordered(32)
         .collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternMeta>>>>()
         .await;
 
@@ -767,7 +767,7 @@ pub async fn nearby_from_coords(
                         .load::<catenary::models::Calendar>(conn)
                 },
             ))
-            .buffer_unordered(8)
+            .buffer_unordered(16)
             .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Calendar>>>>(),
             futures::stream::iter(services_to_lookup_table.iter().map(
                 |(chateau, set_of_calendar)| {
@@ -781,7 +781,7 @@ pub async fn nearby_from_coords(
                         .load::<catenary::models::CalendarDate>(conn2)
                 },
             ))
-            .buffer_unordered(8)
+            .buffer_unordered(16)
             .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CalendarDate>>>>(),
             futures::stream::iter(
                 routes_to_lookup_table
@@ -796,7 +796,7 @@ pub async fn nearby_from_coords(
                             .load::<catenary::models::Route>(conn3)
                     })
             )
-            .buffer_unordered(8)
+            .buffer_unordered(16)
             .collect::<Vec<diesel::QueryResult<Vec<catenary::models::Route>>>>(),
         );
 
