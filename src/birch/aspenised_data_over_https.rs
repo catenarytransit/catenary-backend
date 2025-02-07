@@ -36,8 +36,21 @@ pub struct BulkFetchParams {
 
 #[derive(Serialize, Deserialize)]
 pub struct ChateauAskParams {
+    category_params: CategoryAskParams
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CategoryAskParams {
+    bus: Option<SubCategoryAskParams>,
+    metro: Option<SubCategoryAskParams>,
+    rail: Option<SubCategoryAskParams>,
+    other: Option<SubCategoryAskParams>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SubCategoryAskParams {
     last_updated_time_ms: u64,
-    existing_fasthash_of_routes: u64,
+    hash_of_routes: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -181,7 +194,7 @@ pub async fn bulk_realtime_fetch_v1(
                 last_updated_time_ms: response.last_updated_time_ms,
             };
 
-            if chateau_params.last_updated_time_ms != response.last_updated_time_ms {
+            if true {
                 let mut categories: PositionDataCategory = PositionDataCategory::default();
 
                 for category in &categories_requested {
