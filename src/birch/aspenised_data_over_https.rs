@@ -36,7 +36,7 @@ pub struct BulkFetchParams {
 
 #[derive(Serialize, Deserialize)]
 pub struct ChateauAskParams {
-    category_params: CategoryAskParams
+    category_params: CategoryAskParams,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -186,20 +186,21 @@ pub async fn bulk_realtime_fetch_v1(
 
     for (chateau_id, response, chateau_params) in parallel_chateau_data_fetch {
         if let Some(Ok(Some(response))) = response {
-            let mut each_chateau_response = EachChateauResponse {
-                categories: None,
-            };
+            let mut each_chateau_response = EachChateauResponse { categories: None };
 
             if true {
                 let mut categories: PositionDataCategory = PositionDataCategory::default();
 
                 for category in &categories_requested {
-
                     let chateau_params_for_this_category = match category {
-                        CategoryOfRealtimeVehicleData::Metro => &chateau_params.category_params.metro,
+                        CategoryOfRealtimeVehicleData::Metro => {
+                            &chateau_params.category_params.metro
+                        }
                         CategoryOfRealtimeVehicleData::Bus => &chateau_params.category_params.bus,
                         CategoryOfRealtimeVehicleData::Rail => &chateau_params.category_params.rail,
-                        CategoryOfRealtimeVehicleData::Other => &chateau_params.category_params.other,
+                        CategoryOfRealtimeVehicleData::Other => {
+                            &chateau_params.category_params.other
+                        }
                     };
 
                     let route_ids_allowed = category_to_allowed_route_ids(category);
@@ -242,11 +243,11 @@ pub async fn bulk_realtime_fetch_v1(
                     let payload = EachCategoryPayload {
                         vehicle_positions: match time_param != response.last_updated_time_ms {
                             true => Some(filtered_vehicle_positions),
-                            false => None
+                            false => None,
                         },
                         vehicle_route_cache: match hash_of_routes_param != response.hash_of_routes {
                             true => filtered_routes_cache,
-                            false => None
+                            false => None,
                         },
                         hash_of_routes: response.hash_of_routes,
                         last_updated_time_ms: response.last_updated_time_ms,
