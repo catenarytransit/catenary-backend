@@ -139,7 +139,7 @@ pub async fn gtfs_process_feed(
     let gtfs = minimum_day_filter(gtfs, today - chrono::Duration::days(30));
 
     println!(
-        "Finished reading GTFS for {}, took {:?}ms",
+        "Finished reading GTFS for {}, took {:?}",
         feed_id, gtfs.read_duration
     );
 
