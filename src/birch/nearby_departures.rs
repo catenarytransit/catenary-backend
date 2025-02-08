@@ -231,9 +231,7 @@ pub async fn nearby_from_coords(
     .unwrap();
 
     let conn_pool = pool.as_ref();
-    let conn_pre = conn_pool.get().await;
-
-    let (conn_pre, conn2, conn3) = tokio::join!(conn_pool.get(), conn_pool.get(), conn_pool.get());
+    let (conn_pre, conn2_pre, conn3_pre) = tokio::join!(conn_pool.get(), conn_pool.get(), conn_pool.get());
     
     let conn = &mut conn_pre.unwrap();
     let conn2 = &mut conn2_pre.unwrap();
