@@ -112,6 +112,18 @@ fn get_threads_gtfs() -> usize {
 }
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+    let delete_everything_in_feed_before_ingest = match std::env::var("DELETE_BEFORE_INGEST") {
+        Ok(val) => match val.as_str().to_lowercase().as_str() {
+            "true" => true,
+            _ => false,
+        },
+        Err(_) => false,
+    };
+
+    if delete_everything_in_feed_before_ingest {
+        println!("Feeds will be wiped before downloading");
+    }
+
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
     update_transitland_submodule()?;
     let feeds_to_discard: HashSet<String> = HashSet::from_iter(
@@ -465,6 +477,19 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         
                                 let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
                                 
+                                    if delete_everything_in_feed_before_ingest {
+                                        let wipe_whole_feed_result = wipe_whole_feed(
+                                            &feed_id,
+                                            Arc::clone(&arc_conn_pool)
+                                        ).await;
+
+                                        if wipe_whole_feed_result.is_ok() {
+                                            println!("Wiped whole feed of {} prior to ingestion", feed_id);
+                                        } else {
+                                            eprintln!("Failed to wipe whole feed of {} prior to ingestion", feed_id);
+                                        }
+                                    }
+
                                     let start_time = chrono::Utc::now().timestamp_millis();
                                 
                                     // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id

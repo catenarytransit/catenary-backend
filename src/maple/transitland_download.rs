@@ -280,7 +280,7 @@ pub async fn download_return_eligible_feeds(
                                             Ok(download_attempts_postgres_lookup) => {
                                                 answer.operation_success = true;
 
-                                                if std::env::var("ONLY_FEED_ID").is_ok() {
+                                                if std::env::var("ONLY_FEED_ID").is_ok() || std::env::var("FORCE_INGEST_ALL").is_ok() {
                                                     answer.ingest = true;
                                                 } else {
                                                      // this zip file has never been seen before! Insert it!
