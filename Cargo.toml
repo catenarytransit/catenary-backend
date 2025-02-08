@@ -71,14 +71,14 @@ seahash = "4.1.0"
 dmfr = "0.2"
 chateau = {git = "https://github.com/catenarytransit/chateau"}
 dmfr-dataset-reader = "0.2.4"
-uuid = {version = "1.8.0", features = ["v4", "fast-rng", "macro-diagnostics"]}
+uuid = {version = "1.13.0", features = ["v4", "fast-rng", "macro-diagnostics"]}
 zip = "2.2"
 git2 = "0.20"
 zip-extract = "0.2.1"
 serde_derive = "1.0.197"
 prost = "0.13"
 geozero = "0.14.0"
-diesel = {version = "2.2.2", features = ["ipnet-address","network-address","extras", "numeric", "r2d2"]}
+diesel = {version = "2.2.7", features = ["ipnet-address","network-address","extras", "numeric", "r2d2"]}
 postgis_diesel = "2.3.0"
 diesel-async = { version = "0.5", features = ["postgres", "bb8"] }
 diesel-derive-newtype = "2.1.1"
@@ -107,12 +107,12 @@ ipnetwork = "0.21.1"
 pnet = "0.35.0"
 crossbeam = "0.8.4"
 leapfrog = { version = "0.3.0", features = ["stable_alloc"] }
-scc = "2.1.0"
+scc = "2.3.3"
 env_logger = "0.11.3"
 ron = "0.8.1"
 regex = "1.10.4"
 fasthash = "0.4.0"
-clap = "4.5.20"
+clap = "4.5.28"
 rgb = "0.8.37"
 zotgtfs = "0.3.7"
 amtrak-gtfs-rt = "0.5.2"
