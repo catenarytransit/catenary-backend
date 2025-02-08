@@ -110,12 +110,10 @@ pub async fn gtfs_process_feed(
                 .cloned()
                 .collect::<BTreeSet<_>>();
 
-            gtfs
-                .trips
+            gtfs.trips
                 .retain(|trip_id, _| trips_to_keep.contains(trip_id));
 
-            gtfs
-                .routes
+            gtfs.routes
                 .retain(|route_id, _| route_ids_to_keep.contains(route_id));
 
             println!("Filtered NSW, removed school buses");
