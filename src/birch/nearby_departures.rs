@@ -232,7 +232,12 @@ pub async fn nearby_from_coords(
 
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
+
+    let (conn_pre, conn2, conn3) = tokio::join!(conn_pool.get(), conn_pool.get(), conn_pool.get());
+    
     let conn = &mut conn_pre.unwrap();
+    let conn2 = &mut conn2_pre.unwrap();
+    let conn3 = &mut conn3_pre.unwrap();
 
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
@@ -302,6 +307,11 @@ pub async fn nearby_from_coords(
 
     if stops.len() > 800 {
         bus_distance_limit = 1500;
+        rail_and_other_distance_limit = 1500;
+    }
+
+    if stops.len() > 3000 {
+        bus_distance_limit = 1000;
         rail_and_other_distance_limit = 1500;
     }
 
@@ -740,12 +750,6 @@ pub async fn nearby_from_coords(
         .keys()
         .cloned()
         .collect::<Vec<String>>();
-
-    let conn2_pre = conn_pool.get().await;
-    let conn2 = &mut conn2_pre.unwrap();
-
-    let conn3_pre = conn_pool.get().await;
-    let conn3 = &mut conn3_pre.unwrap();
 
     let calendar_timer = Instant::now();
 
