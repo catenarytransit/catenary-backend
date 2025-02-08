@@ -47,7 +47,10 @@ pub async fn stops_into_postgres(
             name,
             name_translations: None,
             displayname: display_name,
-            code: stop.code.clone(),
+            code: match feed_id {
+                "f-amtrak~sanjoaquin" => Some(stop_id.clone()),
+                _ => stop.code.clone(),
+            },
             gtfs_desc: stop.description.clone(),
             gtfs_desc_translations: None,
             location_type: location_type_conversion(&stop.location_type),
