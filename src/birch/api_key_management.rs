@@ -301,7 +301,7 @@ pub async fn get_realtime_keys(
                         .json(KeyResponse { passwords })
                 }
                 Err(e) => {
-                    println!("Error: {:?}", e);
+                    eprintln!("Error: {:?}", e);
                     return HttpResponse::InternalServerError()
                         .append_header(("Cache-Control", "no-cache"))
                         .finish();

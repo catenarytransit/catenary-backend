@@ -5,6 +5,7 @@ use catenary::aspen::lib::GetVehicleLocationsResponse;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::aspen_dataset::AspenisedVehicleRouteCache;
 use catenary::EtcdConnectionIps;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -35,15 +36,26 @@ pub struct BulkFetchParams {
 
 #[derive(Serialize, Deserialize)]
 pub struct ChateauAskParams {
+    category_params: CategoryAskParams,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CategoryAskParams {
+    bus: Option<SubCategoryAskParams>,
+    metro: Option<SubCategoryAskParams>,
+    rail: Option<SubCategoryAskParams>,
+    other: Option<SubCategoryAskParams>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SubCategoryAskParams {
     last_updated_time_ms: u64,
-    existing_fasthash_of_routes: u64,
+    hash_of_routes: u64,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct EachChateauResponse {
     categories: Option<PositionDataCategory>,
-    hash_of_routes: u64,
-    last_updated_time_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -57,7 +69,9 @@ pub struct PositionDataCategory {
 #[derive(Serialize, Deserialize)]
 pub struct EachCategoryPayload {
     pub vehicle_route_cache: Option<AHashMap<String, AspenisedVehicleRouteCache>>,
-    pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
+    pub vehicle_positions: Option<AHashMap<String, AspenisedVehiclePosition>>,
+    pub last_updated_time_ms: u64,
+    pub hash_of_routes: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -101,79 +115,94 @@ pub async fn bulk_realtime_fetch_v1(
         .flatten()
         .collect::<Vec<CategoryOfRealtimeVehicleData>>();
 
-    for (chateau_id, chateau_params) in params.chateaus.iter() {
-        let fetch_assigned_node_for_this_realtime_feed = etcd
-            .get(
-                format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
-                None,
+    let etcd_data_list: Vec<(
+        &String,
+        &ChateauAskParams,
+        Result<etcd_client::GetResponse, etcd_client::Error>,
+    )> = futures::stream::iter(params.chateaus.iter().map(|(chateau_id, chateau_params)| {
+        let mut etcd = etcd.clone();
+        async move {
+            let fetch_assigned_node_for_this_realtime_feed = etcd
+                .get(
+                    format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
+                    None,
+                )
+                .await;
+
+            (
+                chateau_id,
+                chateau_params,
+                fetch_assigned_node_for_this_realtime_feed,
             )
-            .await;
-
-        if let Err(err_fetch) = &fetch_assigned_node_for_this_realtime_feed {
-            eprintln!("{}", err_fetch);
-            return HttpResponse::InternalServerError()
-                .append_header(("Cache-Control", "no-cache"))
-                .body(format!(
-                    "Error fetching assigned node: {}, failed to connect to etcd",
-                    err_fetch
-                ));
         }
+    }))
+    .buffer_unordered(64)
+    .collect::<Vec<_>>()
+    .await;
 
-        let fetch_assigned_node_for_this_realtime_feed =
-            fetch_assigned_node_for_this_realtime_feed.unwrap();
+    let parallel_chateau_data_fetch = futures::stream::iter(
+        etcd_data_list
+            .iter()
+            .filter(|x| x.2.is_ok())
+            .map(|(chateau_id, chateau_params, etcd_data)| {
+                (chateau_id, chateau_params, etcd_data.as_ref().unwrap())
+            })
+            .map(|(chateau_id, chateau_params, etcd_data_list)| async move {
+                if etcd_data_list.kvs().is_empty() {
+                    return (chateau_id, None, chateau_params);
+                }
 
-        if fetch_assigned_node_for_this_realtime_feed.kvs().is_empty() {
-            return HttpResponse::Ok()
-                .append_header(("Cache-Control", "no-cache"))
-                .body("No assigned node found for this chateau");
-        }
+                //deserialise into ChateauMetadataZookeeper
 
-        //deserialise into ChateauMetadataZookeeper
+                let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+                    etcd_data_list.kvs().first().unwrap().value(),
+                )
+                .unwrap();
 
-        let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
-            fetch_assigned_node_for_this_realtime_feed
-                .kvs()
-                .first()
-                .unwrap()
-                .value(),
-        )
-        .unwrap();
+                //then connect to the node via tarpc
 
-        //then connect to the node via tarpc
+                let aspen_client =
+                    catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+                        .await;
 
-        let aspen_client =
-            catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
+                if aspen_client.is_err() {
+                    return (chateau_id, None, chateau_params);
+                }
 
-        if aspen_client.is_err() {
-            return HttpResponse::InternalServerError()
-                .append_header(("Cache-Control", "no-cache"))
-                .body("Error connecting to assigned node. Failed to connect to tarpc");
-        }
+                let aspen_client = aspen_client.unwrap();
 
-        let aspen_client = aspen_client.unwrap();
+                //then call the get_vehicle_locations method
 
-        //then call the get_vehicle_locations method
+                let response = aspen_client
+                    .get_vehicle_locations(context::current(), chateau_id.to_string(), None)
+                    .await;
 
-        let response = aspen_client
-            .get_vehicle_locations(
-                context::current(),
-                chateau_id.clone(),
-                Some(chateau_params.existing_fasthash_of_routes),
-            )
-            .await
-            .unwrap();
+                (chateau_id, Some(response), chateau_params)
+            }),
+    )
+    .buffer_unordered(32)
+    .collect::<Vec<_>>()
+    .await;
 
-        if let Some(response) = response {
-            let mut each_chateau_response = EachChateauResponse {
-                categories: None,
-                hash_of_routes: response.hash_of_routes,
-                last_updated_time_ms: response.last_updated_time_ms,
-            };
+    for (chateau_id, response, chateau_params) in parallel_chateau_data_fetch {
+        if let Some(Ok(Some(response))) = response {
+            let mut each_chateau_response = EachChateauResponse { categories: None };
 
-            if chateau_params.last_updated_time_ms != response.last_updated_time_ms {
+            if true {
                 let mut categories: PositionDataCategory = PositionDataCategory::default();
 
                 for category in &categories_requested {
+                    let chateau_params_for_this_category = match category {
+                        CategoryOfRealtimeVehicleData::Metro => {
+                            &chateau_params.category_params.metro
+                        }
+                        CategoryOfRealtimeVehicleData::Bus => &chateau_params.category_params.bus,
+                        CategoryOfRealtimeVehicleData::Rail => &chateau_params.category_params.rail,
+                        CategoryOfRealtimeVehicleData::Other => {
+                            &chateau_params.category_params.other
+                        }
+                    };
+
                     let route_ids_allowed = category_to_allowed_route_ids(category);
 
                     let filtered_vehicle_positions = response
@@ -201,9 +230,27 @@ pub async fn bulk_realtime_fetch_v1(
                         None => None,
                     };
 
+                    let hash_of_routes_param = match chateau_params_for_this_category {
+                        Some(chateau_params) => chateau_params.hash_of_routes,
+                        None => 0,
+                    };
+
+                    let time_param = match chateau_params_for_this_category {
+                        Some(chateau_params) => chateau_params.last_updated_time_ms,
+                        None => 0,
+                    };
+
                     let payload = EachCategoryPayload {
-                        vehicle_positions: filtered_vehicle_positions,
-                        vehicle_route_cache: filtered_routes_cache,
+                        vehicle_positions: match time_param != response.last_updated_time_ms {
+                            true => Some(filtered_vehicle_positions),
+                            false => None,
+                        },
+                        vehicle_route_cache: match hash_of_routes_param != response.hash_of_routes {
+                            true => filtered_routes_cache,
+                            false => None,
+                        },
+                        hash_of_routes: response.hash_of_routes,
+                        last_updated_time_ms: response.last_updated_time_ms,
                     };
 
                     //add to categories hashmap
@@ -229,7 +276,7 @@ pub async fn bulk_realtime_fetch_v1(
 
             bulk_fetch_response
                 .chateaus
-                .insert(chateau_id.clone(), each_chateau_response);
+                .insert(chateau_id.to_string(), each_chateau_response);
         }
     }
 
