@@ -121,7 +121,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     };
 
     if delete_everything_in_feed_before_ingest {
-        println!("Feeds will be wiped before downloading");
+        println!("Each feed will be wiped before ingestion");
     }
 
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
