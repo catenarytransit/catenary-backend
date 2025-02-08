@@ -208,7 +208,7 @@ pub struct DepartingTripsDataAnswer {
     pub bus_limited_metres: f64,
     pub rail_and_other_limited_metres: f64,
     pub departures: Vec<DepartureRouteGroup>,
-    pub stop: HashMap<String, HashMap<CompactString, StopOutput>>,
+    pub stop: HashMap<String, AHashMap<CompactString, StopOutput>>,
     pub debug: DeparturesDebug,
 }
 
@@ -864,7 +864,7 @@ pub async fn nearby_from_coords(
         Ok(calendar_structure) => {
             // iterate through all trips and produce a timezone and timeoffset.
 
-            let mut stops_answer: HashMap<String, HashMap<CompactString, StopOutput>> =
+            let mut stops_answer: HashMap<String, AHashMap<CompactString, StopOutput>> =
                 HashMap::new();
             let mut departures: Vec<DepartureRouteGroup> = vec![];
 
@@ -1186,7 +1186,7 @@ pub async fn nearby_from_coords(
                         .unwrap();
 
                     if !stops_answer.contains_key(chateau_id) {
-                        stops_answer.insert(chateau_id.clone(), HashMap::new());
+                        stops_answer.insert(chateau_id.clone(), AHashMap::new());
                     }
 
                     let stop_group = stops_answer.get_mut(chateau_id).unwrap();
