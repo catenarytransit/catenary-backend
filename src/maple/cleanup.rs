@@ -179,13 +179,11 @@ pub async fn delete_attempt_objects(
     let _ = diesel::update(
         catenary::schema::gtfs::ingested_static::dsl::ingested_static
             .filter(catenary::schema::gtfs::ingested_static::dsl::onestop_feed_id.eq(&feed_id))
-             .filter(catenary::schema::gtfs::ingested_static::dsl::attempt_id.eq(&attempt_id))
+            .filter(catenary::schema::gtfs::ingested_static::dsl::attempt_id.eq(&attempt_id)),
     )
-            .set(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(true))
-    
+    .set(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(true))
     .execute(conn)
     .await?;
-
 
     Ok(())
 }
@@ -300,10 +298,9 @@ pub async fn wipe_whole_feed(
 
     let _ = diesel::update(
         catenary::schema::gtfs::ingested_static::dsl::ingested_static
-            .filter(catenary::schema::gtfs::ingested_static::dsl::onestop_feed_id.eq(&feed_id))
+            .filter(catenary::schema::gtfs::ingested_static::dsl::onestop_feed_id.eq(&feed_id)),
     )
-            .set(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(true))
-    
+    .set(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(true))
     .execute(conn)
     .await?;
 
