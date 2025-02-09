@@ -112,6 +112,18 @@ fn get_threads_gtfs() -> usize {
 }
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+    let delete_everything_in_feed_before_ingest = match std::env::var("DELETE_BEFORE_INGEST") {
+        Ok(val) => match val.as_str().to_lowercase().as_str() {
+            "true" => true,
+            _ => false,
+        },
+        Err(_) => false,
+    };
+
+    if delete_everything_in_feed_before_ingest {
+        println!("Each feed will be wiped before ingestion");
+    }
+
     //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
     update_transitland_submodule()?;
     let feeds_to_discard: HashSet<String> = HashSet::from_iter(
@@ -243,6 +255,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
         for banned_feed_id in ban_list {
             wipe_whole_feed(banned_feed_id, Arc::clone(&arc_conn_pool)).await?;
+        }
+
+        for feed_to_discard in feeds_to_discard.iter() {
+            wipe_whole_feed(feed_to_discard, Arc::clone(&arc_conn_pool)).await?;
         }
 
         //insert the feeds that are new
@@ -461,6 +477,19 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         
                                 let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
                                 
+                                    if delete_everything_in_feed_before_ingest {
+                                        let wipe_whole_feed_result = wipe_whole_feed(
+                                            &feed_id,
+                                            Arc::clone(&arc_conn_pool)
+                                        ).await;
+
+                                        if wipe_whole_feed_result.is_ok() {
+                                            println!("Wiped whole feed of {} prior to ingestion", feed_id);
+                                        } else {
+                                            eprintln!("Failed to wipe whole feed of {} prior to ingestion", feed_id);
+                                        }
+                                    }
+
                                     let start_time = chrono::Utc::now().timestamp_millis();
                                 
                                     // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
@@ -519,17 +548,27 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                             ingestion_version: MAPLE_INGESTION_VERSION,
                                         };
 
-                                        let _ = diesel::insert_into(ingested_static)
+                                        let ingested_static_result = diesel::insert_into(ingested_static)
                                             .values(&ingested_static_pq)
                                             .on_conflict_do_nothing()
                                             .execute(conn)
                                             .await;
 
-                                        let _ = assign_production_tables::assign_production_tables(
+                                        if ingested_static_result.is_ok() {
+                                            
+                                        let assign_prod_tables = assign_production_tables::assign_production_tables(
                                             &feed_id,
                                             &attempt_id,
                                             Arc::clone(&arc_conn_pool),
                                         ).await;
+
+                                    use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
+
+                                    let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
+                                    .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
+                                .execute(conn).await;
+
+                                        }
 
                                     } else {
                                         //print output
@@ -538,24 +577,30 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
                                         use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
                                         
-                                        let _ = diesel::update(static_download_attempts
+                                        let update_as_failed = diesel::update(static_download_attempts
                                         .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
                                         .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
                                         ).set(catenary::schema::gtfs::static_download_attempts::dsl::failed.eq(true))
                                         .execute(conn)
                                         .await;
-    
+
+                                        if update_as_failed.is_err() {
+
+                                        } else {    
                                         //Delete objects from the attempt
-                                        let _ = delete_attempt_objects(&feed_id, &attempt_id, Arc::clone(&arc_conn_pool)).await;
+                                        let delete_attempt = delete_attempt_objects(&feed_id, &attempt_id, Arc::clone(&arc_conn_pool)).await;
+
+                                        if delete_attempt.is_ok() {
+                                            use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
+
+                                            let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
+                                            .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
+                                        .execute(conn).await;
+                                        }
+                                        }
                                     }
                                     
-                                    //delete InProgressStaticIngest regardless of result
-
-                                    use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
-
-                                    let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
-                                    .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
-                                .execute(conn).await;
+                                    
                                 
                             }
                         

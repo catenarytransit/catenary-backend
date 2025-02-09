@@ -110,36 +110,22 @@ pub async fn gtfs_process_feed(
                 .cloned()
                 .collect::<BTreeSet<_>>();
 
-            gtfs.trips = gtfs
-                .trips
-                .into_iter()
-                .filter(|(trip_id, _)| trips_to_keep.contains(trip_id))
-                .collect();
+            gtfs.trips
+                .retain(|trip_id, _| trips_to_keep.contains(trip_id));
 
-            gtfs.routes = gtfs
-                .routes
-                .into_iter()
-                .filter(|(route_id, _)| route_ids_to_keep.contains(route_id))
-                .collect();
+            gtfs.routes
+                .retain(|route_id, _| route_ids_to_keep.contains(route_id));
 
             println!("Filtered NSW, removed school buses");
             gtfs.print_stats();
             gtfs
         }
-        "f-uc~irvine~anteater~express" => {
+        "f-amtrak~sanjoaquin" => {
             let mut gtfs = gtfs;
 
-            gtfs.feed_info = vec![gtfs_structures::FeedInfo {
-                name: "TransLoc, Inc.".to_string(),
-                url: "https://transloc.com".to_string(),
-                lang: "en".to_string(),
-                start_date: Some(chrono::NaiveDate::from_ymd_opt(2024, 07, 10).unwrap()),
-                end_date: Some(chrono::NaiveDate::from_ymd_opt(2099, 12, 31).unwrap()),
-                version: None,
-                default_lang: Some("en".to_string()),
-                contact_email: None,
-                contact_url: None,
-            }];
+            gtfs.trips.retain(|trip_id, trip| trip.route_id != "ACE");
+
+            gtfs.routes.retain(|route_id, route| route_id != "ACE");
 
             gtfs
         }
@@ -151,7 +137,7 @@ pub async fn gtfs_process_feed(
     let gtfs = minimum_day_filter(gtfs, today - chrono::Duration::days(30));
 
     println!(
-        "Finished reading GTFS for {}, took {:?}ms",
+        "Finished reading GTFS for {}, took {:?}",
         feed_id, gtfs.read_duration
     );
 

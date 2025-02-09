@@ -90,6 +90,7 @@ pub struct DeparturesDebug {
     pub itinerary_meta_ms: u128,
     pub itinerary_row_ms: u128,
     pub trips_ms: u128,
+    pub route_and_cal_ms: u128,
     pub total_time_ms: u128,
 }
 
@@ -1236,6 +1237,7 @@ pub async fn nearby_from_coords(
                     itinerary_row_ms: itinerary_duration.as_millis(),
                     trips_ms: trip_lookup_elapsed.as_millis(),
                     total_time_ms: total_elapsed_time.as_millis(),
+                    route_and_cal_ms: calendar_timer_finish.as_millis()
                 },
             })
         }
