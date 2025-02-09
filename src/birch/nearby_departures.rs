@@ -298,6 +298,11 @@ pub async fn nearby_from_coords(
 
     let end_stops_duration = start_stops_query.elapsed();
 
+    if let Err(stops) = stops {
+        return HttpResponse::InternalServerError()
+            .body(format!("Could not return stops\n{:#?}", stops));
+    }
+
     let stops = stops.unwrap();
 
     if stops.len() > 400 {
@@ -1237,7 +1242,7 @@ pub async fn nearby_from_coords(
                     itinerary_row_ms: itinerary_duration.as_millis(),
                     trips_ms: trip_lookup_elapsed.as_millis(),
                     total_time_ms: total_elapsed_time.as_millis(),
-                    route_and_cal_ms: calendar_timer_finish.as_millis()
+                    route_and_cal_ms: calendar_timer_finish.as_millis(),
                 },
             })
         }
