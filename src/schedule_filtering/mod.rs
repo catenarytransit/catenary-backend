@@ -100,20 +100,17 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
     for service_id in all_service_ids {
         let calendar = gtfs.calendar.get(&service_id);
         let calendar_dates = gtfs.calendar_dates.get(&service_id);
-
         let mut is_active = false;
 
         if let Some(cal) = calendar {
 
             if cal.end_date >= naive_date {
-
                 let start_date = std::cmp::max(cal.start_date, naive_date);
-                let end_date = cal.end_date;
-
                 let mut current_date = start_date;
-                while current_date <= end_date {
+
+                while current_date <= cal.end_date {
                     let weekday = current_date.weekday();
-                    let is_scheduled = match weekday {
+                    let scheduled = match weekday {
                         chrono::Weekday::Mon => cal.monday,
                         chrono::Weekday::Tue => cal.tuesday,
                         chrono::Weekday::Wed => cal.wednesday,
@@ -123,11 +120,12 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
                         chrono::Weekday::Sun => cal.sunday,
                     };
 
-                    if is_scheduled {
+                    if scheduled {
 
                         let removed = calendar_dates
                             .map(|dates| dates.iter().any(|d| d.date == current_date && d.exception_type == 2))
                             .unwrap_or(false);
+
                         if !removed {
                             is_active = true;
                             break;
@@ -142,12 +140,11 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
                     is_active = true;
                 }
             }
-        } else {
+        }
 
-            if let Some(dates) = calendar_dates {
-                if dates.iter().any(|d| d.exception_type == 1 && d.date >= naive_date) {
-                    is_active = true;
-                }
+        else if let Some(dates) = calendar_dates {
+            if dates.iter().any(|d| d.exception_type == 1 && d.date >= naive_date) {
+                is_active = true;
             }
         }
 
@@ -156,13 +153,60 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
         }
     }
 
-    let mut trips_removed: BTreeSet<String> = BTreeSet::new();
+    let mut trips_removed: BTreeSet<String> = gtfs
+        .trips
+        .iter()
+        .filter(|(_, trip)| throwout_calendar_list.contains(&trip.service_id))
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    let mut routes_to_remove = BTreeSet::new();
+    let mut route_trip_counts: HashMap<String, usize> = HashMap::new();
+
     for (trip_id, trip) in &gtfs.trips {
-        if throwout_calendar_list.contains(&trip.service_id) {
-            trips_removed.insert(trip_id.clone());
+        *route_trip_counts.entry(trip.route_id.clone()).or_insert(0) += 1;
+    }
+
+    for (trip_id, trip) in &gtfs.trips {
+        if trips_removed.contains(trip_id) {
+            let count = route_trip_counts.get_mut(&trip.route_id).unwrap();
+            *count -= 1;
+
+            if *count == 0 {
+                routes_to_remove.insert(trip.route_id.clone());
+            }
         }
     }
 
+    let mut shapes_to_remove = BTreeSet::new();
+    let mut shape_trip_counts: HashMap<String, usize> = HashMap::new();
+
+    for (_, trip) in &gtfs.trips {
+        if let Some(shape_id) = &trip.shape_id {
+            *shape_trip_counts.entry(shape_id.clone()).or_insert(0) += 1;
+        }
+    }
+
+    for (trip_id, trip) in &gtfs.trips {
+        if trips_removed.contains(trip_id) {
+            if let Some(shape_id) = &trip.shape_id {
+                let count = shape_trip_counts.get_mut(shape_id).unwrap();
+                *count -= 1;
+
+                if *count == 0 {
+                    shapes_to_remove.insert(shape_id.clone());
+                }
+            }
+        }
+    }
+
+    gtfs.calendar.retain(|id, _| !throwout_calendar_list.contains(id));
+    gtfs.calendar_dates.retain(|id, _| !throwout_calendar_list.contains(id));
+    gtfs.trips.retain(|id, _| !trips_removed.contains(id));
+    gtfs.routes.retain(|id, _| !routes_to_remove.contains(id));
+    gtfs.shapes.retain(|id, _| !shapes_to_remove.contains(id));
+
+    gtfs
 }
 
 #[cfg(test)]
