@@ -103,7 +103,6 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
         let mut is_active = false;
 
         if let Some(cal) = calendar {
-
             if cal.end_date >= naive_date {
                 let start_date = std::cmp::max(cal.start_date, naive_date);
                 let mut current_date = start_date;
@@ -121,9 +120,12 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
                     };
 
                     if scheduled {
-
                         let removed = calendar_dates
-                            .map(|dates| dates.iter().any(|d| d.date == current_date && d.exception_type == Exception::Deleted))
+                            .map(|dates| {
+                                dates.iter().any(|d| {
+                                    d.date == current_date && d.exception_type == Exception::Deleted
+                                })
+                            })
                             .unwrap_or(false);
 
                         if !removed {
@@ -136,14 +138,18 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
             }
 
             if let Some(dates) = calendar_dates {
-                if dates.iter().any(|d| d.exception_type == Exception::Added && d.date >= naive_date) {
+                if dates
+                    .iter()
+                    .any(|d| d.exception_type == Exception::Added && d.date >= naive_date)
+                {
                     is_active = true;
                 }
             }
-        }
-
-        else if let Some(dates) = calendar_dates {
-            if dates.iter().any(|d| d.exception_type == Exception::Added && d.date >= naive_date) {
+        } else if let Some(dates) = calendar_dates {
+            if dates
+                .iter()
+                .any(|d| d.exception_type == Exception::Added && d.date >= naive_date)
+            {
                 is_active = true;
             }
         }
@@ -200,8 +206,10 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
         }
     }
 
-    gtfs.calendar.retain(|id, _| !throwout_calendar_list.contains(id));
-    gtfs.calendar_dates.retain(|id, _| !throwout_calendar_list.contains(id));
+    gtfs.calendar
+        .retain(|id, _| !throwout_calendar_list.contains(id));
+    gtfs.calendar_dates
+        .retain(|id, _| !throwout_calendar_list.contains(id));
     gtfs.trips.retain(|id, _| !trips_removed.contains(id));
     gtfs.routes.retain(|id, _| !routes_to_remove.contains(id));
     gtfs.shapes.retain(|id, _| !shapes_to_remove.contains(id));
