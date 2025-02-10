@@ -88,79 +88,81 @@ pub fn include_only_route_types(
 
 pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
     let mut gtfs = gtfs;
-
     let mut throwout_calendar_list = BTreeSet::new();
-    let mut routes_to_trips: HashMap<String, Vec<String>> = HashMap::new();
-    let mut trips_removed: BTreeSet<String> = BTreeSet::new();
 
-    let mut shapes_to_trips: HashMap<String, Vec<String>> = HashMap::new();
+    let all_service_ids: BTreeSet<_> = gtfs
+        .calendar
+        .keys()
+        .chain(gtfs.calendar_dates.keys())
+        .cloned()
+        .collect();
 
-    for (calendar_id, calendar) in &gtfs.calendar {
-        if calendar.end_date < naive_date {
-            let contains_any_exceptions_greater_than_or_equal_to_date =
-                match gtfs.calendar_dates.get(calendar_id) {
-                    Some(calendar_dates) => calendar_dates
-                        .iter()
-                        .any(|calendar_date| calendar_date.date >= naive_date),
-                    None => false,
-                };
+    for service_id in all_service_ids {
+        let calendar = gtfs.calendar.get(&service_id);
+        let calendar_dates = gtfs.calendar_dates.get(&service_id);
 
-            if !contains_any_exceptions_greater_than_or_equal_to_date {
-                throwout_calendar_list.insert(calendar_id.clone());
+        let mut is_active = false;
+
+        if let Some(cal) = calendar {
+
+            if cal.end_date >= naive_date {
+
+                let start_date = std::cmp::max(cal.start_date, naive_date);
+                let end_date = cal.end_date;
+
+                let mut current_date = start_date;
+                while current_date <= end_date {
+                    let weekday = current_date.weekday();
+                    let is_scheduled = match weekday {
+                        chrono::Weekday::Mon => cal.monday,
+                        chrono::Weekday::Tue => cal.tuesday,
+                        chrono::Weekday::Wed => cal.wednesday,
+                        chrono::Weekday::Thu => cal.thursday,
+                        chrono::Weekday::Fri => cal.friday,
+                        chrono::Weekday::Sat => cal.saturday,
+                        chrono::Weekday::Sun => cal.sunday,
+                    };
+
+                    if is_scheduled {
+
+                        let removed = calendar_dates
+                            .map(|dates| dates.iter().any(|d| d.date == current_date && d.exception_type == 2))
+                            .unwrap_or(false);
+                        if !removed {
+                            is_active = true;
+                            break;
+                        }
+                    }
+                    current_date = current_date.succ_opt().unwrap();
+                }
             }
+
+            if let Some(dates) = calendar_dates {
+                if dates.iter().any(|d| d.exception_type == 1 && d.date >= naive_date) {
+                    is_active = true;
+                }
+            }
+        } else {
+
+            if let Some(dates) = calendar_dates {
+                if dates.iter().any(|d| d.exception_type == 1 && d.date >= naive_date) {
+                    is_active = true;
+                }
+            }
+        }
+
+        if !is_active {
+            throwout_calendar_list.insert(service_id);
         }
     }
 
+    let mut trips_removed: BTreeSet<String> = BTreeSet::new();
     for (trip_id, trip) in &gtfs.trips {
-        routes_to_trips
-            .entry(trip.route_id.clone())
-            .and_modify(|x| x.push(trip_id.clone()))
-            .or_insert(vec![trip_id.clone()]);
-
-        if let Some(shape_id) = &trip.shape_id {
-            shapes_to_trips
-                .entry(shape_id.clone())
-                .and_modify(|x| x.push(trip_id.clone()))
-                .or_insert(vec![trip_id.clone()]);
-        }
-
         if throwout_calendar_list.contains(&trip.service_id) {
             trips_removed.insert(trip_id.clone());
         }
     }
 
-    let mut throwout_routes_list: BTreeSet<String> = BTreeSet::new();
-
-    for (route_id, trip_ids) in routes_to_trips {
-        let mark_for_deletion = trip_ids.iter().all(|x| trips_removed.contains(x));
-
-        if mark_for_deletion {
-            throwout_routes_list.insert(route_id.clone());
-        }
-    }
-
-    for (shape_id, trip_ids) in shapes_to_trips {
-        let mark_for_deletion = trip_ids.iter().all(|x| trips_removed.contains(x));
-
-        if mark_for_deletion {
-            //gtfs.shapes.remove(&shape_id);
-        }
-    }
-
-    for route_id in throwout_routes_list {
-        gtfs.routes.remove(&route_id);
-    }
-
-    for trip_id in trips_removed {
-        gtfs.trips.remove(&trip_id);
-    }
-
-    for calendar in &throwout_calendar_list {
-        gtfs.calendar.remove(calendar);
-        gtfs.calendar_dates.remove(calendar);
-    }
-
-    gtfs
 }
 
 #[cfg(test)]
