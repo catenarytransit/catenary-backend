@@ -123,7 +123,7 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
                     if scheduled {
 
                         let removed = calendar_dates
-                            .map(|dates| dates.iter().any(|d| d.date == current_date && d.exception_type == 2))
+                            .map(|dates| dates.iter().any(|d| d.date == current_date && d.exception_type == Exception::Deleted))
                             .unwrap_or(false);
 
                         if !removed {
@@ -136,14 +136,14 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
             }
 
             if let Some(dates) = calendar_dates {
-                if dates.iter().any(|d| d.exception_type == 1 && d.date >= naive_date) {
+                if dates.iter().any(|d| d.exception_type == Exception::Added && d.date >= naive_date) {
                     is_active = true;
                 }
             }
         }
 
         else if let Some(dates) = calendar_dates {
-            if dates.iter().any(|d| d.exception_type == 1 && d.date >= naive_date) {
+            if dates.iter().any(|d| d.exception_type == Exception::Added && d.date >= naive_date) {
                 is_active = true;
             }
         }
