@@ -129,6 +129,8 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
+        "f-gtfs~de" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(gtfs),
+
         _ => gtfs,
     };
 

@@ -402,7 +402,9 @@ pub async fn nearby_from_coords(
 
         let haversine_distance = input_point.haversine_distance(&stop_point_geo);
 
-        sorted_order_stops.push(((s.chateau.clone(), s.gtfs_id.clone()), haversine_distance))
+        if haversine_distance <= rail_and_other_distance_limit as f64 {
+            sorted_order_stops.push(((s.chateau.clone(), s.gtfs_id.clone()), haversine_distance))
+        }
     }
 
     sorted_order_stops.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
