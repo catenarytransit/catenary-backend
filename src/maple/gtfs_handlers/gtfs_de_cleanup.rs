@@ -1,4 +1,5 @@
 use gtfs_structures::Gtfs;
+use std::collections::HashMap;
 
 pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
     let mut gtfs = gtfs;
@@ -9,15 +10,17 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         .map(|x| {
             gtfs.agencies
                 .iter()
-                .find(|y| y.agency_name == *x)
+                .find(|y| y.name == *x)
                 .unwrap()
-                .agency_id
+                .id
                 .clone()
         })
+        .flatten()
+        .map(|x| x.to_string())
         .collect::<Vec<String>>();
 
     gtfs.agencies
-        .retain(|x| !to_delete_agencies.contains(&x.agency_name));
+        .retain(|x| !agency_ids_to_remove.contains(&x.id.as_ref().unwrap()));
 
     let stops_to_agency_ids: HashMap<String, Vec<String>> = HashMap::new();
 
