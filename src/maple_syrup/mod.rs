@@ -202,7 +202,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                             },
                             None => None,
                         }
-                    },
+                    }
                 }
             }
         };
