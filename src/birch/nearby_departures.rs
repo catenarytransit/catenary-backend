@@ -1224,9 +1224,12 @@ pub async fn nearby_from_coords(
             }
 
             departures.sort_by(|a, b| {
-                a.closest_distance
-                    .partial_cmp(&b.closest_distance)
-                    .unwrap_or(a.route_id.cmp(&b.route_id))
+                match a.closest_distance
+                .partial_cmp(&b.closest_distance) {
+                    Some(Ordering::Equal) => a.route_id.cmp(&b.route_id),
+                    Some(x) => x,
+                    None => a.route_id.cmp(&b.route_id),
+                }
             });
 
             let total_elapsed_time = start.elapsed();
