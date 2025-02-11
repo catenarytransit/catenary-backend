@@ -138,7 +138,7 @@ pub async fn gtfs_process_feed(
 
     let number_of_days = match feed_id {
         "f-gtfs~de" => 7,
-        _ => 20
+        _ => 20,
     };
 
     let gtfs = minimum_day_filter(gtfs, today - chrono::Duration::days(number_of_days));
