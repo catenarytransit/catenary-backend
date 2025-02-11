@@ -6,9 +6,9 @@ use catenary::enum_to_int::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::stops::dsl::stops as stops_table;
 use diesel_async::RunQueryDsl;
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use itertools::Itertools;
 use titlecase::titlecase;
 
 pub async fn stops_into_postgres(
@@ -22,7 +22,6 @@ pub async fn stops_into_postgres(
     stop_id_to_children_ids: &HashMap<String, HashSet<String>>,
     stop_id_to_children_route: &HashMap<String, HashSet<i16>>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
-    
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
@@ -47,7 +46,7 @@ pub async fn stops_into_postgres(
                     .replace(" (Railway) ", "")
                     .replace(" Light Rail", "")
             });
-    
+
             let stop_pg = catenary::models::Stop {
                 onestop_feed_id: feed_id.to_string(),
                 chateau: chateau_id.to_string(),
@@ -83,7 +82,8 @@ pub async fn stops_into_postgres(
                     )),
                     false => match stop.parent_station.is_some() {
                         true => {
-                            let parent_station = gtfs.stops.get(stop.parent_station.as_ref().unwrap());
+                            let parent_station =
+                                gtfs.stops.get(stop.parent_station.as_ref().unwrap());
                             match parent_station {
                                 Some(parent_station) => match parent_station.latitude.is_some()
                                     && parent_station.longitude.is_some()
@@ -139,16 +139,14 @@ pub async fn stops_into_postgres(
                 },
                 allowed_spatial_query: false,
             };
-    
-           
-    
+
             insertable_stops.push(stop_pg);
         }
 
         diesel::insert_into(stops_table)
-                .values(insertable_stops)
-                .execute(conn)
-                .await?;
+            .values(insertable_stops)
+            .execute(conn)
+            .await?;
     }
 
     Ok(())
