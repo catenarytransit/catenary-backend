@@ -236,7 +236,7 @@ pub async fn nearby_from_coords(
     let (conn_pre, conn2_pre, conn3_pre) =
         tokio::join!(conn_pool.get(), conn_pool.get(), conn_pool.get());
 
-    if conn.pre.is_err() || conn2_pre.is_err() || conn3_pre.is_err() {
+    if conn_pre.is_err() || conn2_pre.is_err() || conn3_pre.is_err() {
         return HttpResponse::InternalServerError().body("Could not get a connection to the database");
     }
 
