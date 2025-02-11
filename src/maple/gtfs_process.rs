@@ -136,7 +136,12 @@ pub async fn gtfs_process_feed(
 
     let today = chrono::Utc::now().naive_utc().date();
 
-    let gtfs = minimum_day_filter(gtfs, today - chrono::Duration::days(30));
+    let number_of_days = match feed_id {
+        "f-gtfs~de" => 7,
+        _ => 30
+    };
+
+    let gtfs = minimum_day_filter(gtfs, today - chrono::Duration::days(number_of_days));
 
     println!(
         "Finished reading GTFS for {}, took {:?}",
