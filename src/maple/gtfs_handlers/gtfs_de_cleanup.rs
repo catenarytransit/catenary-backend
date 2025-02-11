@@ -9,7 +9,7 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "Berliner Verkehrsbetriebe",
         "Karlsruher Verkehrsverbund",
         "Hamburger Verkehrsverbund",
-        "Freiburger Verkehrs AG"
+        "Freiburger Verkehrs AG",
     ];
 
     let agency_ids_to_remove = to_delete_agencies
