@@ -192,7 +192,17 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                         None => None,
                     },
                     1 => stop_headsigns[0].clone(),
-                    _ => None,
+                    _ => {
+                        //use the last stop
+
+                        match stop_diffs.last() {
+                            Some(last_stop) => match gtfs.stops.get(last_stop.stop_id.as_str()) {
+                                Some(stop) => stop.name.clone(),
+                                None => None,
+                            },
+                            None => None,
+                        }
+                    },
                 }
             }
         };
