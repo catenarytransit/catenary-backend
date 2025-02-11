@@ -1,5 +1,7 @@
 # .github/workflows/release.yml
 
+name: Release Compiled version on release tag
+
 on:
   release:
     types: [created]
