@@ -40,6 +40,7 @@ use geo::HaversineDistance;
 use leapfrog::hashmap;
 use rouille::input;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::btree_map;
 use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
