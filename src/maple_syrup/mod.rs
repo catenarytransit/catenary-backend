@@ -176,10 +176,11 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                     .replace("-Funded in part by/SB County Measure A", ""),
             ),
             None => {
-                let stop_headsigns: Vec<Option<String>> = stop_diffs
+                let stop_headsigns: Vec<String> = stop_diffs
                     .iter()
                     .map(|x| x.stop_headsign.clone())
                     .unique()
+                    .flatten()
                     .collect();
 
                 match stop_headsigns.len() {
@@ -191,7 +192,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                         },
                         None => None,
                     },
-                    1 => stop_headsigns[0].clone(),
+                    1 => Some(stop_headsigns[0].clone()),
                     _ => {
                         //use the last stop
 
