@@ -107,6 +107,10 @@ pub fn get_gtfs_header_timestamp_from_bytes(data: &[u8]) -> Option<u64> {
             // Skip other fields (basic skipping, might need more robust protobuf parsing for real-world)
             // For simplicity, assuming fixed length skipping or length-delimited skipping is not needed for this specific task.
             index += 1; // Basic byte increment, may need more sophisticated skipping logic for full protobuf parsing
+
+            if index > 10000 {
+                return None; // Prevent infinite loop
+            }
         }
     }
     None // Timestamp tag not found
