@@ -283,8 +283,6 @@ impl AspenRpc for AspenServer {
             .timestamps_of_gtfs_rt
             .get(&(realtime_feed_id.clone(), GtfsRtType::Alerts));
 
-        
-
         // if any of the timestamps are None, then we need to update the data
         //otherwise, if any of the timestamps are different, we need to update the data
 
