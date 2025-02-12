@@ -829,16 +829,17 @@ async fn main() -> anyhow::Result<()> {
             let etcd_addresses = etcd_addresses.clone();
             let arc_etcd_connect_options = arc_etcd_connect_options.clone();
 
+            let mut etcd = etcd_client::Client::connect(
+                etcd_addresses.clone().as_slice(),
+                arc_etcd_connect_options.as_ref().to_owned(),
+            )
+            .await?;
+
             async move {
                 loop {
-                    let mut etcd = etcd_client::Client::connect(
-                        etcd_addresses.clone().as_slice(),
-                        arc_etcd_connect_options.as_ref().to_owned(),
-                    )
-                    .await?;
+                    println!("Renewing lease");
                     let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await?;
-
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
                 Ok(())
             }
