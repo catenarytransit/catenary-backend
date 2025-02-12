@@ -904,8 +904,14 @@ async fn main() -> anyhow::Result<()> {
     ) -> Result<T, Box<dyn Error + Sync + Send>> {
         match handle.await {
             Ok(Ok(result)) => panic!("Stopping wasn't supposed to happen!"),
-            Ok(Err(err)) => Err(err),
-            Err(err) => Err(Box::new(err)),
+            Ok(Err(err)) => {
+                eprintln!("{:#?}", err);
+                Err(err)
+            }
+            Err(err) => {
+                eprintln!("{:#?}", err);
+                Err(Box::new(err))
+            }
         }
     }
 
