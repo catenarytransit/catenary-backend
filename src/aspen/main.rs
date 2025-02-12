@@ -260,22 +260,56 @@ impl AspenRpc for AspenServer {
             alerts: a_purehash,
         };*/
 
-        let new_v_header_timestamp = vehicles.as_ref().map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice())).flatten();
-        let new_t_header_timestamp = trips.as_ref().map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice())).flatten();
-        let new_a_header_timestamp = alerts.as_ref().map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice())).flatten();
+        let new_v_header_timestamp = vehicles
+            .as_ref()
+            .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
+            .flatten();
+        let new_t_header_timestamp = trips
+            .as_ref()
+            .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
+            .flatten();
+        let new_a_header_timestamp = alerts
+            .as_ref()
+            .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
+            .flatten();
 
-        let existing_timestamp_v = self.timestamps_of_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions));
-        let existing_timestamp_t = self.timestamps_of_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates));
-        let existing_timestamp_a = self.timestamps_of_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::Alerts));
+        let existing_timestamp_v = self
+            .timestamps_of_gtfs_rt
+            .get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions));
+        let existing_timestamp_t = self
+            .timestamps_of_gtfs_rt
+            .get(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates));
+        let existing_timestamp_a = self
+            .timestamps_of_gtfs_rt
+            .get(&(realtime_feed_id.clone(), GtfsRtType::Alerts));
 
         // if any of the timestamps are None, then we need to update the data
         //otherwise, if any of the timestamps are different, we need to update the data
 
-        let new_data_status_from_timestamps = match (new_v_header_timestamp, new_t_header_timestamp, new_a_header_timestamp) {
-            (Some(new_v_header_timestamp), Some(new_t_header_timestamp), Some(new_a_header_timestamp)) => {
-                match (existing_timestamp_v, existing_timestamp_t, existing_timestamp_a) {
-                    (Some(existing_timestamp_v), Some(existing_timestamp_t), Some(existing_timestamp_a)) => {
-                        if new_v_header_timestamp == *existing_timestamp_v.get() && new_t_header_timestamp == *existing_timestamp_t.get() && new_a_header_timestamp == *existing_timestamp_a.get() {
+        let new_data_status_from_timestamps = match (
+            new_v_header_timestamp,
+            new_t_header_timestamp,
+            new_a_header_timestamp,
+        ) {
+            (
+                Some(new_v_header_timestamp),
+                Some(new_t_header_timestamp),
+                Some(new_a_header_timestamp),
+            ) => {
+                match (
+                    existing_timestamp_v,
+                    existing_timestamp_t,
+                    existing_timestamp_a,
+                ) {
+                    (
+                        Some(existing_timestamp_v),
+                        Some(existing_timestamp_t),
+                        Some(existing_timestamp_a),
+                    ) => {
+                        if new_v_header_timestamp == *existing_timestamp_v.get()
+                            && new_t_header_timestamp == *existing_timestamp_t.get()
+                            && new_a_header_timestamp == *existing_timestamp_a.get()
+                        {
                             println!("Same data as before in feed {}, skipping", realtime_feed_id);
                             false
                         } else {
