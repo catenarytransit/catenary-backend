@@ -252,34 +252,49 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-        let v_purehash = vehicles
-            .as_ref()
-            .map(|data| catenary::ahash_fast_hash(&data.as_slice()));
-        let t_purehash = trips
-            .as_ref()
-            .map(|data| catenary::ahash_fast_hash(&data.as_slice()));
-        let a_purehash = alerts
-            .as_ref()
-            .map(|data| catenary::ahash_fast_hash(&data.as_slice()));
+        //let existing_hashes = self.hash_of_raw_gtfs_rt_protobuf.get(&realtime_feed_id);
 
-        let existing_hashes = self.hash_of_raw_gtfs_rt_protobuf.get(&realtime_feed_id);
-
-        let new_hashes = GtfsRealtimeHashStore {
+        /*let new_hashes = GtfsRealtimeHashStore {
             vehicles: v_purehash,
             trips: t_purehash,
             alerts: a_purehash,
+        };*/
+
+        let new_v_header_timestamp = vehicles.as_ref().map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice())).flatten();
+        let new_t_header_timestamp = trips.as_ref().map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice())).flatten();
+        let new_a_header_timestamp = alerts.as_ref().map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice())).flatten();
+
+        let existing_timestamp_v = self.timestamps_of_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions));
+        let existing_timestamp_t = self.timestamps_of_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates));
+        let existing_timestamp_a = self.timestamps_of_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::Alerts));
+
+        // if any of the timestamps are None, then we need to update the data
+        //otherwise, if any of the timestamps are different, we need to update the data
+
+        let new_data_status_from_timestamps = match (new_v_header_timestamp, new_t_header_timestamp, new_a_header_timestamp) {
+            (Some(new_v_header_timestamp), Some(new_t_header_timestamp), Some(new_a_header_timestamp)) => {
+                match (existing_timestamp_v, existing_timestamp_t, existing_timestamp_a) {
+                    (Some(existing_timestamp_v), Some(existing_timestamp_t), Some(existing_timestamp_a)) => {
+                        if new_v_header_timestamp == *existing_timestamp_v.get() && new_t_header_timestamp == *existing_timestamp_t.get() && new_a_header_timestamp == *existing_timestamp_a.get() {
+                            println!("Same data as before in feed {}, skipping", realtime_feed_id);
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                    _ => true,
+                }
+            }
+            _ => true,
         };
 
-        let new_data_status_from_pure_hash = match existing_hashes {
-            None => true,
-            Some(existing_hashes) => *(existing_hashes.get()) != new_hashes,
-        };
-
-        if new_data_status_from_pure_hash {
+        if new_data_status_from_timestamps {
+            /*
             self.hash_of_raw_gtfs_rt_protobuf
                 .entry(realtime_feed_id.clone())
                 .and_modify(|existing_hash_mut| *existing_hash_mut = new_hashes)
                 .or_insert(new_hashes);
+                 */
 
             let vehicles_gtfs_rt = match vehicles_response_code {
                 Some(200) => match vehicles {
