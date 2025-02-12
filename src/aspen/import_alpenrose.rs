@@ -756,6 +756,10 @@ pub async fn new_rt_data(
             if let Some(vehicle_data) = &vehicle_gtfs.vehicle {
                 if let Some(label) = &vehicle_data.label {
                     gtfs_vehicle_labels_to_ids.insert(label.clone(), key.clone());
+                } else {
+                    if let Some(id) = &vehicle_data.id {
+                        gtfs_vehicle_labels_to_ids.insert(id.clone(), key.clone());
+                    }
                 }
             }
         }
