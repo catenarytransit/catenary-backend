@@ -75,7 +75,8 @@ pub async fn aspen_leader_thread(
                                 Arc::clone(&workers_nodes),
                                 Arc::clone(&feeds_list),
                             )
-                            .await.unwrap();
+                            .await
+                            .unwrap();
 
                             //renew the etcd lease
                             let _ = etcd.lease_keep_alive(lease_id_for_this_worker).await?;
@@ -101,7 +102,10 @@ pub async fn aspen_leader_thread(
         }
 
         //renew the etcd lease
-        let _ = etcd.lease_keep_alive(lease_id_for_this_worker).await.unwrap();
+        let _ = etcd
+            .lease_keep_alive(lease_id_for_this_worker)
+            .await
+            .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }

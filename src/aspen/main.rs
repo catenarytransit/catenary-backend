@@ -322,7 +322,8 @@ impl AspenRpc for AspenServer {
             _ => true,
         };
 
-        if new_data_status_from_timestamps {
+        //if new_data_status_from_timestamps {
+        if true {
             /*
             self.hash_of_raw_gtfs_rt_protobuf
                 .entry(realtime_feed_id.clone())
