@@ -939,28 +939,20 @@ fn contains_new_data(
 
     let key = (realtime_feed_id.to_string(), gtfs_rt_type);
 
-    let mut need_to_evaluate_using_hash = false;
-    let mut need_to_insert_hash = false;
-
-    let hash: Option<u64> = None;
-
     match pb_data.header.timestamp {
         Some(0) | None => {
-            need_to_evaluate_using_hash = true;
+            new_data = true;
         }
         Some(new_timestamp) => {
             match server.timestamps_of_gtfs_rt.get(&key) {
                 Some(existing_timestamp) => {
                     if *(existing_timestamp.get()) == new_timestamp {
-                        need_to_evaluate_using_hash = true;
                     } else {
-                        //the timestamp is different, no need to calculate the hash
                         new_data = true;
                     }
                 }
                 None => {
                     new_data = true;
-                    need_to_insert_hash = true;
                 }
             }
         }
