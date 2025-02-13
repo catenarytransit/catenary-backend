@@ -252,7 +252,7 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-        let new_v_header_timestamp = vehicles
+     /*   let new_v_header_timestamp = vehicles
             .as_ref()
             .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
             .flatten();
@@ -312,10 +312,10 @@ impl AspenRpc for AspenServer {
                 }
             }
             _ => true,
-        };
+        };*/
 
-        if new_data_status_from_timestamps {
-            // if true {
+     //   if new_data_status_from_timestamps {
+             if true {
 
             let vehicles_gtfs_rt = match vehicles_response_code {
                 Some(200) => match vehicles {
@@ -717,8 +717,8 @@ async fn main() -> anyhow::Result<()> {
     let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), 40427);
     let socket = SocketAddr::new(server_addr.0, server_addr.1);
 
-    let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Bincode::default).await?;
-    //tracing::info!("Listening on port {}", listener.local_addr().port());
+    let mut listener  = tarpc::serde_transport::tcp::listen(&server_addr, Bincode::default).await?;
+    tracing::info!("Listening on port {}", listener.local_addr().port());
     listener.config_mut().max_frame_length(usize::MAX);
 
     //connect to etcd
@@ -836,49 +836,49 @@ async fn main() -> anyhow::Result<()> {
             }
         });
 
-    let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
-        tokio::task::spawn({
-            println!("Listening on port {}", listener.local_addr().port());
+         let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
+    tokio::task::spawn({
+        println!("Listening on port {}", listener.local_addr().port());
 
-            move || async move {
-                listener
-                    // Ignore accept errors.
-                    .filter_map(|r| future::ready(r.ok()))
-                    .map(server::BaseChannel::with_defaults)
-                    .map(|channel| {
-                        let server = AspenServer {
-                            addr: channel.transport().peer_addr().unwrap(),
-                            worker_id: Arc::clone(&this_worker_id),
-                            authoritative_data_store: Arc::clone(&authoritative_data_store),
-                            conn_pool: Arc::clone(&arc_conn_pool),
-                            alpenrose_to_process_queue: Arc::clone(&process_from_alpenrose_queue),
-                            authoritative_gtfs_rt_store: Arc::clone(&raw_gtfs),
-                            backup_data_store: Arc::clone(&backup_data_store),
-                            backup_gtfs_rt_store: Arc::clone(&backup_raw_gtfs),
-                            alpenrose_to_process_queue_chateaus: Arc::clone(
-                                &alpenrose_to_process_queue_chateaus,
-                            ),
-                            rough_hash_of_gtfs_rt: Arc::clone(&rough_hash_of_gtfs_rt),
-                            hash_of_raw_gtfs_rt_protobuf: Arc::clone(&hash_of_raw_gtfs_rt_protobuf),
-                            worker_etcd_lease_id: etcd_lease_id_for_this_worker,
-                            etcd_addresses: Arc::clone(&etcd_addresses),
-                            etcd_connect_options: Arc::clone(&arc_etcd_connect_options),
-                            timestamps_of_gtfs_rt: Arc::clone(&timestamps_of_gtfs_rt),
-                            authoritative_trip_updates_by_gtfs_feed_history: Arc::new(
-                                SccHashMap::new(),
-                            ),
-                            backup_trip_updates_by_gtfs_feed_history: Arc::new(SccHashMap::new()),
-                        };
-                        channel.execute(server.serve()).for_each(spawn)
-                    })
-                    // Max n channels.
-                    .buffer_unordered(channel_count)
-                    .for_each(|_| async {})
-                    .await;
+        move || async move {
+            listener
+                // Ignore accept errors.
+                .filter_map(|r| future::ready(r.ok()))
+                .map(server::BaseChannel::with_defaults)
+                .map(|channel| {
+                    let server = AspenServer {
+                        addr: channel.transport().peer_addr().unwrap(),
+                        worker_id: Arc::clone(&this_worker_id),
+                        authoritative_data_store: Arc::clone(&authoritative_data_store),
+                        conn_pool: Arc::clone(&arc_conn_pool),
+                        alpenrose_to_process_queue: Arc::clone(&process_from_alpenrose_queue),
+                        authoritative_gtfs_rt_store: Arc::clone(&raw_gtfs),
+                        backup_data_store: Arc::clone(&backup_data_store),
+                        backup_gtfs_rt_store: Arc::clone(&backup_raw_gtfs),
+                        alpenrose_to_process_queue_chateaus: Arc::clone(
+                            &alpenrose_to_process_queue_chateaus,
+                        ),
+                        rough_hash_of_gtfs_rt: Arc::clone(&rough_hash_of_gtfs_rt),
+                        hash_of_raw_gtfs_rt_protobuf: Arc::clone(&hash_of_raw_gtfs_rt_protobuf),
+                        worker_etcd_lease_id: etcd_lease_id_for_this_worker,
+                        etcd_addresses: Arc::clone(&etcd_addresses),
+                        etcd_connect_options: Arc::clone(&arc_etcd_connect_options),
+                        timestamps_of_gtfs_rt: Arc::clone(&timestamps_of_gtfs_rt),
+                        authoritative_trip_updates_by_gtfs_feed_history: Arc::new(
+                            SccHashMap::new(),
+                        ),
+                        backup_trip_updates_by_gtfs_feed_history: Arc::new(SccHashMap::new()),
+                    };
+                    channel.execute(server.serve()).for_each(spawn)
+                })
+                // Max n channels.
+                .buffer_unordered(channel_count)
+                .for_each(|_| async {})
+                .await;
 
-                Ok(())
-            }
-        }());
+            Ok(())
+        }
+    }());
 
     async fn flatten<T>(
         handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
@@ -907,7 +907,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let result_series = tokio::try_join!(
-        flatten_stopping_is_err(async_from_alpenrose_processor_handler),
+        //flatten_stopping_is_err(async_from_alpenrose_processor_handler),
         flatten_stopping_is_err(tarpc_server),
         flatten_stopping_is_err(etcd_lease_renewer)
     )
