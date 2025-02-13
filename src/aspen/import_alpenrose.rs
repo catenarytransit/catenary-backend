@@ -139,6 +139,7 @@ pub async fn new_rt_data(
     alerts_response_code: Option<u16>,
     pool: Arc<CatenaryPostgresPool>,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    println!("Started processing for chateau {} and feed {}", chateau_id, realtime_feed_id);
     let start = std::time::Instant::now();
 
     //either fetch the mutable reference to trip compressed cache or make an empty one
