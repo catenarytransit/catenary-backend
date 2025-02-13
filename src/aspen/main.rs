@@ -717,9 +717,9 @@ async fn main() -> anyhow::Result<()> {
     let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), 40427);
     let socket = SocketAddr::new(server_addr.0, server_addr.1);
 
-    // let mut listener:  = tarpc::serde_transport::tcp::listen(&server_addr, Bincode::default).await?;
-    //tracing::info!("Listening on port {}", listener.local_addr().port());
-    //listener.config_mut().max_frame_length(usize::MAX);
+    let mut listener  = tarpc::serde_transport::tcp::listen(&server_addr, Bincode::default).await?;
+    tracing::info!("Listening on port {}", listener.local_addr().port());
+    listener.config_mut().max_frame_length(usize::MAX);
 
     //connect to etcd
 
@@ -765,8 +765,8 @@ async fn main() -> anyhow::Result<()> {
     let process_from_alpenrose_queue = Arc::new(Injector::<ProcessAlpenroseData>::new());
     let raw_gtfs = Arc::new(SccHashMap::new());
     let authoritative_data_store = Arc::new(SccHashMap::new());
-    //let backup_data_store = Arc::new(SccHashMap::new());
-    //let backup_raw_gtfs = Arc::new(SccHashMap::new());
+    let backup_data_store = Arc::new(SccHashMap::new());
+    let backup_raw_gtfs = Arc::new(SccHashMap::new());
     let alpenrose_to_process_queue_chateaus = Arc::new(Mutex::new(HashSet::new()));
     let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
@@ -781,7 +781,7 @@ async fn main() -> anyhow::Result<()> {
     let b_conn_pool = Arc::clone(&arc_conn_pool);
     let b_thread_count = alpenrosethreadcount;
 
-    let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
+    /*let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
         Result<(), Box<dyn Error + Sync + Send>>,
     > = tokio::task::spawn(async_threads_alpenrose::alpenrose_process_threads(
         b_alpenrose_to_process_queue,
@@ -791,7 +791,7 @@ async fn main() -> anyhow::Result<()> {
         b_thread_count,
         Arc::clone(&alpenrose_to_process_queue_chateaus),
         etcd_lease_id_for_this_worker,
-    ));
+    ));*/
 
     let etcd_lease_renewer: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
@@ -836,7 +836,7 @@ async fn main() -> anyhow::Result<()> {
             }
         });
 
-    /*     let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
+         let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
     tokio::task::spawn({
         println!("Listening on port {}", listener.local_addr().port());
 
@@ -878,7 +878,7 @@ async fn main() -> anyhow::Result<()> {
 
             Ok(())
         }
-    }());*/
+    }());
 
     async fn flatten<T>(
         handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
@@ -907,8 +907,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let result_series = tokio::try_join!(
-        flatten_stopping_is_err(async_from_alpenrose_processor_handler),
-        //  flatten_stopping_is_err(tarpc_server),
+        //flatten_stopping_is_err(async_from_alpenrose_processor_handler),
+        flatten_stopping_is_err(tarpc_server),
         flatten_stopping_is_err(etcd_lease_renewer)
     )
     .unwrap();
