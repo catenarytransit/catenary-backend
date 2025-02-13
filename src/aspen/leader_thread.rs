@@ -4,6 +4,8 @@ use std::error::Error;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+#[path="aspen_assignment.rs"]
+mod aspen_assignment;
 
 pub async fn aspen_leader_thread(
     workers_nodes: Arc<Mutex<Vec<String>>>,
@@ -23,9 +25,6 @@ pub async fn aspen_leader_thread(
     .await?;
 
     println!("Connected to etcd!");
-
-    let worker_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
-    let feeds_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
 
     loop {
         //attempt to become leader
@@ -69,7 +68,7 @@ pub async fn aspen_leader_thread(
                             //if the current is the current worker id, do leader tasks
                             // Read the DMFR dataset, divide it into chunks, and assign it to workers
 
-                            crate::aspen_assignment::assign_chateaus(
+                            aspen_assignment::assign_chateaus(
                                 &mut etcd,
                                 Arc::clone(&arc_conn_pool),
                                 Arc::clone(&workers_nodes),

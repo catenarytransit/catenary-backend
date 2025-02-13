@@ -155,6 +155,10 @@ path = "src/birch/server.rs"
 name = "aspen"
 path = "src/aspen/main.rs"
 
+[[bin]]
+name = "aspenleader"
+path = "src/aspen/spawn_leader.rs"
+
 [lib]
 name = "catenary"
 path = "src/lib.rs"

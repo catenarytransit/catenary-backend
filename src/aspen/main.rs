@@ -252,14 +252,6 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-        //let existing_hashes = self.hash_of_raw_gtfs_rt_protobuf.get(&realtime_feed_id);
-
-        /*let new_hashes = GtfsRealtimeHashStore {
-            vehicles: v_purehash,
-            trips: t_purehash,
-            alerts: a_purehash,
-        };*/
-
         let new_v_header_timestamp = vehicles
             .as_ref()
             .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
@@ -322,14 +314,8 @@ impl AspenRpc for AspenServer {
             _ => true,
         };
 
-        //if new_data_status_from_timestamps {
-        if true {
-            /*
-            self.hash_of_raw_gtfs_rt_protobuf
-                .entry(realtime_feed_id.clone())
-                .and_modify(|existing_hash_mut| *existing_hash_mut = new_hashes)
-                .or_insert(new_hashes);
-                 */
+        if new_data_status_from_timestamps {
+       // if true {
 
             let vehicles_gtfs_rt = match vehicles_response_code {
                 Some(200) => match vehicles {
@@ -795,20 +781,6 @@ async fn main() -> anyhow::Result<()> {
     let chateau_list_for_leader_thread = Arc::clone(&chateau_list);
     let this_worker_id_for_leader_thread = Arc::clone(&this_worker_id);
     let arc_conn_pool_for_leader_thread = Arc::clone(&arc_conn_pool);
-
-    let arc_etcd_connect_options_for_lt = Arc::clone(&arc_etcd_connect_options);
-
-    let leader_thread_handler: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
-        tokio::task::spawn(aspen_leader_thread(
-            workers_nodes_for_leader_thread,
-            chateau_list_for_leader_thread,
-            this_worker_id_for_leader_thread,
-            arc_conn_pool_for_leader_thread,
-            Arc::clone(&etcd_addresses),
-            arc_etcd_connect_options_for_lt,
-            etcd_lease_id_for_this_worker,
-        ));
-
     let b_alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
     let b_authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
     let b_authoritative_data_store = Arc::clone(&authoritative_data_store);
