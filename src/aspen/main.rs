@@ -891,7 +891,6 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let result_series = tokio::try_join!(
-        flatten_stopping_is_err(leader_thread_handler),
         flatten_stopping_is_err(async_from_alpenrose_processor_handler),
         flatten_stopping_is_err(tarpc_server),
         flatten_stopping_is_err(etcd_lease_renewer)
