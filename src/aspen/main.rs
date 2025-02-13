@@ -798,12 +798,14 @@ async fn main() -> anyhow::Result<()> {
             let etcd_addresses = etcd_addresses.clone();
             let arc_etcd_connect_options = arc_etcd_connect_options.clone();
 
+            let this_worker_id = this_worker_id.clone();
+
             let mut etcd = etcd_client::Client::connect(
                 etcd_addresses.clone().as_slice(),
                 arc_etcd_connect_options.as_ref().to_owned(),
             )
             .await?;
-
+        
             async move {
                 loop {
                     println!("Renewing lease");
@@ -812,6 +814,14 @@ async fn main() -> anyhow::Result<()> {
                     match x {
                         Ok(_) => {
                             println!("Lease renew successful");
+
+                            let etcd_this_worker_assignment = etcd
+                                .put(
+                                    format!("/aspen_workers/{}", &this_worker_id).as_str(),
+                                    bincode::serialize(&worker_metadata).unwrap(),
+                                    Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id_for_this_worker)),
+                                )
+                                .await?;
                             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         }
                         Err(e) => {
