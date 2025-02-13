@@ -315,7 +315,7 @@ impl AspenRpc for AspenServer {
         };
 
         if new_data_status_from_timestamps {
-       // if true {
+            // if true {
 
             let vehicles_gtfs_rt = match vehicles_response_code {
                 Some(200) => match vehicles {
@@ -478,8 +478,7 @@ impl AspenRpc for AspenServer {
 
             //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
-            if new_data
-            {
+            if new_data {
                 let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
 
                 if !lock_chateau_queue.contains(&chateau_id) {
@@ -902,47 +901,6 @@ async fn main() -> anyhow::Result<()> {
     .unwrap();
 
     panic!("IT WASNT SUPPOSED TO END");
-    /*
-    match result_series {
-        Ok(result_series_ok) => {
-            println!("All threads have exited");
-
-            match &result_series_ok.0 {
-                Err(e) => {
-                    panic!("Error 0: {:?}", e);
-                }
-                Ok(_) => {}
-            }
-
-            match &result_series_ok.1 {
-                Err(e) => {
-                    panic!("Error 1: {:?}", e);
-                }
-                Ok(_) => {}
-            }
-
-            match &result_series_ok.2 {
-                Err(e) => {
-                    panic!("Error 2: {:?}", e);
-                }
-                Ok(_) => {}
-            }
-
-            match &result_series_ok.3 {
-                Err(e) => {
-                    panic!("Error 3: {:?}", e);
-                }
-                Ok(_) => {}
-            }
-
-            Ok(())
-        }
-        Err(e) => {
-            println!("Error Outer: {:?}", e);
-            panic!("{:#?}", e);
-            Err(anyhow::Error::new(e))
-        }
-    }*/
 }
 
 enum SaveTimestamp {
@@ -1007,31 +965,6 @@ fn contains_new_data(
             }
         }
     }
-
-    /*
-    if (need_to_evaluate_using_hash || need_to_insert_hash) {
-        let hash = rough_hash_of_gtfs_rt(pb_data);
-
-        if (need_to_evaluate_using_hash) {
-            match server.rough_hash_of_gtfs_rt.get(&key) {
-                Some(existing_hash) => {
-                    if *(existing_hash.get()) == hash {
-                    } else {
-                        new_data = true;
-                    }
-                }
-                None => {
-                    new_data = true;
-                }
-            }
-        }
-
-        server
-            .rough_hash_of_gtfs_rt
-            .entry(key.clone())
-            .and_modify(|gtfs_data| *gtfs_data = hash)
-            .or_insert(hash);
-    }*/
 
     new_data
 }
