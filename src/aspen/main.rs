@@ -252,7 +252,7 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-        let new_v_header_timestamp = vehicles
+     /*   let new_v_header_timestamp = vehicles
             .as_ref()
             .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
             .flatten();
@@ -312,10 +312,10 @@ impl AspenRpc for AspenServer {
                 }
             }
             _ => true,
-        };
+        };*/
 
-        if new_data_status_from_timestamps {
-            // if true {
+     //   if new_data_status_from_timestamps {
+             if true {
 
             let vehicles_gtfs_rt = match vehicles_response_code {
                 Some(200) => match vehicles {
@@ -781,7 +781,7 @@ async fn main() -> anyhow::Result<()> {
     let b_conn_pool = Arc::clone(&arc_conn_pool);
     let b_thread_count = alpenrosethreadcount;
 
-    /*let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
+    let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
         Result<(), Box<dyn Error + Sync + Send>>,
     > = tokio::task::spawn(async_threads_alpenrose::alpenrose_process_threads(
         b_alpenrose_to_process_queue,
@@ -791,7 +791,7 @@ async fn main() -> anyhow::Result<()> {
         b_thread_count,
         Arc::clone(&alpenrose_to_process_queue_chateaus),
         etcd_lease_id_for_this_worker,
-    ));*/
+    ));
 
     let etcd_lease_renewer: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
