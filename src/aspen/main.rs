@@ -894,7 +894,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .unwrap();
 
-    Ok(())
+    panic!("IT WASNT SUPPOSED TO END");
     /*
     match result_series {
         Ok(result_series_ok) => {
