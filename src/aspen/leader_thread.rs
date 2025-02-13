@@ -76,9 +76,9 @@ pub async fn aspen_leader_thread(
                             )
                             .await;
 
-                        if let Err(e) = &assign_round {
-                            eprintln!("Error in assign_round: {:#?}", e);
-                        }
+                            if let Err(e) = &assign_round {
+                                eprintln!("Error in assign_round: {:#?}", e);
+                            }
 
                             //renew the etcd lease
                             let _ = etcd.lease_keep_alive(lease_id_for_this_worker).await?;

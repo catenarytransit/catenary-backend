@@ -805,7 +805,7 @@ async fn main() -> anyhow::Result<()> {
                 arc_etcd_connect_options.as_ref().to_owned(),
             )
             .await?;
-        
+
             async move {
                 loop {
                     println!("Renewing lease");
@@ -819,7 +819,10 @@ async fn main() -> anyhow::Result<()> {
                                 .put(
                                     format!("/aspen_workers/{}", &this_worker_id).as_str(),
                                     bincode::serialize(&worker_metadata).unwrap(),
-                                    Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id_for_this_worker)),
+                                    Some(
+                                        etcd_client::PutOptions::new()
+                                            .with_lease(etcd_lease_id_for_this_worker),
+                                    ),
                                 )
                                 .await?;
                             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -953,19 +956,17 @@ fn contains_new_data(
         Some(0) | None => {
             new_data = true;
         }
-        Some(new_timestamp) => {
-            match server.timestamps_of_gtfs_rt.get(&key) {
-                Some(existing_timestamp) => {
-                    if *(existing_timestamp.get()) == new_timestamp {
-                    } else {
-                        new_data = true;
-                    }
-                }
-                None => {
+        Some(new_timestamp) => match server.timestamps_of_gtfs_rt.get(&key) {
+            Some(existing_timestamp) => {
+                if *(existing_timestamp.get()) == new_timestamp {
+                } else {
                     new_data = true;
                 }
             }
-        }
+            None => {
+                new_data = true;
+            }
+        },
     }
 
     new_data
