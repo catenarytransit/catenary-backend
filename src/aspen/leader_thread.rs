@@ -31,8 +31,8 @@ pub async fn aspen_leader_thread(
 
         let make_lease = etcd
             .lease_grant(
-                //30 seconds
-                30,
+                //10 seconds
+                10,
                 Some(etcd_client::LeaseGrantOptions::new().with_id(lease_id_for_this_worker)),
             )
             .await;
@@ -68,14 +68,17 @@ pub async fn aspen_leader_thread(
                             //if the current is the current worker id, do leader tasks
                             // Read the DMFR dataset, divide it into chunks, and assign it to workers
 
-                            aspen_assignment::assign_chateaus(
+                            let assign_round = aspen_assignment::assign_chateaus(
                                 &mut etcd,
                                 Arc::clone(&arc_conn_pool),
                                 Arc::clone(&workers_nodes),
                                 Arc::clone(&feeds_list),
                             )
-                            .await
-                            .unwrap();
+                            .await;
+
+                        if let Err(e) = &assign_round {
+                            eprintln!("Error in assign_round: {:#?}", e);
+                        }
 
                             //renew the etcd lease
                             let _ = etcd.lease_keep_alive(lease_id_for_this_worker).await?;
