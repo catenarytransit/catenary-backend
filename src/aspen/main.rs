@@ -810,8 +810,17 @@ async fn main() -> anyhow::Result<()> {
             async move {
                 loop {
                     println!("Renewing lease");
-                    let _ = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await?;
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    let x = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await;
+
+                    match x {
+                        Ok(_) => {
+                            println!("Lease renew successful");
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+                        Err(e) => {
+                            println!("Error renewing lease: {:#?}", e);
+                        }
+                    }
                 }
                 Ok(())
             }
