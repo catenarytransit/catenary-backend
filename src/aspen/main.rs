@@ -744,6 +744,8 @@ async fn main() -> anyhow::Result<()> {
         .await
         .expect("Failed to make lease with etcd");
 
+    println!("Lease granted: {:?}", make_lease);
+
     //register that the worker exists
 
     let worker_metadata = AspenWorkerMetadataEtcd {
@@ -776,11 +778,6 @@ async fn main() -> anyhow::Result<()> {
     let timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
     //run both the leader and the listener simultaniously
-
-    let workers_nodes_for_leader_thread = Arc::clone(&workers_nodes);
-    let chateau_list_for_leader_thread = Arc::clone(&chateau_list);
-    let this_worker_id_for_leader_thread = Arc::clone(&this_worker_id);
-    let arc_conn_pool_for_leader_thread = Arc::clone(&arc_conn_pool);
     let b_alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
     let b_authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
     let b_authoritative_data_store = Arc::clone(&authoritative_data_store);
