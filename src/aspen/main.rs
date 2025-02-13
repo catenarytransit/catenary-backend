@@ -668,7 +668,7 @@ async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
     tokio::spawn(fut);
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread", unhandled_panic = "shutdown_runtime")]
 async fn main() -> anyhow::Result<()> {
     console_subscriber::init();
 
