@@ -836,7 +836,7 @@ async fn main() -> anyhow::Result<()> {
             }
         });
 
-    let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
+    /*let tarpc_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
             println!("Listening on port {}", listener.local_addr().port());
 
@@ -878,7 +878,7 @@ async fn main() -> anyhow::Result<()> {
 
                 Ok(())
             }
-        }());
+        }());*/
 
     async fn flatten<T>(
         handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
