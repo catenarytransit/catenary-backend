@@ -821,7 +821,7 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
                 Ok(r) => {
                     let response = r.json::<Vec<MetrolinkTrackData>>().await;
 
-                    println!("{:?}", response);
+                    //println!("{:?}", response);
 
                     match response {
                         Ok(response) => {
