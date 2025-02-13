@@ -4,7 +4,7 @@ use std::error::Error;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-#[path="aspen_assignment.rs"]
+#[path = "aspen_assignment.rs"]
 mod aspen_assignment;
 
 pub async fn aspen_leader_thread(
