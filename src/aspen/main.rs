@@ -707,7 +707,7 @@ async fn main() -> anyhow::Result<()> {
         .parse::<usize>()
         .expect("alpenrosethreadcount not a number");
 
-    let etcd_lease_id_for_this_worker: i64 = rand::thread_rng().gen_range(0..i64::MAX);
+    let etcd_lease_id_for_this_worker: i64 = rand::rng().random_range(0..i64::MAX);
 
     //connect to postgres
     println!("Connecting to postgres");
