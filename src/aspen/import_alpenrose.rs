@@ -203,12 +203,20 @@ pub async fn new_rt_data(
         };
 
     let conn_pool = pool.as_ref();
-    let conn_pre = conn_pool.get().await;
+    let mut conn_pre = conn_pool.get().await;
 
     let fetched_track_data: TrackData = fetch_track_data(&chateau_id).await;
 
     //println!("Forming pg connection");
-    let conn = &mut conn_pre?;
+    let mut conn = conn_pre;
+
+    if let Err(e) = &conn {
+        println!("Error with connecting to postgres");
+        eprintln!("{:#?}", e);
+        return Ok(false);
+    }
+
+    let conn = &mut conn.unwrap();
     //println!("Connected to postges");
 
     // take all the gtfs rt data and merge it together
