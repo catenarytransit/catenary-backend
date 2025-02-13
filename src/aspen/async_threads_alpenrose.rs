@@ -80,7 +80,11 @@ pub async fn alpenrose_loop_process_thread(
                 new_ingest_task.alerts_response_code,
                 Arc::clone(&conn_pool),
             )
-            .await?;
+            .await;
+
+            if let Err(e) = &rt_processed_status {
+                eprintln!("Error processing RT data: {} {:?}", feed_id, e);
+            }
         } else {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
