@@ -658,6 +658,7 @@ FROM (
         route_label,
         text_color,
         chateau,
+        stop_to_stop_generated,
         ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857), 
         ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
@@ -727,6 +728,7 @@ FROM (
         route_label,
         text_color,
         chateau,
+        stop_to_stop_generated,
         ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857), 
         ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
@@ -796,6 +798,7 @@ FROM (
         route_label,
         text_color,
         chateau,
+        stop_to_stop_generated,
         ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857), 
         ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
@@ -872,6 +875,7 @@ FROM (
         route_label,
         text_color,
         chateau,
+        stop_to_stop_generated,
         ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857), 
         ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
