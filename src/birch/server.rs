@@ -603,6 +603,13 @@ async fn main() -> std::io::Result<()> {
             _ => None,
         };
 
+    let worker_amount = std::env::var("WORKER_AMOUNT")
+        .unwrap_or_else(|_| "4".to_string())
+        .parse::<u8>()
+        .unwrap_or(4);
+
+    println!("Using {} workers", worker_amount);
+
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
         App::new()
@@ -706,7 +713,7 @@ async fn main() -> std::io::Result<()> {
                 "https://catenarymaps.org/favicon.ico",
             ))
     })
-    .workers(32);
+    .workers(worker_amount);
 
     let _ = builder.bind("127.0.0.1:17419").unwrap().run().await;
 
