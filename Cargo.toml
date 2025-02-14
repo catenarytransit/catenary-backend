@@ -169,9 +169,9 @@ path = "src/spruce/main.rs"
 
 #Test binaries
 
-[[bin]]
-name = "test_maple_syrup"
-path = "src/maple_syrup/test.rs"
+#[[bin]]
+#name = "test_maple_syrup"
+#path = "src/maple_syrup/test.rs"
 
 [[bin]]
 name = "alpenrose"
@@ -196,9 +196,9 @@ path = "src/sage/main.rs"
 name = "setup_ip_db"
 path = "src/ip_addr_geo_db_update/main.rs"
 
-[[bin]]
-name = "test_dmfr"
-path = "src/test_dmfr.rs"
+#[[bin]]
+#name = "test_dmfr"
+#path = "src/test_dmfr.rs"
 
 [[bin]]
 name = "osm_extractor"

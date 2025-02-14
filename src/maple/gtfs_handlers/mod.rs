@@ -8,4 +8,4 @@ pub mod rename_route_labels;
 pub mod shape_colour_calculator;
 pub mod stops_associated_items;
 
-pub const MAPLE_INGESTION_VERSION: i32 = 12;
+pub const MAPLE_INGESTION_VERSION: i32 = 13;

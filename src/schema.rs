@@ -255,6 +255,7 @@ pub mod gtfs {
             chateau -> Text,
             gtfs_stop_sequence -> Oid,
             interpolated_time_since_start -> Nullable<Int4>,
+            timepoint -> Nullable<Bool>,
         }
     }
 

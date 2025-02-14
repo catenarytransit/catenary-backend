@@ -490,6 +490,7 @@ pub async fn gtfs_process_feed(
                 arrival_time_since_start: stop_sequence.arrival_time_since_start,
                 departure_time_since_start: stop_sequence.departure_time_since_start,
                 interpolated_time_since_start: stop_sequence.interpolated_time_since_start,
+                timepoint: stop_sequence.timepoint.into(),
             })
             .collect::<Vec<_>>();
 

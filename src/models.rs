@@ -23,6 +23,7 @@ pub struct ItineraryPatternRow {
     pub stop_id: CompactString,
     pub chateau: String,
     pub gtfs_stop_sequence: u32,
+    pub timepoint: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, QueryableByName)]
@@ -55,6 +56,8 @@ pub struct ItineraryPatternRowNearbyLookup {
     pub timezone: String,
     #[diesel(sql_type = Text)]
     pub route_id: String,
+    #[diesel(sql_type = Nullable<Bool>)]
+    pub timepoint: Option<bool>,
 }
 
 #[derive(
