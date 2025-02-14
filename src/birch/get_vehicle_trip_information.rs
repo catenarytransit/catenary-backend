@@ -275,6 +275,7 @@ struct StopTimeIntroduction {
     pub schedule_relationship: Option<i32>,
     pub gtfs_stop_sequence: u16,
     pub interpolated_stoptime_unix_seconds: Option<u64>,
+    pub timepoint: Option<bool>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -854,6 +855,7 @@ pub async fn get_trip_init(
             rt_departure: None,
             schedule_relationship: None,
             rt_platform_string: None,
+            timepoint: row.timepoint,
         };
 
         stop_times_for_this_trip.push(stop_time);
