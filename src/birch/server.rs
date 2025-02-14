@@ -605,7 +605,7 @@ async fn main() -> std::io::Result<()> {
 
     let worker_amount = std::env::var("WORKER_AMOUNT")
         .unwrap_or_else(|_| "4".to_string())
-        .parse::<u8>()
+        .parse::<usize>()
         .unwrap_or(4);
 
     println!("Using {} workers", worker_amount);
