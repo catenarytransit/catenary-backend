@@ -238,9 +238,12 @@ pub async fn new_rt_data(
     let mut alerts: AHashMap<String, AspenisedAlert> = AHashMap::new();
 
     let mut impacted_route_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
-    let impacted_stop_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
+    let mut impacted_stop_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
     let mut impact_trip_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
-    let general_alerts: AHashMap<String, Vec<String>> = AHashMap::new();
+    let mut general_alerts: AHashMap<String, Vec<String>> = AHashMap::new();
+    
+       
+
 
     use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
@@ -778,6 +781,20 @@ pub async fn new_rt_data(
 
         println!("Finished processing {} chateau took {:?} for route lookup, {:?} for trips, {:?} for itins", chateau_id,routes_query_elapsed, trip_duration, itin_lookup_duration);
     }
+
+    //shrink the hashmaps
+
+    aspenised_vehicle_positions.shrink_to_fit();
+    vehicle_routes_cache.shrink_to_fit();
+    trip_updates.shrink_to_fit();
+    trip_updates_lookup_by_trip_id_to_trip_update_ids.shrink_to_fit();
+    alerts.shrink_to_fit();
+    impacted_route_id_to_alert_ids.shrink_to_fit();
+    impacted_stop_id_to_alert_ids.shrink_to_fit();
+    impact_trip_id_to_alert_ids.shrink_to_fit();
+    general_alerts.shrink_to_fit();
+    gtfs_vehicle_labels_to_ids.shrink_to_fit();
+    compressed_trip_internal_cache.compressed_trips.shrink_to_fit();
 
     //Insert data back into process-wide authoritative_data_store
 
