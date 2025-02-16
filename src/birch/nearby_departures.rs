@@ -110,6 +110,7 @@ pub struct DepartingTrip {
     pub tz: String,
     pub is_interpolated: bool,
     pub cancelled: bool,
+    pub deleted: bool,
     pub platform: Option<String>,
 }
 
@@ -1059,6 +1060,7 @@ pub async fn nearby_from_coords(
 
                     for trip in trip_grouping {
                         let mut is_cancelled: bool = false;
+                        let mut deleted: bool = false;
 
                         let mut departure_time_rt: Option<u64> = None;
                         let mut platform: Option<String> = None;
@@ -1100,6 +1102,9 @@ pub async fn nearby_from_coords(
 
                                         if trip_update.trip.schedule_relationship == Some(3) {
                                             is_cancelled = true;
+                                        } else if trip_update.trip.schedule_relationship == Some(7)
+                                        {
+                                            deleted = true;
                                         } else {
                                             let relevant_stop_time_update =
                                                 trip_update.stop_time_update.iter().find(|x| {
@@ -1182,6 +1187,7 @@ pub async fn nearby_from_coords(
                                 .is_some(),
                             gtfs_frequency_start_time: None,
                             cancelled: is_cancelled,
+                            deleted: deleted,
                         });
                     }
 
