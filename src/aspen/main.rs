@@ -103,6 +103,7 @@ pub struct AspenServer {
     pub etcd_connect_options: Arc<Option<etcd_client::ConnectOptions>>,
     pub worker_etcd_lease_id: i64,
     pub timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
+    
 }
 
 impl AspenRpc for AspenServer {
