@@ -828,6 +828,23 @@ async fn main() -> anyhow::Result<()> {
                         }
                         Err(e) => {
                             println!("Error renewing lease: {:#?}", e);
+
+                            let make_lease = etcd
+                            .lease_grant(
+                                //10 seconds
+                                10,
+                                Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
+                            )
+                            .await
+                            .expect("Failed to make lease with etcd");
+
+                            let etcd_this_worker_assignment = etcd
+                            .put(
+                                format!("/aspen_workers/{}", this_worker_id).as_str(),
+                                bincode::serialize(&worker_metadata).unwrap(),
+                                Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id_for_this_worker)),
+                            )
+                            .await?;
                         }
                     }
                 }
