@@ -14,7 +14,7 @@ pub fn get_gtfs_header_timestamp_from_bytes(data: &[u8]) -> Option<u64> {
             let mut value: u64 = 0;
             let mut shift = 0;
             loop {
-                if index >= data.len() {
+                if index >= data.len() || index >= 200 {
                     return None; // Unexpected end of data during varint decoding
                 }
                 let varint_byte = data[index];
@@ -29,10 +29,6 @@ pub fn get_gtfs_header_timestamp_from_bytes(data: &[u8]) -> Option<u64> {
             // Skip other fields (basic skipping, might need more robust protobuf parsing for real-world)
             // For simplicity, assuming fixed length skipping or length-delimited skipping is not needed for this specific task.
             index += 1; // Basic byte increment, may need more sophisticated skipping logic for full protobuf parsing
-
-            if index > 10000 {
-                return None; // Prevent infinite loop
-            }
         }
     }
     None // Timestamp tag not found
