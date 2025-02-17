@@ -71,6 +71,7 @@ pub mod rt_recent_history;
 use crate::rt_recent_history::*;
 pub mod schedule_filtering;
 pub mod tile_save_and_get;
+pub mod timestamp_extraction;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ChateauDataNoGeometry {
@@ -81,7 +82,7 @@ pub struct ChateauDataNoGeometry {
 
 pub const WGS_84_SRID: u32 = 4326;
 
-mod timestamp_extraction;
+
 
 pub mod gtfs_schedule_protobuf {
     use gtfs_structures::ExactTimes;
