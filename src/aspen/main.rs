@@ -254,15 +254,15 @@ impl AspenRpc for AspenServer {
     ) -> bool {
            let new_v_header_timestamp = vehicles
             .as_ref()
-            .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
+            .map(|x| catenary::timestamp_extraction::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
             .flatten();
         let new_t_header_timestamp = trips
             .as_ref()
-            .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
+            .map(|x| catenary::timestamp_extraction::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
             .flatten();
         let new_a_header_timestamp = alerts
             .as_ref()
-            .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
+            .map(|x| catenary::timestamp_extraction::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
             .flatten();
 
         let existing_timestamp_v = self
