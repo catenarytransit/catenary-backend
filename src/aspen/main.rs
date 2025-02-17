@@ -252,6 +252,7 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
+        /* 
            let new_v_header_timestamp = vehicles
             .as_ref()
             .map(|x| catenary::timestamp_extraction::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
@@ -263,8 +264,9 @@ impl AspenRpc for AspenServer {
         let new_a_header_timestamp = alerts
             .as_ref()
             .map(|x| catenary::timestamp_extraction::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
-            .flatten();
+            .flatten();*/
 
+            /* 
         let existing_timestamp_v = self
             .timestamps_of_gtfs_rt
             .get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions));
@@ -312,7 +314,7 @@ impl AspenRpc for AspenServer {
                 }
             }
             _ => true,
-        };
+        };*/
 
         //   if new_data_status_from_timestamps {
         if true {
