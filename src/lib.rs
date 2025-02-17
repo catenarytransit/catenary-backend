@@ -81,40 +81,7 @@ pub struct ChateauDataNoGeometry {
 
 pub const WGS_84_SRID: u32 = 4326;
 
-pub fn get_gtfs_header_timestamp_from_bytes(data: &[u8]) -> Option<u64> {
-    let target_tag = 0x18; // Tag for timestamp field (field number 3, wire type 0)
-
-    let mut index = 0;
-    while index < data.len() {
-        let byte = data[index];
-        if byte == target_tag {
-            index += 1; // Move to the next byte after the tag
-            let mut value: u64 = 0;
-            let mut shift = 0;
-            loop {
-                if index >= data.len() {
-                    return None; // Unexpected end of data during varint decoding
-                }
-                let varint_byte = data[index];
-                value |= (u64::from(varint_byte & 0x7F)) << shift;
-                shift += 7;
-                index += 1;
-                if (varint_byte & 0x80) == 0 {
-                    return Some(value); // Successfully decoded timestamp
-                }
-            }
-        } else {
-            // Skip other fields (basic skipping, might need more robust protobuf parsing for real-world)
-            // For simplicity, assuming fixed length skipping or length-delimited skipping is not needed for this specific task.
-            index += 1; // Basic byte increment, may need more sophisticated skipping logic for full protobuf parsing
-
-            if index > 10000 {
-                return None; // Prevent infinite loop
-            }
-        }
-    }
-    None // Timestamp tag not found
-}
+mod timestamp_extraction;
 
 pub mod gtfs_schedule_protobuf {
     use gtfs_structures::ExactTimes;

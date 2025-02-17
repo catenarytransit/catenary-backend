@@ -143,6 +143,7 @@ actix-cors = "0.7.0"
 finite = "0.0.1"
 scraper = { version = "0.22.0", features = ["atomic"] }
 html-escape = "0.2.13"
+byteorder = "1.5.0"
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"
