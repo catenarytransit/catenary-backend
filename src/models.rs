@@ -24,6 +24,7 @@ pub struct ItineraryPatternRow {
     pub chateau: String,
     pub gtfs_stop_sequence: u32,
     pub timepoint: Option<bool>,
+    pub stop_headsign_idx: Option<i16>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, QueryableByName)]
@@ -381,6 +382,7 @@ pub struct DirectionPatternRow {
     pub interpolated_time_since_start: Option<i32>,
     pub onestop_feed_id: String,
     pub attempt_id: String,
+    pub stop_headsign_idx: Option<i16>
 }
 
 #[derive(
@@ -398,6 +400,7 @@ pub struct DirectionPatternMeta {
     pub route_id: Option<CompactString>,
     pub route_type: Option<i16>,
     pub direction_id: Option<bool>,
+    pub stop_headsigns_unique_list: Option<Vec<Option<String>>>
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]

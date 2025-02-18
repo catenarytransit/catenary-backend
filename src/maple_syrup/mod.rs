@@ -30,7 +30,7 @@ pub struct ItineraryCover {
     pub direction_pattern_id: u64,
     pub route_type: i16,
     pub stop_headsigns: Option<String>,
-    pub stop_headsign_reference_idx: Option<Vec<Option<usize>>>,
+    pub stop_headsigns_unique_list: Option<Vec<String>>,
 }
 
 #[derive(Hash, Debug, Clone, PartialEq, Eq)]
@@ -58,7 +58,7 @@ pub struct DirectionPattern {
     pub route_id: CompactString,
     pub route_type: i16,
     pub stop_headsigns: Option<String>,
-    pub stop_headsign_reference_idx: Option<Vec<Option<usize>>>,
+    pub stop_headsigns_unique_list: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -253,7 +253,11 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                 1 => None,
                 _ => Some(stop_headsigns_unique_list.join(" | ")),
             },
-            stop_headsign_reference_idx,
+            stop_headsigns_unique_list: match stop_headsigns_unique_list.len() {
+                0 => None,
+                1 => None,
+                _ => Some(stop_headsigns_unique_list),
+            },
             timezone,
             shape_id: trip.shape_id.clone(),
             direction_pattern_id,
@@ -304,7 +308,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         let direction_pattern = DirectionPattern {
             direction_id: itinerary.direction_id,
             stop_sequence,
-            stop_headsign_reference_idx: itinerary.stop_headsign_reference_idx.clone(),
+            stop_headsigns_unique_list: itinerary.stop_headsigns_unique_list.clone(),
             stop_headsigns: itinerary.stop_headsigns.clone(),
             headsign_or_destination: match itinerary.trip_headsign.clone() {
                 Some(headsign) => Some(headsign),

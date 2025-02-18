@@ -113,6 +113,7 @@ pub mod gtfs {
             interpolated_time_since_start -> Nullable<Int4>,
             onestop_feed_id -> Text,
             attempt_id -> Text,
+            stop_headsign_idx -> Nullable<Int2>,
         }
     }
 
@@ -132,6 +133,7 @@ pub mod gtfs {
             route_id -> Nullable<Text>,
             route_type -> Nullable<Int2>,
             direction_id -> Nullable<Bool>,
+            stop_headsigns_unique_list -> Nullable<Array<Nullable<Text>>>,
         }
     }
 
@@ -256,6 +258,7 @@ pub mod gtfs {
             gtfs_stop_sequence -> Oid,
             interpolated_time_since_start -> Nullable<Int4>,
             timepoint -> Nullable<Bool>,
+            stop_headsign_idx -> Nullable<Int2>,
         }
     }
 

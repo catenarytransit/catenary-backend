@@ -404,6 +404,11 @@ pub async fn gtfs_process_feed(
             route_id: Some(itin_pattern.route_id.clone()),
             route_type: Some(itin_pattern.route_type),
             direction_id: itin_pattern.direction_id,
+            stop_headsigns_unique_list: itin_pattern.stop_headsigns_unique_list.as_ref().map(|x| {
+                x.into_iter()
+                    .map(|x| Some(x.to_string()))
+                    .collect::<Vec<Option<String>>>()
+            }),
         };
 
         //insert stop list into DirectionPatternRow
@@ -429,6 +434,17 @@ pub async fn gtfs_process_feed(
                 arrival_time_since_start: stop_time.arrival_time_since_start,
                 departure_time_since_start: stop_time.departure_time_since_start,
                 interpolated_time_since_start: stop_time.interpolated_time_since_start,
+                stop_headsign_idx: match stop_time.stop_headsign {
+                    Some(ref stop_headsign) => direction_pattern
+                        .stop_headsigns_unique_list
+                        .as_ref()
+                        .and_then(|x| {
+                            x.iter()
+                                .position(|x| x == stop_headsign)
+                                .map(|x| x as i16)
+                        }),
+                    None => None,
+                },
             })
             .collect();
 
@@ -491,6 +507,17 @@ pub async fn gtfs_process_feed(
                 departure_time_since_start: stop_sequence.departure_time_since_start,
                 interpolated_time_since_start: stop_sequence.interpolated_time_since_start,
                 timepoint: stop_sequence.timepoint.into(),
+                stop_headsign_idx: match stop_sequence.stop_headsign {
+                    Some(ref stop_headsign) => itinerary
+                        .stop_headsigns_unique_list
+                        .as_ref()
+                        .and_then(|x| {
+                            x.iter()
+                                .position(|x| x == stop_headsign)
+                                .map(|x| x as i16)
+                        }),
+                    None => None,
+                },
             })
             .collect::<Vec<_>>();
 
