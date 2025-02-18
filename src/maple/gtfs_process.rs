@@ -393,10 +393,17 @@ pub async fn gtfs_process_feed(
         let direction_pattern_meta = DirectionPatternMeta {
             chateau: chateau_id.to_string(),
             direction_pattern_id: direction_pattern_id.to_string(),
-            headsign_or_destination: direction_pattern
-                .headsign_or_destination
-                .clone()
-                .unwrap_or_else(|| "".to_string()),
+            headsign_or_destination: match chateau_id {
+                "santacruzmetro" => direction_pattern
+                    .stop_headsigns_unique_list
+                    .as_ref()
+                    .map(|list| list.join(" | "))
+                    .unwrap_or("".to_string()),
+                _ => direction_pattern
+                    .headsign_or_destination
+                    .clone()
+                    .unwrap_or_else(|| "".to_string()),
+            },
             gtfs_shape_id: Some(gtfs_shape_id.clone()),
             fake_shape: direction_pattern.gtfs_shape_id.is_none(),
             onestop_feed_id: feed_id.to_string(),
@@ -434,11 +441,17 @@ pub async fn gtfs_process_feed(
                 arrival_time_since_start: stop_time.arrival_time_since_start,
                 departure_time_since_start: stop_time.departure_time_since_start,
                 interpolated_time_since_start: stop_time.interpolated_time_since_start,
-                stop_headsign_idx: match stop_time.stop_headsign {
-                    Some(ref stop_headsign) => direction_pattern
+                stop_headsign_idx: match &stop_time.stop_headsign {
+                    Some(this_stop_headsign) => direction_pattern
                         .stop_headsigns_unique_list
                         .as_ref()
-                        .and_then(|x| x.iter().position(|x| x == stop_headsign).map(|x| x as i16)),
+                        .map(|direction_headsigns| {
+                            direction_headsigns
+                                .iter()
+                                .position(|x| x == this_stop_headsign)
+                                .map(|x| x as i16)
+                        })
+                        .flatten(),
                     None => None,
                 },
             })
@@ -461,10 +474,16 @@ pub async fn gtfs_process_feed(
             chateau: chateau_id.to_string(),
             attempt_id: attempt_id.to_string(),
             timezone: itinerary.timezone.clone(),
-            trip_headsign: itinerary
-                .trip_headsign
-                .clone()
-                .map(|x| x.replace(" - Funded in part by/SB County Measure A", "")),
+            trip_headsign: match chateau_id {
+                "santacruzmetro" => itinerary
+                    .stop_headsigns_unique_list
+                    .as_ref()
+                    .map(|list| list.join(" | ")),
+                _ => itinerary
+                    .trip_headsign
+                    .clone()
+                    .map(|x| x.replace(" - Funded in part by/SB County Measure A", "")),
+            },
             trip_headsign_translations: None,
             itinerary_pattern_id: itinerary_id.to_string(),
             trip_ids: reduction
