@@ -394,11 +394,13 @@ pub async fn gtfs_process_feed(
             chateau: chateau_id.to_string(),
             direction_pattern_id: direction_pattern_id.to_string(),
             headsign_or_destination: match chateau_id {
-                "santacruzmetro" => direction_pattern
-                    .stop_headsigns_unique_list
-                    .as_ref()
-                    .map(|list| list.join(" | "))
-                    .unwrap_or("".to_string()),
+                "santacruzmetro" => match &direction_pattern.stop_headsigns_unique_list {
+                    Some(list) => list.join(" | "),
+                    _ => direction_pattern
+                        .headsign_or_destination
+                        .clone()
+                        .unwrap_or_else(|| "".to_string()),
+                },
                 _ => direction_pattern
                     .headsign_or_destination
                     .clone()
@@ -475,10 +477,10 @@ pub async fn gtfs_process_feed(
             attempt_id: attempt_id.to_string(),
             timezone: itinerary.timezone.clone(),
             trip_headsign: match chateau_id {
-                "santacruzmetro" => itinerary
-                    .stop_headsigns_unique_list
-                    .as_ref()
-                    .map(|list| list.join(" | ")),
+                "santacruzmetro" => match &itinerary.stop_headsigns_unique_list {
+                    None => itinerary.trip_headsign.clone(),
+                    Some(list) => Some(list.join(" |")),
+                },
                 _ => itinerary
                     .trip_headsign
                     .clone()
