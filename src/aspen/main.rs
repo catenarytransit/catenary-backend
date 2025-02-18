@@ -79,7 +79,7 @@ pub struct GtfsRealtimeHashStore {
     alerts: Option<u64>,
 }
 
-// This is the type that implements the generated World trait. It is the business logic
+// This is the type that implements the generated AspenServer trait. It is the business logic
 // and is used to start the server.
 #[derive(Clone)]
 pub struct AspenServer {
@@ -112,7 +112,7 @@ impl AspenRpc for AspenServer {
                 .expect("NOT VALID RANGE")
                 .sample(&mut thread_rng()),
         );
-        time::sleep(sleep_time).await;
+        tokio::time::sleep(sleep_time).await;
         format!("Hello, {name}! You are connected from {}", self.addr)
     }
 
@@ -252,19 +252,21 @@ impl AspenRpc for AspenServer {
         alerts_response_code: Option<u16>,
         time_of_submission_ms: u64,
     ) -> bool {
-        /*   let new_v_header_timestamp = vehicles
+        /* 
+           let new_v_header_timestamp = vehicles
             .as_ref()
-            .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
+            .map(|x| catenary::timestamp_extraction::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
             .flatten();
         let new_t_header_timestamp = trips
             .as_ref()
-            .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
+            .map(|x| catenary::timestamp_extraction::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
             .flatten();
         let new_a_header_timestamp = alerts
             .as_ref()
-            .map(|x| catenary::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
-            .flatten();
+            .map(|x| catenary::timestamp_extraction::get_gtfs_header_timestamp_from_bytes(x.as_slice()))
+            .flatten();*/
 
+            /* 
         let existing_timestamp_v = self
             .timestamps_of_gtfs_rt
             .get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions));
@@ -828,6 +830,29 @@ async fn main() -> anyhow::Result<()> {
                         }
                         Err(e) => {
                             println!("Error renewing lease: {:#?}", e);
+
+                            let make_lease = etcd
+                                .lease_grant(
+                                    //10 seconds
+                                    10,
+                                    Some(
+                                        etcd_client::LeaseGrantOptions::new()
+                                            .with_id(etcd_lease_id_for_this_worker),
+                                    ),
+                                )
+                                .await
+                                .expect("Failed to make lease with etcd");
+
+                            let etcd_this_worker_assignment = etcd
+                                .put(
+                                    format!("/aspen_workers/{}", this_worker_id).as_str(),
+                                    bincode::serialize(&worker_metadata).unwrap(),
+                                    Some(
+                                        etcd_client::PutOptions::new()
+                                            .with_lease(etcd_lease_id_for_this_worker),
+                                    ),
+                                )
+                                .await?;
                         }
                     }
                 }
