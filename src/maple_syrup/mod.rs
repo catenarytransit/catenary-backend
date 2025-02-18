@@ -29,6 +29,8 @@ pub struct ItineraryCover {
     pub shape_id: Option<String>,
     pub direction_pattern_id: u64,
     pub route_type: i16,
+    pub stop_headsigns: Option<String>,
+    pub stop_headsign_reference_idx: Option<Vec<Option<usize>>>,
 }
 
 #[derive(Hash, Debug, Clone, PartialEq, Eq)]
@@ -55,6 +57,8 @@ pub struct DirectionPattern {
     pub gtfs_shape_id: Option<String>,
     pub route_id: CompactString,
     pub route_type: i16,
+    pub stop_headsigns: Option<String>,
+    pub stop_headsign_reference_idx: Option<Vec<Option<usize>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -170,20 +174,45 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             }
         };
 
+        let stop_headsigns_unique_list: Vec<String> = stop_diffs
+            .iter()
+            .map(|x| {
+                x.stop_headsign.clone().map(|headsigntxt| {
+                    headsigntxt.replace("-Funded in part by/SB County Measure A", "")
+                })
+            })
+            .unique()
+            .flatten()
+            .collect();
+
+        let stop_headsign_reference_idx = if stop_headsigns_unique_list.len() <= 1 {
+            None
+        } else {
+            Some(
+                stop_diffs
+                    .iter()
+                    .map(|stop_time_entry| {
+                        stop_time_entry
+                            .stop_headsign
+                            .as_ref()
+                            .map(|this_stop_entry_headsign| {
+                                stop_headsigns_unique_list
+                                    .iter()
+                                    .position(|x| x == this_stop_entry_headsign)
+                            })
+                    })
+                    .flatten()
+                    .collect::<Vec<Option<usize>>>(),
+            )
+        };
+
         let trip_headsign_calculated = match &trip.trip_headsign {
             Some(x) => Some(
                 x.clone()
                     .replace("-Funded in part by/SB County Measure A", ""),
             ),
             None => {
-                let stop_headsigns: Vec<String> = stop_diffs
-                    .iter()
-                    .map(|x| x.stop_headsign.clone())
-                    .unique()
-                    .flatten()
-                    .collect();
-
-                match stop_headsigns.len() {
+                match stop_headsigns_unique_list.len() {
                     0 => match stop_diffs.last() {
                         Some(last_stop) => match gtfs.stops.get(last_stop.stop_id.as_str()) {
                             // fallback to stop name if neither trip headsign nor stop headsign is available
@@ -192,17 +221,10 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                         },
                         None => None,
                     },
-                    1 => Some(stop_headsigns[0].clone()),
+                    1 => Some(stop_headsigns_unique_list[0].clone()),
                     _ => {
-                        //use the last stop
-
-                        match stop_diffs.last() {
-                            Some(last_stop) => match gtfs.stops.get(last_stop.stop_id.as_str()) {
-                                Some(stop) => stop.name.clone(),
-                                None => None,
-                            },
-                            None => None,
-                        }
+                        //merge all stop headsigns into one
+                        Some(stop_headsigns_unique_list.iter().join(" | "))
                     }
                 }
             }
@@ -226,6 +248,12 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             }),
             route_id: (&trip.route_id).into(),
             trip_headsign: trip_headsign_calculated,
+            stop_headsigns: match stop_headsigns_unique_list.len() {
+                0 => None,
+                1 => None,
+                _ => Some(stop_headsigns_unique_list.join(" | ")),
+            },
+            stop_headsign_reference_idx,
             timezone,
             shape_id: trip.shape_id.clone(),
             direction_pattern_id,
@@ -276,6 +304,8 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         let direction_pattern = DirectionPattern {
             direction_id: itinerary.direction_id,
             stop_sequence,
+            stop_headsign_reference_idx: itinerary.stop_headsign_reference_idx.clone(),
+            stop_headsigns: itinerary.stop_headsigns.clone(),
             headsign_or_destination: match itinerary.trip_headsign.clone() {
                 Some(headsign) => Some(headsign),
                 None => match itinerary.stop_sequences.last() {
