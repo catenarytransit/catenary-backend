@@ -82,8 +82,6 @@ pub struct ChateauDataNoGeometry {
 
 pub const WGS_84_SRID: u32 = 4326;
 
-
-
 pub mod gtfs_schedule_protobuf {
     use gtfs_structures::ExactTimes;
 

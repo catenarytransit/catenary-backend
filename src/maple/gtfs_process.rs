@@ -438,11 +438,7 @@ pub async fn gtfs_process_feed(
                     Some(ref stop_headsign) => direction_pattern
                         .stop_headsigns_unique_list
                         .as_ref()
-                        .and_then(|x| {
-                            x.iter()
-                                .position(|x| x == stop_headsign)
-                                .map(|x| x as i16)
-                        }),
+                        .and_then(|x| x.iter().position(|x| x == stop_headsign).map(|x| x as i16)),
                     None => None,
                 },
             })
@@ -511,11 +507,7 @@ pub async fn gtfs_process_feed(
                     Some(ref stop_headsign) => itinerary
                         .stop_headsigns_unique_list
                         .as_ref()
-                        .and_then(|x| {
-                            x.iter()
-                                .position(|x| x == stop_headsign)
-                                .map(|x| x as i16)
-                        }),
+                        .and_then(|x| x.iter().position(|x| x == stop_headsign).map(|x| x as i16)),
                     None => None,
                 },
             })

@@ -1,7 +1,7 @@
 use prost::Message;
 
-use gtfs_realtime::FeedMessage;
 use gtfs_realtime::FeedHeader;
+use gtfs_realtime::FeedMessage;
 
 pub fn get_gtfs_header_timestamp_from_bytes(data: &[u8]) -> Option<u64> {
     let target_tag = 0x18; // Tag for timestamp field (field number 3, wire type 0)
