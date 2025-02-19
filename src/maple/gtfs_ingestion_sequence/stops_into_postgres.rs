@@ -30,7 +30,8 @@ pub async fn stops_into_postgres(
         let mut insertable_stops = Vec::new();
 
         for (stop_id, stop) in chunk {
-            let name: Option<String> = titlecase_process_new(stop.name.as_ref());
+            let name: Option<String> =
+                titlecase_process_new(stop.name.as_ref()).map(|x| x.replace("Fermata ", ""));
             let display_name: Option<String> = name.as_ref().map(|name| {
                 name.clone()
                     .replace("Station ", "")

@@ -1079,24 +1079,35 @@ pub async fn nearby_from_coords(
                                         .start_date
                                         .is_some();
 
-                                    let trip_updates: Vec<(&String, &AspenisedTripUpdate)> = trip_update_ids
-                                        .iter()
-                                        .map(|x| (x, gtfs_trip_aspenised.trip_updates.get(x).unwrap()))
-                                        .filter(|(x, trip_update)| match does_trip_set_use_dates {
-                                            true => {
-                                                trip_update.trip.start_date
-                                                    == Some(
-                                                        trip.trip_service_date
-                                                            .format("%Y%m%d")
-                                                            .to_string(),
-                                                    )
-                                            }
-                                            false => true,
-                                        })
-                                        .filter(|(x, trip_update)| {
-                                            !already_used_trip_update_id.contains(*x)
-                                        })
-                                        .collect();
+                                    let trip_updates: Vec<(&String, &AspenisedTripUpdate)> =
+                                        trip_update_ids
+                                            .iter()
+                                            .map(|x| {
+                                                (
+                                                    x,
+                                                    gtfs_trip_aspenised
+                                                        .trip_updates
+                                                        .get(x)
+                                                        .unwrap(),
+                                                )
+                                            })
+                                            .filter(
+                                                |(x, trip_update)| match does_trip_set_use_dates {
+                                                    true => {
+                                                        trip_update.trip.start_date
+                                                            == Some(
+                                                                trip.trip_service_date
+                                                                    .format("%Y%m%d")
+                                                                    .to_string(),
+                                                            )
+                                                    }
+                                                    false => true,
+                                                },
+                                            )
+                                            .filter(|(x, trip_update)| {
+                                                !already_used_trip_update_id.contains(*x)
+                                            })
+                                            .collect();
 
                                     if trip_updates.len() > 0 {
                                         let trip_update = trip_updates[0].1;
@@ -1143,7 +1154,7 @@ pub async fn nearby_from_coords(
                                             }
                                         }
 
-                                        // add to used list 
+                                        // add to used list
                                         already_used_trip_update_id.insert(trip_update_id.clone());
                                     }
                                 }
