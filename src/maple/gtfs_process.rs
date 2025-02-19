@@ -395,7 +395,7 @@ pub async fn gtfs_process_feed(
             direction_pattern_id: direction_pattern_id.to_string(),
             headsign_or_destination: match chateau_id {
                 "santacruzmetro" => match &direction_pattern.stop_headsigns_unique_list {
-                    Some(list) => list.join(" | "),
+                    Some(list) => list.join(","),
                     _ => itin_pattern
                         .stop_sequences
                         .last()
@@ -483,7 +483,7 @@ pub async fn gtfs_process_feed(
                         .stop_sequences
                         .last()
                         .and_then(|x| x.stop_headsign.clone()),
-                    Some(list) => Some(list.join(" |")),
+                    Some(list) => Some(list.join(",")),
                 },
                 _ => itinerary
                     .trip_headsign
