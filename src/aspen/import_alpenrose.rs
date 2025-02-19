@@ -270,7 +270,7 @@ pub async fn new_rt_data(
         println!("No routes found for chateau {}", chateau_id);
     }
 
-    let mut route_id_to_route: HashMap<String, catenary::models::Route> = HashMap::new();
+    let mut route_id_to_route: AHashMap<String, catenary::models::Route> = AHashMap::new();
 
     for route in routes {
         route_id_to_route.insert(route.route_id.clone(), route);
@@ -294,7 +294,7 @@ pub async fn new_rt_data(
             authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
         {
             let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
-
+            
             for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
                 if let Some(vehicle_pos) = &vehicle_entity.vehicle {
                     if let Some(trip) = &vehicle_pos.trip {

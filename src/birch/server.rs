@@ -301,6 +301,22 @@ struct ChateauToSendNoGeom {
     schedule_feeds: Vec<String>,
 }
 
+fn multipolygon_cap_decimals(input: geo::MultiPolygon<f64>, decimals: u8) -> geo::MultiPolygon<f64> {
+    let mut output = input;
+
+    for polygon in output.iter_mut() {
+         polygon.interiors_mut(|interior| {
+            interior.iter_mut().for_each(|line_string| {
+                line_string.0.iter_mut().for_each(|point| {
+                    point.x = (point.x * 10_f64.powi(decimals as i32)).round() / 10_f64.powi(decimals as i32);
+                    point.y = (point.y * 10_f64.powi(decimals as i32)).round() / 10_f64.powi(decimals as i32);
+                });
+            });
+         });
+    }
+    output
+}
+
 #[actix_web::get("/getchateaus")]
 async fn chateaus(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
@@ -348,7 +364,7 @@ async fn chateaus(
             chateau: pg_chateau.chateau,
             realtime_feeds: pg_chateau.realtime_feeds.into_iter().flatten().collect(),
             schedule_feeds: pg_chateau.static_feeds.into_iter().flatten().collect(),
-            hull: diesel_multi_polygon_to_geo(pg_chateau.hull.unwrap()),
+            hull: multipolygon_cap_decimals(diesel_multi_polygon_to_geo(pg_chateau.hull.unwrap()), 7),
         })
         .collect::<Vec<ChateauToSend>>();
 
