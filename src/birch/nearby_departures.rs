@@ -1056,8 +1056,6 @@ pub async fn nearby_from_coords(
                     let mut already_used_trip_update_id: ahash::AHashSet<String> =
                         ahash::AHashSet::new();
 
-                    let length_of_trip_grouping = trip_grouping.len();
-
                     for trip in trip_grouping {
                         let mut is_cancelled: bool = false;
                         let mut deleted: bool = false;
@@ -1081,10 +1079,10 @@ pub async fn nearby_from_coords(
                                         .start_date
                                         .is_some();
 
-                                    let trip_updates: Vec<&AspenisedTripUpdate> = trip_update_ids
+                                    let trip_updates: Vec<(&String, &AspenisedTripUpdate)> = trip_update_ids
                                         .iter()
-                                        .map(|x| gtfs_trip_aspenised.trip_updates.get(x).unwrap())
-                                        .filter(|trip_update| match does_trip_set_use_dates {
+                                        .map(|x| (x, gtfs_trip_aspenised.trip_updates.get(x).unwrap()))
+                                        .filter(|(x, trip_update)| match does_trip_set_use_dates {
                                             true => {
                                                 trip_update.trip.start_date
                                                     == Some(
@@ -1095,10 +1093,14 @@ pub async fn nearby_from_coords(
                                             }
                                             false => true,
                                         })
+                                        .filter(|(x, trip_update)| {
+                                            !already_used_trip_update_id.contains(*x)
+                                        })
                                         .collect();
 
                                     if trip_updates.len() > 0 {
-                                        let trip_update = trip_updates[0];
+                                        let trip_update = trip_updates[0].1;
+                                        let trip_update_id = trip_updates[0].0;
 
                                         if trip_update.trip.schedule_relationship == Some(3) {
                                             is_cancelled = true;
@@ -1140,6 +1142,9 @@ pub async fn nearby_from_coords(
                                                 }
                                             }
                                         }
+
+                                        // add to used list 
+                                        already_used_trip_update_id.insert(trip_update_id.clone());
                                     }
                                 }
                             }
