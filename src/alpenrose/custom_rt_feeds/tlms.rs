@@ -136,7 +136,7 @@ pub async fn fetch_tlms_data(
                 match tarpc_send_to_aspen {
                     Ok(_) => {
                         println!(
-                            "Successfully sent dresden data to {}, feed {} to chateau {}",
+                            "Successfully sent dresden f-tlms~rt data to {}, feed {} to chateau {}",
                             worker_metadata.socket, feed_id, worker_metadata.chateau_id
                         );
                     }
@@ -145,11 +145,13 @@ pub async fn fetch_tlms_data(
                     }
                 }
             } else {
-                eprintln!("Failed to decode gtfs data from Dresden!");
+                eprintln!("Failed to decode gtfs data from Dresden f-tlms~rt");
                 return;
             }
+        } else {
+            eprintln!("Failed to fetch route ids and short names from Dresden f-tlms~rt");
         }
     } else {
-        println!("No assigned node found for Chicago Transit");
+        println!("No assigned node found for f-tlms~rt");
     }
 }
