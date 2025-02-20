@@ -21,6 +21,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: sudo apt install -y protobuf-compiler
     
     - name: Compile Maple
       uses: redhat-actions/buildah-build@v2
@@ -51,6 +54,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    
+    - name: Install Dependencies
+      run: sudo apt install -y protobuf-compiler
     
     - name: Compile Alpenrose
       uses: redhat-actions/buildah-build@v2
@@ -81,6 +88,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: sudo apt install -y protobuf-compiler
     
     - name: Compile aspen
       uses: redhat-actions/buildah-build@v2
@@ -112,6 +122,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Install Dependencies
+      run: sudo apt install -y protobuf-compiler
+
     - name: Compile birch
       uses: redhat-actions/buildah-build@v2
       with:
