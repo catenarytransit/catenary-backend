@@ -83,10 +83,15 @@ pub struct BulkFetchResponse {
 pub async fn bulk_realtime_fetch_v1(
     req: HttpRequest,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
     params: web::Json<BulkFetchParams>,
 ) -> impl Responder {
-    let etcd =
-        etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+    let mut etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await
+    .unwrap();
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);
