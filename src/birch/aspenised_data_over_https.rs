@@ -90,8 +90,7 @@ pub async fn bulk_realtime_fetch_v1(
         etcd_connection_ips.ip_addresses.as_slice(),
         etcd_connection_options.as_ref().as_ref().to_owned(),
     )
-    .await
-    .unwrap();
+    .await;
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);
