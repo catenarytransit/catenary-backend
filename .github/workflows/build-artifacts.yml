@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@master
       - name: Install Dependencies
-        run: sudo apt install -y protobuf-compiler redis 
+        run: sudo apt install -y protobuf-compiler redis cmake
       - name: Compile
         id: compile
         uses: rust-build/rust-build.action@v1.4.5
