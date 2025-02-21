@@ -77,7 +77,7 @@ pub async fn assign_chateaus(
             }
         }
 
-        //make a hashmap of workers and their tailscale ips
+        //make a hashmap of workers and their ips
         let mut workers_map = BTreeMap::new();
 
         let mut fetch_workers_from_etcd_req = etcd
@@ -133,6 +133,29 @@ pub async fn assign_chateaus(
                         worker_id: selected_aspen_worker_to_assign.clone(),
                         socket: worker_metadata.socket,
                     };
+
+                    // get data from etcd
+
+                    let existing_data = etcd
+                        .get(
+                            format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
+                            None,
+                        )
+                        .await;
+
+                    if let Ok(existing_data) = existing_data {
+                        let existing_data = existing_data.kvs().get(0).unwrap().value();
+
+                        let existing_data =
+                            bincode::deserialize::<ChateauMetadataEtcd>(existing_data);
+
+                        if let Ok(existing_data) = existing_data {
+                            if existing_data.worker_id == selected_aspen_worker_to_assign {
+                                // data is the same, skip
+                                continue;
+                            }
+                        }
+                    }
 
                     let save_to_etcd = etcd
                         .put(
