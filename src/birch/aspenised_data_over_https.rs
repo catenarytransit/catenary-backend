@@ -84,9 +84,13 @@ pub async fn bulk_realtime_fetch_v1(
     req: HttpRequest,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     params: web::Json<BulkFetchParams>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
 ) -> impl Responder {
-    let etcd =
-        etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+    let etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await;
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);
@@ -290,12 +294,16 @@ pub async fn get_realtime_locations(
     req: HttpRequest,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     path: web::Path<(String, String, u64, u64)>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
 ) -> impl Responder {
     let (chateau_id, category, client_last_updated_time_ms, existing_fasthash_of_routes) =
         path.into_inner();
 
-    let etcd =
-        etcd_client::Client::connect(etcd_connection_ips.ip_addresses.as_slice(), None).await;
+    let etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await;
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);
