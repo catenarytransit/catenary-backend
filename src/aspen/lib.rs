@@ -47,6 +47,22 @@ pub trait AspenRpc {
         time_of_submission_ms: u64,
     ) -> bool;
 
+    async fn from_alpenrose_compressed(
+        chateau_id: String,
+        realtime_feed_id: String,
+        vehicles: Option<Vec<u8>>,
+        trips: Option<Vec<u8>>,
+        alerts: Option<Vec<u8>>,
+        has_vehicles: bool,
+        has_trips: bool,
+        has_alerts: bool,
+        vehicles_response_code: Option<u16>,
+        trips_response_code: Option<u16>,
+        alerts_response_code: Option<u16>,
+        time_of_submission_ms: u64,
+        alerts_dupe_trips: bool,
+    ) -> bool;
+
     async fn get_single_vehicle_location_from_gtfsid(
         chateau_id: String,
         gtfs_id: String,
