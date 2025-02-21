@@ -99,6 +99,28 @@ pub async fn perform_leader_job(
                 .with_lease(*fetch_workers_hashmap.get(worker_id).unwrap());
 
             for (feed_id, realtime_instruction) in instructions_hashmap {
+
+                //get data from the feed
+
+                let existing_assignment = etcd
+                    .get(
+                        format!("/alpenrose_assignments/{}/{}", worker_id, feed_id).as_str(),
+                        None,
+                    )
+                    .await;
+
+                if let Ok(existing_assignment) = existing_assignment {
+                    if let Some(existing_assignment) = existing_assignment.kvs().get(0) {
+                        let existing_assignment =
+                            bincode::deserialize::<RealtimeFeedFetch>(existing_assignment.value())
+                                .unwrap();
+
+                        if existing_assignment == *realtime_instruction {
+                            continue;
+                        }
+                    }
+                }
+
                 let set_assignment = etcd
                     .put(
                         format!("/alpenrose_assignments/{}/{}", worker_id, feed_id).as_str(),
