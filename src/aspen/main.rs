@@ -202,10 +202,11 @@ impl AspenRpc for AspenServer {
             Some(pair) => {
                 let message: &FeedMessage = pair.get();
                 
-                let mut d = flate2::write::ZlibEncoder::new(Vec::new(), Compression::default())
-                    .unwrap();
+                let mut d = flate2::write::ZlibEncoder::new(Vec::new(), Compression::default());
 
-                let _ = message.encode(&mut d);
+                let bytes = message.encode_to_vec();
+
+                d.write_all(bytes.as_slice()).unwrap();
 
                 let compressed_bytes = d.finish().unwrap();
 

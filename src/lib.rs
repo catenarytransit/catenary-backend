@@ -72,6 +72,9 @@ use crate::rt_recent_history::*;
 pub mod schedule_filtering;
 pub mod tile_save_and_get;
 pub mod timestamp_extraction;
+use std::io::{Read, Write};
+use flate2::Compression;
+use std::io::Cursor;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ChateauDataNoGeometry {
@@ -81,6 +84,20 @@ pub struct ChateauDataNoGeometry {
 }
 
 pub const WGS_84_SRID: u32 = 4326;
+
+pub fn compress_zlib(input: &[u8]) -> Vec<u8> {
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(input).unwrap();
+    encoder.finish().unwrap()
+}
+
+pub fn decompress_zlib(input: &[u8]) -> Vec<u8> {
+    let mut decoder = flate2::read::ZlibDecoder::new(Cursor::new(input));
+    let mut decompressed_bytes = Vec::new();
+    decoder.read_to_end(&mut decompressed_bytes).unwrap();
+
+        decompressed_bytes
+}
 
 pub mod gtfs_schedule_protobuf {
     use gtfs_structures::ExactTimes;

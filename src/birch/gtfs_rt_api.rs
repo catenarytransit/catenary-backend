@@ -82,9 +82,7 @@ async fn gtfs_rt(
                             .append_header(("Cache-Control", "no-cache"))
                             .body("Node crashed during request"),
                         Ok(Some(protobuf)) => {
-                            let mut d = flate::read::ZlibDecoder::new(protobuf.as_slice());
-                        let mut decompressed_bytes = Vec::new();
-                        d.read_to_end(&mut decompressed_bytes).unwrap();
+                            let decompressed_bytes = catenary::decompress_zlib(protobuf.as_slice());
 
                             match catenary::parse_gtfs_rt_message(decompressed_bytes.as_slice()) {
                                 Ok(data) => match format {
