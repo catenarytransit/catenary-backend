@@ -73,6 +73,7 @@ use prost::Message;
 use rand::distr::Uniform;
 use rand::thread_rng;
 use std::io::Read;
+use std::io::Write;
 use std::time::Instant;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -182,6 +183,34 @@ impl AspenRpc for AspenServer {
                 let message: &FeedMessage = pair.get();
 
                 Some(message.encode_to_vec())
+            }
+            None => None,
+        }
+    }
+
+    async fn get_gtfs_rt_compressed(
+        self,
+        _: context::Context,
+        realtime_feed_id: String,
+        feed_type: catenary::aspen_dataset::GtfsRtType,
+    ) -> Option<Vec<u8>> {
+        let pair = self
+            .authoritative_gtfs_rt_store
+            .get(&(realtime_feed_id, feed_type));
+
+        match pair {
+            Some(pair) => {
+                let message: &FeedMessage = pair.get();
+                
+                let mut d = flate2::ZlibEncoder::new(Vec::new(), Compression::default())
+                    .unwrap();
+
+                let _ = message.encode(&mut d);
+
+                let compressed_bytes = d.finish().unwrap();
+
+                Some(compressed_bytes)
+
             }
             None => None,
         }
