@@ -109,7 +109,7 @@ pub struct GetVehicleLocationsResponse {
     pub last_updated_time_ms: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ChateauMetadataEtcd {
     pub worker_id: String,
     pub socket: SocketAddr,

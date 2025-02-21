@@ -143,6 +143,8 @@ pub async fn assign_chateaus(
                         )
                         .await;
 
+                    let mut assign_chateau_required = true;
+
                     if let Ok(existing_data) = existing_data {
                         let existing_data = existing_data.kvs().get(0).unwrap().value();
 
@@ -150,13 +152,13 @@ pub async fn assign_chateaus(
                             bincode::deserialize::<ChateauMetadataEtcd>(existing_data);
 
                         if let Ok(existing_data) = existing_data {
-                            if existing_data.worker_id == selected_aspen_worker_to_assign {
-                                // data is the same, skip
-                                continue;
+                            if assigned_chateau_data == existing_data {
+                                assign_chateau_required = false;
                             }
                         }
                     }
 
+                    if assign_chateau_required {
                     let save_to_etcd = etcd
                         .put(
                             format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
@@ -167,6 +169,7 @@ pub async fn assign_chateaus(
                             ),
                         )
                         .await?;
+                    }
 
                     for realtime_feed_id in chateau.realtime_feeds.iter() {
                         let assigned_realtime_feed_data = RealtimeFeedMetadataEtcd {
