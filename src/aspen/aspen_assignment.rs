@@ -146,6 +146,7 @@ pub async fn assign_chateaus(
                     let mut assign_chateau_required = true;
 
                     if let Ok(existing_data) = existing_data {
+                        if existing_data.kvs().len() > 0 {
                         let existing_data = existing_data.kvs().get(0).unwrap().value();
 
                         let existing_data =
@@ -156,19 +157,20 @@ pub async fn assign_chateaus(
                                 assign_chateau_required = false;
                             }
                         }
+                        }
                     }
 
                     if assign_chateau_required {
-                    let save_to_etcd = etcd
-                        .put(
-                            format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
-                            bincode::serialize(&assigned_chateau_data).unwrap(),
-                            Some(
-                                etcd_client::PutOptions::new()
-                                    .with_lease(worker_metadata.etcd_lease_id),
-                            ),
-                        )
-                        .await?;
+                        let save_to_etcd = etcd
+                            .put(
+                                format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
+                                bincode::serialize(&assigned_chateau_data).unwrap(),
+                                Some(
+                                    etcd_client::PutOptions::new()
+                                        .with_lease(worker_metadata.etcd_lease_id),
+                                ),
+                            )
+                            .await?;
                     }
 
                     for realtime_feed_id in chateau.realtime_feeds.iter() {

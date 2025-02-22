@@ -99,7 +99,6 @@ pub async fn perform_leader_job(
                 .with_lease(*fetch_workers_hashmap.get(worker_id).unwrap());
 
             for (feed_id, realtime_instruction) in instructions_hashmap {
-
                 //get data from the feed
 
                 let existing_assignment = etcd

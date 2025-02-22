@@ -67,9 +67,13 @@ mod alerts_responder;
 mod aspen_assignment;
 use catenary::rt_recent_history::RtCacheEntry;
 use catenary::rt_recent_history::RtKey;
+use flate2::read::ZlibDecoder;
+use flate2::Compression;
 use prost::Message;
 use rand::distr::Uniform;
 use rand::thread_rng;
+use std::io::Read;
+use std::io::Write;
 use std::time::Instant;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -184,6 +188,35 @@ impl AspenRpc for AspenServer {
         }
     }
 
+    async fn get_gtfs_rt_compressed(
+        self,
+        _: context::Context,
+        realtime_feed_id: String,
+        feed_type: catenary::aspen_dataset::GtfsRtType,
+    ) -> Option<Vec<u8>> {
+        let pair = self
+            .authoritative_gtfs_rt_store
+            .get(&(realtime_feed_id, feed_type));
+
+        match pair {
+            Some(pair) => {
+                let message: &FeedMessage = pair.get();
+                
+                let mut d = flate2::write::ZlibEncoder::new(Vec::new(), Compression::default());
+
+                let bytes = message.encode_to_vec();
+
+                d.write_all(bytes.as_slice()).unwrap();
+
+                let compressed_bytes = d.finish().unwrap();
+
+                Some(compressed_bytes)
+
+            }
+            None => None,
+        }
+    }
+
     async fn get_alerts_from_route_id(
         self,
         _: context::Context,
@@ -234,6 +267,230 @@ impl AspenRpc for AspenServer {
             &chateau_id,
             &trip_id,
         )
+    }
+
+    async fn from_alpenrose_compressed(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        realtime_feed_id: String,
+        vehicles: Option<Vec<u8>>,
+        trips: Option<Vec<u8>>,
+        alerts: Option<Vec<u8>>,
+        has_vehicles: bool,
+        has_trips: bool,
+        has_alerts: bool,
+        vehicles_response_code: Option<u16>,
+        trips_response_code: Option<u16>,
+        alerts_response_code: Option<u16>,
+        time_of_submission_ms: u64,
+        alerts_dupe_trips: bool,
+    ) -> bool {
+        //decompress using flate2
+
+        //   if new_data_status_from_timestamps {
+        if true {
+            let vehicles_gtfs_rt = match vehicles_response_code {
+                Some(200) => match vehicles {
+                    Some(v) => {
+                        let mut d = ZlibDecoder::new(v.as_slice());
+                        let mut decompressed_bytes = Vec::new();
+                        d.read_to_end(&mut decompressed_bytes).unwrap();
+
+                        match parse_gtfs_rt_message(decompressed_bytes.as_slice()) {
+                            Ok(v) => Some(gtfs_rt_correct_route_id_string(
+                                id_cleanup::gtfs_rt_cleanup(v),
+                                realtime_feed_id.as_str(),
+                            )),
+                            Err(e) => {
+                                eprintln!("Error decoding vehicles: {}", e);
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                },
+                _ => None,
+            };
+
+            let vehicles_gtfs_rt =
+                vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
+                    "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
+                    _ => gtfs_rt_feed,
+                });
+
+            let trips_gtfs_rt = match trips_response_code {
+                Some(200) => match trips {
+                    Some(t) => {
+                        let mut d = ZlibDecoder::new(t.as_slice());
+                        let mut decompressed_bytes = Vec::new();
+                        d.read_to_end(&mut decompressed_bytes).unwrap();
+                        match parse_gtfs_rt_message(decompressed_bytes.as_slice()) {
+                            Ok(t) => Some(gtfs_rt_correct_route_id_string(
+                                id_cleanup::gtfs_rt_cleanup(t),
+                                realtime_feed_id.as_str(),
+                            )),
+                            Err(e) => {
+                                eprintln!("Error decoding trips: {}", e);
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                },
+                _ => None,
+            };
+
+            let trips_gtfs_rt = trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
+                "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
+                _ => gtfs_rt_feed,
+            });
+
+            let alerts_gtfs_rt = match alerts_dupe_trips {
+                true => trips_gtfs_rt.clone(),
+                false => match alerts_response_code {
+                    Some(200) => match alerts {
+                        Some(a) => {
+                            let mut d = ZlibDecoder::new(a.as_slice());
+                            let mut decompressed_bytes = Vec::new();
+                            d.read_to_end(&mut decompressed_bytes).unwrap();
+                            match parse_gtfs_rt_message(decompressed_bytes.as_slice()) {
+                                Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
+                                Err(e) => {
+                                    eprintln!("Error decoding alerts: {}", e);
+                                    None
+                                }
+                            }
+                        }
+                        None => None,
+                    },
+                    _ => None,
+                },
+            };
+
+            //get and update raw gtfs_rt data
+
+            //  println!("Parsed FeedMessages for {}", realtime_feed_id);
+
+            let mut new_data = false;
+
+            let hash_data_start = Instant::now();
+
+            if let Some(vehicles_gtfs_rt) = &vehicles_gtfs_rt {
+                if !new_data {
+                    let new_data_v = contains_new_data(
+                        &self,
+                        &realtime_feed_id,
+                        GtfsRtType::VehiclePositions,
+                        vehicles_gtfs_rt,
+                    );
+
+                    if new_data_v {
+                        new_data = new_data_v;
+                    }
+                }
+
+                let _ = save_timestamps(
+                    &self,
+                    &realtime_feed_id,
+                    GtfsRtType::VehiclePositions,
+                    vehicles_gtfs_rt,
+                );
+            }
+
+            if let Some(trips_gtfs_rt) = &trips_gtfs_rt {
+                if !new_data {
+                    let new_data_t = contains_new_data(
+                        &self,
+                        &realtime_feed_id,
+                        GtfsRtType::TripUpdates,
+                        trips_gtfs_rt,
+                    );
+
+                    if new_data_t {
+                        new_data = new_data_t;
+                    }
+                }
+
+                let _ = save_timestamps(
+                    &self,
+                    &realtime_feed_id,
+                    GtfsRtType::TripUpdates,
+                    trips_gtfs_rt,
+                );
+            }
+
+            if let Some(alerts_gtfs_rt) = &alerts_gtfs_rt {
+                if !new_data {
+                    let new_data_a = contains_new_data(
+                        &self,
+                        &realtime_feed_id,
+                        GtfsRtType::Alerts,
+                        alerts_gtfs_rt,
+                    );
+
+                    if new_data_a {
+                        new_data = new_data_a;
+                    }
+                }
+
+                let _ =
+                    save_timestamps(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
+            }
+
+            if new_data || chateau_id == "uc~irvine~anteater~express" {
+                if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
+                    self.authoritative_gtfs_rt_store
+                        .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+                        .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
+                        .or_insert(vehicles_gtfs_rt.clone());
+                }
+
+                if let Some(trip_gtfs_rt) = trips_gtfs_rt {
+                    self.authoritative_gtfs_rt_store
+                        .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+                        .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
+                        .or_insert(trip_gtfs_rt.clone());
+                }
+
+                if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
+                    self.authoritative_gtfs_rt_store
+                        .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
+                        .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
+                        .or_insert(alerts_gtfs_rt.clone());
+                }
+            }
+
+            let hash_data_duration = hash_data_start.elapsed();
+
+            println!(
+                "wrote {realtime_feed_id} in chateau {chateau_id}, took {} ms, is new data: {new_data}",
+                hash_data_duration.as_millis()
+            );
+
+            //   println!("Saved FeedMessages for {}", realtime_feed_id);
+
+            if new_data {
+                let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
+
+                if !lock_chateau_queue.contains(&chateau_id) {
+                    lock_chateau_queue.insert(chateau_id.clone());
+                    self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
+                        chateau_id,
+                        realtime_feed_id,
+                        has_vehicles,
+                        has_trips,
+                        has_alerts,
+                        vehicles_response_code,
+                        trips_response_code,
+                        alerts_response_code,
+                        time_of_submission_ms,
+                    });
+                }
+            }
+        }
+
+        true
     }
 
     async fn from_alpenrose(

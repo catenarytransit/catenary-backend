@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install Dependencies
-        run: sudo apt install -y protobuf-compiler
+        run: sudo apt install -y protobuf-compiler cmake
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:

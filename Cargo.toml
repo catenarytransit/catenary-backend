@@ -112,7 +112,7 @@ env_logger = "0.11.3"
 ron = "0.8.1"
 regex = "1.10.4"
 fasthash = "0.4.0"
-clap = "4.5.28"
+clap = "4.5.30"
 rgb = "0.8.37"
 zotgtfs = "0.3.7"
 amtrak-gtfs-rt = "0.5.2"
@@ -122,7 +122,6 @@ online = { version = "4.0.2", features = ["tokio-runtime"] }
 chicago-gtfs-rt = "0.2.2"
 etcd-client = "0.14.1"
 ipnet = { version = "2.9.0", features = ["serde"] }
-flate2 = "1.0.30"
 tar = "0.4.41"
 bytes = "1.10.0"
 polyline = "0.11.0"
@@ -144,6 +143,7 @@ finite = "0.0.1"
 scraper = { version = "0.22.0", features = ["atomic"] }
 html-escape = "0.2.13"
 byteorder = "1.5.0"
+flate2 = { version = "1.0.30", features = ["zlib-ng"], default-features = false }
 [[bin]]
 name = "maple"
 path = "src/maple/main.rs"

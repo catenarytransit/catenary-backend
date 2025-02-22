@@ -4,7 +4,11 @@ use catenary::ahash_fast_hash;
 use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id;
 use dashmap::DashMap;
+use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use futures::StreamExt;
+use gtfs_realtime::alert;
 use lazy_static::lazy_static;
 use rand::prelude::*;
 use rand::seq::SliceRandom;
@@ -12,6 +16,7 @@ use reqwest::Response;
 use scc::HashMap as SccHashMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -177,47 +182,84 @@ pub async fn single_fetch_time(
                                     || trip_updates_http_status == Some(200)
                                     || alerts_http_status == Some(200)
                                 {
+                                    let vehicle_positions_cleanup = match vehicle_positions_data {
+                                        Some(Ok(response)) => {
+                                            cleanup_response(
+                                                response,
+                                                UrlType::VehiclePositions,
+                                                feed_id,
+                                                Arc::clone(&hashes_of_data),
+                                            )
+                                            .await
+                                        }
+                                        _ => None,
+                                    };
+
+                                    let trip_updates_cleanup = match trip_updates_data {
+                                        Some(Ok(response)) => {
+                                            cleanup_response(
+                                                response,
+                                                UrlType::TripUpdates,
+                                                feed_id,
+                                                Arc::clone(&hashes_of_data),
+                                            )
+                                            .await
+                                        }
+                                        _ => None,
+                                    };
+
+                                    let mut alerts_cleanup = match alerts_data {
+                                        Some(Ok(response)) => {
+                                            cleanup_response(
+                                                response,
+                                                UrlType::Alerts,
+                                                feed_id,
+                                                Arc::clone(&hashes_of_data),
+                                            )
+                                            .await
+                                        }
+                                        _ => None,
+                                    };
+
+                                    let mut alert_dupe_trips = false;
+
+                                    if alerts_cleanup == trip_updates_cleanup {
+                                        alerts_cleanup = None;
+                                        alert_dupe_trips = true;
+                                    }
+
+                                    //map compression for all data
+
+                                    let vehicle_positions_cleanup =
+                                        vehicle_positions_cleanup.map(|v| {
+                                            let mut encoder =
+                                                ZlibEncoder::new(Vec::new(), Compression::new(2));
+                                            encoder.write_all(v.as_slice()).unwrap();
+                                            encoder.finish().unwrap()
+                                        });
+
+                                    let trip_updates_cleanup = trip_updates_cleanup.map(|v| {
+                                        let mut encoder =
+                                            ZlibEncoder::new(Vec::new(), Compression::new(2));
+                                        encoder.write_all(v.as_slice()).unwrap();
+                                        encoder.finish().unwrap()
+                                    });
+
+                                    let alerts_cleanup = alerts_cleanup.map(|v| {
+                                        let mut encoder =
+                                            ZlibEncoder::new(Vec::new(), Compression::new(2));
+                                        encoder.write_all(v.as_slice()).unwrap();
+                                        encoder.finish().unwrap()
+                                    });
+
                                     let tarpc_send_to_aspen = aspen_client
-                                        .from_alpenrose(
+                                        .from_alpenrose_compressed(
                                             tarpc::context::current(),
                                             data.chateau_id.clone(),
                                             feed_id.clone(),
-                                            match vehicle_positions_data {
-                                                Some(Ok(response)) => {
-                                                    cleanup_response(
-                                                        response,
-                                                        UrlType::VehiclePositions,
-                                                        feed_id,
-                                                        Arc::clone(&hashes_of_data),
-                                                    )
-                                                    .await
-                                                }
-                                                _ => None,
-                                            },
-                                            match trip_updates_data {
-                                                Some(Ok(response)) => {
-                                                    cleanup_response(
-                                                        response,
-                                                        UrlType::TripUpdates,
-                                                        feed_id,
-                                                        Arc::clone(&hashes_of_data),
-                                                    )
-                                                    .await
-                                                }
-                                                _ => None,
-                                            },
-                                            match alerts_data {
-                                                Some(Ok(response)) => {
-                                                    cleanup_response(
-                                                        response,
-                                                        UrlType::Alerts,
-                                                        feed_id,
-                                                        Arc::clone(&hashes_of_data),
-                                                    )
-                                                    .await
-                                                }
-                                                _ => None,
-                                            },
+                                            vehicle_positions_cleanup,
+                                            trip_updates_cleanup,
+                                            alerts_cleanup,
                                             assignment.realtime_vehicle_positions.is_some(),
                                             assignment.realtime_trip_updates.is_some(),
                                             assignment.realtime_alerts.is_some(),
@@ -225,6 +267,7 @@ pub async fn single_fetch_time(
                                             trip_updates_http_status,
                                             alerts_http_status,
                                             duration_since_unix_epoch().as_millis() as u64,
+                                            alert_dupe_trips,
                                         )
                                         .await;
 

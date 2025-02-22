@@ -5,6 +5,7 @@ use catenary::get_node_for_realtime_feed_id;
 use prost::Message;
 use serde::Deserialize;
 use std::sync::Arc;
+use std::io::Read;
 
 #[derive(Deserialize, Clone)]
 struct BirchGtfsRtOptions {
@@ -73,7 +74,7 @@ async fn gtfs_rt(
             match feed_type {
                 Some(feed_type) => {
                     let get_gtfs = aspen_client
-                        .get_gtfs_rt(tarpc::context::current(), query.feed_id, feed_type)
+                        .get_gtfs_rt_compressed(tarpc::context::current(), query.feed_id, feed_type)
                         .await;
 
                     match get_gtfs {
@@ -81,7 +82,9 @@ async fn gtfs_rt(
                             .append_header(("Cache-Control", "no-cache"))
                             .body("Node crashed during request"),
                         Ok(Some(protobuf)) => {
-                            match catenary::parse_gtfs_rt_message(protobuf.as_slice()) {
+                            let decompressed_bytes = catenary::decompress_zlib(protobuf.as_slice());
+
+                            match catenary::parse_gtfs_rt_message(decompressed_bytes.as_slice()) {
                                 Ok(data) => match format {
                                     ConvertedFormat::Protobuf => HttpResponse::Ok()
                                         .append_header(("Cache-Control", "no-cache"))
