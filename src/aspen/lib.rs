@@ -115,7 +115,7 @@ pub struct ChateauMetadataEtcd {
     pub socket: SocketAddr,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RealtimeFeedMetadataEtcd {
     pub worker_id: String,
     pub socket: SocketAddr,
@@ -127,7 +127,7 @@ pub struct ChateausLeaderHashMap {
     pub chateaus: BTreeMap<String, ChateauDataNoGeometry>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct ProcessAlpenroseData {
     pub chateau_id: String,
     pub realtime_feed_id: String,

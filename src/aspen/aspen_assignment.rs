@@ -178,6 +178,31 @@ pub async fn assign_chateaus(
                             chateau_id: chateau_id.clone(),
                         };
 
+                        // get data from etcd
+
+                        let existing_data = etcd
+                            .get(
+                                format!("/aspen_assigned_realtime_feed_ids/{}", realtime_feed_id)
+                                    .as_str(),
+                                None,
+                            )
+                            .await;
+
+                        let mut assign_realtime_feed_required = true;
+
+                        if let Ok(existing_data) = existing_data {
+                            let existing_data = existing_data.kvs().get(0).unwrap().value();
+
+                            let existing_data =
+                                bincode::deserialize::<RealtimeFeedMetadataEtcd>(existing_data);
+
+                            if let Ok(existing_data) = existing_data {
+                                if assigned_realtime_feed_data == existing_data {
+                                    assign_realtime_feed_required = false;
+                                }
+                            }
+                        }
+
                         let save_to_etcd_realtime_data = etcd
                             .put(
                                 format!("/aspen_assigned_realtime_feed_ids/{}", realtime_feed_id),
