@@ -104,10 +104,13 @@ pub async fn aspen_leader_thread(
         }
 
         //renew the etcd lease
-        let _ = etcd
+        let lease_renewal = etcd
             .lease_keep_alive(lease_id_for_this_worker)
-            .await
-            .unwrap();
+            .await;
+
+        if (lease_renewal.is_err()) {
+            eprintln!("Error renewing lease: {:#?}", lease_renewal);
+        }
 
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
