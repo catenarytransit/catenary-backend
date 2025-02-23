@@ -4,8 +4,8 @@ use catenary::aspen_dataset::GtfsRtType;
 use catenary::get_node_for_realtime_feed_id;
 use prost::Message;
 use serde::Deserialize;
-use std::sync::Arc;
 use std::io::Read;
+use std::sync::Arc;
 
 #[derive(Deserialize, Clone)]
 struct BirchGtfsRtOptions {
