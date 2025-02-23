@@ -229,7 +229,7 @@ pub async fn assign_chateaus(
 
             //compact history
 
-            //etcd.compact(fetch_workers_revision_number, None).await?;
+            etcd.compact(fetch_workers_revision_number, None).await?;
         }
     }
 
