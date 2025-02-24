@@ -83,6 +83,7 @@ pub async fn single_fetch_time(
     rtcquebec_gtfs: Arc<gtfs_structures::Gtfs>,
     etcd_urls: &Vec<&str>,
     etcd_connection_options: &Option<etcd_client::ConnectOptions>,
+    lease_id: &i64,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let start = Instant::now();
 
@@ -367,6 +368,11 @@ pub async fn single_fetch_time(
             let duration = start.elapsed();
             let duration = duration.as_secs_f64();
             println!("{}: {:.2?}", feed_id, duration);
+
+            //renew lease
+            let _ = etcd
+                .lease_keep_alive(lease_id)
+                .await;
         }
     }))
     .buffer_unordered(request_limit)

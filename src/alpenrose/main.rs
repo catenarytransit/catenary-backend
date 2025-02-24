@@ -372,6 +372,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&rtc_quebec_gtfs),
                 &etcd_urls,
                 &etcd_connection_options,
+                &etcd_lease_id
             )
             .await?;
         } else {
