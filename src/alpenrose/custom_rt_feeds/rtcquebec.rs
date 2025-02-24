@@ -21,9 +21,18 @@ pub async fn fetch_rtc_data(
                 eprintln!("Failed to fetch Rtc Quebec data, everything is empty");
                 return;
             }
+
+            let vehicles = rtc_gtfs_rt_res.vehicles.unwrap();
+            let voyages = rtc_gtfs_rt_res.voyages.unwrap();
+
+            if (vehicles.entity.len() == 0) || (voyages.entity.len() == 0) {
+                eprintln!("Failed to fetch Rtc Quebec data, entities are empty");
+                return;
+            }
+
             //extract the binary data
-            let vehicle_data = rtc_gtfs_rt_res.vehicles.unwrap().encode_to_vec();
-            let trip_data = rtc_gtfs_rt_res.voyages.unwrap().encode_to_vec();
+            let vehicle_data = vehicles.encode_to_vec();
+            let trip_data = voyages.encode_to_vec();
             //let alert_data = rtc_gtfs_rt_res.alertes.encode_to_vec();
 
             let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
