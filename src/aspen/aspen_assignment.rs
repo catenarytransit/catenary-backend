@@ -193,14 +193,16 @@ pub async fn assign_chateaus(
                         let mut assign_realtime_feed_required = true;
 
                         if let Ok(existing_data) = existing_data {
-                            let existing_data = existing_data.kvs().get(0).unwrap().value();
+                            if let Some(existing_data) = existing_data.kvs().get(0) {
+                                let existing_data = existing_data.value();
 
-                            let existing_data =
-                                bincode::deserialize::<RealtimeFeedMetadataEtcd>(existing_data);
+                                let existing_data =
+                                    bincode::deserialize::<RealtimeFeedMetadataEtcd>(existing_data);
 
-                            if let Ok(existing_data) = existing_data {
-                                if assigned_realtime_feed_data == existing_data {
-                                    assign_realtime_feed_required = false;
+                                if let Ok(existing_data) = existing_data {
+                                    if assigned_realtime_feed_data == existing_data {
+                                        assign_realtime_feed_required = false;
+                                    }
                                 }
                             }
                         }
@@ -227,7 +229,7 @@ pub async fn assign_chateaus(
 
             //compact history
 
-            //etcd.compact(fetch_workers_revision_number, None).await?;
+            etcd.compact(fetch_workers_revision_number, None).await?;
         }
     }
 
