@@ -30,6 +30,11 @@ pub async fn fetch_rtc_data(
                 return;
             }
 
+            if (voyages.entity.len() * 3) < vehicles.entity.len() {
+                eprintln!("Failed to fetch Rtc Quebec data, vehicles are more than 3 times the voyages");
+                return;
+            }
+
             //extract the binary data
             let vehicle_data = vehicles.encode_to_vec();
             let trip_data = voyages.encode_to_vec();
