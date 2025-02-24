@@ -371,7 +371,7 @@ pub async fn single_fetch_time(
 
             //renew lease
             let _ = etcd
-                .lease_keep_alive(lease_id)
+                .lease_keep_alive(*lease_id)
                 .await;
         }
     }))
