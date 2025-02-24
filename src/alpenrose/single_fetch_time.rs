@@ -370,9 +370,9 @@ pub async fn single_fetch_time(
             println!("{}: {:.2?}", feed_id, duration);
 
             //renew lease
-            let _ = etcd
-                .lease_keep_alive(*lease_id)
-                .await;
+            if rand::rng().random_bool(0.1) {
+                let _ = etcd.lease_keep_alive(*lease_id).await;
+            }
         }
     }))
     .buffer_unordered(request_limit)
