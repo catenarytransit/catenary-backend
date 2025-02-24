@@ -72,9 +72,9 @@ use crate::rt_recent_history::*;
 pub mod schedule_filtering;
 pub mod tile_save_and_get;
 pub mod timestamp_extraction;
-use std::io::{Read, Write};
 use flate2::Compression;
 use std::io::Cursor;
+use std::io::{Read, Write};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ChateauDataNoGeometry {
@@ -96,7 +96,7 @@ pub fn decompress_zlib(input: &[u8]) -> Vec<u8> {
     let mut decompressed_bytes = Vec::new();
     decoder.read_to_end(&mut decompressed_bytes).unwrap();
 
-        decompressed_bytes
+    decompressed_bytes
 }
 
 pub mod gtfs_schedule_protobuf {

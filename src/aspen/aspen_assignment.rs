@@ -147,16 +147,16 @@ pub async fn assign_chateaus(
 
                     if let Ok(existing_data) = existing_data {
                         if existing_data.kvs().len() > 0 {
-                        let existing_data = existing_data.kvs().get(0).unwrap().value();
+                            let existing_data = existing_data.kvs().get(0).unwrap().value();
 
-                        let existing_data =
-                            bincode::deserialize::<ChateauMetadataEtcd>(existing_data);
+                            let existing_data =
+                                bincode::deserialize::<ChateauMetadataEtcd>(existing_data);
 
-                        if let Ok(existing_data) = existing_data {
-                            if assigned_chateau_data == existing_data {
-                                assign_chateau_required = false;
+                            if let Ok(existing_data) = existing_data {
+                                if assigned_chateau_data == existing_data {
+                                    assign_chateau_required = false;
+                                }
                             }
-                        }
                         }
                     }
 

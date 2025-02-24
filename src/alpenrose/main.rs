@@ -68,6 +68,16 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let amtrak_gtfs = Arc::new(amtrak_gtfs);
 
+    let rtc_quebec_gtfs = gtfs_structures::GtfsReader::default()
+        .read_shapes(false)
+        .read_from_url_async(
+            "https://cdn.rtcquebec.ca/Site_Internet/DonneesOuvertes/googletransit.zip",
+        )
+        .await
+        .unwrap();
+
+    let rtc_quebec_gtfs = Arc::new(rtc_quebec_gtfs);
+
     println!("Worker id {}", this_worker_id);
 
     // if a node drops out, ingestion will be automatically reassigned to the other nodes
@@ -356,6 +366,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&last_fetch_per_feed),
                 Arc::clone(&amtrak_gtfs),
                 Arc::clone(&chicago_trips_str),
+                Arc::clone(&rtc_quebec_gtfs),
                 &etcd_urls,
                 &etcd_connection_options,
             )
