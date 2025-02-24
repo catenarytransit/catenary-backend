@@ -368,7 +368,7 @@ pub async fn single_fetch_time(
             println!("{}: {:.2?}", feed_id, duration);
         }
     }))
-    .buffer_unordered(20)
+    .buffer_unordered(40)
     .collect::<Vec<()>>()
     .await;
 
