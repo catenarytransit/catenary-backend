@@ -70,8 +70,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let rtc_quebec_gtfs = gtfs_structures::GtfsReader::default()
         .read_shapes(false)
-        .read_from_url_async(
-            "https://cdn.rtcquebec.ca/Site_Internet/DonneesOuvertes/googletransit.zip",
+        .read(
+            "rtcquebec.zip",
         )
         .await
         .unwrap();
