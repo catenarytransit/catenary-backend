@@ -73,7 +73,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .read(
             "rtcquebec.zip",
         )
-        .await
         .unwrap();
 
     let rtc_quebec_gtfs = Arc::new(rtc_quebec_gtfs);
