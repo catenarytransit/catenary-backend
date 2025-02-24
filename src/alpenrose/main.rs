@@ -56,6 +56,11 @@ use get_feed_metadata::RealtimeFeedFetch;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
+    let request_limit = match std::env::var("REQUEST_LIMIT") {
+        Ok(request_limit) => request_limit.parse::<usize>().unwrap(),
+        Err(_) => 40,
+    };
+
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
     let start = Instant::now();
@@ -358,6 +363,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             //get the feed data from the feeds assigned to this worker
 
             single_fetch_time::single_fetch_time(
+                request_limit,
                 client.clone(),
                 Arc::clone(&assignments_for_this_worker),
                 Arc::clone(&last_fetch_per_feed),

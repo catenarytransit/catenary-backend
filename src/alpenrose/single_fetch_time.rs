@@ -74,6 +74,7 @@ async fn cleanup_response(
 }
 
 pub async fn single_fetch_time(
+    request_limit: usize,
     client: reqwest::Client,
     assignments: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>>,
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
@@ -368,7 +369,7 @@ pub async fn single_fetch_time(
             println!("{}: {:.2?}", feed_id, duration);
         }
     }))
-    .buffer_unordered(40)
+    .buffer_unordered(request_limit)
     .collect::<Vec<()>>()
     .await;
 
