@@ -17,9 +17,13 @@ pub async fn fetch_rtc_data(
             rtc_quebec_gtfs_rt::faire_les_donnees_gtfs_rt(gtfs, client.clone()).await;
 
         if let Ok(rtc_gtfs_rt_res) = rtc_gtfs_rt_res {
+            if rtc_gtfs_rt_res.vehicles.is_none() || rtc_gtfs_rt_res.voyages.is_none() {
+                eprintln!("Failed to fetch Rtc Quebec data, everything is empty");
+                return;
+            }
             //extract the binary data
             let vehicle_data = rtc_gtfs_rt_res.vehicles.unwrap().encode_to_vec();
-            // let trip_data = rtc_gtfs_rt_res.voyages.encode_to_vec();
+            let trip_data = rtc_gtfs_rt_res.voyages.unwrap().encode_to_vec();
             //let alert_data = rtc_gtfs_rt_res.alertes.encode_to_vec();
 
             let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
@@ -32,13 +36,13 @@ pub async fn fetch_rtc_data(
                     data.chateau_id.clone(),
                     String::from(feed_id),
                     Some(vehicle_data),
-                    None,
+                    Some(trip_data),
                     None,
                     true,
-                    false,
+                    true,
                     false,
                     Some(200),
-                    None,
+                    Some(200),
                     None,
                     duration_since_unix_epoch().as_millis() as u64,
                 )

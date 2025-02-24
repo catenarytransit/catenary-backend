@@ -70,9 +70,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let rtc_quebec_gtfs = gtfs_structures::GtfsReader::default()
         .read_shapes(false)
-        .read(
-            "rtcquebec.zip",
-        )
+        .read("rtcquebec.zip")
         .unwrap();
 
     let rtc_quebec_gtfs = Arc::new(rtc_quebec_gtfs);
