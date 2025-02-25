@@ -876,56 +876,7 @@ pub async fn get_trip_init(
 
     //calculate start of the trip time
 
-    let start_of_trip_datetime = match &query.start_time {
-        Some(start_time) => {
-            //  let start_time = chrono::NaiveTime::parse_from_str(&start_time, "%H:%M:%S");
-
-            // split into array based on :
-            let start_split: Vec<&str> = start_time.split(':').collect::<Vec<&str>>();
-
-            if start_split.len() != 3 {
-                eprintln!("Invalid start time format");
-                return HttpResponse::BadRequest().body("Invalid start time");
-            }
-
-            let (h, m, s): (
-                Result<u8, std::num::ParseIntError>,
-                Result<u8, std::num::ParseIntError>,
-                Result<u8, std::num::ParseIntError>,
-            ) = (
-                start_split[0].parse(),
-                start_split[1].parse(),
-                start_split[2].parse(),
-            );
-
-            match (h, m, s) {
-                (Ok(h), Ok(m), Ok(s)) => {
-                    let added_days = h / 24;
-
-                    let start_time =
-                        chrono::NaiveTime::from_hms_opt((h % 24).into(), m as u32, s as u32)
-                            .unwrap();
-
-                    let new_naive_date =
-                        start_naive_date + chrono::Duration::days(added_days as i64);
-
-                    let start_of_trip_datetime =
-                        chrono::NaiveDateTime::new(new_naive_date, start_time);
-                    timezone
-                        .from_local_datetime(&start_of_trip_datetime)
-                        .unwrap()
-                }
-                _ => {
-                    eprintln!("Invalid start time format");
-                    return HttpResponse::BadRequest().body("Invalid start time");
-                }
-            }
-        }
-        None => {
-            // number of seconds since midnight + compressed_trip.start_time
-            reference_time + chrono::Duration::seconds(trip_compressed.start_time as i64)
-        }
-    };
+    let start_of_trip_datetime = reference_time + chrono::Duration::seconds(added_seconds_to_ref_midnight);
 
     for row in itin_rows_to_use {
         let stop = stops_data_map.get(row.stop_id.as_str());
