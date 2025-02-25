@@ -31,7 +31,9 @@ pub async fn fetch_rtc_data(
             }
 
             if (voyages.entity.len() * 3) < vehicles.entity.len() {
-                eprintln!("Failed to fetch Rtc Quebec data, vehicles are more than 3 times the voyages");
+                eprintln!(
+                    "Failed to fetch Rtc Quebec data, vehicles are more than 3 times the voyages"
+                );
                 return;
             }
 

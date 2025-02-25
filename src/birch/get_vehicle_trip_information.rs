@@ -6,12 +6,15 @@ use catenary::aspen_dataset::AspenisedAlert;
 use catenary::aspen_dataset::AspenisedVehicleDescriptor;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::schema::gtfs::calendar as calendar_pg_schema;
+use catenary::schema::gtfs::calendar_dates as calendar_dates_pg_schema;
 use catenary::schema::gtfs::itinerary_pattern as itinerary_pattern_pg_schema;
 use catenary::schema::gtfs::itinerary_pattern_meta as itinerary_pattern_meta_pg_schema;
 use catenary::schema::gtfs::routes as routes_pg_schema;
 use catenary::schema::gtfs::stops as stops_pg_schema;
 use catenary::schema::gtfs::trips_compressed as trips_compressed_pg_schema;
 use catenary::EtcdConnectionIps;
+use chrono::Datelike;
 use chrono::TimeZone;
 use chrono_tz::Tz;
 use compact_str::CompactString;
@@ -554,9 +557,9 @@ pub async fn get_trip_init(
     }
 
     let trip_compressed = trip_compressed[0].clone();
-    // get itin data and itin meta data
+    // get itin data and itin meta data, and calendar data
 
-    let (itin_meta, itin_rows, route) = futures::join!(
+    let (itin_meta, itin_rows, route, calendar, calendar_dates) = futures::join!(
         itinerary_pattern_meta_pg_schema::dsl::itinerary_pattern_meta
             .filter(itinerary_pattern_meta_pg_schema::dsl::chateau.eq(&chateau))
             .filter(
@@ -577,7 +580,17 @@ pub async fn get_trip_init(
             .filter(routes_pg_schema::dsl::chateau.eq(&chateau))
             .filter(routes_pg_schema::dsl::route_id.eq(&trip_compressed.route_id))
             .select(catenary::models::Route::as_select())
-            .load(conn)
+            .load(conn),
+        calendar_pg_schema::dsl::calendar
+            .filter(calendar_pg_schema::dsl::chateau.eq(&chateau))
+            .filter(calendar_pg_schema::dsl::service_id.eq(&trip_compressed.service_id))
+            .select(catenary::models::Calendar::as_select())
+            .first(conn),
+        calendar_dates_pg_schema::dsl::calendar_dates
+            .filter(calendar_dates_pg_schema::dsl::chateau.eq(&chateau))
+            .filter(calendar_dates_pg_schema::dsl::service_id.eq(&trip_compressed.service_id))
+            .select(catenary::models::CalendarDate::as_select())
+            .load(conn),
     );
 
     timer.add("query_itin_route_and_itin_rows");
@@ -613,6 +626,20 @@ pub async fn get_trip_init(
     if itin_meta.is_empty() {
         return HttpResponse::NotFound().body("Trip Itin not found");
     }
+
+    if calendar.is_err() {
+        eprintln!("{}", calendar.unwrap_err());
+        return HttpResponse::InternalServerError().body("Error fetching calendar data");
+    }
+
+    let calendar: catenary::models::Calendar = calendar.unwrap();
+
+    if calendar_dates.is_err() {
+        eprintln!("{}", calendar_dates.unwrap_err());
+        return HttpResponse::InternalServerError().body("Error fetching calendar dates data");
+    }
+
+    let calendar_dates = calendar_dates.unwrap();
 
     let itin_meta: catenary::models::ItineraryPatternMeta = itin_meta[0].clone();
 
@@ -724,6 +751,36 @@ pub async fn get_trip_init(
 
     let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
+    let added_seconds_to_ref_midnight = match &query.start_time {
+        Some(start_time) => {
+            let start_split: Vec<&str> = start_time.split(':').collect::<Vec<&str>>();
+
+            if start_split.len() != 3 {
+                eprintln!("Invalid start time format");
+                return HttpResponse::BadRequest().body("Invalid start time");
+            }
+
+            let (h, m, s): (
+                Result<u8, std::num::ParseIntError>,
+                Result<u8, std::num::ParseIntError>,
+                Result<u8, std::num::ParseIntError>,
+            ) = (
+                start_split[0].parse(),
+                start_split[1].parse(),
+                start_split[2].parse(),
+            );
+
+            match (h, m, s) {
+                (Ok(h), Ok(m), Ok(s)) => (h as i64 * 3600) + (m as i64 * 60) + s as i64,
+                _ => {
+                    eprintln!("Invalid start time format");
+                    return HttpResponse::BadRequest().body("Invalid start time");
+                }
+            }
+        }
+        None => trip_compressed.start_time as i64,
+    };
+
     //map start date to a YYYY, MM, DD format
     let start_naive_date = if let Some(start_date) = query.start_date {
         let start_date = chrono::NaiveDate::parse_from_str(&start_date, "%Y%m%d");
@@ -735,17 +792,77 @@ pub async fn get_trip_init(
 
         start_date.unwrap()
     } else {
-        //get current date under the timezone
+        // make an array from 7 days in the past to 7 days in the future, chrono naive days
 
-        // move the starting date if the starting offset is greater than 86400 seconds
+        let now = chrono::Utc::now();
+        let now = timezone.from_utc_datetime(&now.naive_utc());
 
-        match trip_compressed.start_time >= 86400 {
-            true => {
-                chrono::Utc::now().with_timezone(&timezone).date_naive()
-                    - chrono::Duration::seconds(86400)
-            }
-            false => chrono::Utc::now().with_timezone(&timezone).date_naive(),
-        }
+        let now_date = now.date_naive();
+
+        let start_date_iter = now_date - chrono::Duration::days(10);
+
+        let reference_time_noon = chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+
+        let vec_service_dates = start_date_iter
+            .iter_days()
+            .take(20)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter(|date| {
+                let day_of_week = date.weekday();
+
+                //check if the service is active on this day
+
+                let mut service_active = calendar.gtfs_start_date <= *date
+                    && date <= &(calendar.gtfs_end_date)
+                    && match day_of_week {
+                        chrono::Weekday::Mon => calendar.monday,
+                        chrono::Weekday::Tue => calendar.tuesday,
+                        chrono::Weekday::Wed => calendar.wednesday,
+                        chrono::Weekday::Thu => calendar.thursday,
+                        chrono::Weekday::Fri => calendar.friday,
+                        chrono::Weekday::Sat => calendar.saturday,
+                        chrono::Weekday::Sun => calendar.sunday,
+                    };
+
+                let find_calendar_date = calendar_dates
+                    .iter()
+                    .find(|calendar_date| calendar_date.gtfs_date == *date);
+
+                if let Some(find_calendar_date) = find_calendar_date {
+                    service_active = match find_calendar_date.exception_type {
+                        1 => true,
+                        2 => false,
+                        _ => service_active,
+                    }
+                }
+
+                service_active
+            })
+            .map(|date| {
+                let noon_on_start_date = chrono::NaiveDateTime::new(date, reference_time_noon);
+                let noon_on_start_date_with_tz =
+                    timezone.from_local_datetime(&noon_on_start_date).unwrap();
+
+                //reference time is 12 hours before noon
+                let reference_time = noon_on_start_date_with_tz - chrono::Duration::hours(12);
+
+                let start_time =
+                    reference_time + chrono::Duration::seconds(added_seconds_to_ref_midnight);
+
+                let time_diff_from_now = start_time.signed_duration_since(now);
+
+                (date, start_time, time_diff_from_now)
+            })
+            .collect::<Vec<_>>();
+
+        let mut vec_service_dates = vec_service_dates;
+
+        vec_service_dates.sort_by_key(|x| x.2.abs().num_seconds());
+
+        let (start_naive_date, _, _) = vec_service_dates[0];
+
+        start_naive_date
     };
 
     // get reference time as 12 hours before noon of the starting date
