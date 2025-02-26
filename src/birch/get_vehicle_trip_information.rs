@@ -585,7 +585,7 @@ pub async fn get_trip_init(
             .filter(calendar_pg_schema::dsl::chateau.eq(&chateau))
             .filter(calendar_pg_schema::dsl::service_id.eq(&trip_compressed.service_id))
             .select(catenary::models::Calendar::as_select())
-            .first(conn),
+            .load(conn),
         calendar_dates_pg_schema::dsl::calendar_dates
             .filter(calendar_dates_pg_schema::dsl::chateau.eq(&chateau))
             .filter(calendar_dates_pg_schema::dsl::service_id.eq(&trip_compressed.service_id))
@@ -632,7 +632,7 @@ pub async fn get_trip_init(
         return HttpResponse::InternalServerError().body("Error fetching calendar data");
     }
 
-    let calendar: catenary::models::Calendar = calendar.unwrap();
+    let calendar = calendar.unwrap();
 
     if calendar_dates.is_err() {
         eprintln!("{}", calendar_dates.unwrap_err());
@@ -813,7 +813,12 @@ pub async fn get_trip_init(
 
                 //check if the service is active on this day
 
-                let mut service_active = calendar.gtfs_start_date <= *date
+                
+
+                let mut service_active = false;
+
+                if let Some(calendar) = calendar.get(0) {
+                    service_active = calendar.gtfs_start_date <= *date
                     && date <= &(calendar.gtfs_end_date)
                     && match day_of_week {
                         chrono::Weekday::Mon => calendar.monday,
@@ -824,6 +829,7 @@ pub async fn get_trip_init(
                         chrono::Weekday::Sat => calendar.saturday,
                         chrono::Weekday::Sun => calendar.sunday,
                     };
+                }
 
                 let find_calendar_date = calendar_dates
                     .iter()
