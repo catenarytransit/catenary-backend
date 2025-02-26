@@ -813,22 +813,20 @@ pub async fn get_trip_init(
 
                 //check if the service is active on this day
 
-                
-
                 let mut service_active = false;
 
                 if let Some(calendar) = calendar.get(0) {
                     service_active = calendar.gtfs_start_date <= *date
-                    && date <= &(calendar.gtfs_end_date)
-                    && match day_of_week {
-                        chrono::Weekday::Mon => calendar.monday,
-                        chrono::Weekday::Tue => calendar.tuesday,
-                        chrono::Weekday::Wed => calendar.wednesday,
-                        chrono::Weekday::Thu => calendar.thursday,
-                        chrono::Weekday::Fri => calendar.friday,
-                        chrono::Weekday::Sat => calendar.saturday,
-                        chrono::Weekday::Sun => calendar.sunday,
-                    };
+                        && date <= &(calendar.gtfs_end_date)
+                        && match day_of_week {
+                            chrono::Weekday::Mon => calendar.monday,
+                            chrono::Weekday::Tue => calendar.tuesday,
+                            chrono::Weekday::Wed => calendar.wednesday,
+                            chrono::Weekday::Thu => calendar.thursday,
+                            chrono::Weekday::Fri => calendar.friday,
+                            chrono::Weekday::Sat => calendar.saturday,
+                            chrono::Weekday::Sun => calendar.sunday,
+                        };
                 }
 
                 let find_calendar_date = calendar_dates
@@ -882,7 +880,8 @@ pub async fn get_trip_init(
 
     //calculate start of the trip time
 
-    let start_of_trip_datetime = reference_time + chrono::Duration::seconds(added_seconds_to_ref_midnight);
+    let start_of_trip_datetime =
+        reference_time + chrono::Duration::seconds(added_seconds_to_ref_midnight);
 
     for row in itin_rows_to_use {
         let stop = stops_data_map.get(row.stop_id.as_str());
