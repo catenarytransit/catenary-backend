@@ -599,13 +599,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         }
                                         }
                                     }
-                                    
-                                    
-                                
                             }
-                        
                     }
-                
             ))
             .buffer_unordered(get_threads_gtfs())
             .collect::<Vec<()>>()

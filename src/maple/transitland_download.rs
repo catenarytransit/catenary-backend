@@ -270,8 +270,8 @@ pub async fn download_return_eligible_feeds(
                                             .load::<StaticDownloadAttempt>(conn)
                                             .await;
             
-                                     //if the dataset is brand new, mark as success, save the file
-            
+                                        //if the dataset is brand new, mark as success, save the file
+
                                         // this is accomplished by checking in the sql table `gtfs.static_download_attempts`
                                         //if hash exists in the table AND the ingestion operation did not fail, cancel.
                                         //if hash doesn't exist write the file to disk
