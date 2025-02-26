@@ -249,9 +249,9 @@ pub async fn bulk_realtime_fetch_v1(
                             true => Some(filtered_vehicle_positions),
                             false => None,
                         },
-                        vehicle_route_cache: match hash_of_routes_param != response.hash_of_routes {
-                            true => filtered_routes_cache,
-                            false => None,
+                        vehicle_route_cache: match hash_of_routes_param == response.hash_of_routes {
+                            true => None,
+                            false => filtered_routes_cache,
                         },
                         hash_of_routes: response.hash_of_routes,
                         last_updated_time_ms: response.last_updated_time_ms,
