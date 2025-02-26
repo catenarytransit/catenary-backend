@@ -559,7 +559,7 @@ pub async fn get_trip_init(
     let trip_compressed = trip_compressed[0].clone();
     // get itin data and itin meta data, and calendar data
 
-    let (itin_meta, itin_rows, route, calendar, calendar_dates) = futures::join!(
+    let (itin_meta, itin_rows, route, calendar_req, calendar_dates) = futures::join!(
         itinerary_pattern_meta_pg_schema::dsl::itinerary_pattern_meta
             .filter(itinerary_pattern_meta_pg_schema::dsl::chateau.eq(&chateau))
             .filter(
@@ -627,12 +627,12 @@ pub async fn get_trip_init(
         return HttpResponse::NotFound().body("Trip Itin not found");
     }
 
-    if calendar.is_err() {
-        eprintln!("{}", calendar.unwrap_err());
+    if calendar_req.is_err() {
+        eprintln!("{}", calendar_req.unwrap_err());
         return HttpResponse::InternalServerError().body("Error fetching calendar data");
     }
 
-    let calendar = calendar.unwrap();
+    let calendar_rows = calendar_req.unwrap();
 
     if calendar_dates.is_err() {
         eprintln!("{}", calendar_dates.unwrap_err());
@@ -815,10 +815,10 @@ pub async fn get_trip_init(
 
                 let mut service_active = false;
 
-                if let Some(calendar) = calendar.get(0) {
-                    service_active = calendar.gtfs_start_date <= *date
-                        && date <= &(calendar.gtfs_end_date)
-                        && match day_of_week {
+                for calendar in &calendar_rows {
+                    if calendar.gtfs_start_date <= *date
+                    && date <= &(calendar.gtfs_end_date) {
+                        service_active = match day_of_week {
                             chrono::Weekday::Mon => calendar.monday,
                             chrono::Weekday::Tue => calendar.tuesday,
                             chrono::Weekday::Wed => calendar.wednesday,
@@ -827,6 +827,7 @@ pub async fn get_trip_init(
                             chrono::Weekday::Sat => calendar.saturday,
                             chrono::Weekday::Sun => calendar.sunday,
                         };
+                    }
                 }
 
                 let find_calendar_date = calendar_dates
