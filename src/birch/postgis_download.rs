@@ -22,6 +22,7 @@ pub async fn bus_stops_meta(req: HttpRequest) -> impl Responder {
     let mut fields = std::collections::BTreeMap::new();
 
     fields.insert(String::from("onestop_feed_id"), String::from("text"));
+    fields.insert(String::from("chateau"), String::from("text"));
     fields.insert(String::from("attempt_id"), String::from("text"));
     fields.insert(String::from("gtfs_id"), String::from("text"));
     fields.insert(String::from("name"), String::from("text"));
@@ -99,6 +100,7 @@ pub async fn bus_stops(
 FROM (
     SELECT
         onestop_feed_id,
+        chateau,
         attempt_id,
         gtfs_id,
         name,
@@ -117,7 +119,7 @@ FROM (
         route_types,
         children_ids,
         children_route_types,
-        ST_AsMVTGeom(ST_Transform(point, 3857), 
+        ST_AsMVTGeom(ST_Transform(point, 3857),
         ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
         gtfs.stops
@@ -230,6 +232,7 @@ ST_AsMVT(q, 'data', 4096, 'geom')
 FROM (
 SELECT
     onestop_feed_id,
+    chateau,
     attempt_id,
     gtfs_id,
     name,
@@ -307,6 +310,7 @@ pub async fn rail_stops(
 FROM (
     SELECT
         onestop_feed_id,
+        chateau,
         attempt_id,
         gtfs_id,
         name,
@@ -360,6 +364,7 @@ pub async fn rail_stops_meta(req: HttpRequest) -> impl Responder {
     let mut fields = std::collections::BTreeMap::new();
 
     fields.insert(String::from("onestop_feed_id"), String::from("text"));
+    fields.insert(String::from("chateau"), String::from("text"));
     fields.insert(String::from("attempt_id"), String::from("text"));
     fields.insert(String::from("gtfs_id"), String::from("text"));
     fields.insert(String::from("name"), String::from("text"));
@@ -441,6 +446,7 @@ pub async fn other_stops(
 FROM (
     SELECT
         onestop_feed_id,
+        chateau,
         attempt_id,
         gtfs_id,
         name,
@@ -494,6 +500,7 @@ pub async fn other_stops_meta(req: HttpRequest) -> impl Responder {
     let mut fields = std::collections::BTreeMap::new();
 
     fields.insert(String::from("onestop_feed_id"), String::from("text"));
+    fields.insert(String::from("chateau"), String::from("text"));
     fields.insert(String::from("attempt_id"), String::from("text"));
     fields.insert(String::from("gtfs_id"), String::from("text"));
     fields.insert(String::from("name"), String::from("text"));
