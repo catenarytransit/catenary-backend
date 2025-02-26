@@ -637,6 +637,7 @@ async fn main() -> std::io::Result<()> {
         .unwrap_or(4);
 
     println!("Using {} workers", worker_amount);
+    println!("ETCD config: {:#?}", etcd_connection_options);
 
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
