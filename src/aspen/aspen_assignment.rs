@@ -8,6 +8,7 @@ use diesel::query_dsl::select_dsl::SelectDsl;
 use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -114,6 +115,29 @@ pub async fn assign_chateaus(
         } else {
             println!("Assigning tasks to workers....");
 
+            //prefix fetch aspen_assigned_chateaus
+
+            let mut fetch_assigned_chateaus = etcd
+                .get(
+                    "/aspen_assigned_chateaus",
+                    Some(etcd_client::GetOptions::new().with_prefix()),
+                )
+                .await?;
+
+            let fetch_assigned_chateaus = fetch_assigned_chateaus.take_kvs();
+
+            let mut existing_assigned_chateaus = HashMap::new();
+
+            for kv in fetch_assigned_chateaus {
+                let decoded_metadata = bincode::deserialize::<ChateauMetadataEtcd>(kv.value());
+
+                if let Ok(decoded_metadata) = decoded_metadata {
+                    let key = kv.key_str().unwrap();
+                    let chateau = key.replace("/aspen_assigned_chateaus/", "");
+                    existing_assigned_chateaus.insert(chateau, decoded_metadata);
+                }
+            }
+
             if let Some(chateau_list_lock) = chateau_list_lock.as_ref() {
                 for (index, (chateau_id, chateau)) in chateau_list_lock.chateaus.iter().enumerate()
                 {
@@ -136,27 +160,11 @@ pub async fn assign_chateaus(
 
                     // get data from etcd
 
-                    let existing_data = etcd
-                        .get(
-                            format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
-                            None,
-                        )
-                        .await;
-
                     let mut assign_chateau_required = true;
 
-                    if let Ok(existing_data) = existing_data {
-                        if existing_data.kvs().len() > 0 {
-                            let existing_data = existing_data.kvs().get(0).unwrap().value();
-
-                            let existing_data =
-                                bincode::deserialize::<ChateauMetadataEtcd>(existing_data);
-
-                            if let Ok(existing_data) = existing_data {
-                                if assigned_chateau_data == existing_data {
-                                    assign_chateau_required = false;
-                                }
-                            }
+                    if let Some(existing_data) = existing_assigned_chateaus.get(chateau_id) {
+                        if assigned_chateau_data == *existing_data {
+                            assign_chateau_required = false;
                         }
                     }
 
