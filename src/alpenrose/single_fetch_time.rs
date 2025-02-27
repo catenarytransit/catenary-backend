@@ -1,8 +1,10 @@
+use crate::custom_rt_feeds;
 use crate::KeyFormat;
 use crate::RealtimeFeedFetch;
 use catenary::ahash_fast_hash;
 use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id;
+use catenary::get_node_for_realtime_feed_id_kvclient;
 use dashmap::DashMap;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
@@ -20,8 +22,6 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-
-use crate::custom_rt_feeds;
 
 lazy_static! {
     static ref CUSTOM_FEEDS: HashSet<&'static str> = HashSet::from_iter([
@@ -90,6 +90,10 @@ pub async fn single_fetch_time(
 
     let assignments_lock = assignments.read().await;
 
+    let mut etcd = etcd_client::Client::connect(etcd_urls, etcd_connection_options.clone())
+        .await
+        .unwrap();
+
     futures::stream::iter(assignments_lock.iter().map(|(feed_id, assignment)| {
         let client = client.clone();
         let hashes_of_data = Arc::clone(&hashes_of_data);
@@ -97,14 +101,12 @@ pub async fn single_fetch_time(
         let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
         let rtcquebec_gtfs = rtcquebec_gtfs.clone();
         let chicago_text_str = chicago_text_str.clone();
-        let etcd_urls = etcd_urls.clone();
+
+        let mut kv_client = etcd.kv_client();
+        let mut lease_client = etcd.lease_client();
 
         async move {
             let start = Instant::now();
-
-            let mut etcd = etcd_client::Client::connect(etcd_urls, etcd_connection_options.clone())
-                .await
-                .unwrap();
 
             let fetch_interval_ms = assignment.fetch_interval_ms.unwrap_or(1_000);
 
@@ -165,7 +167,7 @@ pub async fn single_fetch_time(
 
                 //lookup currently assigned realtime dataset in zookeeper
                 let fetch_assigned_node_meta =
-                    get_node_for_realtime_feed_id(&mut etcd, feed_id).await;
+                    get_node_for_realtime_feed_id_kvclient(&mut kv_client, feed_id).await;
 
                 match fetch_assigned_node_meta {
                     Some(data) => {
@@ -306,7 +308,7 @@ pub async fn single_fetch_time(
                 match feed_id.as_str() {
                     "f-amtrak~rt" => {
                         custom_rt_feeds::amtrak::fetch_amtrak_data(
-                            &mut etcd,
+                            &mut kv_client,
                             feed_id,
                             &amtrak_gtfs,
                             &client,
@@ -314,29 +316,37 @@ pub async fn single_fetch_time(
                         .await;
                     }
                     "f-viarail~rt" => {
-                        custom_rt_feeds::viarail::fetch_via_data(&mut etcd, feed_id, &client).await;
+                        custom_rt_feeds::viarail::fetch_via_data(&mut kv_client, feed_id, &client)
+                            .await;
                     }
                     "f-mta~nyc~rt~lirr" => {
-                        custom_rt_feeds::mta::fetch_mta_lirr_data(&mut etcd, feed_id, &client)
+                        custom_rt_feeds::mta::fetch_mta_lirr_data(&mut kv_client, feed_id, &client)
                             .await;
                     }
                     "f-mta~nyc~rt~mnr" => {
                         custom_rt_feeds::mta::fetch_mta_metronorth_data(
-                            &mut etcd, feed_id, &client,
+                            &mut kv_client,
+                            feed_id,
+                            &client,
                         )
                         .await;
                     }
                     "f-metrolinktrains~extra~rt" => {
-                        custom_rt_feeds::metrolink_extra::fetch_data(&mut etcd, feed_id, &client)
-                            .await
+                        custom_rt_feeds::metrolink_extra::fetch_data(
+                            &mut kv_client,
+                            feed_id,
+                            &client,
+                        )
+                        .await
                     }
                     "f-bus~dft~gov~uk~rt" => {
-                        custom_rt_feeds::uk::fetch_dft_bus_data(&mut etcd, feed_id, &client).await;
+                        custom_rt_feeds::uk::fetch_dft_bus_data(&mut kv_client, feed_id, &client)
+                            .await;
                     }
                     "f-dp3-cta~rt" => match chicago_text_str.as_ref() {
                         Some(chicago_text_str) => {
                             custom_rt_feeds::chicagotransit::fetch_chicago_data(
-                                &mut etcd,
+                                &mut kv_client,
                                 feed_id,
                                 &client,
                                 chicago_text_str.as_str(),
@@ -346,11 +356,12 @@ pub async fn single_fetch_time(
                         None => {}
                     },
                     "f-tlms~rt" => {
-                        custom_rt_feeds::tlms::fetch_tlms_data(&mut etcd, feed_id, &client).await;
+                        custom_rt_feeds::tlms::fetch_tlms_data(&mut kv_client, feed_id, &client)
+                            .await;
                     }
                     "f-rtcquebec~rt" => {
                         custom_rt_feeds::rtcquebec::fetch_rtc_data(
-                            &mut etcd,
+                            &mut kv_client,
                             feed_id,
                             rtcquebec_gtfs.as_ref(),
                             &client,
@@ -370,7 +381,7 @@ pub async fn single_fetch_time(
 
             //renew lease
             if rand::rng().random_bool(0.1) {
-                let _ = etcd.lease_keep_alive(*lease_id).await;
+                let _ = lease_client.keep_alive(*lease_id).await;
             }
         }
     }))

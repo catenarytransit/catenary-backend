@@ -1,13 +1,13 @@
 use catenary::duration_since_unix_epoch;
-use catenary::get_node_for_realtime_feed_id;
+use catenary::get_node_for_realtime_feed_id_kvclient;
 use catenary::unzip_uk::get_raw_gtfs_rt;
 
 pub async fn fetch_dft_bus_data(
-    etcd: &mut etcd_client::Client,
+    etcd: &mut etcd_client::KvClient,
     feed_id: &str,
     client: &reqwest::Client,
 ) {
-    let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
+    let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 
     if let Some(data) = fetch_assigned_node_meta {
         let worker_id = data.worker_id;

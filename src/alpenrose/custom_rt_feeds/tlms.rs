@@ -1,8 +1,8 @@
 use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id;
+use catenary::get_node_for_realtime_feed_id_kvclient;
 use gtfs_realtime::FeedMessage;
 use prost::Message;
-
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -18,11 +18,11 @@ pub struct RouteIdTable {
 }
 
 pub async fn fetch_tlms_data(
-    etcd: &mut etcd_client::Client,
+    etcd: &mut etcd_client::KvClient,
     feed_id: &str,
     client: &reqwest::Client,
 ) {
-    let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
+    let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 
     if let Some(worker_metadata) = fetch_assigned_node_meta {
         let worker_id = worker_metadata.worker_id;

@@ -8,7 +8,7 @@ const MNR_TRIPS_FEED: &str =
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr";
 
 pub async fn fetch_mta_lirr_data(
-    etcd: &mut etcd_client::Client,
+    etcd: &mut etcd_client::KvClient,
     feed_id: &str,
     client: &reqwest::Client,
 ) {
@@ -51,7 +51,7 @@ pub async fn fetch_mta_lirr_data(
 }
 
 pub async fn fetch_mta_metronorth_data(
-    etcd: &mut etcd_client::Client,
+    etcd: &mut etcd_client::KvClient,
     feed_id: &str,
     client: &reqwest::Client,
 ) {
@@ -382,13 +382,14 @@ pub enum MtaRailroad {
 }
 
 pub async fn send_mta_rail_to_aspen(
-    etcd: &mut etcd_client::Client,
+    etcd: &mut etcd_client::KvClient,
     railroad: MtaRailroad,
     vehicle_position: Vec<u8>,
     trip_updates: Vec<u8>,
     feed_id: &str,
 ) {
-    let fetch_assigned_node_meta = catenary::get_node_for_realtime_feed_id(etcd, feed_id).await;
+    let fetch_assigned_node_meta =
+        catenary::get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 
     if let Some(data) = fetch_assigned_node_meta {
         let worker_id = data.worker_id;

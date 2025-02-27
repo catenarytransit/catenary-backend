@@ -649,6 +649,40 @@ pub fn route_id_transform(feed_id: &str, route_id: String) -> String {
     }
 }
 
+pub async fn get_node_for_realtime_feed_id_kvclient(
+    etcd: &mut etcd_client::KvClient,
+    realtime_feed_id: &str,
+) -> Option<RealtimeFeedMetadataEtcd> {
+    let node = etcd
+        .get(
+            format!("/aspen_assigned_realtime_feed_ids/{}", realtime_feed_id).as_str(),
+            None,
+        )
+        .await;
+
+    match node {
+        Ok(resp) => {
+            let kvs = resp.kvs();
+
+            match kvs.len() {
+                0 => None,
+                _ => {
+                    let data = bincode::deserialize::<RealtimeFeedMetadataEtcd>(kvs[0].value());
+
+                    match data {
+                        Ok(data) => Some(data),
+                        Err(e) => {
+                            println!("Error deserializing RealtimeFeedMetadataEtcd: {:?}", e);
+                            None
+                        }
+                    }
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
 pub async fn get_node_for_realtime_feed_id(
     etcd: &mut etcd_client::Client,
     realtime_feed_id: &str,

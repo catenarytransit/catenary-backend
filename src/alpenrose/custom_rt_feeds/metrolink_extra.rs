@@ -1,11 +1,11 @@
 use catenary::duration_since_unix_epoch;
-use catenary::get_node_for_realtime_feed_id;
+use catenary::get_node_for_realtime_feed_id_kvclient;
 use gtfs_realtime::FeedHeader;
 use gtfs_realtime::FeedMessage;
 use prost::Message;
 
-pub async fn fetch_data(etcd: &mut etcd_client::Client, feed_id: &str, client: &reqwest::Client) {
-    let fetch_assigned_node_meta = get_node_for_realtime_feed_id(etcd, feed_id).await;
+pub async fn fetch_data(etcd: &mut etcd_client::KvClient, feed_id: &str, client: &reqwest::Client) {
+    let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 
     if let Some(assigned_chateau_data) = fetch_assigned_node_meta {
         let worker_id = assigned_chateau_data.worker_id;

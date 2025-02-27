@@ -94,6 +94,46 @@ pub async fn perform_leader_job(
         //lock it so you can't change it anymore
         let assignments = assignments;
 
+        //fetch everything under /alpenrose_assignments/
+
+        let existing_assignments = etcd
+            .get(
+                "/alpenrose_assignments/",
+                Some(etcd_client::GetOptions::new().with_prefix()),
+            )
+            .await?;
+
+        let mut existing_assignments_hashmap: HashMap<String, HashMap<String, RealtimeFeedFetch>> =
+            HashMap::new();
+
+        for kv in existing_assignments.kvs() {
+            let key = kv.key_str().unwrap();
+            let value = kv.value();
+
+            let key = key.replace("/alpenrose_assignments/", "");
+
+            let (worker_id, feed_id) = key.split_once('/').unwrap();
+
+            existing_assignments_hashmap
+                .entry(worker_id.to_string())
+                .and_modify(|instructions| {
+                    instructions.insert(
+                        feed_id.to_string(),
+                        bincode::deserialize::<RealtimeFeedFetch>(value).unwrap(),
+                    );
+                })
+                .or_insert({
+                    let mut map = HashMap::new();
+                    map.insert(
+                        feed_id.to_string(),
+                        bincode::deserialize::<RealtimeFeedFetch>(value).unwrap(),
+                    );
+                    map
+                });
+        }
+
+        //assign the feeds to the workers
+
         for (worker_id, instructions_hashmap) in assignments.iter() {
             let lease_option = etcd_client::PutOptions::new()
                 .with_lease(*fetch_workers_hashmap.get(worker_id).unwrap());
@@ -101,20 +141,12 @@ pub async fn perform_leader_job(
             for (feed_id, realtime_instruction) in instructions_hashmap {
                 //get data from the feed
 
-                let existing_assignment = etcd
-                    .get(
-                        format!("/alpenrose_assignments/{}/{}", worker_id, feed_id).as_str(),
-                        None,
-                    )
-                    .await;
-
-                if let Ok(existing_assignment) = existing_assignment {
-                    if let Some(existing_assignment) = existing_assignment.kvs().get(0) {
-                        let existing_assignment =
-                            bincode::deserialize::<RealtimeFeedFetch>(existing_assignment.value())
-                                .unwrap();
-
-                        if existing_assignment == *realtime_instruction {
+                if let Some(existing_assignment_underworkers) =
+                    existing_assignments_hashmap.get(worker_id)
+                {
+                    if let Some(existing_assignment) = existing_assignment_underworkers.get(feed_id)
+                    {
+                        if existing_assignment == realtime_instruction {
                             continue;
                         }
                     }

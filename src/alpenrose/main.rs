@@ -52,9 +52,9 @@ mod leader_job;
 use std::io;
 use zip::ZipArchive;
 mod single_fetch_time;
+use crate::single_fetch_time::UrlType;
 use get_feed_metadata::RealtimeFeedFetch;
 use scc::HashMap as SccHashMap;
-use crate::single_fetch_time::UrlType;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -377,7 +377,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 &etcd_urls,
                 &etcd_connection_options,
                 &etcd_lease_id,
-                hashes_of_data.clone()
+                hashes_of_data.clone(),
             )
             .await?;
         } else {
