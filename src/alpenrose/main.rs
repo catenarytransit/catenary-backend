@@ -82,6 +82,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     println!("Worker id {}", this_worker_id);
 
+    let hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>> = Arc::new(SccHashMap::new());
+
     // if a node drops out, ingestion will be automatically reassigned to the other nodes
 
     //hands off data to aspen to do additional cleanup and processing, Aspen will perform association with the GTFS schedule data + update dynamic graphs for routing and map representation,
@@ -373,6 +375,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 &etcd_urls,
                 &etcd_connection_options,
                 &etcd_lease_id,
+                &hashes_of_data
             )
             .await?;
         } else {
