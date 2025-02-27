@@ -84,12 +84,11 @@ pub async fn single_fetch_time(
     etcd_urls: &Vec<&str>,
     etcd_connection_options: &Option<etcd_client::ConnectOptions>,
     lease_id: &i64,
+    hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let start = Instant::now();
 
     let assignments_lock = assignments.read().await;
-
-    let hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>> = Arc::new(SccHashMap::new());
 
     futures::stream::iter(assignments_lock.iter().map(|(feed_id, assignment)| {
         let client = client.clone();
