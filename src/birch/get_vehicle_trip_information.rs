@@ -816,8 +816,7 @@ pub async fn get_trip_init(
                 let mut service_active = false;
 
                 for calendar in &calendar_rows {
-                    if calendar.gtfs_start_date <= *date
-                    && date <= &(calendar.gtfs_end_date) {
+                    if calendar.gtfs_start_date <= *date && date <= &(calendar.gtfs_end_date) {
                         service_active = match day_of_week {
                             chrono::Weekday::Mon => calendar.monday,
                             chrono::Weekday::Tue => calendar.tuesday,

@@ -84,7 +84,7 @@ pub async fn single_fetch_time(
     etcd_urls: &Vec<&str>,
     etcd_connection_options: &Option<etcd_client::ConnectOptions>,
     lease_id: &i64,
-    hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>,
+    hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let start = Instant::now();
 
