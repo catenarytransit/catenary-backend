@@ -138,6 +138,27 @@ pub async fn assign_chateaus(
                 }
             }
 
+            let mut existing_assigned_realtime_feeds = HashMap::new();
+
+            let mut fetch_assigned_realtime_feeds = etcd
+                .get(
+                    "/aspen_assigned_realtime_feed_ids",
+                    Some(etcd_client::GetOptions::new().with_prefix()),
+                )
+                .await?;
+
+            let fetch_assigned_realtime_feeds = fetch_assigned_realtime_feeds.take_kvs();
+
+            for kv in fetch_assigned_realtime_feeds {
+                let decoded_metadata = bincode::deserialize::<RealtimeFeedMetadataEtcd>(kv.value());
+
+                if let Ok(decoded_metadata) = decoded_metadata {
+                    let key = kv.key_str().unwrap();
+                    let realtime_feed_id = key.replace("/aspen_assigned_realtime_feed_ids/", "");
+                    existing_assigned_realtime_feeds.insert(realtime_feed_id, decoded_metadata);
+                }
+            }
+
             if let Some(chateau_list_lock) = chateau_list_lock.as_ref() {
                 for (index, (chateau_id, chateau)) in chateau_list_lock.chateaus.iter().enumerate()
                 {
@@ -188,43 +209,31 @@ pub async fn assign_chateaus(
                             chateau_id: chateau_id.clone(),
                         };
 
-                        // get data from etcd
-
-                        let existing_data = etcd
-                            .get(
-                                format!("/aspen_assigned_realtime_feed_ids/{}", realtime_feed_id)
-                                    .as_str(),
-                                None,
-                            )
-                            .await;
-
                         let mut assign_realtime_feed_required = true;
 
-                        if let Ok(existing_data) = existing_data {
-                            if let Some(existing_data) = existing_data.kvs().get(0) {
-                                let existing_data = existing_data.value();
-
-                                let existing_data =
-                                    bincode::deserialize::<RealtimeFeedMetadataEtcd>(existing_data);
-
-                                if let Ok(existing_data) = existing_data {
-                                    if assigned_realtime_feed_data == existing_data {
-                                        assign_realtime_feed_required = false;
-                                    }
-                                }
+                        if let Some(existing_data) =
+                            existing_assigned_realtime_feeds.get(realtime_feed_id)
+                        {
+                            if assigned_realtime_feed_data == *existing_data {
+                                assign_realtime_feed_required = false;
                             }
                         }
 
-                        let save_to_etcd_realtime_data = etcd
-                            .put(
-                                format!("/aspen_assigned_realtime_feed_ids/{}", realtime_feed_id),
-                                bincode::serialize(&assigned_realtime_feed_data).unwrap(),
-                                Some(
-                                    etcd_client::PutOptions::new()
-                                        .with_lease(worker_metadata.etcd_lease_id),
-                                ),
-                            )
-                            .await?;
+                        if assign_realtime_feed_required {
+                            let save_to_etcd_realtime_data = etcd
+                                .put(
+                                    format!(
+                                        "/aspen_assigned_realtime_feed_ids/{}",
+                                        realtime_feed_id
+                                    ),
+                                    bincode::serialize(&assigned_realtime_feed_data).unwrap(),
+                                    Some(
+                                        etcd_client::PutOptions::new()
+                                            .with_lease(worker_metadata.etcd_lease_id),
+                                    ),
+                                )
+                                .await?;
+                        }
                     }
                 }
 
