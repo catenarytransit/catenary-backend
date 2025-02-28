@@ -3,6 +3,7 @@ use gtfs_structures::*;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use ahash::AHashMap;
 
 pub fn include_only_route_types(
     gtfs: Gtfs,
@@ -167,7 +168,7 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
         .collect();
 
     let mut routes_to_remove = BTreeSet::new();
-    let mut route_trip_counts: HashMap<String, usize> = HashMap::new();
+    let mut route_trip_counts: AHashMap<String, usize> = AHashMap::new();
 
     for (trip_id, trip) in &gtfs.trips {
         *route_trip_counts.entry(trip.route_id.clone()).or_insert(0) += 1;
@@ -185,7 +186,7 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
     }
 
     let mut shapes_to_remove = BTreeSet::new();
-    let mut shape_trip_counts: HashMap<String, usize> = HashMap::new();
+    let mut shape_trip_counts: AHashMap<String, usize> = AHashMap::new();
 
     for (_, trip) in &gtfs.trips {
         if let Some(shape_id) = &trip.shape_id {
