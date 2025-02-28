@@ -151,8 +151,6 @@ pub async fn shapes_into_postgres(
                         .collect::<Vec<String>>()
                         .join(",")
                         .as_str()
-                        .replace("Orange County", "OC")
-                        .replace("Inland Empire", "IE")
                         .to_string(),
                     None => String::from(""),
                 };
