@@ -79,8 +79,6 @@ pub async fn shapes_into_postgres(
                     //remove points from Metro Los Angeles B/D that are east of Los Angeles Union Station
                     "eb131b" => point.longitude < -118.2335698,
                     "a05da5" => point.longitude < -118.2335698,
-                    //Remove the under construction segment of the Metro K Line in Los Angeles
-                    "e470ab" => point.latitude > 33.961543,
                     _ => true,
                 })
                 .collect::<Vec<gtfs_structures::Shape>>(),
