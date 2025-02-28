@@ -134,6 +134,13 @@ pub async fn gtfs_process_feed(
         _ => gtfs,
     };
 
+    let mut gtfs = gtfs;
+
+    if feed_id == "f-uc~irvine~anteater~express" {
+        gtfs.routes
+            .retain(|route_id, route| route.long_name.as_deref() != Some("Emergency Management"));
+    }
+
     let today = chrono::Utc::now().naive_utc().date();
 
     let number_of_days = match feed_id {
