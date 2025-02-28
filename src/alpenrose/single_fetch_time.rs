@@ -377,7 +377,7 @@ pub async fn single_fetch_time(
 
             let duration = start.elapsed();
             let duration = duration.as_secs_f64();
-            println!("{}: {:.2?}", feed_id, duration);
+            println!("{}: took {:.3?}s", feed_id, duration);
 
             //renew lease
             if rand::rng().random_bool(0.1) {
