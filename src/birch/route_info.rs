@@ -200,14 +200,6 @@ pub async fn route_info(
 
     list_of_shape_ids.dedup();
 
-    /*
-    let direction_rows = catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
-    .filter(catenary::schema::gtfs::direction_pattern::dsl::chateau.eq(&query.chateau))
-    .filter(catenary::schema::gtfs::direction_pattern::dsl::direction_pattern_id.eq_any(&list_of_direction_patterns))
-    .select(catenary::models::DirectionPatternRow::as_select())
-    .load(conn)
-    .await;*/
-
     let direction_rows = catenary::schema::gtfs::direction_pattern::table
         .filter(catenary::schema::gtfs::direction_pattern::dsl::chateau.eq(&query.chateau))
         .filter(
