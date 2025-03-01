@@ -30,29 +30,29 @@
 )]
 
 use catenary::models::Route;
-use geo::Contains;
 use catenary::models::Stop;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::postgres_tools::make_async_pool;
-use diesel::prelude::*;
 use diesel::dsl::sql;
-use diesel_async::{AsyncConnection, RunQueryDsl};
-use geo::Polygon;
-use serde::Serialize;
-use std::sync::Arc;
+use diesel::prelude::*;
 use diesel::sql_query;
 use diesel::sql_types::*;
-use std::str::FromStr;
+use diesel_async::{AsyncConnection, RunQueryDsl};
+use geo::Contains;
+use geo::Polygon;
 use geojson::Feature;
+use serde::Serialize;
+use std::fs::File;
 use std::io::IoSlice;
 use std::io::prelude::*;
-use std::fs::File;
+use std::str::FromStr;
+use std::sync::Arc;
 
 #[derive(Serialize)]
 struct StopGeo {
     name: String,
     chateau: String,
-   // onestop_feed_id: String,
+    // onestop_feed_id: String,
     displayname: Option<String>,
     routes: Vec<String>,
     route_types: Vec<i16>,
@@ -74,7 +74,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Connected to Postgres");
 
     //import california polygon from sage/California_State_Boundary.geojson
-    let california_geojson = std::fs::read_to_string("./src/sage/California_State_Boundary.geojson").unwrap();
+    let california_geojson =
+        std::fs::read_to_string("./src/sage/California_State_Boundary.geojson").unwrap();
     let california_geojson = geojson::GeoJson::from_str(&california_geojson).unwrap();
     //save multipolygon
     let california_geojson_multipolygon: geo::MultiPolygon = match california_geojson {
@@ -82,22 +83,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let feature = &collection.features[0];
             let geometry = &feature.geometry;
             match geometry {
-                Some(geometry) => {
-                    match &geometry.value {
-                        geojson::Value::Polygon(_) => {
-                            panic!("Expected a multipolygon")
-                        }
-                        geojson::Value::MultiPolygon(multipolygon) => {
-                           geo::MultiPolygon::from_iter(multipolygon.iter()
-                            .map(|a| Polygon::new(geo::LineString::from_iter(a[0]
-                                .iter()
-                                .map(|b| geo::Point::new(b[0], b[1]))
-                            ), vec![]))
-                        )
-                        }
-                        _ => panic!("Expected a multipolygon"),
+                Some(geometry) => match &geometry.value {
+                    geojson::Value::Polygon(_) => {
+                        panic!("Expected a multipolygon")
                     }
-                
+                    geojson::Value::MultiPolygon(multipolygon) => {
+                        geo::MultiPolygon::from_iter(multipolygon.iter().map(|a| {
+                            Polygon::new(
+                                geo::LineString::from_iter(
+                                    a[0].iter().map(|b| geo::Point::new(b[0], b[1])),
+                                ),
+                                vec![],
+                            )
+                        }))
+                    }
+                    _ => panic!("Expected a multipolygon"),
                 },
                 _ => panic!("Expected a polygon"),
             }
@@ -116,7 +116,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .get_results::<Stop>(conn)
     .await?;
 
-
     let duration_stops = start_stops_timer.elapsed();
 
     println!("Duration to query rail stops: {:?}", duration_stops);
@@ -128,29 +127,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let start_stops_filter_timer = std::time::Instant::now();
 
     let stops_geo: Vec<_> = stops_query
-    .into_iter()
-    .filter(|stop | stop.point.is_some())
-    .map(|input|
-        StopGeo {
+        .into_iter()
+        .filter(|stop| stop.point.is_some())
+        .map(|input| StopGeo {
             name: input.name.unwrap_or("".to_string()),
             chateau: input.chateau,
-       //     onestop_feed_id: input.onestop_feed_id,
+            //     onestop_feed_id: input.onestop_feed_id,
             displayname: input.displayname,
-            routes: input.routes.iter().filter(|a| a.is_some())
+            routes: input
+                .routes
+                .iter()
+                .filter(|a| a.is_some())
                 .map(|a| a.as_ref().unwrap().clone())
                 .collect(),
-            route_types: input.route_types.iter().filter(|a| a.is_some())
-            .map(|a| a.as_ref().unwrap().clone())
-            .collect(),
+            route_types: input
+                .route_types
+                .iter()
+                .filter(|a| a.is_some())
+                .map(|a| a.as_ref().unwrap().clone())
+                .collect(),
             point: geo::Point::new(input.point.unwrap().x, input.point.unwrap().y),
-        }
-    ).collect::<Vec<StopGeo>>();
+        })
+        .collect::<Vec<StopGeo>>();
 
     let stops_query_filtered: Vec<_> = stops_geo
         .into_iter()
-        .filter(|stop| {
-            california_geojson_multipolygon.contains(&stop.point)
-        })
+        .filter(|stop| california_geojson_multipolygon.contains(&stop.point))
         .collect();
 
     println!("Filtering took {:?}", start_stops_filter_timer.elapsed());
@@ -160,11 +162,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let start_stops_write_timer = std::time::Instant::now();
 
-    let rail_stops = stops_query_filtered.iter()
-    .filter(|stop| stop.route_types.contains(&2) ||
-        stop.route_types.contains(&0) ||
-        stop.route_types.contains(&1)
-)   .collect::<Vec<&StopGeo>>();
+    let rail_stops = stops_query_filtered
+        .iter()
+        .filter(|stop| {
+            stop.route_types.contains(&2)
+                || stop.route_types.contains(&0)
+                || stop.route_types.contains(&1)
+        })
+        .collect::<Vec<&StopGeo>>();
 
     println!("Rail Stops Query Filtered # {}", rail_stops.len());
 
@@ -172,7 +177,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let mut buffer = File::create("./src/sage/rail_stops_query_filtered.json")?;
 
-    buffer.write_all(stops_rail_query_filtered_json.as_bytes()).unwrap();
+    buffer
+        .write_all(stops_rail_query_filtered_json.as_bytes())
+        .unwrap();
 
     println!("Writing took {:?}", start_stops_write_timer.elapsed());
 

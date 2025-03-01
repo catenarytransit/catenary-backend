@@ -136,19 +136,20 @@ pub async fn gtfs_process_feed(
 
     let mut gtfs = gtfs;
 
-    if feed_id == "f-u0-sncf~tgv" || feed_id == "f-u0-sncf~ter" || feed_id == "f-u0-sncf~intercites" {
-        gtfs.trips
-         =
-         gtfs.trips.into_iter()
-         .map(|(trip_id, trip)| {
-             let mut trip = trip;
-             if trip.trip_short_name == None {
-                trip.trip_short_name = trip.trip_headsign.clone();
-                trip.trip_headsign = None;
-             }
-             (trip_id, trip)
-         })
-         .collect();
+    if feed_id == "f-u0-sncf~tgv" || feed_id == "f-u0-sncf~ter" || feed_id == "f-u0-sncf~intercites" || feed_id == "f-u0-sncf~transilien~rer"
+    {
+        gtfs.trips = gtfs
+            .trips
+            .into_iter()
+            .map(|(trip_id, trip)| {
+                let mut trip = trip;
+                if trip.trip_short_name == None {
+                    trip.trip_short_name = trip.trip_headsign.clone();
+                    trip.trip_headsign = None;
+                }
+                (trip_id, trip)
+            })
+            .collect();
     }
 
     if feed_id == "f-uc~irvine~anteater~express" {
