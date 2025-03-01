@@ -586,7 +586,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
                                         if update_as_failed.is_err() {
 
-                                        } else {   
+                                        } else {
                                         //Delete objects from the attempt
                                         let delete_attempt = delete_attempt_objects(&feed_id, &attempt_id, Arc::clone(&arc_conn_pool)).await;
 

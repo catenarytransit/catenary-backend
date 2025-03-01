@@ -364,12 +364,8 @@ pub async fn download_return_eligible_feeds(
                                     http_response_code: None,
                                 }
                             }}
-
                         }
-                }
-                
-
-                 ))
+                }))
             .buffer_unordered(threads)
             .collect::<Vec<DownloadedFeedsInformation>>();
 
