@@ -1010,7 +1010,13 @@ pub async fn nearby_from_coords(
                 //  temp_answer.insert(chateau_id.clone(), valid_trips);
 
                 for (trip_id, trip_grouping) in valid_trips {
-                    let route = routes.get(trip_grouping[0].route_id.as_str()).unwrap();
+                    let route = routes.get(trip_grouping[0].route_id.as_str());
+
+                    if route.is_none() {
+                        continue;
+                    }
+
+                    let route = route.unwrap();
 
                     if !directions_route_group_for_this_chateau.contains_key(&route.route_id) {
                         directions_route_group_for_this_chateau.insert(
