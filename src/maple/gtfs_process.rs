@@ -136,7 +136,7 @@ pub async fn gtfs_process_feed(
 
     let mut gtfs = gtfs;
 
-    if feed_id == "f-u0-sncf~tgv" || feed_id == "f-u0-sncf~ter" || feed_id == "f-u0-sncf~intercites" || feed_id == "f-u0-sncf~transilien~rer"
+    if feed_id == "f-u0-sncf~tgv" || feed_id == "f-u0-sncf~ter" || feed_id == "f-u0-sncf~intercites"
     {
         gtfs.trips = gtfs
             .trips
