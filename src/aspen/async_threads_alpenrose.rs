@@ -58,35 +58,38 @@ pub async fn alpenrose_loop_process_thread(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         // println!("From-Alpenrose process thread");
-        if let Steal::Success(new_ingest_task) = alpenrose_to_process_queue.steal() {
-            let feed_id = new_ingest_task.realtime_feed_id.clone();
+        match alpenrose_to_process_queue.steal() {
+            Steal::Success(new_ingest_task) => {
+                let feed_id = new_ingest_task.realtime_feed_id.clone();
 
-            let mut chateau_queue_list = chateau_queue_list.lock().await;
+                let mut chateau_queue_list = chateau_queue_list.lock().await;
 
-            chateau_queue_list.remove(&new_ingest_task.chateau_id.clone());
+                chateau_queue_list.remove(&new_ingest_task.chateau_id.clone());
 
-            drop(chateau_queue_list);
+                drop(chateau_queue_list);
 
-            let rt_processed_status = new_rt_data(
-                Arc::clone(&authoritative_data_store),
-                Arc::clone(&authoritative_gtfs_rt_store),
-                new_ingest_task.chateau_id,
-                new_ingest_task.realtime_feed_id,
-                new_ingest_task.has_vehicles,
-                new_ingest_task.has_trips,
-                new_ingest_task.has_alerts,
-                new_ingest_task.vehicles_response_code,
-                new_ingest_task.trips_response_code,
-                new_ingest_task.alerts_response_code,
-                Arc::clone(&conn_pool),
-            )
-            .await;
+                let rt_processed_status = new_rt_data(
+                    Arc::clone(&authoritative_data_store),
+                    Arc::clone(&authoritative_gtfs_rt_store),
+                    new_ingest_task.chateau_id,
+                    new_ingest_task.realtime_feed_id,
+                    new_ingest_task.has_vehicles,
+                    new_ingest_task.has_trips,
+                    new_ingest_task.has_alerts,
+                    new_ingest_task.vehicles_response_code,
+                    new_ingest_task.trips_response_code,
+                    new_ingest_task.alerts_response_code,
+                    Arc::clone(&conn_pool),
+                )
+                .await;
 
-            if let Err(e) = &rt_processed_status {
-                eprintln!("Error processing RT data: {} {:?}", feed_id, e);
+                if let Err(e) = &rt_processed_status {
+                    eprintln!("Error processing RT data: {} {:?}", feed_id, e);
+                }
             }
-        } else {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            _ => {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
         }
     }
 

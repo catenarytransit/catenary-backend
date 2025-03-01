@@ -1,9 +1,9 @@
+use ahash::AHashMap;
 use chrono::prelude::*;
 use gtfs_structures::*;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
-use ahash::AHashMap;
 
 pub fn include_only_route_types(
     gtfs: Gtfs,

@@ -145,42 +145,43 @@ pub async fn download_return_eligible_feeds(
             .expect("zip directory doesn't exist but could not create it");
     }
 
-    if let Ok(entries) = fs::read_dir("transitland-atlas/feeds") {
-        println!("Downloading zip files now");
+    match fs::read_dir("transitland-atlas/feeds") {
+        Ok(entries) => {
+            println!("Downloading zip files now");
 
-        let feeds_to_download = transitland_meta
-            .feed_hashmap
-            .iter()
-            .filter(|(_, feed)| {
-                !feeds_to_discard.contains(&feed.id)
-                    && match feed.spec {
-                        dmfr::FeedSpec::Gtfs => true,
-                        _ => false,
+            let feeds_to_download = transitland_meta
+                .feed_hashmap
+                .iter()
+                .filter(|(_, feed)| {
+                    !feeds_to_discard.contains(&feed.id)
+                        && match feed.spec {
+                            dmfr::FeedSpec::Gtfs => true,
+                            _ => false,
+                        }
+                        && feed.urls.static_current.is_some()
+                        && !feed.id.ends_with("~flex")
+                })
+                .filter(|(_, feed)| {
+                    if let Some(restrict_to_feed_id) = restrict_to_feed_id {
+                        feed.id == *restrict_to_feed_id
+                    } else {
+                        true
                     }
-                    && feed.urls.static_current.is_some()
-                    && !feed.id.ends_with("~flex")
-            })
-            .filter(|(_, feed)| {
-                if let Some(restrict_to_feed_id) = restrict_to_feed_id {
-                    feed.id == *restrict_to_feed_id
-                } else {
-                    true
-                }
-            })
-            .map(|(string, feed)| StaticFeedToDownload {
-                feed_id: feed.id.clone(),
-                url: feed.urls.static_current.as_ref().unwrap().to_string(),
-            })
-            .collect::<Vec<StaticFeedToDownload>>();
+                })
+                .map(|(string, feed)| StaticFeedToDownload {
+                    feed_id: feed.id.clone(),
+                    url: feed.urls.static_current.as_ref().unwrap().to_string(),
+                })
+                .collect::<Vec<StaticFeedToDownload>>();
 
-        let download_progress: Arc<std::sync::Mutex<u16>> = Arc::new(std::sync::Mutex::new(0));
-        let total_feeds_to_download = feeds_to_download.len();
-        use futures::StreamExt;
+            let download_progress: Arc<std::sync::Mutex<u16>> = Arc::new(std::sync::Mutex::new(0));
+            let total_feeds_to_download = feeds_to_download.len();
+            use futures::StreamExt;
 
-        //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
-        let client = make_reqwest_client();
+            //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
+            let client = make_reqwest_client();
 
-        let static_fetches =
+            let static_fetches =
         //perform the downloads as a future stream, so only the thread count is allowed
             futures::stream::iter(feeds_to_download.into_iter().map(
                 |staticfeed|
@@ -372,9 +373,9 @@ pub async fn download_return_eligible_feeds(
             .buffer_unordered(threads)
             .collect::<Vec<DownloadedFeedsInformation>>();
 
-        Ok(static_fetches.await)
-    } else {
-        Err(())
+            Ok(static_fetches.await)
+        }
+        _ => Err(()),
     }
 }
 

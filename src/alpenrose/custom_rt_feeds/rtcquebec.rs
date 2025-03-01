@@ -16,65 +16,68 @@ pub async fn fetch_rtc_data(
         let rtc_gtfs_rt_res =
             rtc_quebec_gtfs_rt::faire_les_donnees_gtfs_rt(gtfs, client.clone()).await;
 
-        if let Ok(rtc_gtfs_rt_res) = rtc_gtfs_rt_res {
-            if rtc_gtfs_rt_res.vehicles.is_none() || rtc_gtfs_rt_res.voyages.is_none() {
-                eprintln!("Failed to fetch Rtc Quebec data, everything is empty");
-                return;
-            }
+        match rtc_gtfs_rt_res {
+            Ok(rtc_gtfs_rt_res) => {
+                if rtc_gtfs_rt_res.vehicles.is_none() || rtc_gtfs_rt_res.voyages.is_none() {
+                    eprintln!("Failed to fetch Rtc Quebec data, everything is empty");
+                    return;
+                }
 
-            let vehicles = rtc_gtfs_rt_res.vehicles.unwrap();
-            let voyages = rtc_gtfs_rt_res.voyages.unwrap();
+                let vehicles = rtc_gtfs_rt_res.vehicles.unwrap();
+                let voyages = rtc_gtfs_rt_res.voyages.unwrap();
 
-            if (vehicles.entity.len() == 0) || (voyages.entity.len() == 0) {
-                eprintln!("Failed to fetch Rtc Quebec data, entities are empty");
-                return;
-            }
+                if (vehicles.entity.len() == 0) || (voyages.entity.len() == 0) {
+                    eprintln!("Failed to fetch Rtc Quebec data, entities are empty");
+                    return;
+                }
 
-            if (voyages.entity.len() * 3) < vehicles.entity.len() {
-                eprintln!(
+                if (voyages.entity.len() * 3) < vehicles.entity.len() {
+                    eprintln!(
                     "Failed to fetch Rtc Quebec data, vehicles are more than 3 times the voyages"
                 );
-                return;
-            }
-
-            //extract the binary data
-            let vehicle_data = vehicles.encode_to_vec();
-            let trip_data = voyages.encode_to_vec();
-            //let alert_data = rtc_gtfs_rt_res.alertes.encode_to_vec();
-
-            let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
-                .await
-                .unwrap();
-
-            let tarpc_send_to_aspen = aspen_client
-                .from_alpenrose(
-                    tarpc::context::current(),
-                    data.chateau_id.clone(),
-                    String::from(feed_id),
-                    Some(vehicle_data),
-                    Some(trip_data),
-                    None,
-                    true,
-                    true,
-                    false,
-                    Some(200),
-                    Some(200),
-                    None,
-                    duration_since_unix_epoch().as_millis() as u64,
-                )
-                .await;
-
-            match tarpc_send_to_aspen {
-                Ok(_) => {
-                    println!("Successfully sent Rtc Quebec data sent to {}", feed_id);
+                    return;
                 }
-                Err(e) => {
-                    eprintln!("{}: Error sending data to {}: {}", feed_id, worker_id, e);
+
+                //extract the binary data
+                let vehicle_data = vehicles.encode_to_vec();
+                let trip_data = voyages.encode_to_vec();
+                //let alert_data = rtc_gtfs_rt_res.alertes.encode_to_vec();
+
+                let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
+                    .await
+                    .unwrap();
+
+                let tarpc_send_to_aspen = aspen_client
+                    .from_alpenrose(
+                        tarpc::context::current(),
+                        data.chateau_id.clone(),
+                        String::from(feed_id),
+                        Some(vehicle_data),
+                        Some(trip_data),
+                        None,
+                        true,
+                        true,
+                        false,
+                        Some(200),
+                        Some(200),
+                        None,
+                        duration_since_unix_epoch().as_millis() as u64,
+                    )
+                    .await;
+
+                match tarpc_send_to_aspen {
+                    Ok(_) => {
+                        println!("Successfully sent Rtc Quebec data sent to {}", feed_id);
+                    }
+                    Err(e) => {
+                        eprintln!("{}: Error sending data to {}: {}", feed_id, worker_id, e);
+                    }
                 }
             }
-        } else {
-            eprintln!("Failed to fetch Rtc Quebec data");
-            eprintln!("{:?}", rtc_gtfs_rt_res.unwrap_err());
+            _ => {
+                eprintln!("Failed to fetch Rtc Quebec data");
+                eprintln!("{:?}", rtc_gtfs_rt_res.unwrap_err());
+            }
         }
     } else {
         println!("No assigned node found for Rtc Quebec");

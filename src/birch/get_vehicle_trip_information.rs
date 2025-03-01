@@ -323,111 +323,124 @@ pub async fn get_trip_rt_update(
         )
         .await;
 
-    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
-        let fetch_assigned_node_for_this_chateau_kv_first =
-            fetch_assigned_node_for_this_chateau.kvs().first();
+    match fetch_assigned_node_for_this_chateau {
+        Ok(fetch_assigned_node_for_this_chateau) => {
+            let fetch_assigned_node_for_this_chateau_kv_first =
+                fetch_assigned_node_for_this_chateau.kvs().first();
 
-        if let Some(fetch_assigned_node_for_this_chateau_data) =
-            fetch_assigned_node_for_this_chateau_kv_first
-        {
-            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
-                fetch_assigned_node_for_this_chateau_data.value(),
-            )
-            .unwrap();
+            if let Some(fetch_assigned_node_for_this_chateau_data) =
+                fetch_assigned_node_for_this_chateau_kv_first
+            {
+                let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+                    fetch_assigned_node_for_this_chateau_data.value(),
+                )
+                .unwrap();
 
-            let aspen_client =
-                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
-                    .await;
+                let aspen_client =
+                    catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+                        .await;
 
-            if let Ok(aspen_client) = aspen_client {
-                let get_trip = aspen_client
-                    .get_trip_updates_from_trip_id(
-                        context::current(),
-                        chateau.clone(),
-                        query.trip_id.clone(),
-                    )
-                    .await;
+                match aspen_client {
+                    Ok(aspen_client) => {
+                        let get_trip = aspen_client
+                            .get_trip_updates_from_trip_id(
+                                context::current(),
+                                chateau.clone(),
+                                query.trip_id.clone(),
+                            )
+                            .await;
 
-                if let Ok(Some(get_trip)) = get_trip {
-                    println!("recieved {} trip options from aspen", get_trip.len());
-                    if !get_trip.is_empty() {
-                        let rt_trip_update = match get_trip.len() {
-                            1 => &get_trip[0],
-                            _ => {
-                                println!(
-                                    "Multiple trip updates found for trip id {} {}",
-                                    chateau, query.trip_id
-                                );
-                                match &query.start_time {
-                                    Some(ref query_start_time) => {
-                                        let find_trip = get_trip.iter().find(|each_update| {
-                                            matches!(
-                                                each_update.trip.start_time.as_ref().map(
-                                                    |start_time| { start_time == query_start_time }
-                                                ),
-                                                Some(true)
-                                            )
-                                        });
+                        match get_trip {
+                            Ok(Some(get_trip)) => {
+                                println!("recieved {} trip options from aspen", get_trip.len());
+                                if !get_trip.is_empty() {
+                                    let rt_trip_update = match get_trip.len() {
+                                        1 => &get_trip[0],
+                                        _ => {
+                                            println!(
+                                                "Multiple trip updates found for trip id {} {}",
+                                                chateau, query.trip_id
+                                            );
+                                            match &query.start_time {
+                                                Some(query_start_time) => {
+                                                    let find_trip =
+                                                        get_trip.iter().find(|each_update| {
+                                                            matches!(
+                                                                each_update
+                                                                    .trip
+                                                                    .start_time
+                                                                    .as_ref()
+                                                                    .map(|start_time| {
+                                                                        start_time
+                                                                            == query_start_time
+                                                                    }),
+                                                                Some(true)
+                                                            )
+                                                        });
 
-                                        match find_trip {
-                                            Some(find_trip) => find_trip,
-                                            None => &get_trip[0],
+                                                    match find_trip {
+                                                        Some(find_trip) => find_trip,
+                                                        None => &get_trip[0],
+                                                    }
+                                                }
+                                                None => &get_trip[0],
+                                            }
                                         }
-                                    }
-                                    None => &get_trip[0],
+                                    };
+
+                                    println!(
+                                        "rt data contains {} stop updates",
+                                        rt_trip_update.stop_time_update.len()
+                                    );
+
+                                    let stop_data: Vec<StopTimeRefresh> = rt_trip_update
+                                        .stop_time_update
+                                        .iter()
+                                        .map(|stop_time_update| StopTimeRefresh {
+                                            stop_id: stop_time_update.stop_id.clone(),
+                                            rt_arrival: stop_time_update.arrival.clone(),
+                                            rt_departure: stop_time_update.departure.clone(),
+                                            schedule_relationship: stop_time_update
+                                                .schedule_relationship,
+                                            gtfs_stop_sequence: stop_time_update
+                                                .stop_sequence
+                                                .map(|x| x as u16),
+                                            rt_platform_string: stop_time_update
+                                                .platform_string
+                                                .clone(),
+                                            departure_occupancy_status: stop_time_update
+                                                .departure_occupancy_status,
+                                        })
+                                        .collect();
+
+                                    HttpResponse::Ok().json(ResponseForGtfsRtRefresh {
+                                        found_data: true,
+                                        data: Some(GtfsRtRefreshData {
+                                            stoptimes: stop_data,
+                                        }),
+                                    })
+                                } else {
+                                    HttpResponse::Ok().json(ResponseForGtfsRtRefresh {
+                                        found_data: false,
+                                        data: None,
+                                    })
                                 }
                             }
-                        };
-
-                        println!(
-                            "rt data contains {} stop updates",
-                            rt_trip_update.stop_time_update.len()
-                        );
-
-                        let stop_data: Vec<StopTimeRefresh> = rt_trip_update
-                            .stop_time_update
-                            .iter()
-                            .map(|stop_time_update| StopTimeRefresh {
-                                stop_id: stop_time_update.stop_id.clone(),
-                                rt_arrival: stop_time_update.arrival.clone(),
-                                rt_departure: stop_time_update.departure.clone(),
-                                schedule_relationship: stop_time_update.schedule_relationship,
-                                gtfs_stop_sequence: stop_time_update
-                                    .stop_sequence
-                                    .map(|x| x as u16),
-                                rt_platform_string: stop_time_update.platform_string.clone(),
-                                departure_occupancy_status: stop_time_update
-                                    .departure_occupancy_status,
-                            })
-                            .collect();
-
-                        HttpResponse::Ok().json(ResponseForGtfsRtRefresh {
-                            found_data: true,
-                            data: Some(GtfsRtRefreshData {
-                                stoptimes: stop_data,
+                            _ => HttpResponse::Ok().json(ResponseForGtfsRtRefresh {
+                                found_data: false,
+                                data: None,
                             }),
-                        })
-                    } else {
-                        HttpResponse::Ok().json(ResponseForGtfsRtRefresh {
-                            found_data: false,
-                            data: None,
-                        })
+                        }
                     }
-                } else {
-                    HttpResponse::Ok().json(ResponseForGtfsRtRefresh {
-                        found_data: false,
-                        data: None,
-                    })
+                    _ => HttpResponse::InternalServerError()
+                        .body("Could not connect to realtime data server"),
                 }
             } else {
                 HttpResponse::InternalServerError()
                     .body("Could not connect to realtime data server")
             }
-        } else {
-            HttpResponse::InternalServerError().body("Could not connect to realtime data server")
         }
-    } else {
-        HttpResponse::InternalServerError().body("Could not connect to zookeeper")
+        _ => HttpResponse::InternalServerError().body("Could not connect to zookeeper"),
     }
 }
 
@@ -983,207 +996,223 @@ pub async fn get_trip_init(
 
             timer.add("open_aspen_connection");
 
-            if let Ok(aspen_client) = aspen_client {
-                let get_trip = aspen_client
-                    .get_trip_updates_from_trip_id(
-                        context::current(),
-                        chateau.clone(),
-                        query.trip_id.clone(),
-                    )
-                    .await;
+            match aspen_client {
+                Ok(aspen_client) => {
+                    let get_trip = aspen_client
+                        .get_trip_updates_from_trip_id(
+                            context::current(),
+                            chateau.clone(),
+                            query.trip_id.clone(),
+                        )
+                        .await;
 
-                timer.add("get_trip_rt_from_aspen");
+                    timer.add("get_trip_rt_from_aspen");
 
-                if let Ok(get_trip) = get_trip {
-                    if let Some(get_trip) = get_trip {
-                        println!("recieved {} trip options from aspen", get_trip.len());
-                        if !get_trip.is_empty() {
-                            let rt_trip_update = match get_trip.len() {
-                                1 => &get_trip[0],
-                                _ => {
-                                    println!(
-                                        "Multiple trip updates found for trip id {} {}",
-                                        chateau, query.trip_id
-                                    );
-                                    match &query.start_time {
-                                        Some(ref query_start_time) => {
-                                            let find_trip =
-                                                get_trip.iter().find(
-                                                    |each_update| match each_update
-                                                        .trip
-                                                        .start_time
-                                                        .as_ref()
-                                                        .map(|start_time| {
-                                                            start_time.clone() == *query_start_time
-                                                        }) {
-                                                        Some(true) => true,
-                                                        _ => false,
-                                                    },
-                                                );
+                    if let Ok(get_trip) = get_trip {
+                        match get_trip {
+                            Some(get_trip) => {
+                                println!("recieved {} trip options from aspen", get_trip.len());
+                                if !get_trip.is_empty() {
+                                    let rt_trip_update = match get_trip.len() {
+                                        1 => &get_trip[0],
+                                        _ => {
+                                            println!(
+                                                "Multiple trip updates found for trip id {} {}",
+                                                chateau, query.trip_id
+                                            );
+                                            match &query.start_time {
+                                                Some(query_start_time) => {
+                                                    let find_trip =
+                                                        get_trip.iter().find(|each_update| {
+                                                            match each_update
+                                                                .trip
+                                                                .start_time
+                                                                .as_ref()
+                                                                .map(|start_time| {
+                                                                    start_time.clone()
+                                                                        == *query_start_time
+                                                                }) {
+                                                                Some(true) => true,
+                                                                _ => false,
+                                                            }
+                                                        });
 
-                                            match find_trip {
-                                                Some(find_trip) => find_trip,
+                                                    match find_trip {
+                                                        Some(find_trip) => find_trip,
+                                                        None => &get_trip[0],
+                                                    }
+                                                }
                                                 None => &get_trip[0],
                                             }
                                         }
-                                        None => &get_trip[0],
-                                    }
-                                }
-                            };
+                                    };
 
-                            vehicle = rt_trip_update.vehicle.clone();
+                                    vehicle = rt_trip_update.vehicle.clone();
 
-                            println!(
-                                "rt data contains {} stop updates",
-                                rt_trip_update.stop_time_update.len()
-                            );
+                                    println!(
+                                        "rt data contains {} stop updates",
+                                        rt_trip_update.stop_time_update.len()
+                                    );
 
-                            for stop_time_update in &rt_trip_update.stop_time_update {
-                                // per gtfs rt spec, the stop can be targeted with either stop id or stop sequence
-                                let stop_time = stop_times_for_this_trip.iter_mut().find(|x| {
-                                    match stop_time_update.stop_id.clone() {
-                                        Some(rt_stop_id) => match stop_time_update.stop_sequence {
-                                            Some(rt_stop_sequence) => {
-                                                rt_stop_id == x.stop_id
-                                                    && rt_stop_sequence as u16
-                                                        == x.gtfs_stop_sequence
+                                    for stop_time_update in &rt_trip_update.stop_time_update {
+                                        // per gtfs rt spec, the stop can be targeted with either stop id or stop sequence
+                                        let stop_time =
+                                            stop_times_for_this_trip.iter_mut().find(|x| {
+                                                match stop_time_update.stop_id.clone() {
+                                                    Some(rt_stop_id) => {
+                                                        match stop_time_update.stop_sequence {
+                                                            Some(rt_stop_sequence) => {
+                                                                rt_stop_id == x.stop_id
+                                                                    && rt_stop_sequence as u16
+                                                                        == x.gtfs_stop_sequence
+                                                            }
+                                                            None => rt_stop_id == x.stop_id,
+                                                        }
+                                                    }
+                                                    None => match stop_time_update.stop_sequence {
+                                                        Some(rt_stop_sequence) => {
+                                                            rt_stop_sequence as u16
+                                                                == x.gtfs_stop_sequence
+                                                        }
+                                                        None => false,
+                                                    },
+                                                }
+                                            });
+
+                                        if let Some(stop_time) = stop_time {
+                                            if let Some(arrival) = &stop_time_update.arrival {
+                                                stop_time.rt_arrival = Some(arrival.clone());
                                             }
-                                            None => rt_stop_id == x.stop_id,
-                                        },
-                                        None => match stop_time_update.stop_sequence {
-                                            Some(rt_stop_sequence) => {
-                                                rt_stop_sequence as u16 == x.gtfs_stop_sequence
+
+                                            if let Some(departure) = &stop_time_update.departure {
+                                                stop_time.rt_departure = Some(departure.clone());
                                             }
-                                            None => false,
-                                        },
-                                    }
-                                });
 
-                                if let Some(stop_time) = stop_time {
-                                    if let Some(arrival) = &stop_time_update.arrival {
-                                        stop_time.rt_arrival = Some(arrival.clone());
-                                    }
+                                            if let Some(schedule_relationship) =
+                                                stop_time_update.schedule_relationship
+                                            {
+                                                stop_time.schedule_relationship =
+                                                    Some(schedule_relationship);
+                                            }
 
-                                    if let Some(departure) = &stop_time_update.departure {
-                                        stop_time.rt_departure = Some(departure.clone());
-                                    }
-
-                                    if let Some(schedule_relationship) =
-                                        stop_time_update.schedule_relationship
-                                    {
-                                        stop_time.schedule_relationship =
-                                            Some(schedule_relationship);
-                                    }
-
-                                    if let Some(rt_platform_string) =
-                                        stop_time_update.platform_string.clone()
-                                    {
-                                        stop_time.rt_platform_string = Some(rt_platform_string);
+                                            if let Some(rt_platform_string) =
+                                                stop_time_update.platform_string.clone()
+                                            {
+                                                stop_time.rt_platform_string =
+                                                    Some(rt_platform_string);
+                                            }
+                                        }
                                     }
                                 }
                             }
-                        }
-                    } else {
-                        eprintln!("Trip id not found {} {}", chateau, query.trip_id);
-                    }
-                }
-
-                // GET ALERTS
-
-                let alerts_for_route = aspen_client
-                    .get_alerts_from_route_id(
-                        context::current(),
-                        chateau.clone(),
-                        route.route_id.clone(),
-                    )
-                    .await;
-                timer.add("query_alerts_for_route");
-
-                let alerts_for_trip = aspen_client
-                    .get_alert_from_trip_id(
-                        context::current(),
-                        chateau.clone(),
-                        query.trip_id.clone(),
-                    )
-                    .await;
-
-                timer.add("query_alerts_for_trip");
-
-                if let Ok(alerts_for_route) = alerts_for_route {
-                    if let Some(alerts_for_route) = alerts_for_route {
-                        for (alert_id, alert) in alerts_for_route {
-                            alert_id_to_alert.insert(alert_id.clone(), alert.clone());
-                            alert_ids_for_this_route.push(alert_id.clone());
-                        }
-                    }
-                }
-
-                if let Ok(alerts_for_trip) = alerts_for_trip {
-                    if let Some(alerts_for_trip) = alerts_for_trip {
-                        for (alert_id, alert) in alerts_for_trip {
-                            alert_id_to_alert.insert(alert_id.clone(), alert.clone());
-                            alert_ids_for_this_trip.push(alert_id.clone());
-                        }
-                    }
-                }
-
-                // GET ALERTS FOR STOPS
-
-                let alerts_for_stops = aspen_client
-                    .get_alert_from_stop_ids(
-                        context::current(),
-                        chateau.clone(),
-                        stop_ids_to_lookup
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect_vec(),
-                    )
-                    .await;
-
-                if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
-                    let relevant_alert_ids = alerts_for_stops
-                        .alerts
-                        .iter()
-                        .filter(|(alert_id, alert)| {
-                            alert.informed_entity.iter().any(|entity| {
-                                let route_id_covered = match &entity.route_id {
-                                    None => true,
-                                    Some(route_id) => route_id == &route.route_id,
-                                };
-
-                                let trip_covered = match &entity.trip {
-                                    None => true,
-                                    Some(trip) => match &trip.trip_id {
-                                        None => true,
-                                        Some(entity_trip_id) => entity_trip_id == &query.trip_id,
-                                    },
-                                };
-
-                                route_id_covered && trip_covered
-                            })
-                        })
-                        .map(|(alert_id, _)| alert_id.clone())
-                        .collect::<BTreeSet<_>>();
-
-                    for (alert_id, alerts) in alerts_for_stops.alerts {
-                        if relevant_alert_ids.contains(&alert_id) {
-                            alert_id_to_alert.insert(alert_id.clone(), alerts.clone());
+                            _ => {
+                                eprintln!("Trip id not found {} {}", chateau, query.trip_id);
+                            }
                         }
                     }
 
-                    for (stop_id, alert_ids) in alerts_for_stops.stops_to_alert_ids {
-                        stop_id_to_alert_ids.insert(
-                            stop_id.clone(),
-                            alert_ids
+                    // GET ALERTS
+
+                    let alerts_for_route = aspen_client
+                        .get_alerts_from_route_id(
+                            context::current(),
+                            chateau.clone(),
+                            route.route_id.clone(),
+                        )
+                        .await;
+                    timer.add("query_alerts_for_route");
+
+                    let alerts_for_trip = aspen_client
+                        .get_alert_from_trip_id(
+                            context::current(),
+                            chateau.clone(),
+                            query.trip_id.clone(),
+                        )
+                        .await;
+
+                    timer.add("query_alerts_for_trip");
+
+                    if let Ok(alerts_for_route) = alerts_for_route {
+                        if let Some(alerts_for_route) = alerts_for_route {
+                            for (alert_id, alert) in alerts_for_route {
+                                alert_id_to_alert.insert(alert_id.clone(), alert.clone());
+                                alert_ids_for_this_route.push(alert_id.clone());
+                            }
+                        }
+                    }
+
+                    if let Ok(alerts_for_trip) = alerts_for_trip {
+                        if let Some(alerts_for_trip) = alerts_for_trip {
+                            for (alert_id, alert) in alerts_for_trip {
+                                alert_id_to_alert.insert(alert_id.clone(), alert.clone());
+                                alert_ids_for_this_trip.push(alert_id.clone());
+                            }
+                        }
+                    }
+
+                    // GET ALERTS FOR STOPS
+
+                    let alerts_for_stops = aspen_client
+                        .get_alert_from_stop_ids(
+                            context::current(),
+                            chateau.clone(),
+                            stop_ids_to_lookup
                                 .iter()
-                                .filter(|alert_id| relevant_alert_ids.contains(alert_id.as_str()))
-                                .cloned()
-                                .collect::<Vec<_>>(),
-                        );
+                                .map(|x| x.to_string())
+                                .collect_vec(),
+                        )
+                        .await;
+
+                    if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
+                        let relevant_alert_ids = alerts_for_stops
+                            .alerts
+                            .iter()
+                            .filter(|(alert_id, alert)| {
+                                alert.informed_entity.iter().any(|entity| {
+                                    let route_id_covered = match &entity.route_id {
+                                        None => true,
+                                        Some(route_id) => route_id == &route.route_id,
+                                    };
+
+                                    let trip_covered = match &entity.trip {
+                                        None => true,
+                                        Some(trip) => match &trip.trip_id {
+                                            None => true,
+                                            Some(entity_trip_id) => {
+                                                entity_trip_id == &query.trip_id
+                                            }
+                                        },
+                                    };
+
+                                    route_id_covered && trip_covered
+                                })
+                            })
+                            .map(|(alert_id, _)| alert_id.clone())
+                            .collect::<BTreeSet<_>>();
+
+                        for (alert_id, alerts) in alerts_for_stops.alerts {
+                            if relevant_alert_ids.contains(&alert_id) {
+                                alert_id_to_alert.insert(alert_id.clone(), alerts.clone());
+                            }
+                        }
+
+                        for (stop_id, alert_ids) in alerts_for_stops.stops_to_alert_ids {
+                            stop_id_to_alert_ids.insert(
+                                stop_id.clone(),
+                                alert_ids
+                                    .iter()
+                                    .filter(|alert_id| {
+                                        relevant_alert_ids.contains(alert_id.as_str())
+                                    })
+                                    .cloned()
+                                    .collect::<Vec<_>>(),
+                            );
+                        }
                     }
                 }
-            } else {
-                eprintln!("Error connecting to assigned node. Failed to connect to tarpc");
+                _ => {
+                    eprintln!("Error connecting to assigned node. Failed to connect to tarpc");
+                }
             }
         } else {
             eprintln!("No assigned node found for this chateau");

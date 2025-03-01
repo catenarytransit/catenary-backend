@@ -16,61 +16,64 @@ pub async fn fetch_data(etcd: &mut etcd_client::KvClient, feed_id: &str, client:
             )
             .await;
 
-        if let Ok(metrolink_extra_gtfs_rt_data) = metrolink_extra_gtfs_rt_data {
-            //extract the binary data
-            let alerts_msg = FeedMessage {
-                header: FeedHeader {
-                    gtfs_realtime_version: String::from("2.0"),
-                    incrementality: Some(
-                        gtfs_realtime::feed_header::Incrementality::FullDataset.into(),
-                    ),
-                    timestamp: Some(duration_since_unix_epoch().as_secs() as u64),
-                },
-                entity: metrolink_extra_gtfs_rt_data,
-            };
+        match metrolink_extra_gtfs_rt_data {
+            Ok(metrolink_extra_gtfs_rt_data) => {
+                //extract the binary data
+                let alerts_msg = FeedMessage {
+                    header: FeedHeader {
+                        gtfs_realtime_version: String::from("2.0"),
+                        incrementality: Some(
+                            gtfs_realtime::feed_header::Incrementality::FullDataset.into(),
+                        ),
+                        timestamp: Some(duration_since_unix_epoch().as_secs() as u64),
+                    },
+                    entity: metrolink_extra_gtfs_rt_data,
+                };
 
-            let alerts_proto = alerts_msg.encode_to_vec();
+                let alerts_proto = alerts_msg.encode_to_vec();
 
-            let aspen_client =
-                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
-                    .await
-                    .unwrap();
+                let aspen_client =
+                    catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+                        .await
+                        .unwrap();
 
-            let tarpc_send_to_aspen = aspen_client
-                .from_alpenrose(
-                    tarpc::context::current(),
-                    assigned_chateau_data.chateau_id.clone(),
-                    String::from(feed_id),
-                    None,
-                    None,
-                    Some(alerts_proto),
-                    false,
-                    false,
-                    true,
-                    None,
-                    None,
-                    Some(200),
-                    duration_since_unix_epoch().as_millis() as u64,
-                )
-                .await;
+                let tarpc_send_to_aspen = aspen_client
+                    .from_alpenrose(
+                        tarpc::context::current(),
+                        assigned_chateau_data.chateau_id.clone(),
+                        String::from(feed_id),
+                        None,
+                        None,
+                        Some(alerts_proto),
+                        false,
+                        false,
+                        true,
+                        None,
+                        None,
+                        Some(200),
+                        duration_since_unix_epoch().as_millis() as u64,
+                    )
+                    .await;
 
-            match tarpc_send_to_aspen {
-                Ok(_) => {
-                    println!(
-                        "Successfully sent Metrolink Alerts Extra feed data sent to {}",
-                        feed_id
-                    );
-                }
-                Err(e) => {
-                    eprintln!(
-                        "{}: Error sending Metrolink Alerts Extra feed data to {}: {}",
-                        feed_id, worker_id, e
-                    );
+                match tarpc_send_to_aspen {
+                    Ok(_) => {
+                        println!(
+                            "Successfully sent Metrolink Alerts Extra feed data sent to {}",
+                            feed_id
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{}: Error sending Metrolink Alerts Extra feed data to {}: {}",
+                            feed_id, worker_id, e
+                        );
+                    }
                 }
             }
-        } else {
-            eprintln!("Failed to fetch Metrolink Alerts Extra data");
-            eprintln!("{:?}", metrolink_extra_gtfs_rt_data.unwrap_err());
+            _ => {
+                eprintln!("Failed to fetch Metrolink Alerts Extra data");
+                eprintln!("{:?}", metrolink_extra_gtfs_rt_data.unwrap_err());
+            }
         }
     } else {
         println!("No assigned node found for Metrolink Alerts Extra");
