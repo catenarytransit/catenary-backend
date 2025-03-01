@@ -1,5 +1,6 @@
 use actix_web::rt;
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{HttpResponse, Responder, web};
+use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenStopTimeEvent;
 use catenary::aspen_dataset::AspenisedAlert;
@@ -13,15 +14,14 @@ use catenary::schema::gtfs::itinerary_pattern_meta as itinerary_pattern_meta_pg_
 use catenary::schema::gtfs::routes as routes_pg_schema;
 use catenary::schema::gtfs::stops as stops_pg_schema;
 use catenary::schema::gtfs::trips_compressed as trips_compressed_pg_schema;
-use catenary::EtcdConnectionIps;
 use chrono::Datelike;
 use chrono::TimeZone;
 use chrono_tz::Tz;
 use compact_str::CompactString;
-use diesel::query_dsl::methods::FilterDsl;
-use diesel::query_dsl::methods::SelectDsl;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
+use diesel::query_dsl::methods::FilterDsl;
+use diesel::query_dsl::methods::SelectDsl;
 use diesel_async::RunQueryDsl;
 use geo::coord;
 use itertools::Itertools;

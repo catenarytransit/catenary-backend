@@ -2,10 +2,10 @@
 // Catenary Transit Initiatives
 // Attribution cannot be removed
 
+use crate::ChateauDataNoGeometry;
 /// This is the service definition. It looks a lot like a trait definition.
 /// It defines one RPC, hello, which takes one arg, name, and returns a String.
 use crate::aspen_dataset::*;
-use crate::ChateauDataNoGeometry;
 use ahash::AHashMap;
 use ahash::AHashSet;
 use serde::{Deserialize, Serialize};

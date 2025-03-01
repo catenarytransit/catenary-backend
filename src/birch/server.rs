@@ -39,19 +39,19 @@ mod postgis_download;
 use postgis_download::*;
 mod departures_at_stop;
 use actix_web::middleware::DefaultHeaders;
-use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
+use catenary::EtcdConnectionIps;
 use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
-use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
-use catenary::EtcdConnectionIps;
+use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, JsonValue};
 use ordered_float::Pow;
 use serde::Deserialize;
 use serde_derive::Serialize;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
+use sqlx::postgres::PgPoolOptions;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
@@ -797,7 +797,9 @@ pub async fn proxy_for_maptiler_terrain_tiles(
     let mut rng = rand::thread_rng();
     let pick_random_key = api_keys[rng.gen_range(0..api_keys.len())];
 
-    let url = format!("https://api.maptiler.com/tiles/terrain-rgb-v2/{z}/{x}/{y}.webp?key={pick_random_key}&mtsid=23671537-53fa-48f2-9ba1-647a217cbdb1");
+    let url = format!(
+        "https://api.maptiler.com/tiles/terrain-rgb-v2/{z}/{x}/{y}.webp?key={pick_random_key}&mtsid=23671537-53fa-48f2-9ba1-647a217cbdb1"
+    );
 
     let request = client
         .request(reqwest::Method::GET, url)

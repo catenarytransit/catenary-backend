@@ -35,7 +35,7 @@
 
 // https://en.wikipedia.org/wiki/Rhododendron_ferrugineum
 use catenary::agency_secret::*;
-use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
+use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use dashmap::DashMap;
 use futures::prelude::*;
 use rand::Rng;

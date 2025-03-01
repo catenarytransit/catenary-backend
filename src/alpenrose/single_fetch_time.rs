@@ -1,14 +1,14 @@
-use crate::custom_rt_feeds;
 use crate::KeyFormat;
 use crate::RealtimeFeedFetch;
+use crate::custom_rt_feeds;
 use catenary::ahash_fast_hash;
 use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id;
 use catenary::get_node_for_realtime_feed_id_kvclient;
 use dashmap::DashMap;
+use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
-use flate2::Compression;
 use futures::StreamExt;
 use gtfs_realtime::alert;
 use lazy_static::lazy_static;

@@ -1,15 +1,15 @@
 use actix_web::middleware::DefaultHeaders;
-use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
+use catenary::EtcdConnectionIps;
 use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
-use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
-use catenary::EtcdConnectionIps;
+use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use geojson::{Feature, GeoJson, JsonValue};
 use ordered_float::Pow;
 use serde::Deserialize;
 use serde_derive::Serialize;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
+use sqlx::postgres::PgPoolOptions;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
@@ -1024,11 +1024,13 @@ pub async fn shapes_intercity_rail_meta(req: HttpRequest) -> impl Responder {
         template: None,
         version: None,
         other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from(
-            "https://birch_intercity_rail_shape_1.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}"
-        ),
+        tiles: vec![
             String::from(
-                "https://birch_intercity_rail_shape_2.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}")
+                "https://birch_intercity_rail_shape_1.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}",
+            ),
+            String::from(
+                "https://birch_intercity_rail_shape_2.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}",
+            ),
         ],
         attribution: None,
     };
@@ -1053,30 +1055,33 @@ pub async fn shapes_local_rail_meta(req: HttpRequest) -> impl Responder {
 
     let fields = tilejson::VectorLayer::new(String::from("data"), fields);
 
-    let tile_json =
-        TileJSON {
-            vector_layers: Some(vec![fields]),
-            tilejson: String::from("3.0.0"),
-            bounds: None,
-            center: None,
-            data: None,
-            description: None,
-            fillzoom: None,
-            grids: None,
-            legend: None,
-            maxzoom: Some(15),
-            minzoom: None,
-            name: Some(String::from("shapes_local_rail")),
-            scheme: None,
-            template: None,
-            version: None,
-            other: std::collections::BTreeMap::new(),
-            tiles: vec![String::from(
-            "https://birch_local_rail_shape_1.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}"
-        ), String::from(
-            "https://birch_local_rail_shape_2.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}")],
-            attribution: None,
-        };
+    let tile_json = TileJSON {
+        vector_layers: Some(vec![fields]),
+        tilejson: String::from("3.0.0"),
+        bounds: None,
+        center: None,
+        data: None,
+        description: None,
+        fillzoom: None,
+        grids: None,
+        legend: None,
+        maxzoom: Some(15),
+        minzoom: None,
+        name: Some(String::from("shapes_local_rail")),
+        scheme: None,
+        template: None,
+        version: None,
+        other: std::collections::BTreeMap::new(),
+        tiles: vec![
+            String::from(
+                "https://birch_local_rail_shape_1.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}",
+            ),
+            String::from(
+                "https://birch_local_rail_shape_2.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}",
+            ),
+        ],
+        attribution: None,
+    };
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))

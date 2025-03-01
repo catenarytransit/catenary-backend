@@ -1,6 +1,6 @@
-use geo::coord;
 use geo::ConvexHull;
 use geo::Coord;
+use geo::coord;
 
 //graham scan
 pub fn convex_hull(input: &Vec<(f64, f64)>) -> geo::Polygon {

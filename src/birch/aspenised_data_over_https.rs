@@ -1,10 +1,10 @@
-use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use ahash::AHashMap;
+use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::GetVehicleLocationsResponse;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::aspen_dataset::AspenisedVehicleRouteCache;
-use catenary::EtcdConnectionIps;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -289,7 +289,9 @@ pub async fn bulk_realtime_fetch_v1(
         .json(bulk_fetch_response)
 }
 
-#[actix_web::get("/get_realtime_locations/{chateau_id}/{category}/{last_updated_time_ms}/{existing_fasthash_of_routes}")]
+#[actix_web::get(
+    "/get_realtime_locations/{chateau_id}/{category}/{last_updated_time_ms}/{existing_fasthash_of_routes}"
+)]
 pub async fn get_realtime_locations(
     req: HttpRequest,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,

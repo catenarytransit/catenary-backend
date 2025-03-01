@@ -6,15 +6,17 @@ pub fn polygon_geo_to_diesel(
     polygon_geo: geo::Polygon,
 ) -> postgis_diesel::types::Polygon<postgis_diesel::types::Point> {
     postgis_diesel::types::Polygon {
-        rings: vec![polygon_geo
-            .clone()
-            .into_inner()
-            .0
-            .into_iter()
-            .map(|coord| {
-                postgis_diesel::types::Point::new(coord.x, coord.y, Some(crate::WGS_84_SRID))
-            })
-            .collect()],
+        rings: vec![
+            polygon_geo
+                .clone()
+                .into_inner()
+                .0
+                .into_iter()
+                .map(|coord| {
+                    postgis_diesel::types::Point::new(coord.x, coord.y, Some(crate::WGS_84_SRID))
+                })
+                .collect(),
+        ],
         srid: Some(crate::WGS_84_SRID),
     }
 }

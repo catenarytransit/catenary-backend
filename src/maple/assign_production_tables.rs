@@ -5,12 +5,12 @@
 use catenary::postgres_tools::CatenaryPostgresPool;
 use chrono::naive::NaiveDate;
 use chrono::offset::Utc;
+use diesel::SelectableHelper;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
-use diesel::SelectableHelper;
-use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::AsyncConnection;
 use diesel_async::RunQueryDsl;
+use diesel_async::scoped_futures::ScopedFutureExt;
 use std::error::Error;
 use std::ops::Sub;
 use std::sync::Arc;

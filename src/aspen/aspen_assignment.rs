@@ -1,11 +1,11 @@
+use catenary::ChateauDataNoGeometry;
 use catenary::aspen::lib::AspenWorkerMetadataEtcd;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::ChateausLeaderHashMap;
 use catenary::aspen::lib::RealtimeFeedMetadataEtcd;
 use catenary::postgres_tools::CatenaryPostgresPool;
-use catenary::ChateauDataNoGeometry;
-use diesel::query_dsl::select_dsl::SelectDsl;
 use diesel::SelectableHelper;
+use diesel::query_dsl::select_dsl::SelectDsl;
 use diesel_async::RunQueryDsl;
 use std::collections::BTreeMap;
 use std::collections::HashMap;

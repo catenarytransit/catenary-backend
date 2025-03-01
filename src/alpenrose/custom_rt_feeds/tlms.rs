@@ -142,9 +142,9 @@ pub async fn fetch_tlms_data(
                         match tarpc_send_to_aspen {
                             Ok(_) => {
                                 println!(
-                            "Successfully sent dresden f-tlms~rt data to {}, feed {} to chateau {}",
-                            worker_metadata.socket, feed_id, worker_metadata.chateau_id
-                        );
+                                    "Successfully sent dresden f-tlms~rt data to {}, feed {} to chateau {}",
+                                    worker_metadata.socket, feed_id, worker_metadata.chateau_id
+                                );
                             }
                             Err(e) => {
                                 eprintln!(

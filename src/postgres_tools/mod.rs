@@ -1,10 +1,10 @@
 // Copyright: Kyler Chin <kyler@catenarymaps.org>
 // Catenary Transit Initiatives
 // Removal of the attribution is not allowed, as covered under the AGPL license
-use diesel_async::pooled_connection::bb8::Pool;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use diesel_async::pooled_connection::ManagerConfig;
 use diesel_async::pooled_connection::RecyclingMethod;
+use diesel_async::pooled_connection::bb8::Pool;
 use std::env;
 
 /// This type alias is the pool, which can be quried for connections.

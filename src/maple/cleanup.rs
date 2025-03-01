@@ -3,9 +3,9 @@
 // Attribution cannot be removed
 
 use catenary::postgres_tools::CatenaryPostgresPool;
-use diesel::query_dsl::methods::FilterDsl;
 use diesel::BoolExpressionMethods;
 use diesel::ExpressionMethods;
+use diesel::query_dsl::methods::FilterDsl;
 use diesel_async::RunQueryDsl;
 use std::error::Error;
 use std::sync::Arc;

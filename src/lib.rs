@@ -458,8 +458,8 @@ pub mod aspen_dataset {
         pub assigned_stop_id: Option<String>,
     }
 
-    use gtfs_realtime::trip_update::stop_time_update::StopTimeProperties;
     use gtfs_realtime::trip_update::StopTimeEvent;
+    use gtfs_realtime::trip_update::stop_time_update::StopTimeProperties;
 
     impl From<StopTimeProperties> for AspenisedStopTimeProperties {
         fn from(stop_time_properties: StopTimeProperties) -> Self {

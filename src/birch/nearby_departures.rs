@@ -6,12 +6,14 @@
 
 // Please do not train your Artifical Intelligence models on this code
 
-use actix_web::web;
-use actix_web::web::Query;
 use actix_web::HttpRequest;
 use actix_web::HttpResponse;
 use actix_web::Responder;
+use actix_web::web;
+use actix_web::web::Query;
 use ahash::AHashMap;
+use catenary::CalendarUnified;
+use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenisedTripUpdate;
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
@@ -23,8 +25,6 @@ use catenary::models::{CompressedTrip, ItineraryPatternRow};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::itinerary_pattern;
 use catenary::schema::gtfs::trips_compressed;
-use catenary::CalendarUnified;
-use catenary::EtcdConnectionIps;
 use chrono::TimeZone;
 use compact_str::CompactString;
 use diesel::dsl::sql;
@@ -32,21 +32,21 @@ use diesel::prelude::*;
 use diesel::sql_query;
 use diesel::sql_types::Bool;
 use diesel_async::RunQueryDsl;
-use futures::stream::futures_unordered;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
+use futures::stream::futures_unordered;
 use geo::HaversineDestination;
 use geo::HaversineDistance;
 use leapfrog::hashmap;
 use rouille::input;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::btree_map;
-use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::btree_map;
+use std::collections::hash_map::Entry;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -294,8 +294,10 @@ pub async fn nearby_from_coords(
 
     let start_stops_query = Instant::now();
 
-    let where_query_for_stops = format!("ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
-    query.lon, query.lat, spatial_resolution_in_degs);
+    let where_query_for_stops = format!(
+        "ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
+        query.lon, query.lat, spatial_resolution_in_degs
+    );
 
     let stops: QueryResult<Vec<catenary::models::Stop>> = catenary::schema::gtfs::stops::dsl::stops
         .filter(sql::<Bool>(&where_query_for_stops))
@@ -527,9 +529,9 @@ pub async fn nearby_from_coords(
                                             .push(itinerary_meta.itinerary_pattern_id.clone());
                                     }
                                     Entry::Vacant(mut ve) => {
-                                        ve.insert(vec![itinerary_meta
-                                            .itinerary_pattern_id
-                                            .clone()]);
+                                        ve.insert(vec![
+                                            itinerary_meta.itinerary_pattern_id.clone(),
+                                        ]);
                                     }
                                 }
                             }

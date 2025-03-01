@@ -4,8 +4,8 @@
 // You are required under the APGL license to retain this annotation as is
 
 use crate::CatenaryPostgresPool;
-use diesel::query_dsl::methods::FilterDsl;
 use diesel::ExpressionMethods;
+use diesel::query_dsl::methods::FilterDsl;
 use diesel_async::RunQueryDsl;
 use std::error::Error;
 use std::sync::Arc;

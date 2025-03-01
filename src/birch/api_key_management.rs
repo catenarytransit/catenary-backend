@@ -1,7 +1,7 @@
-use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use argon2::{
-    password_hash::{PasswordHasher, SaltString},
     Argon2,
+    password_hash::{PasswordHasher, SaltString},
 };
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::ExpressionMethods;

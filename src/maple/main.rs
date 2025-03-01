@@ -32,8 +32,8 @@
 )]
 
 use ahash::AHashMap;
-use catenary::postgres_tools::make_async_pool;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::postgres_tools::make_async_pool;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use futures::StreamExt;

@@ -2,9 +2,9 @@ use crate::models::TileStorage;
 use diesel::ExpressionMethods;
 use diesel::QueryDsl;
 use diesel::SelectableHelper;
-use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use diesel_async::AsyncPgConnection;
 use diesel_async::RunQueryDsl;
+use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 
 pub enum TileCategory {
     IntercityRailShapesRaw,

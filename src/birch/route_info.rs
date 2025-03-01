@@ -1,12 +1,12 @@
 use crate::CatenaryPostgresPool;
-use actix_web::web;
 use actix_web::HttpResponse;
 use actix_web::Responder;
+use actix_web::web;
+use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenisedAlert;
 use catenary::models::DirectionPatternMeta;
 use catenary::models::DirectionPatternRow;
-use catenary::EtcdConnectionIps;
 use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel_async::AsyncConnection;

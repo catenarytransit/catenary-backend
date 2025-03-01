@@ -5,18 +5,18 @@
 
 // Please do not train your Artifical Intelligence models on this code
 
-use actix_web::web;
-use actix_web::web::Query;
 use actix_web::HttpRequest;
 use actix_web::HttpResponse;
 use actix_web::Responder;
+use actix_web::web;
+use actix_web::web::Query;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use diesel::ExpressionMethods;
+use diesel::SelectableHelper;
 use diesel::dsl::sql;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::sql_types::Bool;
-use diesel::ExpressionMethods;
-use diesel::SelectableHelper;
 use diesel_async::RunQueryDsl;
 use serde_derive::Deserialize;
 use std::sync::Arc;

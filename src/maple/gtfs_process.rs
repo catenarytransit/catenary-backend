@@ -6,14 +6,14 @@ use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_rout
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
-use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
+use crate::DownloadedFeedsInformation;
 use crate::gtfs_handlers::shape_colour_calculator::ShapeToColourResponse;
+use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::stops_associated_items::*;
 use crate::gtfs_ingestion_sequence::calendar_into_postgres::calendar_into_postgres;
 use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::insert_stop_to_stop_geometry;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres;
-use crate::DownloadedFeedsInformation;
 use catenary::enum_to_int::*;
 use catenary::gtfs_schedule_protobuf::frequencies_to_protobuf;
 use catenary::maple_syrup;
@@ -31,8 +31,8 @@ use diesel_async::RunQueryDsl;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::FeedInfo;
 use gtfs_structures::Gtfs;
-use gtfs_translations::translation_csv_text_to_translations;
 use gtfs_translations::TranslationResult;
+use gtfs_translations::translation_csv_text_to_translations;
 use prost::Message;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
@@ -693,14 +693,20 @@ pub async fn gtfs_process_feed(
 
     let hull_pg: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>> =
         hull.map(|polygon_geo| postgis_diesel::types::Polygon {
-            rings: vec![polygon_geo
-                .into_inner()
-                .0
-                .into_iter()
-                .map(|coord| {
-                    postgis_diesel::types::Point::new(coord.x, coord.y, Some(catenary::WGS_84_SRID))
-                })
-                .collect()],
+            rings: vec![
+                polygon_geo
+                    .into_inner()
+                    .0
+                    .into_iter()
+                    .map(|coord| {
+                        postgis_diesel::types::Point::new(
+                            coord.x,
+                            coord.y,
+                            Some(catenary::WGS_84_SRID),
+                        )
+                    })
+                    .collect(),
+            ],
             srid: Some(catenary::WGS_84_SRID),
         });
 

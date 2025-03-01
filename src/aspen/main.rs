@@ -39,7 +39,7 @@ use std::{
 };
 use tarpc::{
     context,
-    server::{self, incoming::Incoming, Channel},
+    server::{self, Channel, incoming::Incoming},
     tokio_serde::formats::Bincode,
 };
 use tokio::sync::Mutex;
@@ -67,8 +67,8 @@ mod alerts_responder;
 mod aspen_assignment;
 use catenary::rt_recent_history::RtCacheEntry;
 use catenary::rt_recent_history::RtKey;
-use flate2::read::ZlibDecoder;
 use flate2::Compression;
+use flate2::read::ZlibDecoder;
 use prost::Message;
 use rand::distr::Uniform;
 use rand::thread_rng;

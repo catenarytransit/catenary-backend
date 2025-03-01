@@ -23,7 +23,7 @@
 
 use actix::ActorContext;
 use actix::{Actor, StreamHandler};
-use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, web};
 use actix_web_actors::ws;
 use actix_web_actors::ws::Message::Text;
 /// Define HTTP actor

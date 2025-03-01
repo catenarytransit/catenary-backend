@@ -9,10 +9,10 @@ struct Flags {
 }
 
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2,
+    password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
-use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
+use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use std::error::Error;

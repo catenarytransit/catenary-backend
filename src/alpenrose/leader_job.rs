@@ -1,5 +1,5 @@
-use crate::get_feed_metadata::get_feed_metadata;
 use crate::RealtimeFeedFetch;
+use crate::get_feed_metadata::get_feed_metadata;
 use catenary::fast_hash;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use dmfr_dataset_reader::read_folders;

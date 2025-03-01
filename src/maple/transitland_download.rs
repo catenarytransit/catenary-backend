@@ -1,11 +1,11 @@
-use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::CatenaryPostgresPool;
+use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use catenary::models::StaticDownloadAttempt;
 use diesel::prelude::*;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
-use reqwest::redirect::Policy;
 use reqwest::RequestBuilder;
+use reqwest::redirect::Policy;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
