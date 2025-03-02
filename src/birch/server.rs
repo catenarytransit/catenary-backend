@@ -38,6 +38,7 @@
 mod postgis_download;
 use postgis_download::*;
 mod departures_at_stop;
+mod transfer_calc;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
 use catenary::EtcdConnectionIps;
