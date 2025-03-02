@@ -292,7 +292,12 @@ pub async fn single_fetch_time(
                                         }
                                     }
                                 } else {
-                                    println!("{}: No data to send", feed_id);
+                                    println!("HTTP statuses for feed {}, v {:?}, t{:?}, a{:?}",
+                                        feed_id,
+                                        vehicle_positions_http_status,
+                                        trip_updates_http_status,
+                                        alerts_http_status
+                                    );
                                 }
                             }
                             Err(aspen_connection_error) => {
