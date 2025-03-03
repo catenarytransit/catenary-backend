@@ -24,5 +24,4 @@ pub async fn transfer_calc(
     input_stops: Vec<&Stop>,
     radius_metres: f32,
 ) -> () {
-    
 }
