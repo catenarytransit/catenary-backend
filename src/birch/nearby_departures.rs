@@ -149,6 +149,7 @@ pub struct ValidTripSet {
     pub timezone: Option<chrono_tz::Tz>,
     pub trip_start_time: u32,
     pub trip_short_name: Option<CompactString>,
+    pub service_id: CompactString,
 }
 
 // final datastructure ideas?
@@ -960,6 +961,7 @@ pub async fn nearby_from_coords(
                                     route_id: itin_ref.route_id.clone(),
                                     trip_start_time: trip.start_time,
                                     trip_short_name: trip.trip_short_name.clone(),
+                                    service_id: trip.service_id.clone(),
                                 };
 
                                 match valid_trips.entry(trip.trip_id.clone()) {
@@ -1140,13 +1142,47 @@ pub async fn nearby_from_coords(
                                                             Some(least_num) => {
                                                                 let tz = trip.timezone.as_ref().unwrap();
 
-                                                                let naive_date = tz.timestamp(least_num as i64, 0);
+                                                                let rt_least_naive_date = tz.timestamp(least_num as i64, 0);
 
-                                                                let approx_service_date_start = naive_date - chrono::Duration::seconds(trip_offset as i64);
+                                                                let approx_service_date_start = rt_least_naive_date - chrono::Duration::seconds(trip_offset as i64);
 
                                                                 let approx_service_date = approx_service_date_start.date();
 
-                                                                approx_service_date.naive_local() == trip.trip_service_date
+                                                                //score dates within 1 day of the service date
+                                                                let mut vec_possible_dates: Vec<(chrono::Date<chrono_tz::Tz>, i64)> = vec![];
+
+                                                                //iter from day before to day after
+
+                                                                let day_before = approx_service_date - chrono::Duration::days(2);
+
+                                                                for day in day_before.naive_local().iter_days().take(3) {
+                                                                   //check service id for trip id, then check if calendar is allowed
+
+                                                                     let service_id = trip.service_id.as_str();
+
+                                                                    let service = calendar_in_chateau.get(service_id);
+
+                                                                    if let Some(service) = service {
+                                                                        if catenary::datetime_in_service(&service, day) {
+                                                                            let day_in_tz_midnight = day.and_hms(12, 0, 0).and_local_timezone(*tz).unwrap() - chrono::Duration::hours(12);
+
+                                                                            let time_delta = rt_least_naive_date.signed_duration_since(day_in_tz_midnight);
+    
+                                                                            vec_possible_dates.push((day_in_tz_midnight.date(), time_delta.num_seconds().abs()));
+                                                                        }
+                                                                    }
+                                                                }
+
+                                                                let best_service_date = vec_possible_dates.iter().min_by_key(|x| x.1);
+
+                                                                match best_service_date {
+                                                                    Some(best_service_date) => {
+                                                                        trip.trip_service_date == best_service_date.0.naive_local()
+                                                                    },
+                                                                    None => {
+                                                                        false
+                                                                    }
+                                                                }
 
                                                             },
                                                             None => {

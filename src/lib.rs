@@ -940,7 +940,7 @@ pub fn find_service_ranges(
     results
 }
 
-fn datetime_in_service(service: &CalendarUnified, input_date: chrono::NaiveDate) -> bool {
+pub fn datetime_in_service(service: &CalendarUnified, input_date: chrono::NaiveDate) -> bool {
     let mut answer = false;
 
     if let Some(calendar_general) = &service.general_calendar {
