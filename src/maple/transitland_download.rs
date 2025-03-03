@@ -420,6 +420,12 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
                 "286e6dff5afe4565a08f3d453f8d28e2".parse().unwrap(),
             );
         }
+        "f-u1-delijn" => {
+            headers.insert(
+                "Ocp-Apim-Subscription-Key",
+                "1c069eb9820947ddba69a89103241380".parse().unwrap(),
+            );
+        }
         "f-u3h-koleje~dolnoslaskie" => {
             headers.insert(
                 "Authorization",
