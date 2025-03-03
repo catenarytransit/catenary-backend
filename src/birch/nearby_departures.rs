@@ -45,6 +45,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use chrono::NaiveDate;
 use std::collections::btree_map;
 use std::collections::hash_map::Entry;
 use std::str::FromStr;
@@ -99,7 +100,7 @@ pub struct DeparturesDebug {
 pub struct DepartingTrip {
     pub trip_id: CompactString,
     pub gtfs_frequency_start_time: Option<CompactString>,
-    pub gtfs_schedule_start_day: chrono::NaiveDate,
+    pub gtfs_schedule_start_day: NaiveDate,
     pub is_frequency: bool,
     pub departure_schedule: Option<u64>,
     pub departure_realtime: Option<u64>,
@@ -139,7 +140,7 @@ pub struct ValidTripSet {
     pub chateau_id: String,
     pub trip_id: CompactString,
     pub frequencies: Option<Vec<gtfs_structures::Frequency>>,
-    pub trip_service_date: chrono::NaiveDate,
+    pub trip_service_date: NaiveDate,
     pub itinerary_options: Vec<ItineraryPatternRowMerge>,
     pub reference_start_of_service_date: chrono::DateTime<chrono_tz::Tz>,
     pub itinerary_pattern_id: String,
@@ -1087,6 +1088,9 @@ pub async fn nearby_from_coords(
                                         .start_date
                                         .is_some();
 
+                                    
+
+
                                     let trip_updates: Vec<(&String, &AspenisedTripUpdate)> =
                                         trip_update_ids
                                             .iter()
@@ -1109,12 +1113,52 @@ pub async fn nearby_from_coords(
                                                                     .to_string(),
                                                             )
                                                     }
-                                                    false => true,
+                                                    false => {
+                                                        //if there is only 1 trip update, assign it to the current service date
+
+                                                        //what is the current trip offset from the reference start of service date
+
+                                                        let trip_offset = trip.itinerary_options[0].departure_time_since_start.unwrap_or(trip.itinerary_options[0].arrival_time_since_start.unwrap_or(trip.itinerary_options[0].interpolated_time_since_start.unwrap_or(0))) as u64;
+
+                                                        // get current naive date in the timezone from the earliest item in the trip update
+
+                                                        let naive_date_approx_guess = trip_update.stop_time_update.iter()
+                                                        .filter(|x| x.departure.is_some() || x.arrival.is_some())
+                                                        .filter_map(|x| {
+                                                            if let Some(departure) = &x.departure {
+                                                                Some(departure.time)
+                                                            } else {
+                                                                if let Some(arrival) = &x.arrival {
+                                                                    Some(arrival.time)
+                                                                } else {
+                                                                    None
+                                                                }
+                                                            }
+                                                        }).flatten().min();
+
+                                                        match naive_date_approx_guess {
+                                                            Some(least_num) => {
+                                                                let tz = trip.timezone.as_ref().unwrap();
+
+                                                                let naive_date = tz.timestamp(least_num as i64, 0);
+
+                                                                let approx_service_date_start = naive_date - chrono::Duration::seconds(trip_offset as i64);
+
+                                                                let approx_service_date = approx_service_date_start.date();
+
+                                                                approx_service_date.naive_local() == trip.trip_service_date
+
+                                                            },
+                                                            None => {
+                                                                false
+                                                            }
+                                                        }
+                                                    },
                                                 },
                                             )
-                                            .filter(|(x, trip_update)| {
-                                                !already_used_trip_update_id.contains(*x)
-                                            })
+                                           //.filter(|(x, trip_update)| {
+                                           //     !already_used_trip_update_id.contains(*x)
+                                           // })
                                             .collect();
 
                                     if trip_updates.len() > 0 {
