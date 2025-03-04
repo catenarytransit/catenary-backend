@@ -65,6 +65,18 @@ use dmfr_dataset_reader::read_folders;
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::transitland_download::DownloadedFeedsInformation;
 
+use clap::Parser;
+
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Name of the person to greet
+    #[arg(long)]
+    transitland: String
+}
+
+
 fn update_transitland_submodule() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     //Ensure git submodule transitland-atlas downloads and updates correctly
     match Repository::open("./") {
@@ -112,6 +124,8 @@ fn get_threads_gtfs() -> usize {
 }
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+    let args = Args::parse();
+    
     let delete_everything_in_feed_before_ingest = match std::env::var("DELETE_BEFORE_INGEST") {
         Ok(val) => match val.as_str().to_lowercase().as_str() {
             "true" => true,
@@ -185,7 +199,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
     // See https://github.com/catenarytransit/dmfr-folder-reader
     println!("Reading transitland directory");
-    let dmfr_result = read_folders("./transitland-atlas/")?;
+    let dmfr_result = read_folders(&args.transitland)?;
 
     //delete overlapping feeds
     let dmfr_result = delete_overlapping_feeds_dmfr::delete_overlapping_feeds(dmfr_result);
