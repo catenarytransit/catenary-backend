@@ -62,7 +62,7 @@ Is Postgis not installing? This page may be helpful: https://trac.osgeo.org/post
 ### Updating transitland submodules
 
 ```bash
-git submodule update --remote --merge
+git submodule update --rebase --remote
 ```
 
 ### Style Guide
