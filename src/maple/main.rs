@@ -76,44 +76,6 @@ struct Args {
     transitland: String
 }
 
-
-fn update_transitland_submodule() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
-    //Ensure git submodule transitland-atlas downloads and updates correctly
-    match Repository::open("./") {
-        Ok(repo) => {
-            match repo.find_submodule("transitland-atlas") {
-                Ok(transitland_submodule) => {
-                    println!("Submodule found.");
-
-                    let mut transitland_submodule = transitland_submodule;
-
-                    match transitland_submodule.update(true, None) {
-                        Ok(_) => {
-                            println!("Submodule updated.");
-
-                            Ok(())
-                        }
-                        Err(update_err) => {
-                            eprintln!("Unable to update submodule");
-
-                            // don't need to fail if can't reach github servers for now
-                            Ok(())
-                        }
-                    }
-                }
-                Err(find_submodule) => {
-                    eprintln!("Can't find submodule!");
-                    Err(Box::new(find_submodule))
-                }
-            }
-        }
-        Err(repo_err) => {
-            eprintln!("Can't find own repo!");
-            Err(Box::new(repo_err))
-        }
-    }
-}
-
 fn get_threads_gtfs() -> usize {
     let thread_env = std::env::var("THREADS_GTFS");
 
@@ -138,8 +100,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         println!("Each feed will be wiped before ingestion");
     }
 
-    //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
-    update_transitland_submodule()?;
     let feeds_to_discard: HashSet<String> = HashSet::from_iter(
         vec![
             //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
