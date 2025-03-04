@@ -179,6 +179,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             &arc_conn_pool,
             &feeds_to_discard,
             &restrict_to_feed_id,
+            &args.transitland
         )
         .await;
 
