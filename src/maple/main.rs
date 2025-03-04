@@ -37,7 +37,6 @@ use catenary::postgres_tools::make_async_pool;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use futures::StreamExt;
-use git2::Repository;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
