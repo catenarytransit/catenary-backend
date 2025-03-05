@@ -37,7 +37,6 @@ use catenary::postgres_tools::make_async_pool;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use futures::StreamExt;
-use git2::Repository;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
@@ -65,41 +64,15 @@ use dmfr_dataset_reader::read_folders;
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::transitland_download::DownloadedFeedsInformation;
 
-fn update_transitland_submodule() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
-    //Ensure git submodule transitland-atlas downloads and updates correctly
-    match Repository::open("./") {
-        Ok(repo) => {
-            match repo.find_submodule("transitland-atlas") {
-                Ok(transitland_submodule) => {
-                    println!("Submodule found.");
+use clap::Parser;
 
-                    let mut transitland_submodule = transitland_submodule;
-
-                    match transitland_submodule.update(true, None) {
-                        Ok(_) => {
-                            println!("Submodule updated.");
-
-                            Ok(())
-                        }
-                        Err(update_err) => {
-                            eprintln!("Unable to update submodule");
-
-                            // don't need to fail if can't reach github servers for now
-                            Ok(())
-                        }
-                    }
-                }
-                Err(find_submodule) => {
-                    eprintln!("Can't find submodule!");
-                    Err(Box::new(find_submodule))
-                }
-            }
-        }
-        Err(repo_err) => {
-            eprintln!("Can't find own repo!");
-            Err(Box::new(repo_err))
-        }
-    }
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Name of the person to greet
+    #[arg(long)]
+    transitland: String
 }
 
 fn get_threads_gtfs() -> usize {
@@ -112,6 +85,8 @@ fn get_threads_gtfs() -> usize {
 }
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+    let args = Args::parse();
+    
     let delete_everything_in_feed_before_ingest = match std::env::var("DELETE_BEFORE_INGEST") {
         Ok(val) => match val.as_str().to_lowercase().as_str() {
             "true" => true,
@@ -124,8 +99,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         println!("Each feed will be wiped before ingestion");
     }
 
-    //Ensure git submodule transitland-atlas downloads and updates correctly, if not, pass the error
-    update_transitland_submodule()?;
     let feeds_to_discard: HashSet<String> = HashSet::from_iter(
         vec![
             //These feeds should be discarded because they are duplicated in a larger dataset called `f-sf~bay~area~rg`, which has everything in a single zip file
@@ -185,7 +158,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
     // See https://github.com/catenarytransit/dmfr-folder-reader
     println!("Reading transitland directory");
-    let dmfr_result = read_folders("./transitland-atlas/")?;
+    let dmfr_result = read_folders(&args.transitland)?;
 
     //delete overlapping feeds
     let dmfr_result = delete_overlapping_feeds_dmfr::delete_overlapping_feeds(dmfr_result);
@@ -206,6 +179,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             &arc_conn_pool,
             &feeds_to_discard,
             &restrict_to_feed_id,
+            &args.transitland
         )
         .await;
 

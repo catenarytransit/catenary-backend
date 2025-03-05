@@ -137,6 +137,7 @@ pub async fn download_return_eligible_feeds(
     pool: &Arc<CatenaryPostgresPool>,
     feeds_to_discard: &HashSet<String>,
     restrict_to_feed_id: &Option<String>,
+    transitland_path: &str,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 32;
 
@@ -145,7 +146,7 @@ pub async fn download_return_eligible_feeds(
             .expect("zip directory doesn't exist but could not create it");
     }
 
-    match fs::read_dir("transitland-atlas/feeds") {
+    match fs::read_dir(format!("{}/feeds", transitland_path)) {
         Ok(entries) => {
             println!("Downloading zip files now");
 

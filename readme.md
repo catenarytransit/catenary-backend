@@ -24,7 +24,7 @@ The code is heavily commented, go to each folder in src for more information.
 ## Install Dependencies
 
 ```bash
-sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip wget cmake
+sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip wget cmake  openssl
 ```
 
 ## For Contributors
@@ -62,7 +62,7 @@ Is Postgis not installing? This page may be helpful: https://trac.osgeo.org/post
 ### Updating transitland submodules
 
 ```bash
-git submodule update --remote --merge
+git submodule update --rebase --remote
 ```
 
 ### Style Guide
