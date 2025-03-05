@@ -170,6 +170,20 @@ pub async fn gtfs_process_feed(
         }
     }
 
+    if feed_id == "f-9q5-metro~losangeles~rail" {
+        for (trip_id, trip) in gtfs.trips.iter_mut() {
+            for stop_t in trip.stop_times.iter_mut() {
+                if let Some(headsign) = &mut stop_t.stop_headsign {
+                    if headsign.contains("-") {
+                        let split = headsign.split("-").collect::<Vec<&str>>();;
+
+                        *headsign = split[1].to_string();
+                    }
+                }
+            }
+        }
+    }
+
     let today = chrono::Utc::now().naive_utc().date();
 
     let number_of_days = match feed_id {
