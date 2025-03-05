@@ -17,7 +17,7 @@ non_ascii_idents = "deny"
 ahash = { version = "0.8.11", features = ["serde"] }
 crossbeam-utils = "0.8.21"
 memoffset = "0.9.1"
-time = "0.3.37"
+time = "0.3"
 rouille = "3.0"
 reqwest = {version = "0.12", features = ["gzip","brotli","rustls-tls","deflate","cookies","multipart"]}
 protobuf = "3.7.1"
@@ -55,7 +55,7 @@ geo-types = "0.7.15"
 geo-postgis = "0.2.2"
 geo = "0.29.3"
 tarpc = {version = "0.35.0", features = ["full"]}
-anyhow = "1.0.75"
+anyhow = "1.0"
 tracing = "0.1.40"
 tokio-serde = "0.9"
 tracing-subscriber = "0.3.17"
@@ -70,23 +70,23 @@ dotenvy = "0.15.7"
 seahash = "4.1.0"
 dmfr = "0.2"
 chateau = {git = "https://github.com/catenarytransit/chateau"}
-rtc-quebec-gtfs-rt = {git = "https://github.com/catenarytransit/rtc_quebec_gtfs_rt"}
+rtc-quebec-gtfs-rt = "0.1.1"
 dmfr-dataset-reader = "0.2.4"
-uuid = {version = "1.13.0", features = ["v4", "fast-rng", "macro-diagnostics"]}
+uuid = {version = "1.15", features = ["v4", "fast-rng", "macro-diagnostics"]}
 zip = "2.2"
 git2 = "0.20"
 zip-extract = "0.2.1"
 serde_derive = "1.0.197"
 prost = "0.13"
 geozero = "0.14.0"
-diesel = {version = "2.2.7", features = ["ipnet-address","network-address","extras", "numeric", "r2d2"]}
+diesel = {version = "2.2", features = ["ipnet-address","network-address","extras", "numeric", "r2d2"]}
 postgis_diesel = "2.3.0"
 diesel-async = { version = "0.5", features = ["postgres", "bb8"] }
 diesel-derive-newtype = "2.1.1"
 async-std = {version = "1.5.3"}
 geo-repair-polygon = "0.1.2"
 gtfs-translations = "0.1.0"
-geojson = { version = "0.24.1", features = ["geo-types"] }
+geojson = { version = "0.24", features = ["geo-types"] }
 rstar = "0.12.2"
 sqlx = {version = "0.8", features = ["postgres","runtime-tokio", "macros"]}
 tilejson = "0.4.1"
@@ -100,7 +100,7 @@ random-string = "1.1.0"
 argon2 = "0.5.3"
 tzf-rs = "0.4.10"
 lazy_static = "1.4.0"
-serde_bytes = "0.11.14"
+serde_bytes = "0.11"
 bincode = "1.3.3"
 evmap = "10.0.2"
 dashmap = "6.0"
@@ -113,7 +113,7 @@ env_logger = "0.11.3"
 ron = "0.8.1"
 regex = "1.10.4"
 fasthash = "0.4.0"
-clap = "4.5.30"
+clap = "4.5"
 rgb = "0.8.37"
 zotgtfs = "0.3.7"
 amtrak-gtfs-rt = "0.5.3"
