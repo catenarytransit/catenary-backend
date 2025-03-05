@@ -175,7 +175,7 @@ pub async fn gtfs_process_feed(
             for stop_t in trip.stop_times.iter_mut() {
                 if let Some(headsign) = &mut stop_t.stop_headsign {
                     if headsign.contains("-") {
-                        let split = headsign.split("-").collect::<Vec<&str>>();;
+                        let split = headsign.split("-").collect::<Vec<&str>>();
 
                         *headsign = split[1].to_string();
                     }
