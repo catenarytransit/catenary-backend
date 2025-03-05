@@ -35,6 +35,7 @@ use gtfs_translations::TranslationResult;
 use gtfs_translations::translation_csv_text_to_translations;
 use prost::Message;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
@@ -155,6 +156,18 @@ pub async fn gtfs_process_feed(
     if feed_id == "f-uc~irvine~anteater~express" {
         gtfs.routes
             .retain(|route_id, route| route.long_name.as_deref() != Some("Emergency Management"));
+    }
+
+    if feed_id == "f-9q5-metro~losangeles" {
+        for (route_id, route) in gtfs.routes.iter_mut() {
+            if route.long_name.as_deref() == Some("Metro G Line (Orange) 901") {
+                route.long_name = Some("G 901".to_string())
+            }
+
+            if route.long_name.as_deref() == Some("Metro J Line (Silver) 910/950") {
+                route.long_name = Some("J 910/950".to_string())
+            }
+        }
     }
 
     let today = chrono::Utc::now().naive_utc().date();

@@ -72,7 +72,7 @@ use clap::Parser;
 struct Args {
     /// Name of the person to greet
     #[arg(long)]
-    transitland: String
+    transitland: String,
 }
 
 fn get_threads_gtfs() -> usize {
@@ -86,7 +86,7 @@ fn get_threads_gtfs() -> usize {
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let args = Args::parse();
-    
+
     let delete_everything_in_feed_before_ingest = match std::env::var("DELETE_BEFORE_INGEST") {
         Ok(val) => match val.as_str().to_lowercase().as_str() {
             "true" => true,
@@ -179,7 +179,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             &arc_conn_pool,
             &feeds_to_discard,
             &restrict_to_feed_id,
-            &args.transitland
+            &args.transitland,
         )
         .await;
 

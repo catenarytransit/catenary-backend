@@ -36,6 +36,7 @@ use diesel_async::RunQueryDsl;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use futures::stream::futures_unordered;
+use geo::Distance;
 use geo::HaversineDestination;
 use geo::HaversineDistance;
 use leapfrog::hashmap;
