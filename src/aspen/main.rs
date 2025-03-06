@@ -1063,12 +1063,12 @@ async fn main() -> anyhow::Result<()> {
 
             async move {
                 loop {
-                    println!("Renewing lease");
+                    //     println!("Renewing lease");
                     let x = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await;
 
                     match x {
                         Ok(_) => {
-                            println!("Lease renew successful");
+                            //  println!("Lease renew successful");
 
                             let etcd_this_worker_assignment = etcd
                                 .put(

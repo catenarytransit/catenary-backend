@@ -135,7 +135,7 @@ pub async fn single_fetch_time(
             let trip_updates_future = run_optional_req(trip_updates_request, client.clone());
             let alerts_future = run_optional_req(alerts_request, client.clone());
 
-            println!("{}: Fetching data", feed_id);
+           // println!("{}: Fetching data", feed_id);
             let (vehicle_positions_data, trip_updates_data, alerts_data) =
                 futures::join!(vehicle_positions_future, trip_updates_future, alerts_future,);
 
@@ -174,10 +174,10 @@ pub async fn single_fetch_time(
                         let worker_id = data.worker_id;
 
                         //send the data to the worker
-                        println!(
-                            "Attempting to send {} data to {} via tarpc",
-                            feed_id, data.socket
-                        );
+                      //  println!(
+                      //      "Attempting to send {} data to {} via tarpc",
+                      //      feed_id, data.socket
+                       // );
 
                         let aspen_client =
                             catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket).await;
@@ -382,7 +382,7 @@ pub async fn single_fetch_time(
 
             let duration = start.elapsed();
             let duration = duration.as_secs_f64();
-            println!("{}: took {:.3?}s", feed_id, duration);
+            //println!("{}: took {:.3?}s", feed_id, duration);
 
             //renew lease
             if rand::rng().random_bool(0.1) {
