@@ -699,6 +699,8 @@ pub async fn new_rt_data(
             {
                 let alert_updates_gtfs_rt = alert_updates_gtfs_rt.get();
 
+                let re = Regex::new("/(the )?transit app/gi").unwrap();
+
                 for alert_entity in alert_updates_gtfs_rt.entity.iter() {
                     if let Some(alert) = &alert_entity.alert {
                         let alert_id = alert_entity.id.clone();
@@ -711,8 +713,6 @@ pub async fn new_rt_data(
                                 alert.description_text = None;
                             }
                         }
-                        
-                        let re = Regex::new("/(the )?transit app/gi").unwrap();
 
                         if let Some(header_text) = &mut alert.header_text {
                             for a in header_text.translation.iter_mut() {
