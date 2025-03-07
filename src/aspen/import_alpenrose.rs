@@ -699,7 +699,7 @@ pub async fn new_rt_data(
             {
                 let alert_updates_gtfs_rt = alert_updates_gtfs_rt.get();
 
-                let re = Regex::new("/(the )?transit app/gi").unwrap();
+                let re = Regex::new("(?i)(the )?transit app").unwrap();
 
                 for alert_entity in alert_updates_gtfs_rt.entity.iter() {
                     if let Some(alert) = &alert_entity.alert {
