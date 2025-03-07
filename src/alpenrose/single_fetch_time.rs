@@ -279,10 +279,10 @@ pub async fn single_fetch_time(
 
                                     match tarpc_send_to_aspen {
                                         Ok(_) => {
-                                            println!(
-                                        "feed {}|chateau {}: Successfully sent data sent to {}",
-                                        feed_id, data.chateau_id, worker_id
-                                    );
+                                      //      println!(
+                                      //  "feed {}|chateau {}: Successfully sent data sent to {}",
+                                      //  feed_id, data.chateau_id, worker_id
+                                   // );
                                         }
                                         Err(e) => {
                                             eprintln!(
