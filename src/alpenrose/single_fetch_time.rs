@@ -120,7 +120,7 @@ pub async fn single_fetch_time(
             }
 
             if let Some(trip_url) = &assignment.realtime_trip_updates {
-                if trip_url.contains("api.goswift.ly") && assignment.passwords.is_some() {
+                if trip_url.contains("api.goswift.ly") && assignment.passwords.is_none() {
                     println!("Skipping {} because no password provided", feed_id);
 
                     return;
@@ -128,7 +128,7 @@ pub async fn single_fetch_time(
             }
 
             if let Some(alert_url) = &assignment.realtime_alerts {
-                if alert_url.contains("api.goswift.ly") && assignment.passwords.is_some() {
+                if alert_url.contains("api.goswift.ly") && assignment.passwords.is_none() {
                     println!("Skipping {} because no password provided", feed_id);
 
                     return;
