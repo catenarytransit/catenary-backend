@@ -11,13 +11,13 @@ use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use gtfs_realtime::FeedMessage;
+use regex::Regex;
 use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use regex::Regex;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct MetrolinkTrackData {

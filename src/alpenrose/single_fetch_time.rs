@@ -119,6 +119,22 @@ pub async fn single_fetch_time(
                 }
             }
 
+            if let Some(trip_url) = &assignment.realtime_trip_updates {
+                if trip_url.contains("api.goswift.ly") && assignment.passwords.is_some() {
+                    println!("Skipping {} because no password provided", feed_id);
+
+                    return;
+                }
+            }
+
+            if let Some(alert_url) = &assignment.realtime_alerts {
+                if alert_url.contains("api.goswift.ly") && assignment.passwords.is_some() {
+                    println!("Skipping {} because no password provided", feed_id);
+
+                    return;
+                }
+            }
+
             last_fetch_per_feed.insert(feed_id.clone(), Instant::now());
 
             let vehicle_positions_request =
@@ -135,7 +151,7 @@ pub async fn single_fetch_time(
             let trip_updates_future = run_optional_req(trip_updates_request, client.clone());
             let alerts_future = run_optional_req(alerts_request, client.clone());
 
-           // println!("{}: Fetching data", feed_id);
+            // println!("{}: Fetching data", feed_id);
             let (vehicle_positions_data, trip_updates_data, alerts_data) =
                 futures::join!(vehicle_positions_future, trip_updates_future, alerts_future,);
 
@@ -174,10 +190,10 @@ pub async fn single_fetch_time(
                         let worker_id = data.worker_id;
 
                         //send the data to the worker
-                      //  println!(
-                      //      "Attempting to send {} data to {} via tarpc",
-                      //      feed_id, data.socket
-                       // );
+                        //  println!(
+                        //      "Attempting to send {} data to {} via tarpc",
+                        //      feed_id, data.socket
+                        // );
 
                         let aspen_client =
                             catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket).await;
@@ -279,10 +295,10 @@ pub async fn single_fetch_time(
 
                                     match tarpc_send_to_aspen {
                                         Ok(_) => {
-                                      //      println!(
-                                      //  "feed {}|chateau {}: Successfully sent data sent to {}",
-                                      //  feed_id, data.chateau_id, worker_id
-                                   // );
+                                            //      println!(
+                                            //  "feed {}|chateau {}: Successfully sent data sent to {}",
+                                            //  feed_id, data.chateau_id, worker_id
+                                            // );
                                         }
                                         Err(e) => {
                                             eprintln!(
@@ -292,7 +308,8 @@ pub async fn single_fetch_time(
                                         }
                                     }
                                 } else {
-                                    println!("HTTP statuses for feed {}, v {:?}, t{:?}, a{:?}",
+                                    println!(
+                                        "HTTP statuses for feed {}, v {:?}, t{:?}, a{:?}",
                                         feed_id,
                                         vehicle_positions_http_status,
                                         trip_updates_http_status,
