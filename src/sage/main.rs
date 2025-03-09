@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let excluded_chateaus = BTreeSet::from_iter([
         "uc~irvine~anteater~express",
         "lagunabeachtransit",
-        "greyhound~flix"
+        "greyhound~flix",
     ]);
 
     //https://www.sos.ca.gov/state-holidays
@@ -260,7 +260,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             //make calendar gtfs_structure
 
-            let calendar_structure = catenary::make_calendar_structure_from_pg_single_chateau(calendar, calendar_dates);
+            let calendar_structure =
+                catenary::make_calendar_structure_from_pg_single_chateau(calendar, calendar_dates);
 
             let chateau_routes = routes
                 .into_iter()
@@ -272,19 +273,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             for route in chateau_routes.iter().filter(|x| x.route_type == 3) {
                 //query direction meta of route from database
 
-                let direction_meta = catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
-                    .filter(catenary::schema::gtfs::direction_pattern_meta::route_id.eq(&route.route_id))
-                    .select(catenary::models::DirectionPatternMeta::as_select())
-                    .get_results::<catenary::models::DirectionPatternMeta>(conn)
-                    .await?;
+                let direction_meta =
+                    catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                        .filter(
+                            catenary::schema::gtfs::direction_pattern_meta::route_id
+                                .eq(&route.route_id),
+                        )
+                        .select(catenary::models::DirectionPatternMeta::as_select())
+                        .get_results::<catenary::models::DirectionPatternMeta>(conn)
+                        .await?;
 
                 // query itin meta
 
-                let itin_meta = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                    .filter(catenary::schema::gtfs::itinerary_pattern_meta::route_id.eq(&route.route_id))
-                    .select(catenary::models::ItineraryPatternMeta::as_select())
-                    .get_results::<catenary::models::ItineraryPatternMeta>(conn)
-                    .await?;
+                let itin_meta =
+                    catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                        .filter(
+                            catenary::schema::gtfs::itinerary_pattern_meta::route_id
+                                .eq(&route.route_id),
+                        )
+                        .select(catenary::models::ItineraryPatternMeta::as_select())
+                        .get_results::<catenary::models::ItineraryPatternMeta>(conn)
+                        .await?;
 
                 let itinerary_list = itin_meta
                     .iter()
@@ -294,26 +303,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 // query itin stops
 
                 let itin_stops = catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                    .filter(catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id.eq_any(&itinerary_list))
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
+                            .eq_any(&itinerary_list),
+                    )
                     .select(catenary::models::ItineraryPatternRow::as_select())
                     .get_results::<catenary::models::ItineraryPatternRow>(conn)
                     .await?;
 
                 // query trips compressed
 
-                let trips_compressed = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                    .filter(catenary::schema::gtfs::trips_compressed::route_id.eq(&route.route_id))
-                    .select(catenary::models::CompressedTrip::as_select())
-                    .get_results::<catenary::models::CompressedTrip>(conn)
-                    .await?;
+                let trips_compressed =
+                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::route_id.eq(&route.route_id),
+                        )
+                        .select(catenary::models::CompressedTrip::as_select())
+                        .get_results::<catenary::models::CompressedTrip>(conn)
+                        .await?;
 
                 //test direction each by each
 
-                for direction in direction_meta {
-                    
-                }
+                for direction in direction_meta {}
             }
-                
         }
     }
 

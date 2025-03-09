@@ -1,7 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use rand::Rng;
-use std::iter::FromIterator;
 use compact_str::CompactString;
+use rand::Rng;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::iter::FromIterator;
 
 #[derive(Debug, Eq, PartialEq, Clone, Hash)]
 pub struct SageRouteFamily {
@@ -16,7 +16,8 @@ impl SageRouteFamily {
         let family_id: u32 = rng.random();
 
         //add to families
-        self.families.insert(family_id, BTreeSet::from_iter(route_ids.iter().cloned()));
+        self.families
+            .insert(family_id, BTreeSet::from_iter(route_ids.iter().cloned()));
 
         //add to route_to_family
 

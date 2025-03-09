@@ -318,24 +318,23 @@ impl AspenRpc for AspenServer {
                     _ => gtfs_rt_feed,
                 });
 
-                if realtime_feed_id == "f-metro~losangeles~bus~rt" {
-                    if let Some(v) = &mut vehicles_gtfs_rt {
-                        //remove anything from the route id that is the hyphen - or after
-        
-                        for vehicle_position in v.entity.iter_mut() {
-                            if let Some(vehicle) = &mut vehicle_position.vehicle {
-                                if let Some(id) = &mut vehicle.trip {
-                                    if let Some(route_id) = &mut id.route_id {
-                                        let route_id_new = route_id.as_str();
-                                        let route_id_new = route_id_new.split('-').next().unwrap();
-                                        *route_id = route_id_new.to_string();
-                                    }
+            if realtime_feed_id == "f-metro~losangeles~bus~rt" {
+                if let Some(v) = &mut vehicles_gtfs_rt {
+                    //remove anything from the route id that is the hyphen - or after
+
+                    for vehicle_position in v.entity.iter_mut() {
+                        if let Some(vehicle) = &mut vehicle_position.vehicle {
+                            if let Some(id) = &mut vehicle.trip {
+                                if let Some(route_id) = &mut id.route_id {
+                                    let route_id_new = route_id.as_str();
+                                    let route_id_new = route_id_new.split('-').next().unwrap();
+                                    *route_id = route_id_new.to_string();
                                 }
                             }
                         }
                     }
                 }
-         
+            }
 
             let trips_gtfs_rt = match trips_response_code {
                 Some(200) => match trips {
@@ -359,28 +358,27 @@ impl AspenRpc for AspenServer {
                 _ => None,
             };
 
-            let mut trips_gtfs_rt = trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
-                "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
-                _ => gtfs_rt_feed,
-            });
+            let mut trips_gtfs_rt =
+                trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
+                    "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
+                    _ => gtfs_rt_feed,
+                });
 
             if realtime_feed_id == "f-metro~losangeles~bus~rt" {
                 if let Some(t) = &mut trips_gtfs_rt {
                     //remove anything from the route id that is the hyphen - or after
-    
+
                     for entity in t.entity.iter_mut() {
                         if let Some(trip_update) = &mut entity.trip_update {
-                            
-                                if let Some(route_id) = &mut trip_update.trip.route_id {
-                                    let route_id_new = route_id.as_str();
-                                    let route_id_new = route_id_new.split('-').next().unwrap();
-                                    *route_id = route_id_new.to_string();
-                                }
+                            if let Some(route_id) = &mut trip_update.trip.route_id {
+                                let route_id_new = route_id.as_str();
+                                let route_id_new = route_id_new.split('-').next().unwrap();
+                                *route_id = route_id_new.to_string();
                             }
                         }
                     }
                 }
-            
+            }
 
             let mut alerts_gtfs_rt = match alerts_dupe_trips {
                 true => trips_gtfs_rt.clone(),
@@ -407,23 +405,22 @@ impl AspenRpc for AspenServer {
             if realtime_feed_id == "f-metro~losangeles~bus~rt" {
                 if let Some(a) = &mut alerts_gtfs_rt {
                     //remove anything from the route id that is the hyphen - or after
-    
+
                     for entity in a.entity.iter_mut() {
                         if let Some(alert) = &mut entity.alert {
-                                //iter through each informed entity
+                            //iter through each informed entity
 
-                                for informed_entity in alert.informed_entity.iter_mut() {
-                                    if let Some(route_id) = &mut informed_entity.route_id {
-                                        let route_id_new = route_id.as_str();
-                                        let route_id_new = route_id_new.split('-').next().unwrap();
-                                        *route_id = route_id_new.to_string();
-                                    }
+                            for informed_entity in alert.informed_entity.iter_mut() {
+                                if let Some(route_id) = &mut informed_entity.route_id {
+                                    let route_id_new = route_id.as_str();
+                                    let route_id_new = route_id_new.split('-').next().unwrap();
+                                    *route_id = route_id_new.to_string();
                                 }
                             }
                         }
                     }
                 }
-            
+            }
 
             //get and update raw gtfs_rt data
 

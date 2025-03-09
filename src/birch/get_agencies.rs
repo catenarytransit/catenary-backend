@@ -52,7 +52,7 @@ pub async fn get_agencies_raw(
 
 #[derive(Deserialize)]
 struct AgencyChateauQuery {
-    chateau: String
+    chateau: String,
 }
 
 #[actix_web::get("/get_agencies_for_chateau")]
