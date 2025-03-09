@@ -168,6 +168,29 @@ pub async fn gtfs_process_feed(
                 route.long_name = Some("J 910/950".to_string())
             }
         }
+
+        gtfs.routes = gtfs.routes.into_iter()
+        //remove anything from the route id that is the hyphen - or after
+
+        .map(|(route_id, mut route)| {
+            if let Some(hyphen_index) = route_id.find("-") {
+                route.id = route_id[0..hyphen_index].to_string();
+            }
+            (route.id.clone(), route)
+        })
+        .collect();
+
+        //apply the same to the route id in the trip
+
+        gtfs.trips = gtfs.trips.into_iter()
+        //remove anything from the route id that is the hyphen - or after
+        .map(|(trip_id, mut trip)| {
+            if let Some(hyphen_index) = trip.route_id.find("-") {
+                trip.route_id = trip.route_id[0..hyphen_index].to_string();
+            }
+            (trip.route_id.clone(), trip)
+        })
+        .collect();
     }
 
     if feed_id == "f-9q5-metro~losangeles~rail" {
