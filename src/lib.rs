@@ -62,6 +62,8 @@ use fasthash::MetroHasher;
 use gtfs_realtime::{FeedEntity, FeedMessage};
 use gtfs_structures::RouteType;
 use schema::gtfs::trip_frequencies::start_time;
+use std::collections::BTreeMap;
+use std::collections::btree_map;
 use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -847,6 +849,58 @@ pub fn make_weekdays(calendar: &crate::models::Calendar) -> Vec<chrono::Weekday>
         .filter(|(a, _)| *a)
         .map(|(_, b)| b)
         .collect()
+}
+
+pub fn make_calendar_structure_from_pg_single_chateau(
+    services_calendar_lookup_queries_to_perform: Vec<crate::models::Calendar>,
+    services_calendar_dates_lookup_queries_to_perform: Vec<crate::models::CalendarDate>,
+) -> BTreeMap<String, CalendarUnified> {
+    let mut calendar_structures: BTreeMap<String, CalendarUnified> = BTreeMap::new();
+
+    for calendar in services_calendar_lookup_queries_to_perform {
+        calendar_structures.insert(
+            calendar.service_id.clone(),
+            CalendarUnified {
+                id: calendar.service_id.clone(),
+                general_calendar: Some(GeneralCalendar {
+                    days: make_weekdays(&calendar),
+                    start_date: calendar.gtfs_start_date,
+                    end_date: calendar.gtfs_end_date,
+                }),
+                exceptions: None,
+            },
+        );
+    }
+
+    for calendar_date in services_calendar_dates_lookup_queries_to_perform {
+        let exception_number = match calendar_date.exception_type {
+            1 => gtfs_structures::Exception::Added,
+            2 => gtfs_structures::Exception::Deleted,
+            _ => panic!("WHAT IS THIS!!!!!!"),
+        };
+
+        match calendar_structures.entry(calendar_date.service_id.clone()) {
+            btree_map::Entry::Occupied(mut oe) => {
+                let mut calendar_unified = oe.get_mut();
+
+                if let Some(entry) = &mut calendar_unified.exceptions {
+                    entry.insert(calendar_date.gtfs_date, exception_number);
+                } else {
+                    calendar_unified.exceptions = Some(BTreeMap::from_iter([(
+                        calendar_date.gtfs_date,
+                        exception_number,
+                    )]));
+                }
+            }
+            btree_map::Entry::Vacant(mut ve) => {
+                ve.insert(CalendarUnified::empty_exception_from_calendar_date(
+                    &calendar_date,
+                ));
+            }
+        }
+    }
+
+    calendar_structures
 }
 
 impl CalendarUnified {

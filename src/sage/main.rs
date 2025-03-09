@@ -48,6 +48,7 @@ use std::io::prelude::*;
 use std::str::FromStr;
 use std::sync::Arc;
 mod route_family;
+use std::collections::BTreeSet;
 
 #[derive(Serialize)]
 struct StopGeo {
@@ -73,6 +74,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn = &mut conn_pre.unwrap();
 
     println!("Connected to Postgres");
+
+    let excluded_chateaus = BTreeSet::from_iter([
+        "uc~irvine~anteater~express",
+        "lagunabeachtransit",
+        "greyhound~flix"
+    ]);
+
+    //https://www.sos.ca.gov/state-holidays
+
+    let holidays = BTreeSet::from_iter([
+        chrono::NaiveDate::from_ymd_opt(2025, 3, 31).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 5, 26).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 7, 4).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 9, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 11, 11).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 11, 27).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 11, 28).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 12, 24).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 12, 25).unwrap(),
+    ]);
 
     //import california polygon from sage/California_State_Boundary.geojson
     let california_geojson =
@@ -112,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let stops_query
     = catenary::schema::gtfs::stops::dsl::stops
-    .filter(sql::<Bool>("ST_Contains(ST_MakeEnvelope(-124.41060660766607,32.5342307609976,-114.13445790587905,42.00965914828148, 4326), point)"))
+    .filter(sql::<Bool>("ST_Contains(ST_MakeEnvelope(-124.41060660766607,32.5342307609976,-114.13445790587905,42.00965914828148, 4326), point) AND chateau != 'greyhound~flix' AND chateau != 'lagunabeachtransit' AND chateau != 'uc~irvine~anteater~express'"))
     .select(Stop::as_select())
     .get_results::<Stop>(conn)
     .await?;
@@ -157,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .collect();
 
     println!("Filtering took {:?}", start_stops_filter_timer.elapsed());
-    println!("Stops Query Filtered # {}", stops_query_filtered.len());
+    println!("Stops Query Filtered {}", stops_query_filtered.len());
 
     //write out to json
 
@@ -183,6 +204,118 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap();
 
     println!("Writing took {:?}", start_stops_write_timer.elapsed());
+
+    //create list of chateaus to check
+
+    let chateaus_list = stops_query_filtered
+        .iter()
+        .map(|stop| stop.chateau.clone())
+        .collect::<BTreeSet<String>>();
+
+    println!("Chateaus List  {}", chateaus_list.len());
+
+    for chateau in chateaus_list {
+        if excluded_chateaus.contains(chateau.as_str()) {
+            continue;
+        }
+
+        let chateau_stops = stops_query_filtered
+            .iter()
+            .filter(|stop| stop.chateau == chateau)
+            .collect::<Vec<&StopGeo>>();
+
+        //get all routes for chateau
+
+        let chateau_routes = chateau_stops
+            .iter()
+            .flat_map(|stop| stop.routes.iter())
+            .collect::<BTreeSet<&String>>();
+
+        println!("Chateau Routes  {} under {}", chateau_routes.len(), chateau);
+
+        if chateau_routes.len() > 1 {
+            //query routes of chateau from database
+
+            let routes = catenary::schema::gtfs::routes::dsl::routes
+                .filter(catenary::schema::gtfs::routes::chateau.eq(&chateau))
+                .select(Route::as_select())
+                .get_results::<Route>(conn)
+                .await?;
+
+            //query calendar of chateau from database
+
+            let calendar = catenary::schema::gtfs::calendar::dsl::calendar
+                .filter(catenary::schema::gtfs::calendar::chateau.eq(&chateau))
+                .select(catenary::models::Calendar::as_select())
+                .get_results::<catenary::models::Calendar>(conn)
+                .await?;
+
+            //query calendar_dates of chateau from database
+
+            let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                .filter(catenary::schema::gtfs::calendar_dates::chateau.eq(&chateau))
+                .select(catenary::models::CalendarDate::as_select())
+                .get_results::<catenary::models::CalendarDate>(conn)
+                .await?;
+
+            //make calendar gtfs_structure
+
+            let calendar_structure = catenary::make_calendar_structure_from_pg_single_chateau(calendar, calendar_dates);
+
+            let chateau_routes = routes
+                .into_iter()
+                .filter(|route| chateau_routes.contains(&&route.route_id))
+                .collect::<Vec<Route>>();
+
+            // test each direction if there is 20 min frequency of each route
+
+            for route in chateau_routes.iter().filter(|x| x.route_type == 3) {
+                //query direction meta of route from database
+
+                let direction_meta = catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                    .filter(catenary::schema::gtfs::direction_pattern_meta::route_id.eq(&route.route_id))
+                    .select(catenary::models::DirectionPatternMeta::as_select())
+                    .get_results::<catenary::models::DirectionPatternMeta>(conn)
+                    .await?;
+
+                // query itin meta
+
+                let itin_meta = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                    .filter(catenary::schema::gtfs::itinerary_pattern_meta::route_id.eq(&route.route_id))
+                    .select(catenary::models::ItineraryPatternMeta::as_select())
+                    .get_results::<catenary::models::ItineraryPatternMeta>(conn)
+                    .await?;
+
+                let itinerary_list = itin_meta
+                    .iter()
+                    .map(|itin| itin.itinerary_pattern_id.clone())
+                    .collect::<Vec<String>>();
+
+                // query itin stops
+
+                let itin_stops = catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                    .filter(catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id.eq_any(&itinerary_list))
+                    .select(catenary::models::ItineraryPatternRow::as_select())
+                    .get_results::<catenary::models::ItineraryPatternRow>(conn)
+                    .await?;
+
+                // query trips compressed
+
+                let trips_compressed = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                    .filter(catenary::schema::gtfs::trips_compressed::route_id.eq(&route.route_id))
+                    .select(catenary::models::CompressedTrip::as_select())
+                    .get_results::<catenary::models::CompressedTrip>(conn)
+                    .await?;
+
+                //test direction each by each
+
+                for direction in direction_meta {
+                    
+                }
+            }
+                
+        }
+    }
 
     Ok(())
 }
