@@ -188,7 +188,7 @@ pub async fn gtfs_process_feed(
             if let Some(hyphen_index) = trip.route_id.find("-") {
                 trip.route_id = trip.route_id[0..hyphen_index].to_string();
             }
-            (trip.route_id.clone(), trip)
+            (trip_id, trip)
         })
         .collect();
     }
