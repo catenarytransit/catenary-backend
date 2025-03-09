@@ -715,7 +715,7 @@ async fn main() -> std::io::Result<()> {
             .service(shapes_ferry)
             .service(shapes_ferry_meta)
             .service(get_agencies::get_agencies_raw)
-            .service(proxy_for_aws_terrain_tiles)
+            .service(get_agencies::get_agencies_for_chateau)
             .service(proxy_for_maptiler_terrain_tiles)
             //we do some trolling
             .service(web::redirect(
