@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let stops_query
     = catenary::schema::gtfs::stops::dsl::stops
-    .filter(sql::<Bool>("ST_Contains(ST_MakeEnvelope(-124.41060660766607,32.5342307609976,-114.13445790587905,42.00965914828148, 4326), point) AND location_type = 0"))
+    .filter(sql::<Bool>("ST_Contains(ST_MakeEnvelope(-124.41060660766607,32.5342307609976,-114.13445790587905,42.00965914828148, 4326), point)"))
     .select(Stop::as_select())
     .get_results::<Stop>(conn)
     .await?;
