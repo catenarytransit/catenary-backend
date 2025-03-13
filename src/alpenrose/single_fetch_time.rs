@@ -80,7 +80,7 @@ pub async fn single_fetch_time(
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
     amtrak_gtfs: Arc<gtfs_structures::Gtfs>, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
     chicago_text_str: Arc<Option<String>>,
-    rtcquebec_gtfs: Arc<gtfs_structures::Gtfs>,
+    rtcquebec_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
     etcd_urls: &Vec<&str>,
     etcd_connection_options: &Option<etcd_client::ConnectOptions>,
     lease_id: &i64,
@@ -382,13 +382,16 @@ pub async fn single_fetch_time(
                             .await;
                     }
                     "f-rtcquebec~rt" => {
-                        custom_rt_feeds::rtcquebec::fetch_rtc_data(
-                            &mut kv_client,
-                            feed_id,
-                            rtcquebec_gtfs.as_ref(),
-                            &client,
-                        )
-                        .await;
+
+                            if let Some(rtcquebec_gtfs) = rtcquebec_gtfs.as_ref() {
+                                custom_rt_feeds::rtcquebec::fetch_rtc_data(
+                                    &mut kv_client,
+                                    feed_id,
+                                    rtcquebec_gtfs,
+                                    &client,
+                                )
+                                .await;
+                            }
                     }
                     //    "f-uc~irvine~anteater~express~rt" => {
                     //       custom_rt_feeds::uci::fetch_uci_data(&mut etcd, feed_id).await;
