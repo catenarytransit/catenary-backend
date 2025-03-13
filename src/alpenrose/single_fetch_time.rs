@@ -382,16 +382,15 @@ pub async fn single_fetch_time(
                             .await;
                     }
                     "f-rtcquebec~rt" => {
-
-                            if let Some(rtcquebec_gtfs) = rtcquebec_gtfs.as_ref() {
-                                custom_rt_feeds::rtcquebec::fetch_rtc_data(
-                                    &mut kv_client,
-                                    feed_id,
-                                    rtcquebec_gtfs,
-                                    &client,
-                                )
-                                .await;
-                            }
+                        if let Some(rtcquebec_gtfs) = rtcquebec_gtfs.as_ref() {
+                            custom_rt_feeds::rtcquebec::fetch_rtc_data(
+                                &mut kv_client,
+                                feed_id,
+                                rtcquebec_gtfs,
+                                &client,
+                            )
+                            .await;
+                        }
                     }
                     //    "f-uc~irvine~anteater~express~rt" => {
                     //       custom_rt_feeds::uci::fetch_uci_data(&mut etcd, feed_id).await;
