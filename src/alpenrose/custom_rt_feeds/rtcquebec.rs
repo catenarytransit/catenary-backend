@@ -1,6 +1,8 @@
 use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id_kvclient;
 use prost::Message;
+use std::collections::HashSet;
+use chrono::Timelike;
 
 pub async fn fetch_rtc_data(
     etcd: &mut etcd_client::KvClient,
@@ -36,6 +38,26 @@ pub async fn fetch_rtc_data(
                         "Failed to fetch Rtc Quebec data, vehicles are more than 3 times the voyages"
                     );
                     return;
+                }
+
+                let list_of_route_ids: HashSet<String> = voyages
+                    .entity
+                    .iter()
+                    .map(|x| x.trip_update.as_ref().unwrap().trip.route_id.clone())
+                    .filter_map(|x| x)
+                    .collect();
+
+                //current hour quebec time
+
+                let current_hour = chrono::Utc::now().with_timezone(&chrono_tz::America::Montreal).time().hour();
+
+                //if between 08h and 22h
+
+                if current_hour >= 8 && current_hour < 21 {
+                    if !list_of_route_ids.contains("1-801") {
+                        eprintln!("Failed to fetch Rtc Quebec data, route 1-801 is missing during busy hours");
+                        return;
+                    }
                 }
 
                 //extract the binary data
