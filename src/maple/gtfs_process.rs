@@ -128,6 +128,12 @@ pub async fn gtfs_process_feed(
 
             gtfs.routes.retain(|route_id, route| route_id != "ACE");
 
+            for (trip_id, trip) in gtfs.trips.iter_mut() {
+                if trip.trip_short_name.as_deref() == Some("AMSJ") {
+                    trip.trip_short_name = Some(trip_id.to_string());
+                }
+            }
+
             gtfs
         }
         "f-gtfs~de" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(gtfs),
