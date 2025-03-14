@@ -162,6 +162,7 @@ pub async fn gtfs_process_feed(
     if feed_id == "f-uc~irvine~anteater~express" {
         gtfs.routes
             .retain(|route_id, route| route.long_name.as_deref() != Some("Emergency Management"));
+        
     }
 
     if feed_id == "f-9q5-metro~losangeles" {
