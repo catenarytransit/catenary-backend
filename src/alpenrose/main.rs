@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
         gtfs.trips
             .retain(|_, trip| trip.service_id.contains("daily"));
-        
+
         gtfs
     });
 
