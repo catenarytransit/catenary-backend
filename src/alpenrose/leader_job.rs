@@ -169,7 +169,8 @@ pub async fn perform_leader_job(
             let set_metadata_updated_time = etcd
                 .put(
                     format!("/alpenrose_assignments_last_updated/{}", worker_id).as_str(),
-                    catenary::bincode_serialize(&catenary::duration_since_unix_epoch().as_millis()).unwrap(),
+                    catenary::bincode_serialize(&catenary::duration_since_unix_epoch().as_millis())
+                        .unwrap(),
                     Some(lease_option),
                 )
                 .await;

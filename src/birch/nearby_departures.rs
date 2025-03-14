@@ -870,7 +870,8 @@ pub async fn nearby_from_coords(
         if let Ok(etcd_data) = etcd_data {
             if let Some(first_value) = etcd_data.kvs().first() {
                 let this_chateau_metadata =
-                    catenary::bincode_deserialize::<ChateauMetadataEtcd>(first_value.value()).unwrap();
+                    catenary::bincode_deserialize::<ChateauMetadataEtcd>(first_value.value())
+                        .unwrap();
 
                 chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
             }
