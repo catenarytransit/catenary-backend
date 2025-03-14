@@ -326,7 +326,7 @@ fn convert(
                         }
                     }
                     "LIRR" => {
-                        println!("supporting gtfs {:?}", &supporting_gtfs);
+                       // println!("supporting gtfs {:?}", &supporting_gtfs);
 
                         match &supporting_gtfs {
                             Some(supporting_gtfs) => {
