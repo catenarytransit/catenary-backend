@@ -70,7 +70,7 @@ dotenvy = "0.15.7"
 seahash = "4.1.0"
 dmfr = "0.2"
 chateau = {git = "https://github.com/catenarytransit/chateau"}
-rtc-quebec-gtfs-rt = "0.1.7"
+rtc-quebec-gtfs-rt = "0.1.8"
 dmfr-dataset-reader = "0.2.4"
 uuid = {version = "1.15", features = ["v4", "fast-rng", "macro-diagnostics"]}
 zip = "2.2"
