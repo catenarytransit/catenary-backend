@@ -319,7 +319,7 @@ pub async fn route_info(
         if let Some(fetch_assigned_node_for_this_chateau_data) =
             fetch_assigned_node_for_this_chateau_kv_first
         {
-            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+            let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
                 fetch_assigned_node_for_this_chateau_data.value(),
             )
             .unwrap();

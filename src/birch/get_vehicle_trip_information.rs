@@ -74,7 +74,7 @@ pub async fn get_vehicle_information_from_label(
         if let Some(fetch_assigned_node_for_this_chateau_data) =
             fetch_assigned_node_for_this_chateau_kv_first
         {
-            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+            let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
                 fetch_assigned_node_for_this_chateau_data.value(),
             )
             .unwrap();
@@ -160,7 +160,7 @@ pub async fn get_vehicle_information(
         if let Some(fetch_assigned_node_for_this_chateau_data) =
             fetch_assigned_node_for_this_chateau_kv_first
         {
-            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+            let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
                 fetch_assigned_node_for_this_chateau_data.value(),
             )
             .unwrap();
@@ -331,7 +331,7 @@ pub async fn get_trip_rt_update(
             if let Some(fetch_assigned_node_for_this_chateau_data) =
                 fetch_assigned_node_for_this_chateau_kv_first
             {
-                let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+                let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
                     fetch_assigned_node_for_this_chateau_data.value(),
                 )
                 .unwrap();
@@ -985,7 +985,7 @@ pub async fn get_trip_init(
         if let Some(fetch_assigned_node_for_this_chateau_data) =
             fetch_assigned_node_for_this_chateau_kv_first
         {
-            let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+            let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
                 fetch_assigned_node_for_this_chateau_data.value(),
             )
             .unwrap();

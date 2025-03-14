@@ -107,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         //write poly
 
-        let bincoded_poly = bincode::serialize(&polygon)?;
+        let bincoded_poly = catenary::bincode_serialize(&polygon)?;
 
         let mut poly_file = OpenOptions::new()
             .write(true)
@@ -370,7 +370,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ways: kept_ped_bike_ways,
         };
 
-        //let bincoded_ped_bike = bincode::serialize(&export_ped_bike)?;
+        //let bincoded_ped_bike = catenary::bincode_serialize(&export_ped_bike)?;
 
         //ped_bike_file.write_all(&bincoded_ped_bike)?;
 

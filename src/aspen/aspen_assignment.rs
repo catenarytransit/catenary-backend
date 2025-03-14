@@ -94,7 +94,7 @@ pub async fn assign_chateaus(
             fetch_workers_from_etcd_req.header().unwrap().revision();
 
         for kv in fetch_workers_from_etcd {
-            let decoded_metadata = bincode::deserialize::<AspenWorkerMetadataEtcd>(kv.value());
+            let decoded_metadata = catenary::bincode_deserialize::<AspenWorkerMetadataEtcd>(kv.value());
 
             if let Ok(decoded_metadata) = decoded_metadata {
                 workers_map.insert(decoded_metadata.worker_id.clone(), decoded_metadata.clone());
@@ -129,7 +129,7 @@ pub async fn assign_chateaus(
             let mut existing_assigned_chateaus = HashMap::new();
 
             for kv in fetch_assigned_chateaus {
-                let decoded_metadata = bincode::deserialize::<ChateauMetadataEtcd>(kv.value());
+                let decoded_metadata = catenary::bincode_deserialize::<ChateauMetadataEtcd>(kv.value());
 
                 if let Ok(decoded_metadata) = decoded_metadata {
                     let key = kv.key_str().unwrap();
@@ -150,7 +150,7 @@ pub async fn assign_chateaus(
             let fetch_assigned_realtime_feeds = fetch_assigned_realtime_feeds.take_kvs();
 
             for kv in fetch_assigned_realtime_feeds {
-                let decoded_metadata = bincode::deserialize::<RealtimeFeedMetadataEtcd>(kv.value());
+                let decoded_metadata = catenary::bincode_deserialize::<RealtimeFeedMetadataEtcd>(kv.value());
 
                 if let Ok(decoded_metadata) = decoded_metadata {
                     let key = kv.key_str().unwrap();
@@ -193,7 +193,7 @@ pub async fn assign_chateaus(
                         let save_to_etcd = etcd
                             .put(
                                 format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
-                                bincode::serialize(&assigned_chateau_data).unwrap(),
+                                catenary::bincode_serialize(&assigned_chateau_data).unwrap(),
                                 Some(
                                     etcd_client::PutOptions::new()
                                         .with_lease(worker_metadata.etcd_lease_id),
@@ -226,7 +226,7 @@ pub async fn assign_chateaus(
                                         "/aspen_assigned_realtime_feed_ids/{}",
                                         realtime_feed_id
                                     ),
-                                    bincode::serialize(&assigned_realtime_feed_data).unwrap(),
+                                    catenary::bincode_serialize(&assigned_realtime_feed_data).unwrap(),
                                     Some(
                                         etcd_client::PutOptions::new()
                                             .with_lease(worker_metadata.etcd_lease_id),

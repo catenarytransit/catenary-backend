@@ -46,7 +46,7 @@ pub async fn perform_leader_job(
         .map(|kv| {
             (
                 kv.key_str().unwrap().replace("/alpenrose_workers/", ""),
-                bincode::deserialize::<i64>(kv.value()).unwrap(),
+                catenary::bincode_deserialize::<i64>(kv.value()).unwrap(),
             )
         })
         .collect::<HashMap<String, i64>>();
@@ -119,14 +119,14 @@ pub async fn perform_leader_job(
                 .and_modify(|instructions| {
                     instructions.insert(
                         feed_id.to_string(),
-                        bincode::deserialize::<RealtimeFeedFetch>(value).unwrap(),
+                        catenary::bincode_deserialize::<RealtimeFeedFetch>(value).unwrap(),
                     );
                 })
                 .or_insert({
                     let mut map = HashMap::new();
                     map.insert(
                         feed_id.to_string(),
-                        bincode::deserialize::<RealtimeFeedFetch>(value).unwrap(),
+                        catenary::bincode_deserialize::<RealtimeFeedFetch>(value).unwrap(),
                     );
                     map
                 });
@@ -155,7 +155,7 @@ pub async fn perform_leader_job(
                 let set_assignment = etcd
                     .put(
                         format!("/alpenrose_assignments/{}/{}", worker_id, feed_id).as_str(),
-                        bincode::serialize(&realtime_instruction).unwrap(),
+                        catenary::bincode_serialize(&realtime_instruction).unwrap(),
                         Some(lease_option.clone()),
                     )
                     .await;
@@ -169,7 +169,7 @@ pub async fn perform_leader_job(
             let set_metadata_updated_time = etcd
                 .put(
                     format!("/alpenrose_assignments_last_updated/{}", worker_id).as_str(),
-                    bincode::serialize(&catenary::duration_since_unix_epoch().as_millis()).unwrap(),
+                    catenary::bincode_serialize(&catenary::duration_since_unix_epoch().as_millis()).unwrap(),
                     Some(lease_option),
                 )
                 .await;

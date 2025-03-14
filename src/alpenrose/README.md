@@ -16,7 +16,7 @@ In Etcd v3, etcd no longer uses a node based structure with directories. The str
 **Worker Identification**
 ```rs
 key: format!("/alpenrose_workers/{}", this_worker_id).as_str(),
-value: bincode::serialize(&etcd_lease_id).unwrap(),
+value: catenary::bincode_serialize(&etcd_lease_id).unwrap(),
 ```
 Lease: worker inserts own lease
 value is i64 lease id
@@ -26,7 +26,7 @@ value is i64 lease id
 Per worker:
 ```rs
 key: format!("/alpenrose_assignments_last_updated/{}", this_worker_id),
-value: bincode::serialize(last_assignment_unix_time_ms).unwrap()
+value: catenary::bincode_serialize(last_assignment_unix_time_ms).unwrap()
 ```
 
 Unix time is milliseconds in u64
@@ -34,7 +34,7 @@ Unix time is milliseconds in u64
 Each feed id under worker:
 ```rs
 key: format!("/alpenrose_assignments/{}/{}", this_worker_id, feed_id).as_str(),
-value: bincode::serialize(&assignment_data).unwrap()
+value: catenary::bincode_serialize(&assignment_data).unwrap()
 ```
 
 Lease: use the worker's lease

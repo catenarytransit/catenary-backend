@@ -53,6 +53,8 @@ use std::io;
 use zip::ZipArchive;
 mod single_fetch_time;
 use crate::single_fetch_time::UrlType;
+use catenary::bincode_deserialize;
+use catenary::bincode_serialize;
 use get_feed_metadata::RealtimeFeedFetch;
 use scc::HashMap as SccHashMap;
 
@@ -221,7 +223,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             let etcd_this_worker_assignment = etcd
                 .put(
                     format!("/alpenrose_workers/{}", this_worker_id).as_str(),
-                    bincode::serialize(&etcd_lease_id).unwrap(),
+                    bincode_serialize(&etcd_lease_id).unwrap(),
                     Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id)),
                 )
                 .await?;
@@ -241,7 +243,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                             let attempt_to_become_leader = election_client
                                 .campaign(
                                     "/alpenrose_leader",
-                                    bincode::serialize(this_worker_id.as_ref()).unwrap(),
+                                    bincode_serialize(this_worker_id.as_ref()).unwrap(),
                                     etcd_lease_id,
                                 )
                                 .await;
@@ -249,8 +251,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                             println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
                         }
                         Some(leader_kv) => {
-                            let leader_id: String =
-                                bincode::deserialize(leader_kv.value()).unwrap();
+                            let leader_id: String = bincode_deserialize(leader_kv.value()).unwrap();
 
                             if &leader_id == this_worker_id.as_ref() {
                                 // I AM THE LEADER!!!
@@ -272,7 +273,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                     let attempt_to_become_leader = election_client
                         .campaign(
                             "/alpenrose_leader",
-                            bincode::serialize(this_worker_id.as_ref()).unwrap(),
+                            bincode_serialize(this_worker_id.as_ref()).unwrap(),
                             etcd_lease_id,
                         )
                         .await;
@@ -287,8 +288,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
                     if let Ok(current_leader_resp) = current_leader_election {
                         if let Some(leader_kv) = current_leader_resp.kv() {
-                            let leader_id: String =
-                                bincode::deserialize(leader_kv.value()).unwrap();
+                            let leader_id: String = bincode_deserialize(leader_kv.value()).unwrap();
 
                             if &leader_id == this_worker_id.as_ref() {
                                 // I AM THE LEADER!!!
@@ -322,7 +322,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
             if let Some(last_updated_worker_time) = last_updated_worker_time_kv.first() {
                 let last_updated_worker_time_value =
-                    bincode::deserialize::<u64>(last_updated_worker_time.value()).unwrap();
+                    bincode_deserialize::<u64>(last_updated_worker_time.value()).unwrap();
 
                 if Some(last_updated_worker_time_value)
                     != previously_known_updated_ms_for_this_worker
@@ -352,7 +352,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                     .unwrap()
                                     .to_string()
                                     .replace(&prefix_search, ""),
-                                bincode::deserialize::<RealtimeFeedFetch>(each_kv.value()).unwrap(),
+                                bincode_deserialize::<RealtimeFeedFetch>(each_kv.value()).unwrap(),
                             )
                         })
                         .collect::<HashMap<String, RealtimeFeedFetch>>();

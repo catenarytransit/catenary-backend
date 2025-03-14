@@ -158,7 +158,7 @@ pub async fn bulk_realtime_fetch_v1(
 
                 //deserialise into ChateauMetadataZookeeper
 
-                let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+                let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
                     etcd_data_list.kvs().first().unwrap().value(),
                 )
                 .unwrap();
@@ -360,7 +360,7 @@ pub async fn get_realtime_locations(
 
     //deserialise into ChateauMetadataZookeeper
 
-    let assigned_chateau_data = bincode::deserialize::<ChateauMetadataEtcd>(
+    let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
         fetch_assigned_node_for_this_realtime_feed
             .kvs()
             .first()

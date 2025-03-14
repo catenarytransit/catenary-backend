@@ -50,7 +50,7 @@ pub async fn aspen_leader_thread(
                         let attempt_to_become_leader = election_client
                             .campaign(
                                 "/aspen_leader",
-                                bincode::serialize(this_worker_id.as_ref()).unwrap(),
+                                catenary::bincode_serialize(this_worker_id.as_ref()).unwrap(),
                                 lease_id_for_this_worker,
                             )
                             .await;
@@ -58,7 +58,7 @@ pub async fn aspen_leader_thread(
                         println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
                     }
                     Some(leader_kv) => {
-                        let leader_id: String = bincode::deserialize(leader_kv.value()).unwrap();
+                        let leader_id: String = catenary::bincode_deserialize(leader_kv.value()).unwrap();
 
                         if &leader_id == this_worker_id.as_ref() {
                             // I AM THE LEADER!!!
@@ -92,7 +92,7 @@ pub async fn aspen_leader_thread(
                 let attempt_to_become_leader = election_client
                     .campaign(
                         "/aspen_leader",
-                        bincode::serialize(this_worker_id.as_ref()).unwrap(),
+                        catenary::bincode_serialize(this_worker_id.as_ref()).unwrap(),
                         lease_id_for_this_worker,
                     )
                     .await;

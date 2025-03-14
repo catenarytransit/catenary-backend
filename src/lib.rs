@@ -75,6 +75,8 @@ pub mod schedule_filtering;
 pub mod tile_save_and_get;
 pub mod timestamp_extraction;
 use flate2::Compression;
+use serde::Deserialize;
+use serde::Serialize;
 use std::io::Cursor;
 use std::io::{Read, Write};
 
@@ -669,10 +671,17 @@ pub async fn get_node_for_realtime_feed_id_kvclient(
             match kvs.len() {
                 0 => None,
                 _ => {
-                    let data = bincode::deserialize::<RealtimeFeedMetadataEtcd>(kvs[0].value());
+                    let data = bincode::serde::decode_from_slice::<
+                        RealtimeFeedMetadataEtcd,
+                        bincode::config::Configuration<
+                            bincode::config::LittleEndian,
+                            bincode::config::Fixint,
+                            bincode::config::NoLimit,
+                        >,
+                    >(kvs[0].value(), bincode::config::legacy());
 
                     match data {
-                        Ok(data) => Some(data),
+                        Ok(data) => Some(data.0),
                         Err(e) => {
                             println!("Error deserializing RealtimeFeedMetadataEtcd: {:?}", e);
                             None
@@ -703,10 +712,17 @@ pub async fn get_node_for_realtime_feed_id(
             match kvs.len() {
                 0 => None,
                 _ => {
-                    let data = bincode::deserialize::<RealtimeFeedMetadataEtcd>(kvs[0].value());
+                    let data = bincode::serde::decode_from_slice::<
+                        RealtimeFeedMetadataEtcd,
+                        bincode::config::Configuration<
+                            bincode::config::LittleEndian,
+                            bincode::config::Fixint,
+                            bincode::config::NoLimit,
+                        >,
+                    >(kvs[0].value(), bincode::config::legacy());
 
                     match data {
-                        Ok(data) => Some(data),
+                        Ok(data) => Some(data.0),
                         Err(e) => {
                             println!("Error deserializing RealtimeFeedMetadataEtcd: {:?}", e);
                             None
@@ -1071,4 +1087,31 @@ pub fn metrolink_unix_fix(date: &str) -> u64 {
     //convert to number
 
     numbers.parse::<u64>().unwrap()
+}
+
+pub fn bincode_serialize<T>(value: &T) -> Result<Vec<u8>, bincode::error::EncodeError>
+where
+    T: serde::Serialize,
+{
+    use bincode::config;
+    use bincode::config::*;
+
+    let config: Configuration<LittleEndian, Fixint> = config::legacy();
+
+    bincode::serde::encode_to_vec(value, config)
+}
+
+pub fn bincode_deserialize<T>(value: &[u8]) -> Result<T, bincode::error::DecodeError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    use bincode::config;
+    use bincode::config::*;
+
+    let config: Configuration<LittleEndian, Fixint> = config::legacy();
+
+    match bincode::serde::decode_from_slice(value, config) {
+        Ok(x) => Ok(x.0),
+        Err(e) => Err(e),
+    }
 }

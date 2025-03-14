@@ -71,7 +71,7 @@ use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use prost::Message;
 use rand::distr::Uniform;
-use rand::thread_rng;
+use rand::rng;
 use std::io::Read;
 use std::io::Write;
 use std::time::Instant;
@@ -114,7 +114,7 @@ impl AspenRpc for AspenServer {
         let sleep_time = Duration::from_millis(
             Uniform::new_inclusive(1, 10)
                 .expect("NOT VALID RANGE")
-                .sample(&mut thread_rng()),
+                .sample(&mut rng()),
         );
         tokio::time::sleep(sleep_time).await;
         format!("Hello, {name}! You are connected from {}", self.addr)
@@ -1064,7 +1064,7 @@ async fn main() -> anyhow::Result<()> {
     let etcd_this_worker_assignment = etcd
         .put(
             format!("/aspen_workers/{}", this_worker_id).as_str(),
-            bincode::serialize(&worker_metadata).unwrap(),
+            catenary::bincode_serialize(&worker_metadata).unwrap(),
             Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id_for_this_worker)),
         )
         .await?;
@@ -1128,7 +1128,7 @@ async fn main() -> anyhow::Result<()> {
                             let etcd_this_worker_assignment = etcd
                                 .put(
                                     format!("/aspen_workers/{}", &this_worker_id).as_str(),
-                                    bincode::serialize(&worker_metadata).unwrap(),
+                                    catenary::bincode_serialize(&worker_metadata).unwrap(),
                                     Some(
                                         etcd_client::PutOptions::new()
                                             .with_lease(etcd_lease_id_for_this_worker),
@@ -1155,7 +1155,7 @@ async fn main() -> anyhow::Result<()> {
                             let etcd_this_worker_assignment = etcd
                                 .put(
                                     format!("/aspen_workers/{}", this_worker_id).as_str(),
-                                    bincode::serialize(&worker_metadata).unwrap(),
+                                    catenary::bincode_serialize(&worker_metadata).unwrap(),
                                     Some(
                                         etcd_client::PutOptions::new()
                                             .with_lease(etcd_lease_id_for_this_worker),
