@@ -82,6 +82,15 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .read("rtcquebec.zip")
         .ok();
 
+    let rtc_quebec_gtfs = rtc_quebec_gtfs.map(|gtfs| {
+        let mut gtfs = gtfs;
+
+        gtfs.trips
+            .retain(|_, trip| trip.service_id.contains("daily"));
+        
+        gtfs
+    });
+
     let rtc_quebec_gtfs = Arc::new(rtc_quebec_gtfs);
 
     println!("Worker id {}", this_worker_id);
