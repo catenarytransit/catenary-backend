@@ -96,8 +96,8 @@ pub async fn fetch_rtc_data(
                     }
                 }
             }
-            _ => {
-                eprintln!("Failed to fetch Rtc Quebec data {:?}", rtc_gtfs_rt_res.unwrap_err());
+            Err(rtc_err) => {
+                eprintln!("Failed to fetch Rtc Quebec data {:?}", rtc_err);
             }
         }
     } else {
