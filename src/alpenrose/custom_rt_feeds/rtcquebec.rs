@@ -63,6 +63,13 @@ pub async fn fetch_rtc_data(
                         );
                         return;
                     }
+
+                    if list_of_route_ids.len() < 10 {
+                      eprintln!(
+                            "Failed to fetch Rtc Quebec data, route count low during busy hours"
+                        );
+                        return;  
+                    }
                 }
 
                 //extract the binary data
