@@ -5,7 +5,7 @@ CREATE TABLE vehicles (
     ending_range integer,
     starting_text text,
     ending_text text,
-    use_numerical_sort boolean,
+    use_numeric_sorting boolean,
     manufacturer text,
     model text,
     years text[],
