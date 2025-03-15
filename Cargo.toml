@@ -204,3 +204,7 @@ path = "src/ip_addr_geo_db_update/main.rs"
 [[bin]]
 name = "osm_extractor"
 path = "src/osm_extractor/main.rs"
+
+[[bin]]
+name = "update_vehicles_db"
+path = "src/update_vehicles_db/main.rs"
