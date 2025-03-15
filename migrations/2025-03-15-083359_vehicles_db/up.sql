@@ -1,5 +1,5 @@
 -- Your SQL goes here
-CREATE TABLE vehicles (
+CREATE TABLE gtfs.vehicles (
     file_path text NOT NULL,
     starting_range integer,
     ending_range integer,

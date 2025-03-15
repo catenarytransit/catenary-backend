@@ -1,2 +1,2 @@
 -- This file should undo anything in `up.sql`
-DROP TABLE vehicles;
+DROP TABLE gtfs.vehicles;
