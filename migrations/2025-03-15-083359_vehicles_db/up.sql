@@ -11,5 +11,5 @@ CREATE TABLE vehicles (
     years text[],
     engine text,
     transmission text,
-    notes text,
+    notes text
 );
