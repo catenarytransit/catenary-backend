@@ -429,3 +429,21 @@ pub struct TileStorage {
     pub mvt_data: Vec<u8>,
     pub added_time: chrono::DateTime<chrono::Utc>,
 }
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::gtfs::vehicles)]
+pub struct VehicleEntry {
+    pub file_path: String,
+    pub starting_range: Option<i32>,
+    pub ending_range: Option<i32>,
+    pub starting_text: Option<String>,
+    pub ending_text: Option<String>,
+    pub use_numeric_sorting: Option<bool>,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub years: Option<Vec<Option<String>>>,
+    pub engine: Option<String>,
+    pub transmission: Option<String>,
+    pub notes: Option<String>,
+    pub key_str: String,
+}

@@ -83,7 +83,12 @@ async fn main() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         match vehicles {
             Ok(vehicles) => {
                 println!("File: {:?}", file_path);
-                println!("Data: {:#?}", vehicles);
+              //  println!("Data: {:#?}", vehicles);
+
+              let cleaned_path = file_path.strip_prefix(&args.vehicles_db_folder).unwrap();
+              let cleaned_path = cleaned_path.to_str().unwrap().replace(".json", "");
+
+              println!("Cleaned Path: {:?}", cleaned_path);
             }
             Err(e) => {
                 println!("Error parsing JSON file: {:?}", e);
