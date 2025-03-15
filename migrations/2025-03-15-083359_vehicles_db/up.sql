@@ -11,5 +11,7 @@ CREATE TABLE gtfs.vehicles (
     years text[],
     engine text,
     transmission text,
-    notes text
+    notes text,
+    key_str text NOT NULL,
+    PRIMARY KEY (file_path,key_str)
 );
