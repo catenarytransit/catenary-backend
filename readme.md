@@ -24,7 +24,7 @@ The code is heavily commented, go to each folder in src for more information.
 ## Install Dependencies
 
 ```bash
-sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql unzip wget cmake  openssl
+sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql postgresql-contrib unzip wget cmake openssl libpq-dev
 ```
 
 ## For Contributors
