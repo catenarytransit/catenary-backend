@@ -517,6 +517,28 @@ pub mod gtfs {
         }
     }
 
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.vehicles (file_path, key_str) {
+            file_path -> Text,
+            starting_range -> Nullable<Int4>,
+            ending_range -> Nullable<Int4>,
+            starting_text -> Nullable<Text>,
+            ending_text -> Nullable<Text>,
+            use_numeric_sorting -> Nullable<Bool>,
+            manufacturer -> Nullable<Text>,
+            model -> Nullable<Text>,
+            years -> Nullable<Array<Nullable<Text>>>,
+            engine -> Nullable<Text>,
+            transmission -> Nullable<Text>,
+            notes -> Nullable<Text>,
+            key_str -> Text,
+        }
+    }
+
     diesel::allow_tables_to_appear_in_same_query!(
         admin_credentials,
         agencies,
@@ -546,5 +568,6 @@ pub mod gtfs {
         tile_storage,
         trip_frequencies,
         trips_compressed,
+        vehicles,
     );
 }
