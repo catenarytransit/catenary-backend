@@ -1,3 +1,5 @@
+// @generated automatically by Diesel CLI.
+
 pub mod gtfs {
     diesel::table! {
         use postgis_diesel::sql_types::*;
