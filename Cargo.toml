@@ -95,7 +95,6 @@ zstd-safe = "7.2.3"
 hitbox = "0.1.1"
 cached = { version = "0.54", features = ["async_tokio_rt_multi_thread", "disk_store"] }
 geo-booleanop = "0.3.2"
-geo-clipper = "0.9.0"
 random-string = "1.1.0"
 argon2 = "0.5.3"
 tzf-rs = "0.4.10"

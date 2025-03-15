@@ -13,11 +13,11 @@ use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
-use geo_clipper::Clipper;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
+use geo::algorithm::bool_ops::BooleanOps;
 
 pub async fn refresh_metadata_assignments(
     dmfr_result: &ReturnDmfrAnalysis,
@@ -123,7 +123,7 @@ pub async fn refresh_metadata_assignments(
                     let mut merged_hull: geo::MultiPolygon =
                         hulls_from_static_geo_types[0].clone().into();
                     for hull_subset in hulls_from_static_geo_types.iter().skip(1) {
-                        merged_hull = merged_hull.union(&hull_subset.clone(), 10000.0);
+                        merged_hull = merged_hull.union(&hull_subset.clone());
                     }
                     merged_hull
                 }),
