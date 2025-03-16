@@ -490,7 +490,7 @@ pub async fn gtfs_process_feed(
                     .as_deref()
                     .unwrap()
                     .name
-                    .clone(),
+                    .clone().unwrap_or_default(),
                 _ => direction_pattern
                     .headsign_or_destination
                     .clone()
