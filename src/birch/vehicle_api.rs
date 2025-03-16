@@ -159,6 +159,32 @@ pub async fn get_vehicle_data_endpoint(
                 vehicle: None,
             }),
         },
+        "santacruzmetro" => {
+            match query.label.parse::<i32>() {
+                Ok(vehicle_number) => {
+                    match look_for_vehicle_number(
+                        conn,
+                        "north_america/united_states/california/santacruzmetro",
+                        vehicle_number,
+                    )
+                    .await
+                    {
+                        Ok(vehicle) => HttpResponse::Ok().json(ResponseVehicleIndividual {
+                            found_data: true,
+                            vehicle,
+                        }),
+                        Err(e) => HttpResponse::InternalServerError().json(ResponseVehicleIndividual {
+                            found_data: false,
+                            vehicle: None,
+                        }),
+                    }
+                }
+                Err(_) => HttpResponse::BadRequest().json(ResponseVehicleIndividual {
+                    found_data: false,
+                    vehicle: None,
+                }),
+            }
+        }
         _ => HttpResponse::Ok().json(ResponseVehicleIndividual {
             found_data: false,
             vehicle: None,
