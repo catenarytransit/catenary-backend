@@ -179,6 +179,7 @@ async fn look_for_vehicle_number(
     let vehicle = catenary::schema::gtfs::vehicles::dsl::vehicles
         .filter(catenary::schema::gtfs::vehicles::starting_range.le(vehicle_number))
         .filter(catenary::schema::gtfs::vehicles::ending_range.ge(vehicle_number))
+        .filter(catenary::schema::gtfs::vehicles::file_path.eq(file_path))
         .first::<VehicleEntry>(conn)
         .await?;
 
