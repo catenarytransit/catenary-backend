@@ -1,17 +1,17 @@
-use std::error::Error;
-use catenary::{models::VehicleEntry};
+use catenary::models::VehicleEntry;
+use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::postgres_tools::make_async_pool;
 use clap::Parser;
+use diesel::prelude::*;
+use diesel_async::AsyncConnection;
+use diesel_async::RunQueryDsl;
 use serde::Deserialize;
+use std::error::Error;
+use std::sync::Arc;
 use std::{
     fs, io,
     path::{Path, PathBuf},
 };
-use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
-use catenary::postgres_tools::CatenaryPostgresPool;
-use std::sync::Arc;
-use catenary::postgres_tools::make_async_pool;
-use diesel_async::AsyncConnection;
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct VehicleType {
@@ -99,72 +99,98 @@ async fn main() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         match vehicles {
             Ok(vehicles) => {
                 println!("File: {:?}", file_path);
-              //  println!("Data: {:#?}", vehicles);
+                //  println!("Data: {:#?}", vehicles);
 
-              let cleaned_path = file_path.strip_prefix(&args.vehicles_db_folder).unwrap();
-              let cleaned_path = cleaned_path.to_str().unwrap().replace(".json", "");
+                let cleaned_path = file_path.strip_prefix(&args.vehicles_db_folder).unwrap();
+                let cleaned_path = cleaned_path.to_str().unwrap().replace(".json", "");
 
-              println!("Cleaned Path: {:?}", cleaned_path);
+                println!("Cleaned Path: {:?}", cleaned_path);
 
-              let vehicle_data = vehicles.vehicles.iter().map(|v|{
+                let vehicle_data =
+                    vehicles
+                        .vehicles
+                        .iter()
+                        .map(|v| {
+                            v.roster.iter().map(|r| VehicleEntry {
+                                file_path: cleaned_path.to_string(),
+                                starting_range: r.fleet_selection.start_number.map(|x| x as i32),
+                                ending_range: r.fleet_selection.end_number.map(|x| x as i32),
+                                starting_text: r.fleet_selection.start_text.clone(),
+                                ending_text: r.fleet_selection.end_text.clone(),
+                                use_numeric_sorting: Some(r.fleet_selection.use_numeric_sorting),
+                                manufacturer: Some(v.manufacturer.clone()),
+                                model: Some(v.model.clone()),
+                                years: r.years.clone().map(|x| {
+                                    x.iter().map(|y| Some(y.to_string())).collect::<Vec<_>>()
+                                }),
+                                engine: r.engine.clone(),
+                                transmission: r.transmission.clone(),
+                                notes: r.notes.clone(),
+                                key_str: format!(
+                                    "{}-{}-{}-{}",
+                                    match r.fleet_selection.start_number {
+                                        Some(x) => x.to_string(),
+                                        None => r
+                                            .fleet_selection
+                                            .start_text
+                                            .clone()
+                                            .unwrap_or("".to_string()),
+                                    },
+                                    match r.fleet_selection.end_number {
+                                        Some(x) => x.to_string(),
+                                        None => r
+                                            .fleet_selection
+                                            .end_text
+                                            .clone()
+                                            .unwrap_or("".to_string()),
+                                    },
+                                    v.manufacturer,
+                                    v.model
+                                ),
+                            })
+                        })
+                        .flatten()
+                        .collect::<Vec<_>>();
 
-                v.roster.iter().map(|r| VehicleEntry {
-                    file_path: cleaned_path.to_string(),
-                    starting_range: r.fleet_selection.start_number.map(|x| x as i32),
-                    ending_range: r.fleet_selection.end_number.map(|x| x as i32),
-                    starting_text: r.fleet_selection.start_text.clone(),
-                    ending_text: r.fleet_selection.end_text.clone(),
-                    use_numeric_sorting: Some(r.fleet_selection.use_numeric_sorting),
-                    manufacturer: Some(v.manufacturer.clone()),
-                    model: Some(v.model.clone()),
-                    years: r.years.clone().map(|x| x.iter().map(|y| Some(y.to_string())).collect::<Vec<_>>()),
-                    engine: r.engine.clone(),
-                    transmission: r.transmission.clone(),
-                    notes: r.notes.clone(),
-                    key_str: format!("{}-{}-{}-{}", 
-                    match r.fleet_selection.start_number {
-                        Some(x) => x.to_string(),
-                        None => r.fleet_selection.start_text.clone().unwrap_or("".to_string())
-                    },
-                    match r.fleet_selection.end_number {
-                        Some(x) => x.to_string(),
-                        None => r.fleet_selection.end_text.clone().unwrap_or("".to_string())
-                    },
-                     v.manufacturer, v.model),
-                })
+                //make a postgres transaction
 
-               }).flatten().collect::<Vec<_>>();
+                let cleaned_path_copy = cleaned_path.clone();
 
-               //make a postgres transaction
+                let insert_for_this_file = conn
+                    .build_transaction()
+                    .run::<(), diesel::result::Error, _>(|conn| {
+                        Box::pin(async move {
+                            diesel::delete(
+                                catenary::schema::gtfs::vehicles::table.filter(
+                                    catenary::schema::gtfs::vehicles::dsl::file_path
+                                        .eq(&cleaned_path_copy),
+                                ),
+                            )
+                            .execute(conn)
+                            .await?;
 
-               let cleaned_path_copy = cleaned_path.clone();
+                            for vehicle in vehicle_data {
+                                diesel::insert_into(catenary::schema::gtfs::vehicles::table)
+                                    .values(&vehicle)
+                                    .execute(conn)
+                                    .await?;
+                            }
 
-               let insert_for_this_file = conn.build_transaction().run::<(), diesel::result::Error, _>(|conn| 
-                Box::pin(async move {
-
-                   diesel::delete(catenary::schema::gtfs::vehicles::table.filter(catenary::schema::gtfs::vehicles::dsl::file_path.eq(&cleaned_path_copy)))
-                   .execute(conn)
-                   .await?;
-
-                     for vehicle in vehicle_data {
-                          diesel::insert_into(catenary::schema::gtfs::vehicles::table)
-                          .values(&vehicle)
-                          .execute(conn)
-                          .await?;
-                     }
-
-                   Ok(())
-
-                }) as _
-               ).await;
+                            Ok(())
+                        }) as _
+                    })
+                    .await;
 
                 match insert_for_this_file {
-                     Ok(_) => {
-                          println!("Inserted data for file: {:?}", cleaned_path);
-                     }
-                     Err(e) => {
-                          println!("Error inserting data for file: {:?}, error: {:?}", cleaned_path, e);
-                     }
+                    Ok(_) => {
+                        println!("Inserted data for file: {:?}", cleaned_path);
+                    }
+                    Err(e) => {
+                        println!(
+                            "Error inserting data for file: {:?}, error: {:?}",
+                            cleaned_path, e
+                        );
+                    }
                 }
             }
             Err(e) => {

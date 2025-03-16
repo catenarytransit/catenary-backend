@@ -65,10 +65,10 @@ pub async fn fetch_rtc_data(
                     }
 
                     if list_of_route_ids.len() < 10 {
-                      eprintln!(
+                        eprintln!(
                             "Failed to fetch Rtc Quebec data, route count low during busy hours"
                         );
-                        return;  
+                        return;
                     }
                 }
 

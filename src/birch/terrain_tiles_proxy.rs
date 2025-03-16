@@ -1,5 +1,5 @@
 use actix_web::Responder;
-use actix_web::{web, HttpRequest, HttpResponse};
+use actix_web::{HttpRequest, HttpResponse, web};
 use rand::Rng;
 
 #[actix_web::get("/maptiler_terrain_tiles_proxy/{z}/{x}/{y}.webp")]

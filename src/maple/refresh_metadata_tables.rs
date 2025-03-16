@@ -13,11 +13,11 @@ use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
+use geo::algorithm::bool_ops::BooleanOps;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
-use geo::algorithm::bool_ops::BooleanOps;
 
 pub async fn refresh_metadata_assignments(
     dmfr_result: &ReturnDmfrAnalysis,

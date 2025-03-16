@@ -484,6 +484,13 @@ pub async fn gtfs_process_feed(
                         .and_then(|x| x.stop_headsign.clone())
                         .unwrap_or_else(|| "".to_string()),
                 },
+                "montebellobuslines" => gtfs
+                    .stops
+                    .get(itin_pattern.stop_sequences.last().unwrap().stop_id.as_str())
+                    .as_deref()
+                    .unwrap()
+                    .name
+                    .clone(),
                 _ => direction_pattern
                     .headsign_or_destination
                     .clone()
@@ -567,6 +574,13 @@ pub async fn gtfs_process_feed(
                         .and_then(|x| x.stop_headsign.clone()),
                     Some(list) => Some(list.join(",")),
                 },
+                "montebellobuslines" => gtfs
+                    .stops
+                    .get(itinerary.stop_sequences.last().unwrap().stop_id.as_str())
+                    .as_deref()
+                    .unwrap()
+                    .name
+                    .clone(),
                 _ => itinerary
                     .trip_headsign
                     .clone()

@@ -68,6 +68,7 @@ mod route_info;
 use rand::Rng;
 mod terrain_tiles_proxy;
 use terrain_tiles_proxy::proxy_for_maptiler_terrain_tiles;
+mod vehicle_api;
 
 #[derive(Clone, Debug)]
 struct ChateauCache {
@@ -719,6 +720,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_agencies::get_agencies_raw)
             .service(get_agencies::get_agencies_for_chateau)
             .service(proxy_for_maptiler_terrain_tiles)
+            .service(vehicle_api::get_vehicle_data_endpoint)
             //we do some trolling
             .service(web::redirect(
                 "/.env",
