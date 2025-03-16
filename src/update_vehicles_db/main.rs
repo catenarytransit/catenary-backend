@@ -1,4 +1,5 @@
 use std::error::Error;
+use catenary::models::VehicleEntry;
 use clap::Parser;
 use serde::Deserialize;
 use std::{
@@ -89,6 +90,25 @@ async fn main() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
               let cleaned_path = cleaned_path.to_str().unwrap().replace(".json", "");
 
               println!("Cleaned Path: {:?}", cleaned_path);
+
+              let vehicle_data = vehicles.vehicles.iter().map(|v|{
+
+                v.roster.iter().map(|r| VehicleEntry {
+                    file_path: cleaned_path.to_string(),
+                    starting_range: r.fleet_selection.start_number.map(|x| x as i32),
+                    ending_range: r.fleet_selection.end_number.map(|x| x as i32),
+                    starting_text: r.fleet_selection.start_text.clone(),
+                    ending_text: r.fleet_selection.end_text.clone(),
+                    use_numeric_sorting: Some(r.fleet_selection.use_numeric_sorting),
+                    manufacturer: Some(v.manufacturer.clone()),
+                    model: Some(v.model),
+                    years: r.years.clone().map(|x| x.iter().map(|y| Some(y.to_string())).collect::<Vec<_>>()),
+                    engine: r.engine.clone(),
+                    transmission: r.transmission.clone(),
+                    notes: r.notes.clone(),
+                })
+
+               }).flatten().collect::<Vec<_>>();
             }
             Err(e) => {
                 println!("Error parsing JSON file: {:?}", e);
