@@ -136,6 +136,18 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
+        "f-los~angeles~international~airport~shuttle" => {
+            let mut gtfs = gtfs;
+
+            gtfs.routes.iter_mut().for_each(|(route_id, route)| {
+                route.long_name = route.long_name.as_ref().map(|x| {
+                    x.replace("Metro Connector GL", "Metro Connector C")
+                        .to_string()
+                });
+            });
+
+            gtfs
+        }
         "f-gtfs~de" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(gtfs),
 
         _ => gtfs,
