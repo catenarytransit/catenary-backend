@@ -23,6 +23,40 @@ struct ResponseVehicleIndividual {
     vehicle: Option<VehicleEntry>,
 }
 
+async fn generic_number_lookup(
+    conn: &mut bb8::PooledConnection<
+        '_,
+        diesel_async::pooled_connection::AsyncDieselConnectionManager<
+            diesel_async::AsyncPgConnection,
+        >,
+    >,
+    file_path: &str, label: &str) -> HttpResponse {
+    match label.parse::<i32>() {
+        Ok(vehicle_number) => {
+            match look_for_vehicle_number(
+                conn,
+                file_path,
+                vehicle_number,
+            )
+            .await
+            {
+                Ok(vehicle) => HttpResponse::Ok().json(ResponseVehicleIndividual {
+                    found_data: true,
+                    vehicle,
+                }),
+                Err(e) => HttpResponse::InternalServerError().json(ResponseVehicleIndividual {
+                    found_data: false,
+                    vehicle: None,
+                }),
+            }
+        }
+        Err(_) => HttpResponse::BadRequest().json(ResponseVehicleIndividual {
+            found_data: false,
+            vehicle: None,
+        }),
+    }
+}
+
 #[actix_web::get("/get_vehicle")]
 pub async fn get_vehicle_data_endpoint(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
@@ -87,103 +121,26 @@ pub async fn get_vehicle_data_endpoint(
                 }
             }
         }
-        "northcountytransitdistrict" => match query.label.parse::<i32>() {
-            Ok(vehicle_number) => {
-                match look_for_vehicle_number(
-                    conn,
-                    "north_america/united_states/california/northcountytransitdistrict",
-                    vehicle_number,
-                )
-                .await
-                {
-                    Ok(vehicle) => HttpResponse::Ok().json(ResponseVehicleIndividual {
-                        found_data: true,
-                        vehicle,
-                    }),
-                    Err(e) => HttpResponse::InternalServerError().json(ResponseVehicleIndividual {
-                        found_data: false,
-                        vehicle: None,
-                    }),
-                }
-            }
-            Err(_) => HttpResponse::BadRequest().json(ResponseVehicleIndividual {
-                found_data: false,
-                vehicle: None,
-            }),
-        },
-        "orangecountytransportationauthority" => match query.label.parse::<i32>() {
-            Ok(vehicle_number) => {
-                match look_for_vehicle_number(
-                    conn,
-                    "north_america/united_states/california/orangecounty",
-                    vehicle_number,
-                )
-                .await
-                {
-                    Ok(vehicle) => HttpResponse::Ok().json(ResponseVehicleIndividual {
-                        found_data: true,
-                        vehicle,
-                    }),
-                    Err(e) => HttpResponse::InternalServerError().json(ResponseVehicleIndividual {
-                        found_data: false,
-                        vehicle: None,
-                    }),
-                }
-            }
-            Err(_) => HttpResponse::BadRequest().json(ResponseVehicleIndividual {
-                found_data: false,
-                vehicle: None,
-            }),
-        },
-        "san-diego-mts" => match query.label.parse::<i32>() {
-            Ok(vehicle_number) => {
-                match look_for_vehicle_number(
-                    conn,
-                    "north_america/united_states/california/mts",
-                    vehicle_number,
-                )
-                .await
-                {
-                    Ok(vehicle) => HttpResponse::Ok().json(ResponseVehicleIndividual {
-                        found_data: true,
-                        vehicle,
-                    }),
-                    Err(e) => HttpResponse::InternalServerError().json(ResponseVehicleIndividual {
-                        found_data: false,
-                        vehicle: None,
-                    }),
-                }
-            }
-            Err(_) => HttpResponse::BadRequest().json(ResponseVehicleIndividual {
-                found_data: false,
-                vehicle: None,
-            }),
-        },
+        "northcountytransitdistrict" => {
+            generic_number_lookup(conn, "north_america/united_states/california/northcountytransitdistrict", &query.label).await
+        }
+        "orangecountytransportationauthority" => {
+           generic_number_lookup(conn, "north_america/united_states/california/orangecounty", &query.label).await
+        }
+        "san-diego-mts" => {
+            generic_number_lookup(conn, "north_america/united_states/california/mts", &query.label).await
+        }
         "santacruzmetro" => {
-            match query.label.parse::<i32>() {
-                Ok(vehicle_number) => {
-                    match look_for_vehicle_number(
-                        conn,
-                        "north_america/united_states/california/santacruzmetro",
-                        vehicle_number,
-                    )
-                    .await
-                    {
-                        Ok(vehicle) => HttpResponse::Ok().json(ResponseVehicleIndividual {
-                            found_data: true,
-                            vehicle,
-                        }),
-                        Err(e) => HttpResponse::InternalServerError().json(ResponseVehicleIndividual {
-                            found_data: false,
-                            vehicle: None,
-                        }),
-                    }
-                }
-                Err(_) => HttpResponse::BadRequest().json(ResponseVehicleIndividual {
-                    found_data: false,
-                    vehicle: None,
-                }),
-            }
+            generic_number_lookup(conn, "north_america/united_states/california/santacruzmetro", &query.label).await
+        }
+        "vancouver-british-columbia-canada" => {
+            generic_number_lookup(conn, "north_america/canada/british_columbia/translink", &query.label).await
+        }
+        "rseaudetransportdelacapitalertc" => {
+            generic_number_lookup(conn, "north_america/canada/quebec/rtc", &query.label).await
+        }
+        "socitdetransportdemontral" => {
+            generic_number_lookup(conn, "north_america/canada/quebec/stm", &query.label).await
         }
         _ => HttpResponse::Ok().json(ResponseVehicleIndividual {
             found_data: false,
