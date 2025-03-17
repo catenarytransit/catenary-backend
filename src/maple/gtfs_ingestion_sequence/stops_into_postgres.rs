@@ -5,6 +5,7 @@
 use catenary::enum_to_int::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::stops::dsl::stops as stops_table;
+use crossbeam;
 use diesel_async::RunQueryDsl;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
@@ -26,7 +27,9 @@ pub async fn stops_into_postgres(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
-    for chunk in &gtfs.stops.iter().chunks(64) {
+    let mut stops_finished_chunks_array = Vec::new();
+
+    for chunk in &gtfs.stops.iter().chunks(128) {
         let mut insertable_stops = Vec::new();
 
         for (stop_id, stop) in chunk {
@@ -144,11 +147,23 @@ pub async fn stops_into_postgres(
             insertable_stops.push(stop_pg);
         }
 
-        diesel::insert_into(stops_table)
-            .values(insertable_stops)
-            .execute(conn)
-            .await?;
+        stops_finished_chunks_array.push(insertable_stops);
     }
+
+    conn.build_transaction()
+        .run::<(), diesel::result::Error, _>(|conn| {
+            Box::pin(async move {
+                for insertable_stops in stops_finished_chunks_array {
+                    diesel::insert_into(stops_table)
+                        .values(insertable_stops)
+                        .execute(conn)
+                        .await?;
+                }
+
+                Ok(())
+            })
+        })
+        .await?;
 
     Ok(())
 }
