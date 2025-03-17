@@ -454,5 +454,17 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
         }
     }
 
+    if feed_id == "f-gtfs~de" {
+        let username = std::env::var("DE_USERNAME");
+        let password = std::env::var("DE_PASSWORD");
+
+        if let Ok(username) = username {
+            if let Ok(password) = password {
+                println!("Password found for DE!");
+                request = request.basic_auth(username, Some(password));
+            }
+        }
+    }
+
     request.headers(headers)
 }
