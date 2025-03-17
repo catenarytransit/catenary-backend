@@ -109,7 +109,10 @@ pub fn flatten_feed(
     //extract file
     zip_extract::extract(Cursor::new(buf), &target_dir, true)?;
 
-    if feed_id == "f-uc~irvine~anteater~express" || feed_id == "f-9muq-lagunabeach~ca~us" {
+    if feed_id == "f-uc~irvine~anteater~express"
+        || feed_id == "f-9muq-lagunabeach~ca~us"
+        || feed_id == "f-los~angeles~international~airport~shuttle"
+    {
         remove_transloc_prefix(gtfs_uncompressed_temp_storage, feed_id);
     }
 

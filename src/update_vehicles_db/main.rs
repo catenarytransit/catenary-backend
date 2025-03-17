@@ -106,12 +106,11 @@ async fn main() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
                 println!("Cleaned Path: {:?}", cleaned_path);
 
-                let vehicle_data =
-                    vehicles
-                        .vehicles
-                        .iter()
-                        .map(|v| {
-                            v.roster.iter().map(|r| VehicleEntry {
+                let vehicle_data = vehicles
+                    .vehicles
+                    .iter()
+                    .map(|v| {
+                        v.roster.iter().map(|r| VehicleEntry {
                                 file_path: cleaned_path.to_string(),
                                 starting_range: r.fleet_selection.start_number.map(|x| x as i32),
                                 ending_range: r.fleet_selection.end_number.map(|x| x as i32),
@@ -148,9 +147,9 @@ async fn main() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                     v.model
                                 ),
                             })
-                        })
-                        .flatten()
-                        .collect::<Vec<_>>();
+                    })
+                    .flatten()
+                    .collect::<Vec<_>>();
 
                 //make a postgres transaction
 

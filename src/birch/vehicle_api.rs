@@ -30,16 +30,12 @@ async fn generic_number_lookup(
             diesel_async::AsyncPgConnection,
         >,
     >,
-    file_path: &str, label: &str) -> HttpResponse {
+    file_path: &str,
+    label: &str,
+) -> HttpResponse {
     match label.parse::<i32>() {
         Ok(vehicle_number) => {
-            match look_for_vehicle_number(
-                conn,
-                file_path,
-                vehicle_number,
-            )
-            .await
-            {
+            match look_for_vehicle_number(conn, file_path, vehicle_number).await {
                 Ok(vehicle) => HttpResponse::Ok().json(ResponseVehicleIndividual {
                     found_data: true,
                     vehicle,
@@ -122,19 +118,44 @@ pub async fn get_vehicle_data_endpoint(
             }
         }
         "northcountytransitdistrict" => {
-            generic_number_lookup(conn, "north_america/united_states/california/northcountytransitdistrict", &query.label).await
+            generic_number_lookup(
+                conn,
+                "north_america/united_states/california/northcountytransitdistrict",
+                &query.label,
+            )
+            .await
         }
         "orangecountytransportationauthority" => {
-           generic_number_lookup(conn, "north_america/united_states/california/orangecounty", &query.label).await
+            generic_number_lookup(
+                conn,
+                "north_america/united_states/california/orangecounty",
+                &query.label,
+            )
+            .await
         }
         "san-diego-mts" => {
-            generic_number_lookup(conn, "north_america/united_states/california/mts", &query.label).await
+            generic_number_lookup(
+                conn,
+                "north_america/united_states/california/mts",
+                &query.label,
+            )
+            .await
         }
         "santacruzmetro" => {
-            generic_number_lookup(conn, "north_america/united_states/california/santacruzmetro", &query.label).await
+            generic_number_lookup(
+                conn,
+                "north_america/united_states/california/santacruzmetro",
+                &query.label,
+            )
+            .await
         }
         "vancouver-british-columbia-canada" => {
-            generic_number_lookup(conn, "north_america/canada/british_columbia/translink", &query.label).await
+            generic_number_lookup(
+                conn,
+                "north_america/canada/british_columbia/translink",
+                &query.label,
+            )
+            .await
         }
         "rseaudetransportdelacapitalertc" => {
             generic_number_lookup(conn, "north_america/canada/quebec/rtc", &query.label).await
