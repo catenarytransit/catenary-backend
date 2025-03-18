@@ -76,7 +76,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut total_original_file_size = 0;
 
-    
     total_original_file_size += fs::metadata(new_unzipped_dir.join("trips.txt"))?.len();
     total_original_file_size += fs::metadata(new_unzipped_dir.join("stop_times.txt"))?.len();
 

@@ -821,21 +821,19 @@ pub async fn gtfs_process_feed(
         })
         .collect();
 
-    for routes_chunk in routes_pg.chunks(10000) {
-        conn.build_transaction()
-            .run::<(), diesel::result::Error, _>(|conn| {
-                Box::pin(async move {
-                    for route_chunk in routes_chunk.chunks(50) {
-                        diesel::insert_into(catenary::schema::gtfs::routes::dsl::routes)
-                            .values(route_chunk)
-                            .execute(conn)
-                            .await?;
-                    }
-                    Ok(())
-                })
+    conn.build_transaction()
+        .run::<(), diesel::result::Error, _>(|conn| {
+            Box::pin(async move {
+                for route_chunk in routes_pg.chunks(50) {
+                    diesel::insert_into(catenary::schema::gtfs::routes::dsl::routes)
+                        .values(route_chunk)
+                        .execute(conn)
+                        .await?;
+                }
+                Ok(())
             })
-            .await?;
-    }
+        })
+        .await?;
 
     println!("Routes inserted for {}", feed_id);
 

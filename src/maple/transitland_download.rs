@@ -12,10 +12,10 @@ use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use url::{ParseError, Url};
-use std::time::Instant;
 
 #[derive(Clone)]
 struct StaticFeedToDownload {
