@@ -34,6 +34,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     fs::create_dir_all(&new_unzipped_dir)?;
 
+    //wipe everything in the folder
+
+    for entry in fs::read_dir(&new_unzipped_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            fs::remove_dir_all(&path)?;
+        } else {
+            fs::remove_file(&path)?;
+        }
+    }
+
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
         let outpath = new_unzipped_dir.join(file.mangled_name());
@@ -64,32 +76,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut total_original_file_size = 0;
 
-    // fix stop_times.txt
-
-    let start_fix_stop_times = Instant::now();
-    let stop_times_input_path = new_unzipped_dir.join("stop_times.txt");
-    let stop_times_output_path = new_unzipped_dir.join("stop_times_fixed.txt");
-
-    fix_stop_times_headsigns(
-        &stop_times_input_path.to_string_lossy(),
-        &stop_times_output_path.to_string_lossy(),
-    )?;
-
-    let fix_stop_times_duration = Instant::now() - start_fix_stop_times;
-
-    println!(
-        "Fixed stop_times.txt in {:.3} seconds",
-        fix_stop_times_duration.as_secs_f64()
-    );
-
-    //move stop_times_fixed.txt to stop_times.txt
-
-    fs::rename(&stop_times_output_path, &stop_times_input_path)?;
+    
+    total_original_file_size += fs::metadata(new_unzipped_dir.join("trips.txt"))?.len();
+    total_original_file_size += fs::metadata(new_unzipped_dir.join("stop_times.txt"))?.len();
 
     // compress the folder
     let start_compress = Instant::now();
     let compressed_path = recomp_temp_dir.join("compressed.zip");
-    let mut compressed_file = fs::File::create(&compressed_path)?;
+    let compressed_file = fs::File::create(&compressed_path)?;
 
     let mut zip = zip::ZipWriter::new(&compressed_file);
 
@@ -123,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("Loading {}", path);
-    let gtfs_reader = gtfs_structures::GtfsReader::default().trim_fields(false);
+    let gtfs_reader = gtfs_structures::GtfsReader::default().trim_fields(true);
 
     let gtfs = gtfs_reader
         .read_from_path(&new_unzipped_dir)
