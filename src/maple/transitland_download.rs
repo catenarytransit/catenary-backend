@@ -201,7 +201,7 @@ pub async fn download_return_eligible_feeds(
                                 
                                 //calculate how long the download takes
                             let start = Instant::now();
-                            let current_unix_ms_time = start
+                            let current_unix_ms_time = std::time::SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .expect("Time went backwards")
                                 .as_millis();
