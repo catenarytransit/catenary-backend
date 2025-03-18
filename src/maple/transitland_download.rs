@@ -15,6 +15,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use url::{ParseError, Url};
+use std::time::Instant;
 
 #[derive(Clone)]
 struct StaticFeedToDownload {
