@@ -199,7 +199,7 @@ pub async fn download_return_eligible_feeds(
                            Ok(parse_url) => {
                                 
                                 //calculate how long the download takes
-                            let start = SystemTime::now();
+                            let start = Instant::now();
                             let current_unix_ms_time = start
                                 .duration_since(UNIX_EPOCH)
                                 .expect("Time went backwards")
@@ -219,9 +219,7 @@ pub async fn download_return_eligible_feeds(
                                 &parse_url,
                             ).await;
             
-                            let duration = SystemTime::now()
-                                .duration_since(start)
-                                .expect("Time went backwards");
+                            let duration = start.elapsed();
 
                             let duration_ms = duration.as_millis();
             
