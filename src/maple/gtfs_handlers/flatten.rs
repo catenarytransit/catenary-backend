@@ -175,7 +175,10 @@ pub fn flatten_feed(
         println!("Fixing stop_times.txt for Germany");
         let start_timer = std::time::Instant::now();
         catenary::fix_stop_times_headsigns(&stop_times_path, &stop_times_temp_path)?;
-        println!("Fixed stop times for Germany, took {:?}", start_timer.elapsed());
+        println!(
+            "Fixed stop times for Germany, took {:?}",
+            start_timer.elapsed()
+        );
 
         //delete old stop_times.txt
         fs::remove_file(&stop_times_path)?;

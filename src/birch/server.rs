@@ -68,8 +68,8 @@ mod route_info;
 use rand::Rng;
 mod terrain_tiles_proxy;
 use terrain_tiles_proxy::proxy_for_maptiler_terrain_tiles;
-mod vehicle_api;
 mod block_api;
+mod vehicle_api;
 
 #[derive(Clone, Debug)]
 struct ChateauCache {
