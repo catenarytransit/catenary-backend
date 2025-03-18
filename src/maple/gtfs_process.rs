@@ -600,7 +600,7 @@ pub async fn gtfs_process_feed(
 
     println!("Directions inserted for {}", feed_id);
     println!("Inserting itineraries for {}", feed_id);
-    for group in &reduction.itineraries.iter().chunks(20000) {
+    for group in &reduction.itineraries.iter().chunks(100000) {
         let mut t_final: Vec<catenary::models::ItineraryPatternMeta> = vec![];
         let mut t_rows: Vec<Vec<catenary::models::ItineraryPatternRow>> = vec![];
 
