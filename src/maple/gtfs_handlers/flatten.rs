@@ -95,16 +95,16 @@ pub fn flatten_feed(
 ) -> Result<(), Box<dyn Error>> {
     let _ = fs::create_dir(gtfs_uncompressed_temp_storage);
 
-    let source_path = format!("{}/{}.zip", gtfs_temp_storage, feed_id);
-    let target_path = format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id);
+    let source_path = format!("{}/{}.zip", &gtfs_temp_storage, &feed_id);
+    let target_path = format!("{}/{}", &gtfs_uncompressed_temp_storage, &feed_id);
 
     // Attempt to open file and pass back error if failed
-    let mut file = File::open(source_path)?;
+    let mut file = File::open(&source_path)?;
     let mut buf: Vec<u8> = vec![];
 
     // read bytes and pass back error if unable to read
     let read = file.read_to_end(&mut buf)?;
-    let target_dir = PathBuf::from(target_path);
+    let target_dir = PathBuf::from(&target_path);
 
     //extract file
     zip_extract::extract(Cursor::new(buf), &target_dir, true)?;
@@ -164,6 +164,24 @@ pub fn flatten_feed(
         }
 
         subfolder_answer?;
+    }
+
+    //fix stop times for germany
+
+    if feed_id == "f-gtfs~de" {
+        let mut stop_times_path = format!("{}/stop_times.txt", &target_path);
+        let mut stop_times_temp_path = format!("{}/stop_times_temp.txt", &target_path);
+
+        println!("Fixing stop_times.txt for Germany");
+        let start_timer = std::time::Instant::now();
+        catenary::fix_stop_times_headsigns(&stop_times_path, &stop_times_temp_path)?;
+        println!("Fixed stop times for Germany, took {:?}", start_timer.elapsed());
+
+        //delete old stop_times.txt
+        fs::remove_file(&stop_times_path)?;
+
+        //rename stop_times_temp.txt to stop_times.txt
+        fs::rename(&stop_times_temp_path, &stop_times_path)?;
     }
 
     Ok(())

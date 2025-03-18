@@ -74,11 +74,108 @@ use crate::rt_recent_history::*;
 pub mod schedule_filtering;
 pub mod tile_save_and_get;
 pub mod timestamp_extraction;
+use csv::ReaderBuilder;
+use csv::StringRecord;
+use csv::WriterBuilder;
 use flate2::Compression;
 use serde::Deserialize;
 use serde::Serialize;
 use std::io::Cursor;
 use std::io::{Read, Write};
+use std::path::PathBuf;
+use std::{fs::File, io::BufReader, io::BufWriter};
+
+pub fn fix_stop_times_headsigns(
+    input_path: &str,
+    output_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let input_file = File::open(input_path)?;
+    let output_file = File::create(output_path)?;
+    let input_reader = BufReader::new(input_file);
+    let mut output_writer = WriterBuilder::new().from_writer(BufWriter::new(output_file));
+
+    let mut csv_reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(input_reader);
+
+    let headers = csv_reader.headers()?.clone();
+    let mut output_headers = Vec::new();
+    let mut stop_headsign_index: Option<usize> = None;
+    for (i, header) in headers.into_iter().enumerate() {
+        if header == "stop_headsign" {
+            stop_headsign_index = Some(i);
+        } else {
+            output_headers.push(header);
+        }
+    }
+    output_writer.write_record(&output_headers)?;
+
+    let mut current_trip_id: Option<String> = None;
+    let mut current_trip_rows: Vec<StringRecord> = Vec::new();
+    let mut current_trip_headsigns: Vec<String> = Vec::new();
+
+    for result in csv_reader.records() {
+        let record = result?;
+        if record.len() < 8 {
+            continue; // Skip malformed records
+        }
+        let trip_id = &record[0];
+        let stop_headsign = &record[5];
+
+        if current_trip_id.is_none() || current_trip_id.as_ref().unwrap() != trip_id {
+            // Process the previous trip
+            if let Some(prev_trip_id) = current_trip_id {
+                let all_headsigns_same = current_trip_headsigns.windows(2).all(|w| w[0] == w[1]);
+                if all_headsigns_same && !current_trip_headsigns.is_empty() {
+                    for row in &current_trip_rows {
+                        let mut output_record = Vec::new();
+                        for (i, field) in row.iter().enumerate() {
+                            if Some(i) != stop_headsign_index {
+                                output_record.push(field);
+                            }
+                        }
+                        output_writer.write_record(&output_record)?;
+                    }
+                } else {
+                    for row in &current_trip_rows {
+                        output_writer.write_record(row)?;
+                    }
+                }
+            }
+
+            // Start a new trip
+            current_trip_id = Some(trip_id.to_string());
+            current_trip_rows.clear();
+            current_trip_headsigns.clear();
+        }
+
+        current_trip_rows.push(record.clone()); // Added .clone() here
+        current_trip_headsigns.push(stop_headsign.to_string());
+    }
+
+    // Process the last trip
+    if let Some(prev_trip_id) = current_trip_id {
+        let all_headsigns_same = current_trip_headsigns.windows(2).all(|w| w[0] == w[1]);
+        if all_headsigns_same && !current_trip_headsigns.is_empty() {
+            for row in &current_trip_rows {
+                let mut output_record = Vec::new();
+                for (i, field) in row.iter().enumerate() {
+                    if Some(i) != stop_headsign_index {
+                        output_record.push(field);
+                    }
+                }
+                output_writer.write_record(&output_record)?;
+            }
+        } else {
+            for row in &current_trip_rows {
+                output_writer.write_record(row)?;
+            }
+        }
+    }
+
+    output_writer.flush()?;
+    Ok(())
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ChateauDataNoGeometry {

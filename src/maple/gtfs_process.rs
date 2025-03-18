@@ -33,6 +33,7 @@ use gtfs_structures::FeedInfo;
 use gtfs_structures::Gtfs;
 use gtfs_translations::TranslationResult;
 use gtfs_translations::translation_csv_text_to_translations;
+use itertools::Itertools;
 use prost::Message;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -422,281 +423,288 @@ pub async fn gtfs_process_feed(
 
     println!("Inserting directions for {}", feed_id);
 
-    let mut d_final: Vec<DirectionPatternMeta> = vec![];
+    for group in &reduction.direction_patterns.iter().chunks(100000) {
+        let mut d_final: Vec<DirectionPatternMeta> = vec![];
 
-    let mut d_rows: Vec<Vec<DirectionPatternRow>> = vec![];
+        let mut d_rows: Vec<Vec<DirectionPatternRow>> = vec![];
 
-    for (direction_pattern_id, direction_pattern) in &reduction.direction_patterns {
-        let gtfs_shape_id = match &direction_pattern.gtfs_shape_id {
-            Some(gtfs_shape_id) => gtfs_shape_id.clone(),
-            None => direction_pattern_id.to_string(),
-        };
+        for (direction_pattern_id, direction_pattern) in group {
+            let gtfs_shape_id = match &direction_pattern.gtfs_shape_id {
+                Some(gtfs_shape_id) => gtfs_shape_id.clone(),
+                None => direction_pattern_id.to_string(),
+            };
 
-        let first_itin_id = reduction
-            .direction_pattern_id_to_itineraries
-            .get(direction_pattern_id)
-            .unwrap()
-            .iter()
-            .next()
-            .expect("Expected Itin for direction id");
-
-        let itin_pattern = reduction
-            .itineraries
-            .get(first_itin_id)
-            .expect("Did not find itin pattern, crashing....");
-
-        if direction_pattern.gtfs_shape_id.is_none() {
-            //: postgis_diesel::types::LineString<postgis_diesel::types::Point>
-
-            let stop_points = direction_pattern
-                .stop_sequence
+            let first_itin_id = reduction
+                .direction_pattern_id_to_itineraries
+                .get(direction_pattern_id)
+                .unwrap()
                 .iter()
-                .filter_map(|stop_id| gtfs.stops.get(stop_id.as_str()))
-                .filter_map(|stop| match (stop.latitude, stop.longitude) {
-                    (Some(latitude), Some(longitude)) => Some(postgis_diesel::types::Point {
-                        y: latitude,
-                        x: longitude,
-                        srid: Some(4326),
-                    }),
-                    _ => None,
-                })
-                .collect::<Vec<postgis_diesel::types::Point>>();
+                .next()
+                .expect("Expected Itin for direction id");
 
-            if stop_points.len() > 2 {
-                let linestring: postgis_diesel::types::LineString<postgis_diesel::types::Point> =
-                    postgis_diesel::types::LineString {
+            let itin_pattern = reduction
+                .itineraries
+                .get(first_itin_id)
+                .expect("Did not find itin pattern, crashing....");
+
+            if direction_pattern.gtfs_shape_id.is_none() {
+                //: postgis_diesel::types::LineString<postgis_diesel::types::Point>
+
+                let stop_points = direction_pattern
+                    .stop_sequence
+                    .iter()
+                    .filter_map(|stop_id| gtfs.stops.get(stop_id.as_str()))
+                    .filter_map(|stop| match (stop.latitude, stop.longitude) {
+                        (Some(latitude), Some(longitude)) => Some(postgis_diesel::types::Point {
+                            y: latitude,
+                            x: longitude,
+                            srid: Some(4326),
+                        }),
+                        _ => None,
+                    })
+                    .collect::<Vec<postgis_diesel::types::Point>>();
+
+                if stop_points.len() > 2 {
+                    let linestring: postgis_diesel::types::LineString<
+                        postgis_diesel::types::Point,
+                    > = postgis_diesel::types::LineString {
                         points: stop_points,
                         srid: Some(4326),
                     };
 
-                //insert into shapes and shapes_not_bus
+                    //insert into shapes and shapes_not_bus
 
-                let route = gtfs.routes.get(direction_pattern.route_id.as_str());
+                    let route = gtfs.routes.get(direction_pattern.route_id.as_str());
 
-                if let Some(route) = route {
-                    let _ = insert_stop_to_stop_geometry(
-                        feed_id,
-                        attempt_id,
-                        chateau_id,
-                        route,
-                        *direction_pattern_id,
-                        &linestring,
-                        Arc::clone(&arc_conn_pool),
-                    )
-                    .await;
+                    if let Some(route) = route {
+                        let _ = insert_stop_to_stop_geometry(
+                            feed_id,
+                            attempt_id,
+                            chateau_id,
+                            route,
+                            *direction_pattern_id,
+                            &linestring,
+                            Arc::clone(&arc_conn_pool),
+                        )
+                        .await;
+                    }
                 }
+            }
+
+            let direction_pattern_meta = DirectionPatternMeta {
+                chateau: chateau_id.to_string(),
+                direction_pattern_id: direction_pattern_id.to_string(),
+                headsign_or_destination: match chateau_id {
+                    "santacruzmetro" => match &direction_pattern.stop_headsigns_unique_list {
+                        Some(list) => list.join(","),
+                        _ => itin_pattern
+                            .stop_sequences
+                            .last()
+                            .and_then(|x| x.stop_headsign.clone())
+                            .unwrap_or_else(|| "".to_string()),
+                    },
+                    "montebellobuslines" => gtfs
+                        .stops
+                        .get(itin_pattern.stop_sequences.last().unwrap().stop_id.as_str())
+                        .as_deref()
+                        .unwrap()
+                        .name
+                        .clone()
+                        .unwrap_or_default(),
+                    _ => direction_pattern
+                        .headsign_or_destination
+                        .clone()
+                        .unwrap_or_else(|| "".to_string()),
+                },
+                gtfs_shape_id: Some(gtfs_shape_id.clone()),
+                fake_shape: direction_pattern.gtfs_shape_id.is_none(),
+                onestop_feed_id: feed_id.to_string(),
+                attempt_id: attempt_id.to_string(),
+                route_id: Some(itin_pattern.route_id.clone()),
+                route_type: Some(itin_pattern.route_type),
+                direction_id: itin_pattern.direction_id,
+                stop_headsigns_unique_list: itin_pattern.stop_headsigns_unique_list.as_ref().map(
+                    |x| {
+                        x.into_iter()
+                            .map(|x| Some(x.to_string()))
+                            .collect::<Vec<Option<String>>>()
+                    },
+                ),
+            };
+
+            d_final.push(direction_pattern_meta);
+
+            //insert stop list into DirectionPatternRow
+
+            let direction_pattern_rows: Vec<DirectionPatternRow> = itin_pattern
+                .stop_sequences
+                .iter()
+                .enumerate()
+                .map(|(stop_idx, stop_time)| DirectionPatternRow {
+                    attempt_id: attempt_id.to_string(),
+                    chateau: chateau_id.to_string(),
+                    direction_pattern_id: direction_pattern_id.to_string(),
+                    stop_id: stop_time.stop_id.clone(),
+                    stop_sequence: stop_idx as u32,
+                    onestop_feed_id: feed_id.to_string(),
+                    arrival_time_since_start: stop_time.arrival_time_since_start,
+                    departure_time_since_start: stop_time.departure_time_since_start,
+                    interpolated_time_since_start: stop_time.interpolated_time_since_start,
+                    stop_headsign_idx: match &stop_time.stop_headsign {
+                        Some(this_stop_headsign) => direction_pattern
+                            .stop_headsigns_unique_list
+                            .as_ref()
+                            .map(|direction_headsigns| {
+                                direction_headsigns
+                                    .iter()
+                                    .position(|x| x == this_stop_headsign)
+                                    .map(|x| x as i16)
+                            })
+                            .flatten(),
+                        None => None,
+                    },
+                })
+                .collect();
+
+            for dir_chunk in direction_pattern_rows.chunks(50) {
+                d_rows.push(dir_chunk.to_vec());
             }
         }
 
-        let direction_pattern_meta = DirectionPatternMeta {
-            chateau: chateau_id.to_string(),
-            direction_pattern_id: direction_pattern_id.to_string(),
-            headsign_or_destination: match chateau_id {
-                "santacruzmetro" => match &direction_pattern.stop_headsigns_unique_list {
-                    Some(list) => list.join(","),
-                    _ => itin_pattern
-                        .stop_sequences
-                        .last()
-                        .and_then(|x| x.stop_headsign.clone())
-                        .unwrap_or_else(|| "".to_string()),
-                },
-                "montebellobuslines" => gtfs
-                    .stops
-                    .get(itin_pattern.stop_sequences.last().unwrap().stop_id.as_str())
-                    .as_deref()
-                    .unwrap()
-                    .name
-                    .clone()
-                    .unwrap_or_default(),
-                _ => direction_pattern
-                    .headsign_or_destination
-                    .clone()
-                    .unwrap_or_else(|| "".to_string()),
-            },
-            gtfs_shape_id: Some(gtfs_shape_id.clone()),
-            fake_shape: direction_pattern.gtfs_shape_id.is_none(),
-            onestop_feed_id: feed_id.to_string(),
-            attempt_id: attempt_id.to_string(),
-            route_id: Some(itin_pattern.route_id.clone()),
-            route_type: Some(itin_pattern.route_type),
-            direction_id: itin_pattern.direction_id,
-            stop_headsigns_unique_list: itin_pattern.stop_headsigns_unique_list.as_ref().map(|x| {
-                x.into_iter()
-                    .map(|x| Some(x.to_string()))
-                    .collect::<Vec<Option<String>>>()
-            }),
-        };
-
-        d_final.push(direction_pattern_meta);
-
-        //insert stop list into DirectionPatternRow
-
-        let direction_pattern_rows: Vec<DirectionPatternRow> = itin_pattern
-            .stop_sequences
-            .iter()
-            .enumerate()
-            .map(|(stop_idx, stop_time)| DirectionPatternRow {
-                attempt_id: attempt_id.to_string(),
-                chateau: chateau_id.to_string(),
-                direction_pattern_id: direction_pattern_id.to_string(),
-                stop_id: stop_time.stop_id.clone(),
-                stop_sequence: stop_idx as u32,
-                onestop_feed_id: feed_id.to_string(),
-                arrival_time_since_start: stop_time.arrival_time_since_start,
-                departure_time_since_start: stop_time.departure_time_since_start,
-                interpolated_time_since_start: stop_time.interpolated_time_since_start,
-                stop_headsign_idx: match &stop_time.stop_headsign {
-                    Some(this_stop_headsign) => direction_pattern
-                        .stop_headsigns_unique_list
-                        .as_ref()
-                        .map(|direction_headsigns| {
-                            direction_headsigns
-                                .iter()
-                                .position(|x| x == this_stop_headsign)
-                                .map(|x| x as i16)
-                        })
-                        .flatten(),
-                    None => None,
-                },
+        conn.build_transaction()
+            .run::<(), diesel::result::Error, _>(|conn| {
+                Box::pin(async move {
+                    for dir_chunk in d_final.chunks(50) {
+                        diesel::insert_into(
+                            catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta,
+                        )
+                        .values(dir_chunk)
+                        .execute(conn)
+                        .await?;
+                    }
+    
+                    for dir_chunk in d_rows {
+                        diesel::insert_into(
+                            catenary::schema::gtfs::direction_pattern::dsl::direction_pattern,
+                        )
+                        .values(dir_chunk)
+                        .execute(conn)
+                        .await?;
+                    }
+    
+                    Ok(())
+                })
             })
-            .collect();
-
-        for dir_chunk in direction_pattern_rows.chunks(50) {
-            d_rows.push(dir_chunk.to_vec());
-        }
+            .await?;
     }
-
-    conn.build_transaction()
-        .run::<(), diesel::result::Error, _>(|conn| {
-            Box::pin(async move {
-                for dir_chunk in d_final.chunks(50) {
-                    diesel::insert_into(
-                        catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta,
-                    )
-                    .values(dir_chunk)
-                    .execute(conn)
-                    .await?;
-                }
-
-                for dir_chunk in d_rows {
-                    diesel::insert_into(
-                        catenary::schema::gtfs::direction_pattern::dsl::direction_pattern,
-                    )
-                    .values(dir_chunk)
-                    .execute(conn)
-                    .await?;
-                }
-
-                Ok(())
-            })
-        })
-        .await?;
 
     println!("Directions inserted for {}", feed_id);
     println!("Inserting itineraries for {}", feed_id);
+    for group in &reduction.itineraries.iter().chunks(20000) {
+        let mut t_final: Vec<catenary::models::ItineraryPatternMeta> = vec![];
+        let mut t_rows: Vec<Vec<catenary::models::ItineraryPatternRow>> = vec![];
 
-    let mut t_final: Vec<catenary::models::ItineraryPatternMeta> = vec![];
-    let mut t_rows: Vec<Vec<catenary::models::ItineraryPatternRow>> = vec![];
-
-    for (itinerary_id, itinerary) in &reduction.itineraries {
-        let itinerary_pg_meta = ItineraryPatternMeta {
-            onestop_feed_id: feed_id.to_string(),
-            chateau: chateau_id.to_string(),
-            attempt_id: attempt_id.to_string(),
-            timezone: itinerary.timezone.clone(),
-            trip_headsign: match chateau_id {
-                "santacruzmetro" => match &itinerary.stop_headsigns_unique_list {
-                    None => itinerary
-                        .stop_sequences
-                        .last()
-                        .and_then(|x| x.stop_headsign.clone()),
-                    Some(list) => Some(list.join(",")),
-                },
-                "montebellobuslines" => gtfs
-                    .stops
-                    .get(itinerary.stop_sequences.last().unwrap().stop_id.as_str())
-                    .as_deref()
-                    .unwrap()
-                    .name
-                    .clone(),
-                _ => itinerary
-                    .trip_headsign
-                    .clone()
-                    .map(|x| x.replace(" - Funded in part by/SB County Measure A", "")),
-            },
-            trip_headsign_translations: None,
-            itinerary_pattern_id: itinerary_id.to_string(),
-            trip_ids: reduction
-                .itineraries_to_trips
-                .get(itinerary_id)
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(|trip_under_itin| Some(trip_under_itin.trip_id.to_string()))
-                .collect::<Vec<Option<String>>>(),
-            shape_id: itinerary.shape_id.clone(),
-            route_id: itinerary.route_id.clone(),
-            direction_pattern_id: Some(itinerary.direction_pattern_id.to_string()),
-        };
-
-        t_final.push(itinerary_pg_meta);
-
-        let itinerary_pg = itinerary
-            .stop_sequences
-            .iter()
-            .enumerate()
-            .map(|(stop_index, stop_sequence)| ItineraryPatternRow {
+        for (itinerary_id, itinerary) in group {
+            let itinerary_pg_meta = ItineraryPatternMeta {
                 onestop_feed_id: feed_id.to_string(),
                 chateau: chateau_id.to_string(),
                 attempt_id: attempt_id.to_string(),
-                itinerary_pattern_id: itinerary_id.to_string(),
-                stop_sequence: stop_index as i32,
-                stop_id: stop_sequence.stop_id.clone(),
-                gtfs_stop_sequence: stop_sequence.gtfs_stop_sequence as u32,
-                arrival_time_since_start: stop_sequence.arrival_time_since_start,
-                departure_time_since_start: stop_sequence.departure_time_since_start,
-                interpolated_time_since_start: stop_sequence.interpolated_time_since_start,
-                timepoint: stop_sequence.timepoint.into(),
-                stop_headsign_idx: match stop_sequence.stop_headsign {
-                    Some(ref stop_headsign) => itinerary
-                        .stop_headsigns_unique_list
-                        .as_ref()
-                        .and_then(|x| x.iter().position(|x| x == stop_headsign).map(|x| x as i16)),
-                    None => None,
+                timezone: itinerary.timezone.clone(),
+                trip_headsign: match chateau_id {
+                    "santacruzmetro" => match &itinerary.stop_headsigns_unique_list {
+                        None => itinerary
+                            .stop_sequences
+                            .last()
+                            .and_then(|x| x.stop_headsign.clone()),
+                        Some(list) => Some(list.join(",")),
+                    },
+                    "montebellobuslines" => gtfs
+                        .stops
+                        .get(itinerary.stop_sequences.last().unwrap().stop_id.as_str())
+                        .as_deref()
+                        .unwrap()
+                        .name
+                        .clone(),
+                    _ => itinerary
+                        .trip_headsign
+                        .clone()
+                        .map(|x| x.replace(" - Funded in part by/SB County Measure A", "")),
                 },
-            })
-            .collect::<Vec<_>>();
+                trip_headsign_translations: None,
+                itinerary_pattern_id: itinerary_id.to_string(),
+                trip_ids: reduction
+                    .itineraries_to_trips
+                    .get(itinerary_id)
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|trip_under_itin| Some(trip_under_itin.trip_id.to_string()))
+                    .collect::<Vec<Option<String>>>(),
+                shape_id: itinerary.shape_id.clone(),
+                route_id: itinerary.route_id.clone(),
+                direction_pattern_id: Some(itinerary.direction_pattern_id.to_string()),
+            };
 
-        for itinerary_chunk in itinerary_pg.chunks(50) {
-            t_rows.push(itinerary_chunk.to_vec());
+            t_final.push(itinerary_pg_meta);
+
+            let itinerary_pg = itinerary
+                .stop_sequences
+                .iter()
+                .enumerate()
+                .map(|(stop_index, stop_sequence)| ItineraryPatternRow {
+                    onestop_feed_id: feed_id.to_string(),
+                    chateau: chateau_id.to_string(),
+                    attempt_id: attempt_id.to_string(),
+                    itinerary_pattern_id: itinerary_id.to_string(),
+                    stop_sequence: stop_index as i32,
+                    stop_id: stop_sequence.stop_id.clone(),
+                    gtfs_stop_sequence: stop_sequence.gtfs_stop_sequence as u32,
+                    arrival_time_since_start: stop_sequence.arrival_time_since_start,
+                    departure_time_since_start: stop_sequence.departure_time_since_start,
+                    interpolated_time_since_start: stop_sequence.interpolated_time_since_start,
+                    timepoint: stop_sequence.timepoint.into(),
+                    stop_headsign_idx: match stop_sequence.stop_headsign {
+                        Some(ref stop_headsign) => {
+                            itinerary.stop_headsigns_unique_list.as_ref().and_then(|x| {
+                                x.iter().position(|x| x == stop_headsign).map(|x| x as i16)
+                            })
+                        }
+                        None => None,
+                    },
+                })
+                .collect::<Vec<_>>();
+
+            for itinerary_chunk in itinerary_pg.chunks(50) {
+                t_rows.push(itinerary_chunk.to_vec());
+            }
         }
-    }
 
-    conn.build_transaction()
-        .run::<(), diesel::result::Error, _>(|conn| {
-            Box::pin(async move {
-                for itinerary_chunk in t_final.chunks(50) {
-                    diesel::insert_into(
-                        catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta,
-                    )
-                    .values(itinerary_chunk)
-                    .execute(conn)
-                    .await?;
-                }
+        conn.build_transaction()
+            .run::<(), diesel::result::Error, _>(|conn| {
+                Box::pin(async move {
+                    for itinerary_chunk in t_final.chunks(50) {
+                        diesel::insert_into(
+                            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta,
+                        )
+                        .values(itinerary_chunk)
+                        .execute(conn)
+                        .await?;
+                    }
 
-                for itinerary_chunk in t_rows {
-                    diesel::insert_into(
-                        catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern,
-                    )
-                    .values(&itinerary_chunk)
-                    .execute(conn)
-                    .await?;
-                }
+                    for itinerary_chunk in t_rows {
+                        diesel::insert_into(
+                            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern,
+                        )
+                        .values(&itinerary_chunk)
+                        .execute(conn)
+                        .await?;
+                    }
 
-                Ok(())
+                    Ok(())
+                })
             })
-        })
-        .await?;
+            .await?;
+    }
 
     println!("Itineraries inserted for {}", feed_id);
 
@@ -704,62 +712,63 @@ pub async fn gtfs_process_feed(
 
     println!("Inserting trips for {}", feed_id);
 
-    let mut t_final: Vec<Vec<catenary::models::CompressedTrip>> = vec![];
+    for group in &reduction.itineraries_to_trips.iter().chunks(100000) {
+        let mut t_final: Vec<Vec<catenary::models::CompressedTrip>> = vec![];
+        for (itinerary_id, compressed_trip_list) in group {
+            let trip_pg = compressed_trip_list
+                .iter()
+                .map(|compressed_trip_raw| catenary::models::CompressedTrip {
+                    onestop_feed_id: feed_id.to_string(),
+                    chateau: chateau_id.to_string(),
+                    attempt_id: attempt_id.to_string(),
+                    itinerary_pattern_id: itinerary_id.to_string(),
+                    trip_id: compressed_trip_raw.trip_id.to_string(),
+                    service_id: compressed_trip_raw.service_id.clone(),
+                    direction_id: reduction
+                        .itineraries
+                        .get(itinerary_id)
+                        .unwrap()
+                        .direction_id,
+                    start_time: compressed_trip_raw.start_time,
+                    trip_short_name: compressed_trip_raw.trip_short_name.clone(),
+                    block_id: compressed_trip_raw.block_id.clone(),
+                    wheelchair_accessible: compressed_trip_raw.wheelchair_accessible,
+                    bikes_allowed: compressed_trip_raw.bikes_allowed,
+                    has_frequencies: !compressed_trip_raw.frequencies.is_empty(),
+                    route_id: route_id_transform(feed_id, compressed_trip_raw.route_id.clone()),
+                    frequencies: match !compressed_trip_raw.frequencies.is_empty() {
+                        true => {
+                            let prost_message =
+                                frequencies_to_protobuf(&compressed_trip_raw.frequencies);
+                            Some(prost_message.encode_to_vec())
+                        }
+                        false => None,
+                    },
+                })
+                .collect::<Vec<_>>();
 
-    for (itinerary_id, compressed_trip_list) in &reduction.itineraries_to_trips {
-        let trip_pg = compressed_trip_list
-            .iter()
-            .map(|compressed_trip_raw| catenary::models::CompressedTrip {
-                onestop_feed_id: feed_id.to_string(),
-                chateau: chateau_id.to_string(),
-                attempt_id: attempt_id.to_string(),
-                itinerary_pattern_id: itinerary_id.to_string(),
-                trip_id: compressed_trip_raw.trip_id.to_string(),
-                service_id: compressed_trip_raw.service_id.clone(),
-                direction_id: reduction
-                    .itineraries
-                    .get(itinerary_id)
-                    .unwrap()
-                    .direction_id,
-                start_time: compressed_trip_raw.start_time,
-                trip_short_name: compressed_trip_raw.trip_short_name.clone(),
-                block_id: compressed_trip_raw.block_id.clone(),
-                wheelchair_accessible: compressed_trip_raw.wheelchair_accessible,
-                bikes_allowed: compressed_trip_raw.bikes_allowed,
-                has_frequencies: !compressed_trip_raw.frequencies.is_empty(),
-                route_id: route_id_transform(feed_id, compressed_trip_raw.route_id.clone()),
-                frequencies: match !compressed_trip_raw.frequencies.is_empty() {
-                    true => {
-                        let prost_message =
-                            frequencies_to_protobuf(&compressed_trip_raw.frequencies);
-                        Some(prost_message.encode_to_vec())
-                    }
-                    false => None,
-                },
-            })
-            .collect::<Vec<_>>();
-
-        for trip_chunk in trip_pg.chunks(50) {
-            t_final.push(trip_chunk.to_vec());
+            for trip_chunk in trip_pg.chunks(50) {
+                t_final.push(trip_chunk.to_vec());
+            }
         }
-    }
 
-    conn.build_transaction()
-        .run::<(), diesel::result::Error, _>(|conn| {
-            Box::pin(async move {
-                for trip_chunk in t_final {
-                    diesel::insert_into(
-                        catenary::schema::gtfs::trips_compressed::dsl::trips_compressed,
-                    )
-                    .values(trip_chunk)
-                    .execute(conn)
-                    .await?;
-                }
+        conn.build_transaction()
+            .run::<(), diesel::result::Error, _>(|conn| {
+                Box::pin(async move {
+                    for trip_chunk in t_final {
+                        diesel::insert_into(
+                            catenary::schema::gtfs::trips_compressed::dsl::trips_compressed,
+                        )
+                        .values(trip_chunk)
+                        .execute(conn)
+                        .await?;
+                    }
 
-                Ok(())
+                    Ok(())
+                })
             })
-        })
-        .await?;
+            .await?;
+    }
 
     //insert routes
 
@@ -812,10 +821,19 @@ pub async fn gtfs_process_feed(
         })
         .collect();
 
-    for routes_chunk in routes_pg.chunks(50) {
-        diesel::insert_into(catenary::schema::gtfs::routes::dsl::routes)
-            .values(routes_chunk)
-            .execute(conn)
+    for routes_chunk in routes_pg.chunks(10000) {
+        conn.build_transaction()
+            .run::<(), diesel::result::Error, _>(|conn| {
+                Box::pin(async move {
+                    for route_chunk in routes_chunk.chunks(50) {
+                        diesel::insert_into(catenary::schema::gtfs::routes::dsl::routes)
+                            .values(route_chunk)
+                            .execute(conn)
+                            .await?;
+                    }
+                    Ok(())
+                })
+            })
             .await?;
     }
 

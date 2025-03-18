@@ -18,7 +18,7 @@ lazy_static! {
     static ref FINDER: DefaultFinder = DefaultFinder::new();
 }
 
-#[derive(Hash, Clone, Debug)]
+#[derive(Hash, Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ItineraryCover {
     pub stop_sequences: Vec<StopDifference>,
     //map 0 to false and 1 to true
@@ -33,7 +33,7 @@ pub struct ItineraryCover {
     pub stop_headsigns_unique_list: Option<Vec<String>>,
 }
 
-#[derive(Hash, Debug, Clone, PartialEq, Eq)]
+#[derive(Hash, Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StopDifference {
     pub stop_id: CompactString,
     pub arrival_time_since_start: Option<i32>,
@@ -50,6 +50,7 @@ pub struct StopDifference {
     pub gtfs_stop_sequence: u32,
 }
 
+#[derive(Clone, Debug, Serialize)]
 pub struct DirectionPattern {
     pub direction_id: Option<bool>,
     pub stop_sequence: Vec<CompactString>,
@@ -61,7 +62,7 @@ pub struct DirectionPattern {
     pub stop_headsigns_unique_list: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct TripUnderItinerary {
     pub trip_id: CompactString,
     pub start_time: u32,
@@ -74,6 +75,7 @@ pub struct TripUnderItinerary {
     pub route_id: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
 pub struct ResponseFromReduce {
     pub itineraries: AHashMap<u64, ItineraryCover>,
     pub trips_to_itineraries: AHashMap<CompactString, u64>,
