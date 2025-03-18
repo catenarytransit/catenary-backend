@@ -117,6 +117,14 @@ pub async fn get_vehicle_data_endpoint(
                 }
             }
         }
+        "longbeachtransit" => {
+            generic_number_lookup(
+                conn,
+                "north_america/united_states/california/longbeach",
+                &query.label,
+            )
+            .await
+        }
         "northcountytransitdistrict" => {
             generic_number_lookup(
                 conn,
