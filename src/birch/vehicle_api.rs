@@ -171,6 +171,14 @@ pub async fn get_vehicle_data_endpoint(
         "socitdetransportdemontral" => {
             generic_number_lookup(conn, "north_america/canada/quebec/stm", &query.label).await
         }
+        "nyct" => {
+            generic_number_lookup(
+                conn,
+                "north_america/united_states/new_york/mta_buses",
+                &query.label,
+            )
+            .await
+        }
         _ => HttpResponse::Ok().json(ResponseVehicleIndividual {
             found_data: false,
             vehicle: None,
