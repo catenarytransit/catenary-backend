@@ -144,7 +144,8 @@ async fn main() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                             .unwrap_or("".to_string()),
                                     },
                                     v.manufacturer,
-                                    v.model
+                                    v.model,
+
                                 ),
                             })
                     })

@@ -172,7 +172,11 @@ pub async fn get_vehicle_data_endpoint(
             generic_number_lookup(conn, "north_america/canada/quebec/stm", &query.label).await
         }
         "nyct" => {
-            let only_numbers = query.label.chars().filter(|x| x.is_numeric()).collect::<String>();
+            let only_numbers = query
+                .label
+                .chars()
+                .filter(|x| x.is_numeric())
+                .collect::<String>();
 
             generic_number_lookup(
                 conn,

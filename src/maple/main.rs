@@ -42,7 +42,7 @@ use std::error::Error;
 use std::fs;
 mod delete_overlapping_feeds_dmfr;
 use std::sync::Arc;
-
+pub mod correction_of_transfers;
 use crate::cleanup::delete_attempt_objects;
 use crate::cleanup::wipe_whole_feed;
 

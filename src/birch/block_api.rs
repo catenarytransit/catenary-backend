@@ -5,6 +5,7 @@ use catenary::EtcdConnectionIps;
 use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
+use compact_str::CompactString;
 use diesel::SelectableHelper;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
@@ -60,6 +61,35 @@ pub async fn block_api(
         .unique()
         .map(|x| x.clone())
         .collect::<BTreeSet<String>>();
+
+    let itin_rows = catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+        .filter(
+            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id
+                .eq_any(&itin_id_list),
+        )
+        .filter(catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(&query.chateau))
+        .select(catenary::models::ItineraryPatternRow::as_select())
+        .load(conn)
+        .await
+        .unwrap();
+
+    let itin_metas = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+        .filter(
+            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_id
+                .eq_any(&itin_id_list),
+        )
+        .filter(catenary::schema::gtfs::itinerary_pattern_meta::dsl::chateau.eq(&query.chateau))
+        .select(catenary::models::ItineraryPatternMeta::as_select())
+        .load(conn)
+        .await
+        .unwrap();
+
+    let service_ids = trips
+        .iter()
+        .map(|x| &x.service_id)
+        .unique()
+        .map(|x| x.clone())
+        .collect::<BTreeSet<CompactString>>();
 
     HttpResponse::InternalServerError().body("Not implemented")
 }
