@@ -73,14 +73,6 @@ pub fn filter_and_write_transfers(
     let output_file = File::create(output_file_path)?;
     let mut writer = WriterBuilder::new().from_writer(BufWriter::new(output_file));
 
-    // Write the header row
-    writer.write_record(&[
-        "from_stop_id",
-        "to_stop_id",
-        "transfer_type",
-        "min_transfer_time",
-    ])?;
-
     // Write the filtered records
     for transfer in valid_transfers {
         writer.serialize(transfer)?;
