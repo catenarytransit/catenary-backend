@@ -191,12 +191,20 @@ pub fn flatten_feed(
 
     let transfers_path = format!("{}/transfers.txt", &target_path);
     let stops_path = format!("{}/stops.txt", &target_path);
+    let new_transfer_path = format!("{}/transfers_temp.txt", &target_path);
 
     if PathBuf::from(&transfers_path).exists() && PathBuf::from(&stops_path).exists() {
         //fix transfers
         println!("Fixing transfers.txt for {}", feed_id);
         let start_timer = std::time::Instant::now();
-        crate::correction_of_transfers::filter_and_write_transfers(&stops_path, &transfers_path, &transfers_path)?;
+        crate::correction_of_transfers::filter_and_write_transfers(&stops_path, &transfers_path, &new_transfer_path)?;
+        //rename transfers_temp.txt to transfers.txt
+        fs::rename(&new_transfer_path, &transfers_path)?;
+        println!(
+            "Fixed transfers for {}, took {:?}",
+            feed_id,
+            start_timer.elapsed()
+        );
     }
 
     Ok(())
