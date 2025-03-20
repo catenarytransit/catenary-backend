@@ -50,7 +50,7 @@ struct BlockResponse {
     routes: HashMap<String, catenary::models::Route>,
 }
 
-#[actix_web::get("/get_agencies")]
+#[actix_web::get("/get_block")]
 pub async fn block_api(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     query: Query<BlockApiQuery>,
