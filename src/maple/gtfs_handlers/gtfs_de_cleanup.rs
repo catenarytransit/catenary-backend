@@ -14,7 +14,8 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "Flixtrain",
         "Verkehrsverbund Rhein-Neckar",
         "NEB Niederbarnimer Eisenbahn",
-        "SWEG Bahn Stuttgart"
+        "SWEG Bahn Stuttgart",
+        "Albtal-Verkehrs-Gesellschaft"
     ];
 
     let agency_ids_to_remove = to_delete_agencies
