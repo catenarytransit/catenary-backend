@@ -281,6 +281,6 @@ pub async fn block_api(
     };
 
     HttpResponse::Ok()
-    .header("Access-Control-Allow-Origin", "*")
+    .append_header(("Access-Control-Allow-Origin", "*"))
     .json(block_response)
 }
