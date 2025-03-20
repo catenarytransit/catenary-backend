@@ -197,7 +197,11 @@ pub fn flatten_feed(
         //fix transfers
         println!("Fixing transfers.txt for {}", feed_id);
         let start_timer = std::time::Instant::now();
-        crate::correction_of_transfers::filter_and_write_transfers(&stops_path, &transfers_path, &new_transfer_path)?;
+        crate::correction_of_transfers::filter_and_write_transfers(
+            &stops_path,
+            &transfers_path,
+            &new_transfer_path,
+        )?;
         //rename transfers_temp.txt to transfers.txt
         fs::rename(&new_transfer_path, &transfers_path)?;
         println!(

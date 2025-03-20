@@ -722,6 +722,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_agencies::get_agencies_for_chateau)
             .service(proxy_for_maptiler_terrain_tiles)
             .service(vehicle_api::get_vehicle_data_endpoint)
+            .service(block_api::block_api)
             //we do some trolling
             .service(web::redirect(
                 "/.env",

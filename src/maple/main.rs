@@ -130,7 +130,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             //low quality feed that teleports you to antartica.
             "f-wests~bus~service",
             //discard duplicate from inside ratp feed
-            "f-u0-sncf~transilien~rer"
+            "f-u0-sncf~transilien~rer",
         ]
         .into_iter()
         .map(String::from),

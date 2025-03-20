@@ -5,9 +5,9 @@ use std::io::BufReader;
 use std::path::Path;
 
 use csv::ReaderBuilder;
-use std::io::BufWriter;
 use csv::WriterBuilder;
 use serde::{Deserialize, Serialize};
+use std::io::BufWriter;
 
 #[derive(Debug, Deserialize)]
 struct Stop {
