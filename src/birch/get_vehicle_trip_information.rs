@@ -259,6 +259,7 @@ struct TripIntroductionInformation {
     pub alert_ids_for_this_trip: Vec<String>,
     pub shape_polyline: Option<String>,
     pub trip_id_found_in_db: bool,
+    pub service_date: Option<chrono::NaiveDate>
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -1241,6 +1242,7 @@ pub async fn get_trip_init(
         alert_id_to_alert,
         shape_polyline,
         trip_id_found_in_db: true,
+        service_date:  Some(start_naive_date)
     };
 
     let text = serde_json::to_string(&response).unwrap();
