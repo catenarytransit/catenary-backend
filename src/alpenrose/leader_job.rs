@@ -60,8 +60,11 @@ pub async fn perform_leader_job(
 
     let fast_hash_of_worker_nodes = fast_hash(&workers_list);
 
+    let randomly_generate_true_10_percent = rand::random::<f64>() < 0.1;
+
     if *last_set_of_active_nodes_hash != Some(fast_hash_of_worker_nodes)
         || *last_updated_feeds_hash != Some(fast_hash_of_feeds)
+        || randomly_generate_true_10_percent
     {
         *last_updated_feeds_hash = Some(fast_hash_of_feeds);
         *last_set_of_active_nodes_hash = Some(fast_hash_of_worker_nodes);
