@@ -193,6 +193,38 @@ pub async fn block_api(
         stops_map.insert(stop.gtfs_id.clone(), stop);
     }
 
+    let calendar: Vec<catenary::models::Calendar> = catenary::schema::gtfs::calendar::dsl::calendar
+        .filter(catenary::schema::gtfs::calendar::dsl::service_id.eq_any(&service_ids))
+        .filter(catenary::schema::gtfs::calendar::dsl::chateau.eq(&query.chateau))
+        .select(catenary::models::Calendar::as_select())
+        .load(conn)
+        .await
+        .unwrap();
+
+    let calendar_dates: Vec<catenary::models::CalendarDate> =
+        catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+            .filter(catenary::schema::gtfs::calendar_dates::dsl::service_id.eq_any(&service_ids))
+            .filter(catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(&query.chateau))
+            .select(catenary::models::CalendarDate::as_select())
+            .load(conn)
+            .await
+            .unwrap();
+
+    let calendar_hashmap: HashMap<String, Vec<catenary::models::Calendar>> = calendar
+        .into_iter()
+        .chunk_by(|x| x.service_id.clone())
+        .into_iter()
+        .map(|(key, group)| (key, group.collect()))
+        .collect();
+
+    let calendar_dates_hashmap: HashMap<String, Vec<catenary::models::CalendarDate>> =
+        calendar_dates
+            .into_iter()
+            .chunk_by(|x| x.service_id.clone())
+            .into_iter()
+            .map(|(key, group)| (key, group.collect()))
+            .collect();
+
     let reference_midnight = native_date
         .and_time(chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap())
         - chrono::Duration::hours(12);
@@ -201,7 +233,45 @@ pub async fn block_api(
 
     let mut trips_in_block: Vec<TripInBlock> = vec![];
 
-    for trip in trips {
+    for trip in trips.into_iter().filter(|x| {
+        let mut is_active = false;
+
+        let calendar = calendar_hashmap.get(x.service_id.as_str());
+
+        if let Some(calendars) = calendar {
+            for cal in calendars {
+                if cal.gtfs_start_date <= native_date && cal.gtfs_end_date >= native_date {
+                    if cal.monday
+                        || cal.tuesday
+                        || cal.wednesday
+                        || cal.thursday
+                        || cal.friday
+                        || cal.saturday
+                        || cal.sunday
+                    {
+                        is_active = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        let calendar_dates = calendar_dates_hashmap.get(x.service_id.as_str());
+
+        if let Some(calendar_dates) = calendar_dates {
+            for cal in calendar_dates {
+                if cal.gtfs_date == native_date {
+                    if cal.exception_type == 1 {
+                        is_active = true;
+                    } else if cal.exception_type == 2 {
+                        is_active = false;
+                    }
+                }
+            }
+        }
+
+        is_active
+    }) {
         let itin_rows = itin_row_map.get(&trip.itinerary_pattern_id).unwrap();
         let itin_meta = itin_meta_map.get(&trip.itinerary_pattern_id).unwrap();
 
@@ -281,6 +351,6 @@ pub async fn block_api(
     };
 
     HttpResponse::Ok()
-    .append_header(("Access-Control-Allow-Origin", "*"))
-    .json(block_response)
+        .append_header(("Access-Control-Allow-Origin", "*"))
+        .json(block_response)
 }
