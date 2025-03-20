@@ -10,6 +10,8 @@ pub async fn fetch_rtc_data(
     gtfs: &gtfs_structures::Gtfs,
     client: &reqwest::Client,
 ) {
+    let client = reqwest::Client::new();
+
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 
     if let Some(data) = fetch_assigned_node_meta {
