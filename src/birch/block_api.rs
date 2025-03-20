@@ -280,5 +280,7 @@ pub async fn block_api(
         routes: routes_map,
     };
 
-    HttpResponse::Ok().json(block_response)
+    HttpResponse::Ok()
+    .header("Access-Control-Allow-Origin", "*")
+    .json(block_response)
 }
