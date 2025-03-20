@@ -5,6 +5,7 @@ use catenary::EtcdConnectionIps;
 use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
+use chrono::Datelike;
 use compact_str::CompactString;
 use diesel::SelectableHelper;
 use diesel::prelude::*;
@@ -121,19 +122,19 @@ pub async fn block_api(
         .map(|x| x.clone())
         .collect::<BTreeSet<CompactString>>();
 
-    let native_date = query
+    let naive_date = query
         .service_date
         .chars()
         .filter(|x| x.is_numeric())
         .collect::<String>();
 
-    let native_date = chrono::NaiveDate::parse_from_str(&native_date, "%Y%m%d");
+    let naive_date = chrono::NaiveDate::parse_from_str(&naive_date, "%Y%m%d");
 
-    if native_date.is_err() {
+    if naive_date.is_err() {
         return HttpResponse::BadRequest().body("Invalid date format");
     }
 
-    let native_date = native_date.unwrap();
+    let naive_date = naive_date.unwrap();
 
     //get tz
 
@@ -225,7 +226,7 @@ pub async fn block_api(
             .map(|(key, group)| (key, group.collect()))
             .collect();
 
-    let reference_midnight = native_date
+    let reference_midnight = naive_date
         .and_time(chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap())
         - chrono::Duration::hours(12);
 
@@ -240,17 +241,43 @@ pub async fn block_api(
 
         if let Some(calendars) = calendar {
             for cal in calendars {
-                if cal.gtfs_start_date <= native_date && cal.gtfs_end_date >= native_date {
-                    if cal.monday
-                        || cal.tuesday
-                        || cal.wednesday
-                        || cal.thursday
-                        || cal.friday
-                        || cal.saturday
-                        || cal.sunday
-                    {
-                        is_active = true;
-                        break;
+                if cal.gtfs_start_date <= naive_date && cal.gtfs_end_date >= naive_date {
+                    match naive_date.weekday() {
+                        chrono::Weekday::Mon => {
+                            if cal.monday {
+                                is_active = true;
+                            }
+                        }
+                        chrono::Weekday::Tue => {
+                            if cal.tuesday {
+                                is_active = true;
+                            }
+                        }
+                        chrono::Weekday::Wed => {
+                            if cal.wednesday {
+                                is_active = true;
+                            }
+                        }
+                        chrono::Weekday::Thu => {
+                            if cal.thursday {
+                                is_active = true;
+                            }
+                        }
+                        chrono::Weekday::Fri => {
+                            if cal.friday {
+                                is_active = true;
+                            }
+                        }
+                        chrono::Weekday::Sat => {
+                            if cal.saturday {
+                                is_active = true;
+                            }
+                        }
+                        chrono::Weekday::Sun => {
+                            if cal.sunday {
+                                is_active = true;
+                            }
+                        }
                     }
                 }
             }
@@ -260,7 +287,7 @@ pub async fn block_api(
 
         if let Some(calendar_dates) = calendar_dates {
             for cal in calendar_dates {
-                if cal.gtfs_date == native_date {
+                if cal.gtfs_date == naive_date {
                     if cal.exception_type == 1 {
                         is_active = true;
                     } else if cal.exception_type == 2 {
