@@ -255,22 +255,22 @@ pub fn flatten_feed(
             feed_id,
             start_timer.elapsed()
         );
-    }
 
-    //check if transfers.txt is more than 1 line, if not, delete it
+        //check if transfers.txt is more than 1 line, if not, delete it
 
-    let file = File::open(&transfers_path)?;
+        let file = File::open(&transfers_path)?;
 
-    let mut reader = std::io::BufReader::new(file);
+        let mut reader = std::io::BufReader::new(file);
 
-    let mut line_count = 0;
+        let mut line_count = 0;
 
-    for _ in reader.lines() {
-        line_count += 1;
-    }
+        for _ in reader.lines() {
+            line_count += 1;
+        }
 
-    if line_count < 2 {
-        fs::remove_file(&transfers_path)?;
+        if line_count < 2 {
+            fs::remove_file(&transfers_path)?;
+        }
     }
 
     Ok(())
