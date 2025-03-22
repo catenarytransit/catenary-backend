@@ -130,7 +130,7 @@ pub async fn update_schedules_with_new_chateau_id(
         .execute(conn)
         .await?;
 
-        use catenary::schema::gtfs::direction_pattern_meta;
+    use catenary::schema::gtfs::direction_pattern_meta;
 
     let _ = diesel::update(direction_pattern_meta::dsl::direction_pattern_meta)
         .filter(direction_pattern_meta::dsl::onestop_feed_id.eq(feed_id))

@@ -1,13 +1,15 @@
 use std::error::Error;
-use std::fs;
 use std::fs::File;
 use std::fs::{read_dir, remove_file};
 use std::io::BufRead;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
-use std::path::PathBuf;
 use std::rc::Rc;
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use dmfr::Feed;
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
@@ -86,8 +88,6 @@ pub fn remove_transloc_prefix(gtfs_uncompressed_temp_storage: &str, feed_id: &st
         }
     }
 }
-
-
 
 fn flatten_if_single_subfolder(folder_path: &Path) -> Result<(), io::Error> {
     let entries = fs::read_dir(folder_path)?;

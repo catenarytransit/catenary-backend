@@ -16,7 +16,7 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "NEB Niederbarnimer Eisenbahn",
         "SWEG Bahn Stuttgart",
         "Albtal-Verkehrs-Gesellschaft",
-        "VGM/VRL"
+        "VGM/VRL",
     ];
 
     let agency_ids_to_remove = to_delete_agencies
@@ -90,9 +90,7 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
 
 pub fn gtfs_ch_cleanup(gtfs: Gtfs) -> Gtfs {
     let mut gtfs = gtfs;
-    let to_delete_agencies = [
-        "Société Nationale des Chemins de fer Français"
-    ];
+    let to_delete_agencies = ["Société Nationale des Chemins de fer Français"];
 
     let agency_ids_to_remove = to_delete_agencies
         .iter()
