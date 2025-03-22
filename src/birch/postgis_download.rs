@@ -644,7 +644,7 @@ pub async fn shapes_intercity_rail(
 
     let tile_width_degrees = tile_width_degrees_from_z(z);
 
-    let simplification_threshold = tile_width_degrees * 0.003;
+    let simplification_threshold = tile_width_degrees * 0.002;
 
     // let grid = tile_grid::Grid::wgs84();
 
