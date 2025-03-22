@@ -415,7 +415,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             let attempt_ids = Arc::new(attempt_ids);
 
-            let unzip_feeds_clone = check_for_stops_ids.clone();
+            //let unzip_feeds_clone = check_for_stops_ids.clone();
 
             // 5. Process GTFS feeds
 
@@ -435,6 +435,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .collect();
 
             let total_feeds_to_process = feeds_to_process.len() as u16;
+
+            println!("Processing {} feeds", total_feeds_to_process);
 
             futures::stream::iter(
                 feeds_to_process
