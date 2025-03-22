@@ -364,10 +364,12 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .collect::<Vec<(String, bool)>>()
                 .await;
 
-            let successful_unzip_feeds_count =
-                unzip_feeds.iter().map(|x| x.1)
+            let successful_unzip_feeds_count = unzip_feeds
+                .iter()
+                .map(|x| x.1)
                 .filter(|x| *x)
-                .collect::<Vec<bool>>().len();
+                .collect::<Vec<bool>>()
+                .len();
 
             println!(
                 "{} of {} unzipped",
