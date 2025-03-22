@@ -87,6 +87,46 @@ pub fn remove_transloc_prefix(gtfs_uncompressed_temp_storage: &str, feed_id: &st
     }
 }
 
+
+
+fn flatten_if_single_subfolder(folder_path: &Path) -> Result<(), io::Error> {
+    let entries = fs::read_dir(folder_path)?;
+    let mut subfolders = Vec::new();
+
+    for entry in entries {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            subfolders.push(entry.path());
+        }
+    }
+
+    if subfolders.len() == 1 {
+        let subfolder_path = subfolders.into_iter().next().unwrap();
+        let subfolder_name = subfolder_path.file_name().unwrap();
+
+        let subfolder_entries = fs::read_dir(&subfolder_path)?;
+
+        for entry in subfolder_entries {
+            let entry = entry?;
+            let source_path = entry.path();
+            let file_name = source_path.file_name().unwrap();
+            let destination_path = folder_path.join(file_name);
+            fs::rename(&source_path, &destination_path)?;
+        }
+
+        fs::remove_dir(&subfolder_path)?;
+        println!("Flattened folder: {:?}", folder_path);
+    } else {
+        println!(
+            "Folder {:?} does not contain exactly one subfolder.",
+            folder_path
+        );
+    }
+
+    Ok(())
+}
+
 pub fn flatten_feed(
     gtfs_temp_storage: &str,
     gtfs_uncompressed_temp_storage: &str,
@@ -165,6 +205,12 @@ pub fn flatten_feed(
 
         subfolder_answer?;
     }
+
+    //flatten if single subfolder
+
+    let folder_path = PathBuf::from(&target_path);
+
+    flatten_if_single_subfolder(&folder_path)?;
 
     //fix stop times for germany
 
