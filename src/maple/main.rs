@@ -341,6 +341,14 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                             rc_feed,
                         );
 
+                        if (flatten_feed_result.is_err()) {
+                            eprintln!(
+                                "Failed to flatten feed {}: {:?}",
+                                to_ingest_feed.feed_id.as_str(),
+                                flatten_feed_result
+                            );
+                        }
+
                         let fix_stops_file = gtfs_handlers::fix_files::fix_files_in_gtfs_directory(
                             format!(
                                 "{}/{}",
@@ -357,7 +365,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .await;
 
             let successful_unzip_feeds_count =
-                unzip_feeds.iter().map(|x| x.1).collect::<Vec<bool>>().len();
+                unzip_feeds.iter().map(|x| x.1)
+                .filter(|x| *x)
+                .collect::<Vec<bool>>().len();
 
             println!(
                 "{} of {} unzipped",
