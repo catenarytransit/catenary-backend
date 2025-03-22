@@ -150,7 +150,7 @@ pub async fn gtfs_process_feed(
             gtfs
         }
         "f-gtfs~de" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(gtfs),
-
+        "f-u0-switzerland" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_ch_cleanup(gtfs),
         _ => gtfs,
     };
 
