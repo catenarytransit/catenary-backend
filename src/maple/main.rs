@@ -365,6 +365,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 unzip_feeds.len()
             );
 
+            println!("{:?}", unzip_feeds);
+
             let check_for_stops_ids = unzip_feeds
                 .into_iter()
                 .filter(|x| x.1)
