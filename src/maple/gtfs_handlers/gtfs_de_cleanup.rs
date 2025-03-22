@@ -17,6 +17,7 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "SWEG Bahn Stuttgart",
         "Albtal-Verkehrs-Gesellschaft",
         "VGM/VRL",
+        "metronom"
     ];
 
     let agency_ids_to_remove = to_delete_agencies
@@ -25,10 +26,9 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
             gtfs.agencies
                 .iter()
                 .find(|y| y.name == *x)
-                .unwrap()
-                .id
-                .clone()
         })
+        .filter(|x| x.is_some())
+        .map(|x| x.unwrap().id.clone())
         .flatten()
         .map(|x| x.to_string())
         .collect::<Vec<String>>();
@@ -98,10 +98,9 @@ pub fn gtfs_ch_cleanup(gtfs: Gtfs) -> Gtfs {
             gtfs.agencies
                 .iter()
                 .find(|y| y.name == *x)
-                .unwrap()
-                .id
-                .clone()
         })
+        .filter(|x| x.is_some())
+        .map(|x| x.unwrap().id.clone())
         .flatten()
         .map(|x| x.to_string())
         .collect::<Vec<String>>();

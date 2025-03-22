@@ -677,8 +677,8 @@ FROM (
     // println!("Performing query \n {}", query_str);
 
     let max_age = match z {
-        4 => 36000,
-        5 => 10000,
+        4 => 10000,
+        5 => 5000,
         6 => 2000,
         _ => 1000,
     };
