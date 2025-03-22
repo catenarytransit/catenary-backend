@@ -120,6 +120,24 @@ pub async fn update_schedules_with_new_chateau_id(
         .execute(conn)
         .await?;
 
+    //reassign directions
+
+    use catenary::schema::gtfs::direction_pattern;
+
+    let _ = diesel::update(direction_pattern::dsl::direction_pattern)
+        .filter(direction_pattern::dsl::onestop_feed_id.eq(feed_id))
+        .set(direction_pattern::dsl::chateau.eq(new_chateau_id))
+        .execute(conn)
+        .await?;
+
+        use catenary::schema::gtfs::direction_pattern_meta;
+
+    let _ = diesel::update(direction_pattern_meta::dsl::direction_pattern_meta)
+        .filter(direction_pattern_meta::dsl::onestop_feed_id.eq(feed_id))
+        .set(direction_pattern_meta::dsl::chateau.eq(new_chateau_id))
+        .execute(conn)
+        .await?;
+
     println!(
         "Finished reassignment of feed {} to Château {}",
         feed_id, new_chateau_id
