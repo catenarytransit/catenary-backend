@@ -19,6 +19,7 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "VGM/VRL",
         "metronom",
         "DB ZugBus Regionalverkehr Alb-Bodensee",
+        "Südwestdeutsche Verkehrs-AG"
     ];
 
     let agency_ids_to_remove = to_delete_agencies
