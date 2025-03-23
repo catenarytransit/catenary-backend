@@ -19,7 +19,10 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "VGM/VRL",
         "metronom",
         "DB ZugBus Regionalverkehr Alb-Bodensee",
-        "Südwestdeutsche Verkehrs-AG"
+        "Südwestdeutsche Verkehrs-AG",
+        "Regionalverkehr Alb-Bodensee",
+        "SBG SüdbadenBus GmbH",
+        "Verkehrsverbund Schwarzwald-Baar"
     ];
 
     let agency_ids_to_remove = to_delete_agencies
