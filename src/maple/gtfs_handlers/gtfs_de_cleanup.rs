@@ -26,10 +26,13 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "Landkreis Calw",
         "Verkehrsverbund Stuttgart",
         "Verkehrsverbund Hegau Bodensee",
-        "Regionalverkehr Alb-Bodensee"
+        "Regionalverkehr Alb-Bodensee",
     ];
 
-    let to_delete_agencies = Vec::from(to_delete_agencies).iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    let to_delete_agencies = Vec::from(to_delete_agencies)
+        .iter()
+        .map(|x| x.to_string())
+        .collect::<Vec<String>>();
 
     crate::gtfs_handlers::remove_agencies::remove_agencies(gtfs, &to_delete_agencies)
 }
@@ -41,6 +44,9 @@ pub fn gtfs_ch_cleanup(gtfs: Gtfs) -> Gtfs {
         "DB Regio AG Baden-Württemberg",
     ];
 
-    let to_delete_agencies = Vec::from(to_delete_agencies).iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    let to_delete_agencies = Vec::from(to_delete_agencies)
+        .iter()
+        .map(|x| x.to_string())
+        .collect::<Vec<String>>();
     crate::gtfs_handlers::remove_agencies::remove_agencies(gtfs, &to_delete_agencies)
 }
