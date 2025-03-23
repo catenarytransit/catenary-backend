@@ -17,16 +17,13 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "SWEG Bahn Stuttgart",
         "Albtal-Verkehrs-Gesellschaft",
         "VGM/VRL",
-        "metronom"
+        "metronom",
+        "DB ZugBus Regionalverkehr Alb-Bodensee",
     ];
 
     let agency_ids_to_remove = to_delete_agencies
         .iter()
-        .map(|x| {
-            gtfs.agencies
-                .iter()
-                .find(|y| y.name == *x)
-        })
+        .map(|x| gtfs.agencies.iter().find(|y| y.name == *x))
         .filter(|x| x.is_some())
         .map(|x| x.unwrap().id.clone())
         .flatten()
@@ -90,15 +87,14 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
 
 pub fn gtfs_ch_cleanup(gtfs: Gtfs) -> Gtfs {
     let mut gtfs = gtfs;
-    let to_delete_agencies = ["Société Nationale des Chemins de fer Français"];
+    let to_delete_agencies = [
+        "Société Nationale des Chemins de fer Français",
+        "DB Regio AG Baden-Württemberg",
+    ];
 
     let agency_ids_to_remove = to_delete_agencies
         .iter()
-        .map(|x| {
-            gtfs.agencies
-                .iter()
-                .find(|y| y.name == *x)
-        })
+        .map(|x| gtfs.agencies.iter().find(|y| y.name == *x))
         .filter(|x| x.is_some())
         .map(|x| x.unwrap().id.clone())
         .flatten()
