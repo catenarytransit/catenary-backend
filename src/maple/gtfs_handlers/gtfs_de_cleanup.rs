@@ -2,7 +2,6 @@ use gtfs_structures::Gtfs;
 use std::collections::{BTreeSet, HashMap};
 
 pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
-    let mut gtfs = gtfs;
     let to_delete_agencies = [
         "Flixbus",
         "Stadtwerke München",
@@ -30,7 +29,11 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "ÖBB",
         "Hanseatische Eisenbahn GmbH",
         "erixx",
-        "Ostdeutsche Eisenbahn GmbH"
+        "Ostdeutsche Eisenbahn GmbH",
+        "Flixtrain-de",
+        "U-Bahn München",
+        "Österreichische Bundesbahnen",
+        "FlixBus-de"
     ];
 
     let to_delete_agencies = Vec::from(to_delete_agencies)
@@ -42,7 +45,6 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
 }
 
 pub fn gtfs_ch_cleanup(gtfs: Gtfs) -> Gtfs {
-    let mut gtfs = gtfs;
     let to_delete_agencies = [
         "Société Nationale des Chemins de fer Français",
         "DB Regio AG Baden-Württemberg",

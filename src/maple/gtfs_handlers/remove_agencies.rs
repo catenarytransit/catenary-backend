@@ -126,7 +126,14 @@ pub fn gtfs_ch_cleanup(gtfs: Gtfs) -> Gtfs {
 
     gtfs.stops
         .retain(|stop_id, stop| match stops_to_agency_ids.get(stop_id) {
-            Some(agency_ids) => !agency_ids.is_empty(),
+            Some(agency_ids) => !agency_ids.is_empty() ||
+                match &stop.parent_station {
+                    Some(parent_id) => match stops_to_agency_ids.get(parent_id.as_str()) {
+                        Some(agency_ids) => !agency_ids.is_empty(),
+                        None => true,
+                    },
+                    None => true,
+                },
             None => true,
         });
 
