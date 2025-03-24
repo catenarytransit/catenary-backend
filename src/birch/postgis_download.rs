@@ -918,6 +918,10 @@ pub async fn shapes_ferry_meta(req: HttpRequest) -> impl Responder {
     fields.insert(String::from("route_type"), String::from("smallint"));
     fields.insert(String::from("route_label"), String::from("text"));
     fields.insert(String::from("chateau"), String::from("text"));
+    fields.insert(
+        String::from("stop_to_stop_generated"),
+        String::from("boolean"),
+    );
 
     let fields = tilejson::VectorLayer::new(String::from("data"), fields);
 
