@@ -151,6 +151,10 @@ pub async fn gtfs_process_feed(
         }
         "f-gtfs~de" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(gtfs),
         "f-u0-switzerland" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_ch_cleanup(gtfs),
+        "f-nvbw" => crate::gtfs_handlers::remove_agencies::remove_agencies(
+            gtfs,
+            &Vec::from([String::from("FlixTrain-de"), String::from("SNCF")]),
+        ),
         _ => gtfs,
     };
 

@@ -4,6 +4,7 @@ pub mod fix_files;
 pub mod flatten;
 pub mod gtfs_de_cleanup;
 pub mod hull_from_gtfs;
+pub mod remove_agencies;
 pub mod rename_route_labels;
 pub mod shape_colour_calculator;
 pub mod stops_associated_items;
