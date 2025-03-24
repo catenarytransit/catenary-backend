@@ -29,7 +29,8 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "Regionalverkehr Alb-Bodensee",
         "ÖBB",
         "Hanseatische Eisenbahn GmbH",
-        "erixx"
+        "erixx",
+        "Ostdeutsche Eisenbahn GmbH"
     ];
 
     let to_delete_agencies = Vec::from(to_delete_agencies)
