@@ -110,7 +110,8 @@ pub async fn shapes_into_postgres(
                     postgis_diesel::types::LineString {
                         srid: Some(4326),
                         points: preshape
-                            .iter()
+                            .into_iter()
+                            .filter(|point| point.latitude != 0.0 && point.longitude != 0.0)
                             .map(|point| postgis_diesel::types::Point {
                                 x: point.longitude,
                                 y: point.latitude,
