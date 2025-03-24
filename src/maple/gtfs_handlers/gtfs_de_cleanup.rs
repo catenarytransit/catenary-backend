@@ -2,7 +2,6 @@ use gtfs_structures::Gtfs;
 use std::collections::{BTreeSet, HashMap};
 
 pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
-    let mut gtfs = gtfs;
     let to_delete_agencies = [
         "Flixbus",
         "Stadtwerke München",
@@ -43,7 +42,6 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
 }
 
 pub fn gtfs_ch_cleanup(gtfs: Gtfs) -> Gtfs {
-    let mut gtfs = gtfs;
     let to_delete_agencies = [
         "Société Nationale des Chemins de fer Français",
         "DB Regio AG Baden-Württemberg",
