@@ -214,7 +214,7 @@ pub fn flatten_feed(
 
     //fix stop times for germany
 
-    /* 
+    /*
     if feed_id == "f-gtfs~de" {
         let stop_times_path = format!("{}/stop_times.txt", &target_path);
         let stop_times_temp_path = format!("{}/stop_times_temp.txt", &target_path);
