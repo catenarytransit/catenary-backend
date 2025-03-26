@@ -431,7 +431,7 @@ pub async fn gtfs_process_feed(
 
     println!("Inserting directions for {}", feed_id);
 
-    for group in &reduction.direction_patterns.iter().chunks(30000) {
+    for group in &reduction.direction_patterns.iter().chunks(10000) {
         let mut d_final: Vec<DirectionPatternMeta> = vec![];
 
         let mut d_rows: Vec<Vec<DirectionPatternRow>> = vec![];
@@ -608,7 +608,7 @@ pub async fn gtfs_process_feed(
 
     println!("Directions inserted for {}", feed_id);
     println!("Inserting itineraries for {}", feed_id);
-    for group in &reduction.itineraries.iter().chunks(20000) {
+    for group in &reduction.itineraries.iter().chunks(10000) {
         let mut t_final: Vec<catenary::models::ItineraryPatternMeta> = vec![];
         let mut t_rows: Vec<Vec<catenary::models::ItineraryPatternRow>> = vec![];
 
@@ -720,7 +720,7 @@ pub async fn gtfs_process_feed(
 
     println!("Inserting trips for {}", feed_id);
 
-    for group in &reduction.itineraries_to_trips.iter().chunks(100000) {
+    for group in &reduction.itineraries_to_trips.iter().chunks(10000) {
         let mut t_final: Vec<Vec<catenary::models::CompressedTrip>> = vec![];
         for (itinerary_id, compressed_trip_list) in group {
             let trip_pg = compressed_trip_list
