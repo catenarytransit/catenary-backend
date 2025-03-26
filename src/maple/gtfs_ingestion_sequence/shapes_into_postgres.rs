@@ -31,7 +31,7 @@ pub async fn shapes_into_postgres(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
-    for group in &gtfs.shapes.iter().chunks(500) {
+    for group in &gtfs.shapes.iter().chunks(100) {
         let mut batch_of_shapes: Vec<catenary::models::Shape> = vec![];
 
         for (shape_id, shape) in group {
