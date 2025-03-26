@@ -230,10 +230,10 @@ struct StopTimeRefresh {
     pub stop_id: Option<compact_str::CompactString>,
     pub rt_arrival: Option<AspenStopTimeEvent>,
     pub rt_departure: Option<AspenStopTimeEvent>,
-    pub schedule_relationship: Option<i32>,
+    pub schedule_relationship: Option<u8>,
     pub gtfs_stop_sequence: Option<u16>,
     pub rt_platform_string: Option<String>,
-    pub departure_occupancy_status: Option<i32>,
+    pub departure_occupancy_status: Option<u8>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -276,7 +276,7 @@ struct StopTimeIntroduction {
     pub scheduled_departure_time_unix_seconds: Option<u64>,
     pub rt_arrival: Option<AspenStopTimeEvent>,
     pub rt_departure: Option<AspenStopTimeEvent>,
-    pub schedule_relationship: Option<i32>,
+    pub schedule_relationship: Option<u8>,
     pub gtfs_stop_sequence: u16,
     pub interpolated_stoptime_unix_seconds: Option<u64>,
     pub timepoint: Option<bool>,
@@ -402,7 +402,7 @@ pub async fn get_trip_rt_update(
                                             rt_arrival: stop_time_update.arrival.clone(),
                                             rt_departure: stop_time_update.departure.clone(),
                                             schedule_relationship: stop_time_update
-                                                .schedule_relationship,
+                                                .schedule_relationship .as_ref().map(|x| catenary::aspen_dataset::schedule_relationship_to_u8(&x)),
                                             gtfs_stop_sequence: stop_time_update
                                                 .stop_sequence
                                                 .map(|x| x as u16),
@@ -410,7 +410,8 @@ pub async fn get_trip_rt_update(
                                                 .platform_string
                                                 .clone(),
                                             departure_occupancy_status: stop_time_update
-                                                .departure_occupancy_status,
+                                            
+                                                .departure_occupancy_status.as_ref().map(|x| catenary::aspen_dataset::occupancy_status_to_u8(&x)),
                                         })
                                         .collect();
 
@@ -1090,10 +1091,12 @@ pub async fn get_trip_init(
                                             }
 
                                             if let Some(schedule_relationship) =
-                                                stop_time_update.schedule_relationship
+                                                &stop_time_update.schedule_relationship
                                             {
                                                 stop_time.schedule_relationship =
-                                                    Some(schedule_relationship);
+                                                Some(catenary::aspen_dataset::schedule_relationship_to_u8(
+                                                    &schedule_relationship,
+                                                ));
                                             }
 
                                             if let Some(rt_platform_string) =
