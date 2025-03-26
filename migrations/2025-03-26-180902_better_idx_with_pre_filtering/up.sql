@@ -1,5 +1,4 @@
 -- Your SQL goes here
-DROP TABLE IF EXISTS gtfs.shapes_not_bus IF EXISTS;
 DROP INDEX shapes_linestring_index_intercity_rail IF EXISTS;
 DROP INDEX shapes_linestring_index_local_rail IF EXISTS;
 DROP INDEX shapes_linestring_index_ferry IF EXISTS;
