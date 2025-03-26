@@ -469,7 +469,18 @@ pub async fn new_rt_data(
                                 AspenisedVehicleTripInfo {
                                     trip_id: trip.trip_id.clone(),
                                     direction_id: trip.direction_id,
-                                   start_date: trip.start_date.clone(),
+                                   start_date: match &trip.start_date {
+                                        Some(start_date) => {
+                                            match chrono::NaiveDate::parse_from_str(
+                                                &start_date,
+                                                "%Y%m%d",
+                                            ) {
+                                                Ok(start_date) => Some(start_date),
+                                                Err(_) => None,
+                                            }
+                                        },
+                                        None => None,
+                                    },
                                    start_time: trip.start_time.clone(),
                                     schedule_relationship: trip.schedule_relationship,
                                     route_id: recalculate_route_id.clone(),
