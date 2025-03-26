@@ -1110,8 +1110,6 @@ pub async fn nearby_from_coords(
                                                         trip_update.trip.start_date
                                                             == Some(
                                                                 trip.trip_service_date
-                                                                    .format("%Y%m%d")
-                                                                    .to_string(),
                                                             )
                                                     }
                                                     false => {

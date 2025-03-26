@@ -495,7 +495,7 @@ pub mod aspen_dataset {
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenTripProperties {
         pub trip_id: Option<String>,
-        pub start_date: Option<String>,
+        pub start_date: Option<chrono::NaiveDate>,
         pub start_time: Option<String>,
         pub shape_id: Option<String>,
     }
@@ -506,7 +506,7 @@ pub mod aspen_dataset {
         pub route_id: Option<String>,
         pub direction_id: Option<u32>,
         pub start_time: Option<String>,
-        pub start_date: Option<String>,
+        pub start_date: Option<chrono::NaiveDate>,
         pub schedule_relationship: Option<i32>,
         pub modified_trip: Option<ModifiedTripSelector>,
     }
@@ -535,7 +535,17 @@ pub mod aspen_dataset {
                 route_id: trip_descriptor.route_id,
                 direction_id: trip_descriptor.direction_id,
                 start_time: trip_descriptor.start_time,
-                start_date: trip_descriptor.start_date,
+                start_date: match &trip_descriptor.start_date {
+                    Some(date) => {
+                        //chrono parse yyyymmdd
+
+                        match chrono::NaiveDate::parse_from_str(&date, "%Y%m%d") {
+                            Ok(date) => Some(date),
+                            Err(_) => None,
+                        }
+                    }
+                    None => None,
+                },
                 schedule_relationship: trip_descriptor.schedule_relationship,
                 modified_trip: trip_descriptor.modified_trip.map(|x| x.into()),
             }
@@ -639,7 +649,7 @@ pub mod aspen_dataset {
         pub trip_short_name: Option<String>,
         pub direction_id: Option<u32>,
         pub start_time: Option<String>,
-        pub start_date: Option<String>,
+        pub start_date: Option<chrono::NaiveDate>,
         pub schedule_relationship: Option<i32>,
     }
 
@@ -668,7 +678,17 @@ pub mod aspen_dataset {
         fn from(trip_properties: TripProperties) -> Self {
             AspenTripProperties {
                 trip_id: trip_properties.trip_id,
-                start_date: trip_properties.start_date,
+                start_date: match &trip_properties.start_date {
+                    Some(date) => {
+                        //chrono parse yyyymmdd
+
+                        match chrono::NaiveDate::parse_from_str(date, "%Y%m%d") {
+                            Ok(date) => Some(date),
+                            Err(_) => None,
+                        }
+                    }
+                    None => None,
+                },
                 start_time: trip_properties.start_time,
                 shape_id: trip_properties.shape_id,
             }
