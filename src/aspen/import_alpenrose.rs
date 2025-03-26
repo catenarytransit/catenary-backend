@@ -5,6 +5,8 @@
 extern crate catenary;
 use crate::metrolink_california_additions::vehicle_pos_supplement;
 use ahash::{AHashMap, AHashSet};
+use catenary::aspen_dataset::option_i32_to_occupancy_status;
+use catenary::aspen_dataset::option_i32_to_schedule_relationship;
 use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use compact_str::CompactString;
@@ -617,7 +619,7 @@ pub async fn new_rt_data(
                                 .stop_time_update
                                 .iter()
                                 .map(|stu| AspenisedStopTimeUpdate {
-                                    stop_sequence: stu.stop_sequence,
+                                    stop_sequence: stu.stop_sequence.map(|x| x as u16),
                                     stop_id: stu.stop_id.as_ref().map(|x| x.into()),
                                     arrival: stu.arrival.clone().map(|arrival| {
                                         AspenStopTimeEvent {
@@ -673,8 +675,12 @@ pub async fn new_rt_data(
                                         }
                                         _ => None,
                                     },
-                                    schedule_relationship: stu.schedule_relationship,
-                                    departure_occupancy_status: stu.departure_occupancy_status,
+                                    schedule_relationship: option_i32_to_schedule_relationship(
+                                        &stu.schedule_relationship,
+                                    ),
+                                    departure_occupancy_status: option_i32_to_occupancy_status(
+                                        &stu.departure_occupancy_status,
+                                    ),
                                     stop_time_properties: stu
                                         .stop_time_properties
                                         .clone()
