@@ -664,7 +664,8 @@ pub async fn new_rt_data(
                                                                 train_and_stop_scax
                                                                     .formatted_track_designation
                                                                     .clone()
-                                                                    .replace("Platform ", ""),
+                                                                    .replace("Platform ", "")
+                                                                    .into(),
                                                             );
                                                         }
                                                     }

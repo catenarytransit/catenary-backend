@@ -280,6 +280,7 @@ pub mod aspen_dataset {
     use crate::RtKey;
     use ahash::AHashMap;
     use compact_str::CompactString;
+    use ecow::EcoString;
     use gtfs_realtime::FeedEntity;
     use std::hash::Hash;
 
@@ -555,13 +556,13 @@ pub mod aspen_dataset {
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenisedStopTimeUpdate {
         pub stop_sequence: Option<u16>,
-        pub stop_id: Option<compact_str::CompactString>,
+        pub stop_id: Option<ecow::EcoString>,
         pub arrival: Option<AspenStopTimeEvent>,
         pub departure: Option<AspenStopTimeEvent>,
         pub departure_occupancy_status: Option<AspenisedOccupancyStatus>,
         pub schedule_relationship: Option<AspenisedScheduleRelationship>,
         pub stop_time_properties: Option<AspenisedStopTimeProperties>,
-        pub platform_string: Option<String>,
+        pub platform_string: Option<ecow::EcoString>,
     }
 
     pub fn option_i32_to_occupancy_status(
@@ -656,7 +657,7 @@ pub mod aspen_dataset {
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenisedStopTimeProperties {
-        pub assigned_stop_id: Option<String>,
+        pub assigned_stop_id: Option<EcoString>,
     }
 
     use gtfs_realtime::trip_update::StopTimeEvent;
@@ -665,7 +666,7 @@ pub mod aspen_dataset {
     impl From<StopTimeProperties> for AspenisedStopTimeProperties {
         fn from(stop_time_properties: StopTimeProperties) -> Self {
             AspenisedStopTimeProperties {
-                assigned_stop_id: stop_time_properties.assigned_stop_id,
+                assigned_stop_id: stop_time_properties.assigned_stop_id.map(|x| x.into()),
             }
         }
     }
