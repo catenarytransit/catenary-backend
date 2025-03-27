@@ -4,14 +4,16 @@ use std::collections::{BTreeSet, HashMap};
 pub fn remove_agencies(gtfs: Gtfs, to_delete_agencies: &Vec<String>) -> Gtfs {
     let mut gtfs = gtfs;
 
-    let to_delete_agencies:BTreeSet<String> = to_delete_agencies.iter().map(|x| x.clone()).collect();
+    let to_delete_agencies: BTreeSet<String> =
+        to_delete_agencies.iter().map(|x| x.clone()).collect();
 
-    let agency_ids_to_remove = gtfs.agencies
-    .iter()
-    .filter(|agency| to_delete_agencies.contains(&agency.name))
-    .filter(|agency| agency.id.is_some())
-    .map(|x| x.id.as_ref().unwrap().clone())
-    .collect::<Vec<String>>();
+    let agency_ids_to_remove = gtfs
+        .agencies
+        .iter()
+        .filter(|agency| to_delete_agencies.contains(&agency.name))
+        .filter(|agency| agency.id.is_some())
+        .map(|x| x.id.as_ref().unwrap().clone())
+        .collect::<Vec<String>>();
 
     gtfs.agencies
         .retain(|x| !agency_ids_to_remove.contains(&x.id.as_ref().unwrap()));

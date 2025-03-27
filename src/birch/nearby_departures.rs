@@ -1234,7 +1234,7 @@ pub async fn nearby_from_coords(
                                                 if let Some(platform_id) =
                                                     &relevant_stop_time_update.platform_string
                                                 {
-                                                    platform = Some(platform_id.clone());
+                                                    platform = Some(platform_id.to_string());
                                                 }
                                             }
                                         }

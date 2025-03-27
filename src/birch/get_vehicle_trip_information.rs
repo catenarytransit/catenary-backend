@@ -23,6 +23,7 @@ use diesel::SelectableHelper;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel_async::RunQueryDsl;
+use ecow::EcoString;
 use geo::coord;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -227,12 +228,12 @@ struct GtfsRtRefreshData {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeRefresh {
-    pub stop_id: Option<compact_str::CompactString>,
+    pub stop_id: Option<EcoString>,
     pub rt_arrival: Option<AspenStopTimeEvent>,
     pub rt_departure: Option<AspenStopTimeEvent>,
     pub schedule_relationship: Option<u8>,
     pub gtfs_stop_sequence: Option<u16>,
-    pub rt_platform_string: Option<String>,
+    pub rt_platform_string: Option<EcoString>,
     pub departure_occupancy_status: Option<u8>,
 }
 
@@ -407,8 +408,7 @@ pub async fn get_trip_rt_update(
                                                 .stop_sequence
                                                 .map(|x| x as u16),
                                             rt_platform_string: stop_time_update
-                                                .platform_string
-                                                .clone(),
+                                                .platform_string.clone(),
                                             departure_occupancy_status: stop_time_update
                                             
                                                 .departure_occupancy_status.as_ref().map(|x| catenary::aspen_dataset::occupancy_status_to_u8(&x)),
@@ -1064,11 +1064,11 @@ pub async fn get_trip_init(
                                                     Some(rt_stop_id) => {
                                                         match stop_time_update.stop_sequence {
                                                             Some(rt_stop_sequence) => {
-                                                                rt_stop_id == x.stop_id
+                                                                *rt_stop_id == *x.stop_id
                                                                     && rt_stop_sequence as u16
                                                                         == x.gtfs_stop_sequence
                                                             }
-                                                            None => rt_stop_id == x.stop_id,
+                                                            None => *rt_stop_id == *x.stop_id,
                                                         }
                                                     }
                                                     None => match stop_time_update.stop_sequence {
@@ -1103,7 +1103,7 @@ pub async fn get_trip_init(
                                                 stop_time_update.platform_string.clone()
                                             {
                                                 stop_time.rt_platform_string =
-                                                    Some(rt_platform_string);
+                                                    Some(rt_platform_string.to_string());
                                             }
                                         }
                                     }
