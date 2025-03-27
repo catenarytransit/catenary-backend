@@ -10,7 +10,7 @@ pub fn remove_agencies(gtfs: Gtfs, to_delete_agencies: &Vec<String>) -> Gtfs {
     .iter()
     .filter(|agency| to_delete_agencies.contains(&agency.name))
     .filter(|agency| agency.id.is_some())
-    .map(|x| x.id.unwrap().clone())
+    .map(|x| x.id.as_ref().unwrap().clone())
     .collect::<Vec<String>>();
 
     gtfs.agencies
