@@ -555,13 +555,13 @@ pub mod aspen_dataset {
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenisedStopTimeUpdate {
         pub stop_sequence: Option<u16>,
-        pub stop_id: Option<compact_str::CompactString>,
+        pub stop_id: Option<ecow::EcoString>,
         pub arrival: Option<AspenStopTimeEvent>,
         pub departure: Option<AspenStopTimeEvent>,
         pub departure_occupancy_status: Option<AspenisedOccupancyStatus>,
         pub schedule_relationship: Option<AspenisedScheduleRelationship>,
         pub stop_time_properties: Option<AspenisedStopTimeProperties>,
-        pub platform_string: Option<String>,
+        pub platform_string: Option<ecow::EcoString>,
     }
 
     pub fn option_i32_to_occupancy_status(
