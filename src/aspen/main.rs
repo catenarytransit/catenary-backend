@@ -332,6 +332,12 @@ impl AspenRpc for AspenServer {
                                 }
                             }
                         }
+
+                        if let Some(trip_update) = &mut vehicle_position.trip_update {
+                            if !trip_update.stop_time_update.is_empty() {
+                                trip_update.stop_time_update = vec![];
+                            }
+                        }
                     }
                 }
             }
