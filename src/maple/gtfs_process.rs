@@ -157,6 +157,7 @@ pub async fn gtfs_process_feed(
                 String::from("FlixTrain-de"),
                 String::from("SNCF"),
                 String::from("Schweizerische Bundesbahnen SBB"),
+                String::from("Schweiz. Schifffahrtsgesellschaft Untersee und Rhein AG")
             ]),
         ),
         _ => gtfs,
