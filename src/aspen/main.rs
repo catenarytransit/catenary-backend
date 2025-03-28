@@ -24,7 +24,6 @@
     clippy::iter_cloned_collect
 )]
 
-
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 

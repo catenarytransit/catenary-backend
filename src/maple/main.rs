@@ -31,6 +31,13 @@
     clippy::op_ref
 )]
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 use ahash::AHashMap;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::postgres_tools::make_async_pool;
