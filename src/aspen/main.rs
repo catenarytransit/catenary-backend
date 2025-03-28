@@ -2,6 +2,13 @@
 // Catenary Transit Initiatives
 // Attribution cannot be removed
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 #![deny(
     clippy::mutable_key_type,
     clippy::map_entry,
