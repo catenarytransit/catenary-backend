@@ -160,6 +160,12 @@ pub async fn gtfs_process_feed(
                 String::from("Schweiz. Schifffahrtsgesellschaft Untersee und Rhein AG"),
             ]),
         ),
+        "f-u4-ruter~flybussen~stfoldkollektivtrafikk~hedmarktrafikk~oppla" => crate::gtfs_handlers::remove_agencies::remove_agencies(
+            gtfs,
+            &Vec::from([
+                String::from("Avinor")
+            ]),
+        ),
         _ => gtfs,
     };
 
