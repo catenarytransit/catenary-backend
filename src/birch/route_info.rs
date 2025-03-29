@@ -39,7 +39,7 @@ pub struct RouteInfoResponse {
     pub alert_ids_for_this_route: Vec<String>,
     pub alert_id_to_alert: BTreeMap<String, AspenisedAlert>,
     pub stop_id_to_alert_ids: BTreeMap<String, Vec<String>>,
-    pub onestop_feed_id: String
+    pub onestop_feed_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
