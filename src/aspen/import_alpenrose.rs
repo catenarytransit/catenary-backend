@@ -5,6 +5,8 @@
 extern crate catenary;
 use crate::metrolink_california_additions::vehicle_pos_supplement;
 use ahash::{AHashMap, AHashSet};
+use catenary::aspen_dataset::option_i32_to_occupancy_status;
+use catenary::aspen_dataset::option_i32_to_schedule_relationship;
 use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use compact_str::CompactString;
@@ -469,7 +471,18 @@ pub async fn new_rt_data(
                                 AspenisedVehicleTripInfo {
                                     trip_id: trip.trip_id.clone(),
                                     direction_id: trip.direction_id,
-                                   start_date: trip.start_date.clone(),
+                                   start_date: match &trip.start_date {
+                                        Some(start_date) => {
+                                            match chrono::NaiveDate::parse_from_str(
+                                                &start_date,
+                                                "%Y%m%d",
+                                            ) {
+                                                Ok(start_date) => Some(start_date),
+                                                Err(_) => None,
+                                            }
+                                        },
+                                        None => None,
+                                    },
                                    start_time: trip.start_time.clone(),
                                     schedule_relationship: trip.schedule_relationship,
                                     route_id: recalculate_route_id.clone(),
@@ -606,7 +619,7 @@ pub async fn new_rt_data(
                                 .stop_time_update
                                 .iter()
                                 .map(|stu| AspenisedStopTimeUpdate {
-                                    stop_sequence: stu.stop_sequence,
+                                    stop_sequence: stu.stop_sequence.map(|x| x as u16),
                                     stop_id: stu.stop_id.as_ref().map(|x| x.into()),
                                     arrival: stu.arrival.clone().map(|arrival| {
                                         AspenStopTimeEvent {
@@ -651,7 +664,8 @@ pub async fn new_rt_data(
                                                                 train_and_stop_scax
                                                                     .formatted_track_designation
                                                                     .clone()
-                                                                    .replace("Platform ", ""),
+                                                                    .replace("Platform ", "")
+                                                                    .into(),
                                                             );
                                                         }
                                                     }
@@ -662,8 +676,12 @@ pub async fn new_rt_data(
                                         }
                                         _ => None,
                                     },
-                                    schedule_relationship: stu.schedule_relationship,
-                                    departure_occupancy_status: stu.departure_occupancy_status,
+                                    schedule_relationship: option_i32_to_schedule_relationship(
+                                        &stu.schedule_relationship,
+                                    ),
+                                    departure_occupancy_status: option_i32_to_occupancy_status(
+                                        &stu.departure_occupancy_status,
+                                    ),
                                     stop_time_properties: stu
                                         .stop_time_properties
                                         .clone()

@@ -1110,8 +1110,6 @@ pub async fn nearby_from_coords(
                                                         trip_update.trip.start_date
                                                             == Some(
                                                                 trip.trip_service_date
-                                                                    .format("%Y%m%d")
-                                                                    .to_string(),
                                                             )
                                                     }
                                                     false => {
@@ -1236,7 +1234,7 @@ pub async fn nearby_from_coords(
                                                 if let Some(platform_id) =
                                                     &relevant_stop_time_update.platform_string
                                                 {
-                                                    platform = Some(platform_id.clone());
+                                                    platform = Some(platform_id.to_string());
                                                 }
                                             }
                                         }

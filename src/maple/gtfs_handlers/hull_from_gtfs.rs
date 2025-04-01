@@ -50,17 +50,24 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
         route.route_type == RouteType::Subway || route.route_type == RouteType::Bus
     });
 
-    let list_of_coordinates_to_use_from_shapes = gtfs
-        .shapes
-        .iter()
-        .flat_map(|(id, points)| {
-            points
-                .iter()
-                .filter(|point| !is_null_island(point.longitude, point.latitude))
-                .filter(|point| point.longitude.is_finite() && point.latitude.is_finite())
-                .map(|point| Point::new(point.longitude, point.latitude))
-        })
-        .collect::<Vec<Point>>();
+    let shape_point_count = gtfs.shapes.iter().map(|(_, x)| x.len()).sum::<usize>();
+
+    let extremely_large_shape_file = shape_point_count > 10_000_000;
+
+    let list_of_coordinates_to_use_from_shapes = match extremely_large_shape_file {
+        true => vec![],
+        false => gtfs
+            .shapes
+            .iter()
+            .flat_map(|(id, points)| {
+                points
+                    .iter()
+                    .filter(|point| !is_null_island(point.longitude, point.latitude))
+                    .filter(|point| point.longitude.is_finite() && point.latitude.is_finite())
+                    .map(|point| Point::new(point.longitude, point.latitude))
+            })
+            .collect::<Vec<Point>>(),
+    };
 
     let stop_points = gtfs
         .stops
@@ -78,7 +85,6 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
     let new_point_collection = list_of_coordinates_to_use_from_shapes
         .into_iter()
         .chain(stop_points.into_iter())
-        .filter(|point| !BANNED_OCEAN_GEO.contains(point))
         .collect::<Vec<Point>>();
 
     if new_point_collection.len() < 4 {
@@ -94,11 +100,14 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
 
     //buffer the convex hull by 5km if bus only, 10km for metros, but 50km if contains rail or other modes
 
-    let buffer_distance = match bus_only {
-        true => 5000.0,
-        false => match contains_metro_and_bus_only {
+    let buffer_distance = match extremely_large_shape_file {
+        true => 20000.0,
+        false => match bus_only {
             true => 5000.0,
-            false => 30000.0,
+            false => match contains_metro_and_bus_only {
+                true => 5000.0,
+                false => 30000.0,
+            },
         },
     };
 

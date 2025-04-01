@@ -1,7 +1,6 @@
 // Copyright Kyler Chin <kyler@catenarymaps.org>
 // Catenary Transit Initiatives
 // Attribution cannot be removed
-
 #![deny(
     clippy::mutable_key_type,
     clippy::map_entry,
@@ -24,6 +23,14 @@
     clippy::iter_nth,
     clippy::iter_cloned_collect
 )]
+
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 use ahash::AHashSet;
 use catenary::postgres_tools::make_async_pool;
 use catenary::{aspen::lib::*, id_cleanup};
@@ -330,6 +337,12 @@ impl AspenRpc for AspenServer {
                                     let route_id_new = route_id_new.split('-').next().unwrap();
                                     *route_id = route_id_new.to_string();
                                 }
+                            }
+                        }
+
+                        if let Some(trip_update) = &mut vehicle_position.trip_update {
+                            if !trip_update.stop_time_update.is_empty() {
+                                trip_update.stop_time_update = vec![];
                             }
                         }
                     }

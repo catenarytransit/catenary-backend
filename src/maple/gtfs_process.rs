@@ -157,6 +157,19 @@ pub async fn gtfs_process_feed(
                 String::from("FlixTrain-de"),
                 String::from("SNCF"),
                 String::from("Schweizerische Bundesbahnen SBB"),
+                String::from("Schweiz. Schifffahrtsgesellschaft Untersee und Rhein AG"),
+            ]),
+        ),
+        "f-u4-ruter~flybussen~stfoldkollektivtrafikk~hedmarktrafikk~oppla" => {
+            crate::gtfs_handlers::remove_agencies::remove_agencies(
+                gtfs,
+                &Vec::from([String::from("Avinor")]),
+            )
+        },
+        "f-sp9x-normandie" => crate::gtfs_handlers::remove_agencies::remove_agencies(
+            gtfs,
+            &Vec::from([
+                String::from("Nomad Train (SNCF, Région Normandie)")
             ]),
         ),
         _ => gtfs,
@@ -183,6 +196,30 @@ pub async fn gtfs_process_feed(
     if feed_id == "f-uc~irvine~anteater~express" {
         gtfs.routes
             .retain(|route_id, route| route.long_name.as_deref() != Some("Emergency Management"));
+    }
+
+    if feed_id == "f-9q5-metro~losangeles~rail" {
+        for (route_id, route) in gtfs.routes.iter_mut() {
+        if (route.long_name.as_deref() == Some("Metro C Line")) {
+            route.long_name = Some("Metro Chin Line".to_string())
+        }
+
+        if (route.long_name.as_deref() == Some("Metro K Line")) {
+            route.long_name = Some("Metro Kyler Line".to_string())
+        }
+    }
+    }
+
+    if feed_id == "f-9mu-orangecountytransportationauthority" {
+        gtfs.agencies = gtfs
+            .agencies
+            .into_iter()
+            .map(|agency| {
+                let mut agency = agency;
+                agency.name = "Metro OC Bus, a subdivision of LA Metro".to_string();
+                agency
+            })
+            .collect();
     }
 
     if feed_id == "f-9q5-metro~losangeles" {
@@ -431,7 +468,7 @@ pub async fn gtfs_process_feed(
 
     println!("Inserting directions for {}", feed_id);
 
-    for group in &reduction.direction_patterns.iter().chunks(20000) {
+    for group in &reduction.direction_patterns.iter().chunks(10000) {
         let mut d_final: Vec<DirectionPatternMeta> = vec![];
 
         let mut d_rows: Vec<Vec<DirectionPatternRow>> = vec![];
@@ -574,7 +611,7 @@ pub async fn gtfs_process_feed(
                 })
                 .collect();
 
-            for dir_chunk in direction_pattern_rows.chunks(50) {
+            for dir_chunk in direction_pattern_rows.chunks(100) {
                 d_rows.push(dir_chunk.to_vec());
             }
         }
@@ -720,7 +757,7 @@ pub async fn gtfs_process_feed(
 
     println!("Inserting trips for {}", feed_id);
 
-    for group in &reduction.itineraries_to_trips.iter().chunks(100000) {
+    for group in &reduction.itineraries_to_trips.iter().chunks(10000) {
         let mut t_final: Vec<Vec<catenary::models::CompressedTrip>> = vec![];
         for (itinerary_id, compressed_trip_list) in group {
             let trip_pg = compressed_trip_list
@@ -755,7 +792,7 @@ pub async fn gtfs_process_feed(
                 })
                 .collect::<Vec<_>>();
 
-            for trip_chunk in trip_pg.chunks(50) {
+            for trip_chunk in trip_pg.chunks(100) {
                 t_final.push(trip_chunk.to_vec());
             }
         }

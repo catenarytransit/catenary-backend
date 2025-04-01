@@ -24,7 +24,9 @@ The code is heavily commented, go to each folder in src for more information.
 ## Install Dependencies
 
 ```bash
-sudo apt install protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql postgresql-17 postgresql-17-postgis postgresql-contrib unzip wget cmake openssl libpq-dev
+sudo apt install -y postgresql-common
+sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh
+sudo apt install libprotoc-dev protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql postgresql-17 postgresql-17-postgis postgresql-contrib unzip wget cmake openssl libpq-dev
 ```
 
 ### Enable PostGis

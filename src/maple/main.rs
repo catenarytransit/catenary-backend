@@ -31,6 +31,13 @@
     clippy::op_ref
 )]
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 use ahash::AHashMap;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::postgres_tools::make_async_pool;
@@ -131,6 +138,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             "f-wests~bus~service",
             //discard duplicate from inside ratp feed
             "f-u0-sncf~transilien~rer",
+            "f-eurostar",
         ]
         .into_iter()
         .map(String::from),

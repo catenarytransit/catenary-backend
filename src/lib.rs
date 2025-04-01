@@ -280,6 +280,7 @@ pub mod aspen_dataset {
     use crate::RtKey;
     use ahash::AHashMap;
     use compact_str::CompactString;
+    use ecow::EcoString;
     use gtfs_realtime::FeedEntity;
     use std::hash::Hash;
 
@@ -495,7 +496,7 @@ pub mod aspen_dataset {
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenTripProperties {
         pub trip_id: Option<String>,
-        pub start_date: Option<String>,
+        pub start_date: Option<chrono::NaiveDate>,
         pub start_time: Option<String>,
         pub shape_id: Option<String>,
     }
@@ -506,7 +507,7 @@ pub mod aspen_dataset {
         pub route_id: Option<String>,
         pub direction_id: Option<u32>,
         pub start_time: Option<String>,
-        pub start_date: Option<String>,
+        pub start_date: Option<chrono::NaiveDate>,
         pub schedule_relationship: Option<i32>,
         pub modified_trip: Option<ModifiedTripSelector>,
     }
@@ -535,7 +536,17 @@ pub mod aspen_dataset {
                 route_id: trip_descriptor.route_id,
                 direction_id: trip_descriptor.direction_id,
                 start_time: trip_descriptor.start_time,
-                start_date: trip_descriptor.start_date,
+                start_date: match &trip_descriptor.start_date {
+                    Some(date) => {
+                        //chrono parse yyyymmdd
+
+                        match chrono::NaiveDate::parse_from_str(&date, "%Y%m%d") {
+                            Ok(date) => Some(date),
+                            Err(_) => None,
+                        }
+                    }
+                    None => None,
+                },
                 schedule_relationship: trip_descriptor.schedule_relationship,
                 modified_trip: trip_descriptor.modified_trip.map(|x| x.into()),
             }
@@ -544,19 +555,109 @@ pub mod aspen_dataset {
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenisedStopTimeUpdate {
-        pub stop_sequence: Option<u32>,
-        pub stop_id: Option<compact_str::CompactString>,
+        pub stop_sequence: Option<u16>,
+        pub stop_id: Option<ecow::EcoString>,
         pub arrival: Option<AspenStopTimeEvent>,
         pub departure: Option<AspenStopTimeEvent>,
-        pub departure_occupancy_status: Option<i32>,
-        pub schedule_relationship: Option<i32>,
+        pub departure_occupancy_status: Option<AspenisedOccupancyStatus>,
+        pub schedule_relationship: Option<AspenisedScheduleRelationship>,
         pub stop_time_properties: Option<AspenisedStopTimeProperties>,
-        pub platform_string: Option<String>,
+        pub platform_string: Option<ecow::EcoString>,
+    }
+
+    pub fn option_i32_to_occupancy_status(
+        occupancy_status: &Option<i32>,
+    ) -> Option<AspenisedOccupancyStatus> {
+        match occupancy_status {
+            Some(status) => match status {
+                0 => Some(AspenisedOccupancyStatus::Empty),
+                1 => Some(AspenisedOccupancyStatus::ManySeatsAvailable),
+                2 => Some(AspenisedOccupancyStatus::FewSeatsAvailable),
+                3 => Some(AspenisedOccupancyStatus::StandingRoomOnly),
+                4 => Some(AspenisedOccupancyStatus::CrushedStandingRoomOnly),
+                5 => Some(AspenisedOccupancyStatus::Full),
+                6 => Some(AspenisedOccupancyStatus::NotAcceptingPassengers),
+                7 => Some(AspenisedOccupancyStatus::NoDataAvailable),
+                8 => Some(AspenisedOccupancyStatus::NotBoardable),
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    pub fn occupancy_status_to_u8(occupancy_status: &AspenisedOccupancyStatus) -> u8 {
+        match occupancy_status {
+            AspenisedOccupancyStatus::Empty => 0,
+            AspenisedOccupancyStatus::ManySeatsAvailable => 1,
+            AspenisedOccupancyStatus::FewSeatsAvailable => 2,
+            AspenisedOccupancyStatus::StandingRoomOnly => 3,
+            AspenisedOccupancyStatus::CrushedStandingRoomOnly => 4,
+            AspenisedOccupancyStatus::Full => 5,
+            AspenisedOccupancyStatus::NotAcceptingPassengers => 6,
+            AspenisedOccupancyStatus::NoDataAvailable => 7,
+            AspenisedOccupancyStatus::NotBoardable => 8,
+        }
+    }
+
+    pub fn schedule_relationship_to_u8(
+        schedule_relationship: &AspenisedScheduleRelationship,
+    ) -> u8 {
+        match schedule_relationship {
+            AspenisedScheduleRelationship::Scheduled => 0,
+            AspenisedScheduleRelationship::Added => 1,
+            AspenisedScheduleRelationship::Unscheduled => 2,
+            AspenisedScheduleRelationship::Canceled => 3,
+            AspenisedScheduleRelationship::Replacement => 5,
+            AspenisedScheduleRelationship::Duplicated => 6,
+            AspenisedScheduleRelationship::Deleted => 7,
+        }
+    }
+
+    pub fn option_i32_to_schedule_relationship(
+        schedule_relationship: &Option<i32>,
+    ) -> Option<AspenisedScheduleRelationship> {
+        match schedule_relationship {
+            Some(status) => match status {
+                0 => Some(AspenisedScheduleRelationship::Scheduled),
+                1 => Some(AspenisedScheduleRelationship::Added),
+                2 => Some(AspenisedScheduleRelationship::Unscheduled),
+                3 => Some(AspenisedScheduleRelationship::Canceled),
+                5 => Some(AspenisedScheduleRelationship::Replacement),
+                6 => Some(AspenisedScheduleRelationship::Duplicated),
+                7 => Some(AspenisedScheduleRelationship::Deleted),
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub enum AspenisedOccupancyStatus {
+        Empty = 0,
+        ManySeatsAvailable = 1,
+        FewSeatsAvailable = 2,
+        StandingRoomOnly = 3,
+        CrushedStandingRoomOnly = 4,
+        Full = 5,
+        NotAcceptingPassengers = 6,
+        NoDataAvailable = 7,
+        NotBoardable = 8,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub enum AspenisedScheduleRelationship {
+        Scheduled = 0,
+        Added = 1,
+        Unscheduled = 2,
+        Canceled = 3,
+        Replacement = 5,
+        Duplicated = 6,
+        Deleted = 7,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct AspenisedStopTimeProperties {
-        pub assigned_stop_id: Option<String>,
+        pub assigned_stop_id: Option<EcoString>,
     }
 
     use gtfs_realtime::trip_update::StopTimeEvent;
@@ -565,7 +666,7 @@ pub mod aspen_dataset {
     impl From<StopTimeProperties> for AspenisedStopTimeProperties {
         fn from(stop_time_properties: StopTimeProperties) -> Self {
             AspenisedStopTimeProperties {
-                assigned_stop_id: stop_time_properties.assigned_stop_id,
+                assigned_stop_id: stop_time_properties.assigned_stop_id.map(|x| x.into()),
             }
         }
     }
@@ -639,7 +740,7 @@ pub mod aspen_dataset {
         pub trip_short_name: Option<String>,
         pub direction_id: Option<u32>,
         pub start_time: Option<String>,
-        pub start_date: Option<String>,
+        pub start_date: Option<chrono::NaiveDate>,
         pub schedule_relationship: Option<i32>,
     }
 
@@ -668,7 +769,17 @@ pub mod aspen_dataset {
         fn from(trip_properties: TripProperties) -> Self {
             AspenTripProperties {
                 trip_id: trip_properties.trip_id,
-                start_date: trip_properties.start_date,
+                start_date: match &trip_properties.start_date {
+                    Some(date) => {
+                        //chrono parse yyyymmdd
+
+                        match chrono::NaiveDate::parse_from_str(date, "%Y%m%d") {
+                            Ok(date) => Some(date),
+                            Err(_) => None,
+                        }
+                    }
+                    None => None,
+                },
                 start_time: trip_properties.start_time,
                 shape_id: trip_properties.shape_id,
             }
@@ -1210,5 +1321,20 @@ where
     match bincode::serde::decode_from_slice(value, config) {
         Ok(x) => Ok(x.0),
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_size_of_stop_update() {
+        let x = std::mem::size_of::<gtfs_realtime::trip_update::StopTimeUpdate>();
+        println!("Size of StopTimeUpdate: {}", x);
+
+        let x = std::mem::size_of::<crate::aspen_dataset::AspenisedStopTimeUpdate>();
+
+        println!("Size of AspenisedStopTimeUpdate: {}", x);
     }
 }

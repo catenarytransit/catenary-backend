@@ -35,6 +35,13 @@
     clippy::useless_vec
 )]
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 mod postgis_download;
 use postgis_download::*;
 mod departures_at_stop;
@@ -680,7 +687,6 @@ async fn main() -> std::io::Result<()> {
             .service(nanotime)
             .service(chateaus)
             .service(metrolinktrackproxy)
-            .service(shapes_not_bus)
             .service(shapes_not_bus_meta)
             .service(shapes_bus)
             .service(shapes_bus_meta)

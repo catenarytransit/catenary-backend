@@ -185,6 +185,51 @@ pub async fn get_vehicle_data_endpoint(
             )
             .await
         }
+        "san-francisco-bay-area" => match &query.route_id {
+            Some(route_id) => {
+                let split_route_colon = route_id
+                    .split(":")
+                    .map(|x| x.to_string())
+                    .collect::<Vec<String>>();
+
+                match split_route_colon.len() == 2 {
+                    true => {
+                        let agency_code = split_route_colon[0].clone();
+
+                        match agency_code.as_str() {
+                            "SM" => {
+                                generic_number_lookup(
+                                    conn,
+                                    "north_america/united_states/california/smctd-samtrans",
+                                    &query.label,
+                                )
+                                .await
+                            }
+                            "AC" => {
+                                generic_number_lookup(
+                                    conn,
+                                    "north_america/united_states/california/alameda-actransit",
+                                    &query.label,
+                                )
+                                .await
+                            }
+                            _ => HttpResponse::Ok().json(ResponseVehicleIndividual {
+                                found_data: false,
+                                vehicle: None,
+                            }),
+                        }
+                    }
+                    false => HttpResponse::Ok().json(ResponseVehicleIndividual {
+                        found_data: false,
+                        vehicle: None,
+                    }),
+                }
+            }
+            None => HttpResponse::Ok().json(ResponseVehicleIndividual {
+                found_data: false,
+                vehicle: None,
+            }),
+        },
         _ => HttpResponse::Ok().json(ResponseVehicleIndividual {
             found_data: false,
             vehicle: None,

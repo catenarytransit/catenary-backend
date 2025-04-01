@@ -3,8 +3,7 @@ use ahash::AHashMap;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::GetVehicleLocationsResponse;
-use catenary::aspen_dataset::AspenisedVehiclePosition;
-use catenary::aspen_dataset::AspenisedVehicleRouteCache;
+use catenary::aspen_dataset::*;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -17,6 +16,62 @@ pub enum CategoryOfRealtimeVehicleData {
     Bus,
     Rail,
     Other,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AspenisedVehicleTripInfoOutput {
+    pub trip_id: Option<String>,
+    pub trip_headsign: Option<String>,
+    pub route_id: Option<String>,
+    pub trip_short_name: Option<String>,
+    pub direction_id: Option<u32>,
+    pub start_time: Option<String>,
+    pub start_date: Option<String>,
+    pub schedule_relationship: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+
+struct AspenisedVehiclePositionOutput {
+    pub trip: Option<AspenisedVehicleTripInfoOutput>,
+    pub vehicle: Option<AspenisedVehicleDescriptor>,
+    pub position: Option<CatenaryRtVehiclePosition>,
+    pub timestamp: Option<u64>,
+    pub route_type: i16,
+    pub current_stop_sequence: Option<u32>,
+    pub current_status: Option<i32>,
+    pub congestion_level: Option<i32>,
+    pub occupancy_status: Option<i32>,
+    pub occupancy_percentage: Option<u32>,
+}
+
+fn convert_to_output(input: &AspenisedVehiclePosition) -> AspenisedVehiclePositionOutput {
+    let trip_new = match &input.trip {
+        Some(trip) => Some(AspenisedVehicleTripInfoOutput {
+            trip_id: trip.trip_id.clone(),
+            trip_headsign: trip.trip_headsign.clone(),
+            route_id: trip.route_id.clone(),
+            trip_short_name: trip.trip_short_name.clone(),
+            direction_id: trip.direction_id,
+            start_time: trip.start_time.clone(),
+            start_date: trip.start_date.map(|x| x.format("%Y%m%d").to_string()),
+            schedule_relationship: trip.schedule_relationship,
+        }),
+        None => None,
+    };
+
+    AspenisedVehiclePositionOutput {
+        trip: trip_new,
+        vehicle: input.vehicle.clone(),
+        position: input.position.clone(),
+        timestamp: input.timestamp,
+        route_type: input.route_type,
+        current_stop_sequence: input.current_stop_sequence,
+        current_status: input.current_status,
+        congestion_level: input.congestion_level,
+        occupancy_status: input.occupancy_status,
+        occupancy_percentage: input.occupancy_percentage,
+    }
 }
 
 fn category_to_allowed_route_ids(category: &CategoryOfRealtimeVehicleData) -> Vec<i16> {
@@ -69,7 +124,7 @@ pub struct PositionDataCategory {
 #[derive(Serialize, Deserialize)]
 pub struct EachCategoryPayload {
     pub vehicle_route_cache: Option<AHashMap<String, AspenisedVehicleRouteCache>>,
-    pub vehicle_positions: Option<AHashMap<String, AspenisedVehiclePosition>>,
+    pub vehicle_positions: Option<AHashMap<String, AspenisedVehiclePositionOutput>>,
     pub last_updated_time_ms: u64,
     pub hash_of_routes: u64,
 }
@@ -215,8 +270,9 @@ pub async fn bulk_realtime_fetch_v1(
                         .filter(|vehicle_position| {
                             route_ids_allowed.contains(&vehicle_position.1.route_type)
                         })
-                        .map(|(a, b)| (a.clone(), b.clone()))
-                        .collect::<AHashMap<String, AspenisedVehiclePosition>>();
+                        .map(|(a, b)| (a.clone(), b))
+                        .map(|(a, b)| (a, convert_to_output(&b)))
+                        .collect::<AHashMap<String, AspenisedVehiclePositionOutput>>();
 
                     let filtered_routes_cache: Option<
                         AHashMap<String, AspenisedVehicleRouteCache>,

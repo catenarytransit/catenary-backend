@@ -39,6 +39,7 @@ pub struct RouteInfoResponse {
     pub alert_ids_for_this_route: Vec<String>,
     pub alert_id_to_alert: BTreeMap<String, AspenisedAlert>,
     pub stop_id_to_alert_ids: BTreeMap<String, Vec<String>>,
+    pub onestop_feed_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -383,6 +384,7 @@ pub async fn route_info(
         color: route.color,
         text_color: route.text_color,
         route_type: route.route_type,
+        onestop_feed_id: route.onestop_feed_id,
         pdf_url: None,
         stops: stops_hashmap,
         direction_patterns: directions_zipped,

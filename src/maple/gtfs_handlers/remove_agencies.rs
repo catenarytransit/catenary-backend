@@ -4,13 +4,15 @@ use std::collections::{BTreeSet, HashMap};
 pub fn remove_agencies(gtfs: Gtfs, to_delete_agencies: &Vec<String>) -> Gtfs {
     let mut gtfs = gtfs;
 
-    let agency_ids_to_remove = to_delete_agencies
+    let to_delete_agencies: BTreeSet<String> =
+        to_delete_agencies.iter().map(|x| x.trim().to_string()).collect();
+
+    let agency_ids_to_remove = gtfs
+        .agencies
         .iter()
-        .map(|x| gtfs.agencies.iter().find(|y| *y.name.trim() == *x.trim()))
-        .filter(|x| x.is_some())
-        .map(|x| x.unwrap().id.clone())
-        .flatten()
-        .map(|x| x.to_string())
+        .filter(|agency| to_delete_agencies.contains(agency.name.trim()))
+        .filter(|agency| agency.id.is_some())
+        .map(|x| x.id.as_ref().unwrap().clone())
         .collect::<Vec<String>>();
 
     gtfs.agencies
@@ -126,14 +128,16 @@ pub fn gtfs_ch_cleanup(gtfs: Gtfs) -> Gtfs {
 
     gtfs.stops
         .retain(|stop_id, stop| match stops_to_agency_ids.get(stop_id) {
-            Some(agency_ids) => !agency_ids.is_empty() ||
-                match &stop.parent_station {
-                    Some(parent_id) => match stops_to_agency_ids.get(parent_id.as_str()) {
-                        Some(agency_ids) => !agency_ids.is_empty(),
+            Some(agency_ids) => {
+                !agency_ids.is_empty()
+                    || match &stop.parent_station {
+                        Some(parent_id) => match stops_to_agency_ids.get(parent_id.as_str()) {
+                            Some(agency_ids) => !agency_ids.is_empty(),
+                            None => true,
+                        },
                         None => true,
-                    },
-                    None => true,
-                },
+                    }
+            }
             None => true,
         });
 
