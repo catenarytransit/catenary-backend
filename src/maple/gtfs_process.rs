@@ -582,7 +582,7 @@ pub async fn gtfs_process_feed(
         conn.build_transaction()
             .run::<(), diesel::result::Error, _>(|conn| {
                 Box::pin(async move {
-                    for dir_chunk in d_final.chunks(50) {
+                    for dir_chunk in d_final.chunks(100) {
                         diesel::insert_into(
                             catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta,
                         )
