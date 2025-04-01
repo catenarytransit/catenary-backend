@@ -160,23 +160,25 @@ pub async fn gtfs_process_feed(
                 String::from("Schweiz. Schifffahrtsgesellschaft Untersee und Rhein AG"),
             ]),
         ),
+        "f-ahverkehrsverbund~schleswig~holstein~nah" => {
+            crate::gtfs_handlers::remove_agencies::remove_agencies(
+                gtfs,
+                &Vec::from([String::from("DB Fernverkehr (Codesharing)")]),
+            )
+        }
         "f-u4-ruter~flybussen~stfoldkollektivtrafikk~hedmarktrafikk~oppla" => {
             crate::gtfs_handlers::remove_agencies::remove_agencies(
                 gtfs,
                 &Vec::from([String::from("Avinor")]),
             )
-        },
+        }
         "f-sp9x-normandie" => crate::gtfs_handlers::remove_agencies::remove_agencies(
             gtfs,
-            &Vec::from([
-                String::from("Nomad Train (SNCF, Région Normandie)")
-            ]),
+            &Vec::from([String::from("Nomad Train (SNCF, Région Normandie)")]),
         ),
         "f-gbwc-mobibreizh" => crate::gtfs_handlers::remove_agencies::remove_agencies(
             gtfs,
-            &Vec::from([
-                String::from("TER BreizhGo")
-            ]),
+            &Vec::from([String::from("TER BreizhGo")]),
         ),
         _ => gtfs,
     };
@@ -206,14 +208,14 @@ pub async fn gtfs_process_feed(
 
     if feed_id == "f-9q5-metro~losangeles~rail" {
         for (route_id, route) in gtfs.routes.iter_mut() {
-        if (route.long_name.as_deref() == Some("Metro C Line")) {
-            route.long_name = Some("Metro Chin Line".to_string())
-        }
+            if (route.long_name.as_deref() == Some("Metro C Line")) {
+                route.long_name = Some("Metro Chin Line".to_string())
+            }
 
-        if (route.long_name.as_deref() == Some("Metro K Line")) {
-            route.long_name = Some("Metro Kyler Line".to_string())
+            if (route.long_name.as_deref() == Some("Metro K Line")) {
+                route.long_name = Some("Metro Kyler Line".to_string())
+            }
         }
-    }
     }
 
     if feed_id == "f-9mu-orangecountytransportationauthority" {
