@@ -4,8 +4,10 @@ use std::collections::{BTreeSet, HashMap};
 pub fn remove_agencies(gtfs: Gtfs, to_delete_agencies: &Vec<String>) -> Gtfs {
     let mut gtfs = gtfs;
 
-    let to_delete_agencies: BTreeSet<String> =
-        to_delete_agencies.iter().map(|x| x.trim().to_string()).collect();
+    let to_delete_agencies: BTreeSet<String> = to_delete_agencies
+        .iter()
+        .map(|x| x.trim().to_string())
+        .collect();
 
     let agency_ids_to_remove = gtfs
         .agencies

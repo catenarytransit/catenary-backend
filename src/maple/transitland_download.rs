@@ -434,11 +434,13 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
             //login: kd
             //password: Baewongohwug3Ao
             //https://kolejedolnoslaskie.pl/rozklady-gtfs/
-        },
+        }
         "f-mavcsoport" => {
             headers.insert(
                 "Authorization",
-                "Basic YXJvbmt2aEBnbWFpbC5jb206M09jOHpNRFc3c3RCQ2ljVg==".parse().unwrap(),
+                "Basic YXJvbmt2aEBnbWFpbC5jb206M09jOHpNRFc3c3RCQ2ljVg=="
+                    .parse()
+                    .unwrap(),
             );
         }
         _ => {}
