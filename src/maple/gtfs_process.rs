@@ -165,7 +165,19 @@ pub async fn gtfs_process_feed(
                 gtfs,
                 &Vec::from([String::from("Avinor")]),
             )
-        }
+        },
+        "f-sp9x-normandie" => crate::gtfs_handlers::remove_agencies::remove_agencies(
+            gtfs,
+            &Vec::from([
+                String::from("Nomad Train (SNCF, Région Normandie)")
+            ]),
+        ),
+        "f-gbwc-mobibreizh" => crate::gtfs_handlers::remove_agencies::remove_agencies(
+            gtfs,
+            &Vec::from([
+                String::from("TER BreizhGo")
+            ]),
+        ),
         _ => gtfs,
     };
 
@@ -613,7 +625,7 @@ pub async fn gtfs_process_feed(
         conn.build_transaction()
             .run::<(), diesel::result::Error, _>(|conn| {
                 Box::pin(async move {
-                    for dir_chunk in d_final.chunks(50) {
+                    for dir_chunk in d_final.chunks(100) {
                         diesel::insert_into(
                             catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta,
                         )
