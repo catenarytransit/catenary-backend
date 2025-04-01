@@ -192,7 +192,7 @@ pub async fn gtfs_process_feed(
             .retain(|route_id, route| route.long_name.as_deref() != Some("Emergency Management"));
     }
 
-    if feed_id == "f-9q5~metro~losangeles~rail" {
+    if feed_id == "f-9q5-metro~losangeles~rail" {
         for (route_id, route) in gtfs.routes.iter_mut() {
         if (route.long_name.as_deref() == Some("Metro C Line")) {
             route.long_name = Some("Metro Chin Line".to_string())
