@@ -204,6 +204,18 @@ pub async fn gtfs_process_feed(
     }
     }
 
+    if feed_id == "f-9mu-orangecountytransportationauthority" {
+        gtfs.agencies = gtfs
+            .agencies
+            .into_iter()
+            .map(|agency| {
+                let mut agency = agency;
+                agency.name = "Metro OC Bus, a subdivision of LA Metro".to_string();
+                agency
+            })
+            .collect();
+    }
+
     if feed_id == "f-9q5-metro~losangeles" {
         for (route_id, route) in gtfs.routes.iter_mut() {
             if route.long_name.as_deref() == Some("Metro G Line (Orange) 901") {
