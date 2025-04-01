@@ -172,6 +172,12 @@ pub async fn gtfs_process_feed(
                 String::from("Nomad Train (SNCF, Région Normandie)")
             ]),
         ),
+        "f-gbwc-mobibreizh" => crate::gtfs_handlers::remove_agencies::remove_agencies(
+            gtfs,
+            &Vec::from([
+                String::from("TER BreizhGo")
+            ]),
+        ),
         _ => gtfs,
     };
 
