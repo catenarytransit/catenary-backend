@@ -734,13 +734,23 @@ pub async fn new_rt_data(
 
                         if let Some(header_text) = &mut alert.header_text {
                             for a in header_text.translation.iter_mut() {
-                                a.text = re.replace_all(&a.text, "Catenary Maps").to_string();
+                                a.text = re
+                                    .replace_all(
+                                        &catenary::convert_text_12h_to_24h(&a.text),
+                                        "Catenary Maps",
+                                    )
+                                    .to_string();
                             }
                         }
 
                         if let Some(desc_text) = &mut alert.description_text {
                             for a in desc_text.translation.iter_mut() {
-                                a.text = re.replace_all(&a.text, "Catenary Maps").to_string();
+                                a.text = re
+                                    .replace_all(
+                                        &catenary::convert_text_12h_to_24h(&a.text),
+                                        "Catenary Maps",
+                                    )
+                                    .to_string();
                             }
                         }
 
