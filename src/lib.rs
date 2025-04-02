@@ -78,12 +78,19 @@ use csv::ReaderBuilder;
 use csv::StringRecord;
 use csv::WriterBuilder;
 use flate2::Compression;
+use lazy_static::lazy_static;
+use regex::Regex;
 use serde::Deserialize;
 use serde::Serialize;
 use std::io::Cursor;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::{fs::File, io::BufReader, io::BufWriter};
+
+lazy_static! {
+    static ref CLOCK_AM_PM_REGEX: Regex =
+        Regex::new(r"(\b\d{1,2})(?::(\d{2}))?\s*(?:([ap])\.?m\.?|([ap])m)(\b|\s|$)").unwrap();
+}
 
 pub fn fix_stop_times_headsigns(
     input_path: &str,
@@ -1322,6 +1329,33 @@ where
         Ok(x) => Ok(x.0),
         Err(e) => Err(e),
     }
+}
+
+pub fn convert_text_12h_to_24h(text: &str) -> String {
+    CLOCK_AM_PM_REGEX
+        .replace_all(text, |caps: &regex::Captures| {
+            let hour_str = &caps[1];
+            let minute_match = caps.get(2);
+            let ampm1 = caps.get(3).map_or("", |m| m.as_str());
+            let ampm2 = caps.get(4).map_or("", |m| m.as_str());
+
+            let hour: u32 = hour_str.parse().unwrap();
+            let minute: u32 = minute_match.map_or(0, |m| m.as_str().parse().unwrap_or(0));
+            let ampm = if !ampm1.is_empty() { ampm1 } else { ampm2 };
+
+            let mut hour24 = hour;
+            if ampm == "p" && hour != 12 {
+                hour24 += 12;
+            } else if ampm == "a" && hour == 12 {
+                hour24 = 0;
+            }
+
+            match minute_match {
+                Some(m) => format!("{:02}:{:02}", hour24, minute),
+                None => format!("{:02}:00", hour24),
+            }
+        })
+        .to_string()
 }
 
 #[cfg(test)]
