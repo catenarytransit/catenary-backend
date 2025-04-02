@@ -753,7 +753,8 @@ pub async fn new_rt_data(
                                         &catenary::convert_text_12h_to_24h(&a.text),
                                         "Catenary Maps",
                                     )
-                                    .to_string();
+                                    .to_string().replace("For Real-Time tracking, please visit rt.scmetro.org.", "")
+                                    .replace("Para el rastreo en tiempo real, por favor visite https://rt.scmetro.org.", "");
                             }
                         }
 
