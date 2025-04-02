@@ -1339,7 +1339,7 @@ pub fn convert_text_12h_to_24h(input: &str) -> String {
     // - meridian indicator: am, a.m., pm, p.m. (case insensitive)
     // - optional trailing period to preserve punctuation.
 
-    CLOCK_AM_PM_REGEX.replace_all(inpugt, |caps: &regex::Captures| {
+    CLOCK_AM_PM_REGEX.replace_all(input, |caps: &regex::Captures| {
         // Parse the hour and optional minute.
         let hour_str = &caps["hour"];
         let hour: u32 = hour_str.parse().unwrap();
