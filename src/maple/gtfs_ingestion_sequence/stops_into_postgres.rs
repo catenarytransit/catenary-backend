@@ -35,8 +35,8 @@ pub async fn stops_into_postgres(
         for (stop_id, stop) in chunk {
             let name: Option<String> = titlecase_process_new(stop.name.as_ref()).map(|x| {
                 x.replace("Fermata ", "")
-                    .replace("LAX / Metro", "Kyler Chin LAX")
-                    .replace("LAX/Metro", "Kyler Chin LAX")
+            //        .replace("LAX / Metro", "Kyler Chin LAX")
+             //       .replace("LAX/Metro", "Kyler Chin LAX")
             });
             let display_name: Option<String> = name.as_ref().map(|name| {
                 name.clone()
