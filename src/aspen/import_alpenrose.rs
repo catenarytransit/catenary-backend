@@ -13,6 +13,7 @@ use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use gtfs_realtime::FeedMessage;
+use lazy_static::lazy_static;
 use regex::Regex;
 use scc::HashMap as SccHashMap;
 use serde::Deserialize;
@@ -83,6 +84,10 @@ pub struct MetrolinkPos {
     pub lon: f32,
     pub speed: f32,
     pub symbol: CompactString,
+}
+
+lazy_static! {
+    static ref TRANSIT_APP_REGEX: Regex = Regex::new(r"(?i)(the )?transit app").unwrap();
 }
 
 const realtime_feeds_to_use_vehicle_ids: [&str; 1] = ["f-ezzx-tbc~rt"];
@@ -717,8 +722,6 @@ pub async fn new_rt_data(
             {
                 let alert_updates_gtfs_rt = alert_updates_gtfs_rt.get();
 
-                let re = Regex::new("(?i)(the )?transit app").unwrap();
-
                 for alert_entity in alert_updates_gtfs_rt.entity.iter() {
                     if let Some(alert) = &alert_entity.alert {
                         let alert_id = alert_entity.id.clone();
@@ -734,7 +737,7 @@ pub async fn new_rt_data(
 
                         if let Some(header_text) = &mut alert.header_text {
                             for a in header_text.translation.iter_mut() {
-                                a.text = re
+                                a.text = TRANSIT_APP_REGEX
                                     .replace_all(
                                         &catenary::convert_text_12h_to_24h(&a.text),
                                         "Catenary Maps",
@@ -745,7 +748,7 @@ pub async fn new_rt_data(
 
                         if let Some(desc_text) = &mut alert.description_text {
                             for a in desc_text.translation.iter_mut() {
-                                a.text = re
+                                a.text = TRANSIT_APP_REGEX
                                     .replace_all(
                                         &catenary::convert_text_12h_to_24h(&a.text),
                                         "Catenary Maps",
