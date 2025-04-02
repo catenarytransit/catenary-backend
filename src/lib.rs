@@ -89,7 +89,7 @@ use std::{fs::File, io::BufReader, io::BufWriter};
 
 lazy_static! {
     static ref CLOCK_AM_PM_REGEX: Regex =
-        Regex::new(r"(\b\d{1,2})(?::(\d{2}))?\s*(?:([ap])\.?m\.?|([ap])m)(\b|\s|$)").unwrap();
+        Regex::new(r"(?i)\b(?P<hour>1[0-2]|[1-9])(?::(?P<minute>[0-5][0-9]))?\s*(?P<meridian>[AP]\.?[Mm]\.?)\b(?P<ending>\.)?").unwrap();
 }
 
 pub fn fix_stop_times_headsigns(
@@ -1331,31 +1331,40 @@ where
     }
 }
 
-pub fn convert_text_12h_to_24h(text: &str) -> String {
-    CLOCK_AM_PM_REGEX
-        .replace_all(text, |caps: &regex::Captures| {
-            let hour_str = &caps[1];
-            let minute_match = caps.get(2);
-            let ampm1 = caps.get(3).map_or("", |m| m.as_str());
-            let ampm2 = caps.get(4).map_or("", |m| m.as_str());
+pub fn convert_text_12h_to_24h(input: &str) -> String {
+      // This regex matches:
+    // - hour: 1-9 or 10,11,12
+    // - optional minute part, e.g. :30
+    // - optional whitespace between time and meridian indicator
+    // - meridian indicator: am, a.m., pm, p.m. (case insensitive)
+    // - optional trailing period to preserve punctuation.
 
-            let hour: u32 = hour_str.parse().unwrap();
-            let minute: u32 = minute_match.map_or(0, |m| m.as_str().parse().unwrap_or(0));
-            let ampm = if !ampm1.is_empty() { ampm1 } else { ampm2 };
+    CLOCK_AM_PM_REGEX.replace_all(inpugt, |caps: &regex::Captures| {
+        // Parse the hour and optional minute.
+        let hour_str = &caps["hour"];
+        let hour: u32 = hour_str.parse().unwrap();
+        let minute_str = caps.name("minute").map_or("00", |m| m.as_str());
+        let minute: u32 = minute_str.parse().unwrap();
 
-            let mut hour24 = hour;
-            if ampm == "p" && hour != 12 {
-                hour24 += 12;
-            } else if ampm == "a" && hour == 12 {
-                hour24 = 0;
+        // Normalize the meridian indicator to lowercase for easier checking.
+        let meridian = caps["meridian"].to_ascii_lowercase();
+        // Preserve the optional ending period, if present.
+        let ending = caps.name("ending").map_or("", |m| m.as_str());
+
+        // Convert 12-hour time to 24-hour time.
+        let mut hour_24 = hour;
+        if meridian.starts_with('p') {
+            if hour != 12 {
+                hour_24 += 12;
             }
-
-            match minute_match {
-                Some(m) => format!("{:02}:{:02}", hour24, minute),
-                None => format!("{:02}:00", hour24),
+        } else if meridian.starts_with('a') {
+            if hour == 12 {
+                hour_24 = 0;
             }
-        })
-        .to_string()
+        }
+        // Format as HH:MM and append any ending punctuation.
+        format!("{:02}:{:02}{}", hour_24, minute, ending)
+    }).to_string()
 }
 
 #[cfg(test)]
