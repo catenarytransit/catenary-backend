@@ -53,6 +53,7 @@ pub fn gtfs_ch_cleanup(gtfs: Gtfs) -> Gtfs {
     let to_delete_agencies = [
         "Société Nationale des Chemins de fer Français",
         "DB Regio AG Baden-Württemberg",
+        "DistriBus"
     ];
 
     let to_delete_agencies = Vec::from(to_delete_agencies)
