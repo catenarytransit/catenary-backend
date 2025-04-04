@@ -161,7 +161,7 @@ pub async fn gtfs_process_feed(
                 String::from("Schweiz. Schifffahrtsgesellschaft Untersee und Rhein AG"),
                 String::from("FlixBus-de"),
                 String::from("NVBW"),
-                String::from("OEBB Personenverkehr AG Kundenservice")
+                String::from("OEBB Personenverkehr AG Kundenservice"),
             ]),
         ),
         "f-ahverkehrsverbund~schleswig~holstein~nah" => {
@@ -511,6 +511,17 @@ pub async fn gtfs_process_feed(
                     .stop_sequence
                     .iter()
                     .filter_map(|stop_id| gtfs.stops.get(stop_id.as_str()))
+                    .filter(|stop| {
+                        stop.latitude.is_some() && stop.longitude.is_some()
+                            && 
+                            //not within 1 degree of null is_null_island
+                            !(
+                                stop.latitude.unwrap() > -1.0
+                                    && stop.latitude.unwrap() < 1.0
+                                    && stop.longitude.unwrap() > -1.0
+                                    && stop.longitude.unwrap() < 1.0
+                            )
+                    })
                     .filter_map(|stop| match (stop.latitude, stop.longitude) {
                         (Some(latitude), Some(longitude)) => Some(postgis_diesel::types::Point {
                             y: latitude,
