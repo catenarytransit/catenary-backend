@@ -161,7 +161,7 @@ pub async fn gtfs_process_feed(
                 String::from("Schweiz. Schifffahrtsgesellschaft Untersee und Rhein AG"),
                 String::from("FlixBus-de"),
                 String::from("NVBW"),
-                String::from("OEBB Personenverkehr AG Kundenservice")
+                String::from("OEBB Personenverkehr AG Kundenservice"),
             ]),
         ),
         "f-ahverkehrsverbund~schleswig~holstein~nah" => {
@@ -511,6 +511,17 @@ pub async fn gtfs_process_feed(
                     .stop_sequence
                     .iter()
                     .filter_map(|stop_id| gtfs.stops.get(stop_id.as_str()))
+                    .filter(|stop| {
+                        stop.latitude.is_some() && stop.longitude.is_some()
+                            && 
+                            //not within 1 degree of null is_null_island
+                            !(
+                                stop.latitude.unwrap() > -1.0
+                                    && stop.latitude.unwrap() < 1.0
+                                    && stop.longitude.unwrap() > -1.0
+                                    && stop.longitude.unwrap() < 1.0
+                            )
+                    })
                     .filter_map(|stop| match (stop.latitude, stop.longitude) {
                         (Some(latitude), Some(longitude)) => Some(postgis_diesel::types::Point {
                             y: latitude,
@@ -769,7 +780,7 @@ pub async fn gtfs_process_feed(
 
     println!("Inserting trips for {}", feed_id);
 
-    for group in &reduction.itineraries_to_trips.iter().chunks(10000) {
+    for group in &reduction.itineraries_to_trips.iter().chunks(15000) {
         let mut t_final: Vec<Vec<catenary::models::CompressedTrip>> = vec![];
         for (itinerary_id, compressed_trip_list) in group {
             let trip_pg = compressed_trip_list
@@ -804,7 +815,7 @@ pub async fn gtfs_process_feed(
                 })
                 .collect::<Vec<_>>();
 
-            for trip_chunk in trip_pg.chunks(100) {
+            for trip_chunk in trip_pg.chunks(1000) {
                 t_final.push(trip_chunk.to_vec());
             }
         }
