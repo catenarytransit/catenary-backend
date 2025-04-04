@@ -541,7 +541,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                             ingestion_errored: false,
                                             ingestion_successfully_finished: true,
                                             deleted: false,
-                                            default_lang: gtfs_process_result.unwrap().default_lang,
+                                            default_lang: gtfs_process_result.as_ref().unwrap().default_lang.clone(),
                                             production: false,
                                             feed_expiration_date: None,
                                             feed_start_date: None,
@@ -560,6 +560,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                             &feed_id,
                                             &attempt_id,
                                             Arc::clone(&arc_conn_pool),
+                                            gtfs_process_result.as_ref().unwrap().bbox
                                         ).await;
 
                                     use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;

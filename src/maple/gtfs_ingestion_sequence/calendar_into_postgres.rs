@@ -39,7 +39,7 @@ pub async fn calendar_into_postgres(
         vec_of_calendar.push(calendar_into_pg);
     }
 
-    for calendar_chunk in vec_of_calendar.chunks(400) {
+    for calendar_chunk in vec_of_calendar.chunks(1000) {
         let _ = diesel::insert_into(catenary::schema::gtfs::calendar::table)
             .values(calendar_chunk)
             .execute(conn)
@@ -66,7 +66,7 @@ pub async fn calendar_into_postgres(
         }
     }
 
-    for calendar_date_chunk in vec_of_calendar_dates.chunks(400) {
+    for calendar_date_chunk in vec_of_calendar_dates.chunks(2000) {
         let _ = diesel::insert_into(calendar_dates::table)
             .values(calendar_date_chunk)
             .execute(conn)
