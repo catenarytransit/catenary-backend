@@ -55,6 +55,7 @@ pub mod schema;
 pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataEtcd;
 pub mod custom_alerts;
+pub mod shape_cache;
 use ahash::AHasher;
 use chrono::Datelike;
 use chrono::NaiveDate;
