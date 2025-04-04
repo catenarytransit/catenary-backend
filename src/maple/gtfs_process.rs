@@ -28,6 +28,7 @@ use catenary::schedule_filtering::minimum_day_filter;
 use chrono::NaiveDate;
 use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
+use geo::BoundingRect;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::FeedInfo;
 use gtfs_structures::Gtfs;
@@ -49,6 +50,7 @@ pub struct GtfsSummary {
     pub languages_avaliable: HashSet<String>,
     pub default_lang: Option<String>,
     pub general_timezone: String,
+    pub bbox: Option<geo::Rect>,
 }
 
 // take a feed id and throw it into postgres
@@ -320,6 +322,7 @@ pub async fn gtfs_process_feed(
             0 => String::from("Etc/UTC"),
             _ => gtfs.agencies[0].timezone.clone(),
         },
+        bbox: None,
     };
 
     let start_reduction_timer = Instant::now();
@@ -907,6 +910,10 @@ pub async fn gtfs_process_feed(
 
     //calculate concave hull
     let hull = crate::gtfs_handlers::hull_from_gtfs::hull_from_gtfs(&gtfs);
+
+    let bbox = hull.as_ref().map(|hull| hull.bounding_rect()).flatten();
+
+    gtfs_summary.bbox = bbox;
 
     // insert feed info
     if let Some(feed_info) = &feed_info {

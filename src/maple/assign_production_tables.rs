@@ -25,10 +25,22 @@ pub async fn assign_production_tables(
     feed_id: &str,
     attempt_id: &str,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
+    bbox: Option<geo::Rect>,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
+
+    let bbox_slippy = match bbox {
+        Some(bbox) => Some(slippy_map_tiles::BBox::new(
+            bbox.max().y as f32,
+            bbox.min().x as f32,
+            bbox.min().y as f32,
+            bbox.max().x as f32,
+        )),
+        None => None,
+    }
+    .flatten();
 
     let now: NaiveDate = Utc::now().naive_utc().date();
     let now_ms = SystemTime::now()
@@ -291,6 +303,23 @@ pub async fn assign_production_tables(
             &drop_attempt_id, &feed_id
         );
         let _ = delete_attempt_objects(feed_id, drop_attempt_id, Arc::clone(&arc_conn_pool)).await;
+    }
+
+    //wipe the old tile cache
+
+    if let Some(bbox_slippy) = bbox_slippy {
+        println!("Wiping tile cache for feed {}", &feed_id);
+
+        let start_timer = std::time::Instant::now();
+
+        let _ =
+            catenary::shape_fetcher::wipe_all_relevant_tiles_for_bbox(conn, &bbox_slippy).await?;
+
+        println!(
+            "Wiped tile cache for feed {}, took {:?}",
+            &feed_id,
+            start_timer.elapsed()
+        );
     }
 
     Ok(())

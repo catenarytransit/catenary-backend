@@ -574,6 +574,29 @@ pub async fn shapes_intercity_rail(
         return HttpResponse::BadRequest().body("Zoom level too low");
     }
 
+    let eligible_for_cache_hit = z <= 11;
+
+    let category = catenary::shape_fetcher::Category::IntercityRailOriginal;
+
+    let conn_pool = pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre.unwrap();
+
+    if eligible_for_cache_hit {
+        let fetch_tile = catenary::shape_fetcher::fetch_tile(conn, x, y, z, category.clone()).await;
+
+        if let Ok(tile) = fetch_tile {
+            if let Some(tile) = tile.get(0) {
+                if tile.mvt_data.len() > 0 {
+                    return HttpResponse::Ok()
+                        .insert_header(("Content-Type", "application/x-protobuf"))
+                        .insert_header(("Cache-Control", "max-age=600, public"))
+                        .body(tile.mvt_data.clone());
+                }
+            }
+        }
+    }
+
     let tile_width_degrees = tile_width_degrees_from_z(z);
 
     let simplification_threshold = tile_width_degrees * 0.001;
@@ -621,6 +644,22 @@ FROM (
     {
         Ok(mvt_result) => {
             let mvt_bytes: Vec<u8> = mvt_result.get(0);
+
+            if eligible_for_cache_hit {
+                let insert_tile = catenary::shape_fetcher::insert_tile(
+                    conn,
+                    x,
+                    y,
+                    z,
+                    category,
+                    mvt_bytes.clone(),
+                    chrono::Utc::now(),
+                )
+                .await;
+                if let Err(err) = insert_tile {
+                    eprintln!("{:?}", err);
+                }
+            }
 
             HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/x-protobuf"))
@@ -749,10 +788,10 @@ FROM (
     // println!("Performing query \n {}", query_str);
 
     let max_age = match z {
-        4 => 36000,
-        5 => 10000,
-        6 => 2000,
-        _ => 1000,
+        4 => 1000,
+        5 => 1000,
+        6 => 1000,
+        _ => 500,
     };
 
     match sqlx::query(query_str.as_str())

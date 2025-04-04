@@ -778,30 +778,25 @@ pub async fn size_bbox_zoom_birch(
     query_bbox_zoom: web::Query<QueryBboxZoom>,
     req: HttpRequest,
 ) -> impl Responder {
-   let bbox = slippy_map_tiles::BBox::new(
+    let bbox = slippy_map_tiles::BBox::new(
         query_bbox_zoom.t,
         query_bbox_zoom.l,
         query_bbox_zoom.b,
         query_bbox_zoom.r,
-   );
+    );
 
-   match bbox {
+    match bbox {
         Some(bbox) => {
-            let number_of_tiles = slippy_map_tiles::size_bbox_zoom(
-                &bbox,
-                query_bbox_zoom.zoom,
-            );
+            let number_of_tiles = slippy_map_tiles::size_bbox_zoom(&bbox, query_bbox_zoom.zoom);
 
             HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/json"))
                 .body(serde_json::to_string(&number_of_tiles).unwrap())
         }
-        None => {
-            HttpResponse::BadRequest()
-                .insert_header(("Content-Type", "text/plain"))
-                .body("Bad BBox")
-        }
-   }
+        None => HttpResponse::BadRequest()
+            .insert_header(("Content-Type", "text/plain"))
+            .body("Bad BBox"),
+    }
 }
 
 #[actix_web::get("/watchduty_tiles_proxy/{z}/{x}/{y}")]
