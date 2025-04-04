@@ -729,6 +729,7 @@ async fn main() -> std::io::Result<()> {
             .service(proxy_for_maptiler_terrain_tiles)
             .service(vehicle_api::get_vehicle_data_endpoint)
             .service(block_api::block_api)
+            .service(size_bbox_zoom_birch)
             //we do some trolling
             .service(web::redirect(
                 "/.env",
@@ -761,6 +762,46 @@ async fn main() -> std::io::Result<()> {
     let _ = builder.bind("127.0.0.1:17419").unwrap().run().await;
 
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct QueryBboxZoom {
+    t: f32,
+    b: f32,
+    l: f32,
+    r: f32,
+    zoom: u8,
+}
+
+#[actix_web::get("/size_bbox_zoom")]
+pub async fn size_bbox_zoom_birch(
+    query_bbox_zoom: web::Query<QueryBboxZoom>,
+    req: HttpRequest,
+) -> impl Responder {
+   let bbox = slippy_map_tiles::BBox::new(
+        query_bbox_zoom.t,
+        query_bbox_zoom.l,
+        query_bbox_zoom.b,
+        query_bbox_zoom.r,
+   );
+
+   match bbox {
+        Some(bbox) => {
+            let number_of_tiles = slippy_map_tiles::size_bbox_zoom(
+                &bbox,
+                query_bbox_zoom.zoom,
+            );
+
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/json"))
+                .body(serde_json::to_string(&number_of_tiles).unwrap())
+        }
+        None => {
+            HttpResponse::BadRequest()
+                .insert_header(("Content-Type", "text/plain"))
+                .body("Bad BBox")
+        }
+   }
 }
 
 #[actix_web::get("/watchduty_tiles_proxy/{z}/{x}/{y}")]
