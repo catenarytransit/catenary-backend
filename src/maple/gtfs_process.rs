@@ -769,7 +769,7 @@ pub async fn gtfs_process_feed(
 
     println!("Inserting trips for {}", feed_id);
 
-    for group in &reduction.itineraries_to_trips.iter().chunks(10000) {
+    for group in &reduction.itineraries_to_trips.iter().chunks(15000) {
         let mut t_final: Vec<Vec<catenary::models::CompressedTrip>> = vec![];
         for (itinerary_id, compressed_trip_list) in group {
             let trip_pg = compressed_trip_list
@@ -804,7 +804,7 @@ pub async fn gtfs_process_feed(
                 })
                 .collect::<Vec<_>>();
 
-            for trip_chunk in trip_pg.chunks(100) {
+            for trip_chunk in trip_pg.chunks(1000) {
                 t_final.push(trip_chunk.to_vec());
             }
         }
