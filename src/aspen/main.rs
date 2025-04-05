@@ -339,8 +339,6 @@ impl AspenRpc for AspenServer {
                                 }
                             }
                         }
-
-                       
                     }
                 }
             }
