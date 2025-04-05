@@ -12,7 +12,6 @@ use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -112,7 +111,7 @@ async fn try_to_download(
 
     let request = add_auth_headers(request, feed_id);
 
-    let response = request.send().await;
+    let response = request.await.send().await;
 
     match response {
         Ok(response) => Ok(response),
