@@ -646,19 +646,27 @@ FROM (
             let mvt_bytes: Vec<u8> = mvt_result.get(0);
 
             if eligible_for_cache_hit {
-                let insert_tile = catenary::shape_fetcher::insert_tile(
-                    conn,
-                    x,
-                    y,
-                    z,
-                    category,
-                    mvt_bytes.clone(),
-                    chrono::Utc::now(),
-                )
-                .await;
-                if let Err(err) = insert_tile {
-                    eprintln!("{:?}", err);
-                }
+                let mvt_bytes_clone = mvt_bytes.clone();
+                let category_clone = category.clone();
+                let pool_clone = pool.clone();
+                actix_web::rt::spawn(async move {
+                    let conn_pool = pool_clone.as_ref();
+                    let conn_pre = conn_pool.get().await;
+                    let mut conn = conn_pre.unwrap();
+                    let insert_tile = catenary::shape_fetcher::insert_tile(
+                        &mut conn,
+                        x,
+                        y,
+                        z,
+                        category_clone,
+                        mvt_bytes_clone,
+                        chrono::Utc::now(),
+                    )
+                    .await;
+                    if let Err(err) = insert_tile {
+                        eprintln!("{:?}", err);
+                    }
+                });
             }
 
             HttpResponse::Ok()
