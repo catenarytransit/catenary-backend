@@ -6,10 +6,12 @@ use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
 use reqwest::RequestBuilder;
 use reqwest::redirect::Policy;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
+use std::sync::Arc;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -21,6 +23,48 @@ use url::{ParseError, Url};
 struct StaticFeedToDownload {
     pub feed_id: String,
     pub url: String,
+}
+
+//decoding auth login token to access Österreich (austria)
+#[derive(serde::Deserialize, Debug)]
+struct TokenResponse {
+    access_token: String,
+}
+
+async fn get_mvo_keycloak_token(
+    client: reqwest::Client,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut form_data = HashMap::new();
+    form_data.insert("client_id", "dbp-public-ui");
+    form_data.insert("username", "5f7xgv6ilp@ro5wy.anonbox.net");
+    form_data.insert("password", ")#E8qE'~CqND5b#");
+    form_data.insert("grant_type", "password");
+    form_data.insert("scope", "openid");
+
+    let response = client
+        .post("https://user.mobilitaetsverbuende.at/auth/realms/dbp-public/protocol/openid-connect/token")
+        .form(&form_data)
+        .send();
+
+    match response.await {
+        Ok(resp) => {
+            let resp_data = resp.json::<TokenResponse>().await;
+            match resp_data {
+                Ok(token_data) => {
+                    println!("Token: {:?}", token_data);
+                    Ok(token_data.access_token)
+                }
+                Err(e) => {
+                    println!("Error parsing token response: {}", e);
+                    Err(Box::new(e))
+                }
+            }
+        }
+        Err(e) => {
+            println!("Error: {}", e);
+            Err(Box::new(e))
+        }
+    }
 }
 
 fn make_reqwest_client() -> reqwest::Client {
@@ -59,7 +103,7 @@ async fn try_to_download(
             )
             .multipart(form);
 
-        let request = add_auth_headers(request, feed_id);
+        let request = add_auth_headers(request, feed_id).await;
 
         return request.send().await;
     }
@@ -389,7 +433,7 @@ fn transform_for_bay_area(x: String) -> String {
     }
 }
 
-fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
+async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
     let mut request = request;
 
     let mut headers = reqwest::header::HeaderMap::new();
@@ -442,6 +486,24 @@ fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
                     .parse()
                     .unwrap(),
             );
+        }
+        "f-Linz~Österreich"
+        | "f-Vorarlberg~Österreich"
+        | "f-Tyrol~Österreich"
+        | "f-Oberösterreich~Österreich"
+        | "f-Carinthia~Österreich"
+        | "f-Styria~Österreich"
+        | "f-Ostösterreich~Österreich" => {
+            let client = make_reqwest_client();
+
+            let token = get_mvo_keycloak_token(client).await;
+
+            if let Ok(token) = token {
+                headers.insert(
+                    "Authorization",
+                    format!("Bearer {}", token).parse().unwrap(),
+                );
+            }
         }
         _ => {}
     };
