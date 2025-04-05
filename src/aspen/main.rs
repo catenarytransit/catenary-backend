@@ -340,10 +340,17 @@ impl AspenRpc for AspenServer {
                             }
                         }
 
-                        if let Some(trip_update) = &mut vehicle_position.trip_update {
-                            if !trip_update.stop_time_update.is_empty() {
-                                trip_update.stop_time_update = vec![];
-                            }
+                       
+                    }
+                }
+            }
+
+            //delete stop times
+            if let Some(v) = &mut vehicles_gtfs_rt {
+                for vehicle_position in v.entity.iter_mut() {
+                    if let Some(trip_update) = &mut vehicle_position.trip_update {
+                        if !trip_update.stop_time_update.is_empty() {
+                            trip_update.stop_time_update = vec![];
                         }
                     }
                 }
@@ -414,6 +421,17 @@ impl AspenRpc for AspenServer {
                     _ => None,
                 },
             };
+
+            //delete stop time updates
+            if let Some(a) = &mut alerts_gtfs_rt {
+                for entity in a.entity.iter_mut() {
+                    if let Some(trip_update) = &mut entity.trip_update {
+                        if !trip_update.stop_time_update.is_empty() {
+                            trip_update.stop_time_update = vec![];
+                        }
+                    }
+                }
+            }
 
             if realtime_feed_id == "f-metro~losangeles~bus~rt" {
                 if let Some(a) = &mut alerts_gtfs_rt {
