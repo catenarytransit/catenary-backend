@@ -186,6 +186,10 @@ pub async fn gtfs_process_feed(
             gtfs,
             &Vec::from([String::from("TER BreizhGo")]),
         ),
+        "f-Ostösterreich~Österreich" => crate::gtfs_handlers::remove_agencies::remove_agencies(
+            gtfs,
+            &Vec::from([String::from("Wiener Linien GmbH & Co KG")]),
+        ),
         _ => gtfs,
     };
 
