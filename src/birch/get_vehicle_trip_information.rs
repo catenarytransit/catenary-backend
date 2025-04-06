@@ -721,7 +721,10 @@ pub async fn get_trip_init(
                         })
                         .collect::<Vec<_>>();
 
-                    let last_stop_name = stop_times.last().map(|x| x.name.clone()).flatten();
+                    let last_stop_name = stop_times
+                    .filter(|stu| stu.schedule_relationship != Some(AspenisedScheduleRelationship::Canceled) && 
+                    stu.schedule_relationship != Some(AspenisedScheduleRelationship::Deleted))
+                    .last().map(|x| x.name.clone()).flatten();
 
                     let route = catenary::schema::gtfs::routes::dsl::routes
                         .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(&chateau))
