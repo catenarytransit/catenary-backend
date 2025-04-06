@@ -998,10 +998,15 @@ pub async fn nearby_from_coords(
                                         chateau_id.clone(),
                                         valid_trips.keys().cloned().collect::<Vec<String>>(),
                                     )
-                                    .await
-                                    .unwrap();
+                                    .await;
 
-                                Some(gtfs_trip_aspenised)
+                                match gtfs_trip_aspenised {
+                                    Ok(gtfs_trip_aspenised) => Some(gtfs_trip_aspenised),
+                                    Err(err) => {
+                                        eprintln!("Error getting trip updates, line 1006: {:#?}", err);
+                                        None
+                                    }
+                                }
                             }
                             Err(err) => None,
                         }
