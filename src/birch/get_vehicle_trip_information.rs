@@ -68,7 +68,8 @@ pub async fn get_vehicle_information_from_label(
         )
         .await;
 
-    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
+    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau.as_ref()
+    {
         let fetch_assigned_node_for_this_chateau_kv_first =
             fetch_assigned_node_for_this_chateau.kvs().first();
 
@@ -261,6 +262,7 @@ struct TripIntroductionInformation {
     pub shape_polyline: Option<String>,
     pub trip_id_found_in_db: bool,
     pub service_date: Option<chrono::NaiveDate>,
+    pub schedule_trip_exists: bool,
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -567,8 +569,241 @@ pub async fn get_trip_init(
 
     let trip_compressed: Vec<catenary::models::CompressedTrip> = trip_compressed.unwrap();
 
+    timer.add("connect_to_etcd");
+
+    let etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await;
+
+    if let Err(etcd_err) = &etcd {
+        eprintln!("{:#?}", etcd_err);
+
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Could not connect to etcd");
+    }
+
+    let mut etcd = etcd.unwrap();
+
+    let fetch_assigned_node_for_this_chateau = etcd
+        .get(
+            format!("/aspen_assigned_chateaus/{}", chateau).as_str(),
+            None,
+        )
+        .await;
+
+    timer.add("fetch_assigned_aspen_chateau_data_from_etcd");
+
     if trip_compressed.is_empty() {
-        return HttpResponse::NotFound().body("Compressed trip not found");
+        //  return HttpResponse::NotFound().body("Compressed trip not found");
+
+        if query.route_id.is_none() {
+            return HttpResponse::NotFound()
+                .body("Compressed trip not found and route id is empty");
+        }
+
+        let fetch_assigned_node_for_this_chateau_kv_first = fetch_assigned_node_for_this_chateau
+            .as_ref()
+            .unwrap()
+            .kvs()
+            .first();
+
+        if let Some(fetch_assigned_node_for_this_chateau_data) =
+            fetch_assigned_node_for_this_chateau_kv_first
+        {
+            let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
+                fetch_assigned_node_for_this_chateau_data.value(),
+            )
+            .unwrap();
+
+            let aspen_client =
+                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+                    .await;
+
+            if let Err(aspen_client_err) = &aspen_client {
+                eprintln!("{:#?}", aspen_client_err);
+                return HttpResponse::InternalServerError()
+                    .body("Could not connect to realtime data server");
+            }
+
+            let aspen_client = aspen_client.unwrap();
+
+            // build stop sequence directly from realtime data
+
+            let get_trips = aspen_client
+                .get_trip_updates_from_trip_id(
+                    context::current(),
+                    chateau.clone(),
+                    query.trip_id.clone(),
+                )
+                .await;
+
+            if let Ok(get_trips) = get_trips {
+                //get list of stops to lookup
+
+                if let Some(get_trip) = get_trips {
+                    if get_trip.is_empty() {
+                        return HttpResponse::NotFound().body("Trip not found in rt database");
+                    }
+
+                    let trip = &get_trip[0];
+
+                    let stop_ids_to_lookup: Vec<CompactString> = trip
+                        .stop_time_update
+                        .iter()
+                        .map(|y| y.stop_id.clone())
+                        .map(|x| x.map(|x| x.as_str().into()))
+                        .flatten()
+                        .collect::<Vec<_>>();
+
+                    let stops_data = stops_pg_schema::dsl::stops
+                        .filter(stops_pg_schema::dsl::chateau.eq(&chateau))
+                        .filter(stops_pg_schema::dsl::gtfs_id.eq_any(&stop_ids_to_lookup))
+                        .select(catenary::models::Stop::as_select())
+                        .load(conn)
+                        .await;
+
+                    if let Err(stops_data_err) = &stops_data {
+                        eprintln!("{}", stops_data_err);
+                        return HttpResponse::InternalServerError()
+                            .body("Error fetching stop data from postgres");
+                    }
+
+                    let stops_data: Vec<catenary::models::Stop> = stops_data.unwrap();
+
+                    let stops_hashmap = stops_data
+                        .into_iter()
+                        .map(|x| (x.gtfs_id.clone(), x))
+                        .collect::<BTreeMap<_, _>>();
+
+                    let stop_times: Vec<StopTimeIntroduction> = trip
+                        .stop_time_update
+                        .iter()
+                        .filter(|x| x.stop_id.is_some())
+                        .enumerate()
+                        .map(|(i, stu)| {
+                            let stop = stops_hashmap.get((&stu.stop_id).as_ref().unwrap().as_str());
+
+                            StopTimeIntroduction {
+                                stop_id: stu
+                                    .stop_id
+                                    .as_ref()
+                                    .map(|x| x.to_string().into())
+                                    .unwrap(),
+                                name: stop.map(|x| x.name.clone()).flatten(),
+                                translations: None,
+                                rt_platform_string: None,
+                                platform_code: None,
+                                code: stop.as_ref().map(|x| x.code.clone()).flatten(),
+                                gtfs_stop_sequence: stu
+                                    .stop_sequence
+                                    .map(|x| x as u16)
+                                    .unwrap_or(i as u16),
+                                timezone: stop
+                                    .map(|x| {
+                                        x.timezone.as_ref().map(|tz_str| {
+                                            chrono_tz::Tz::from_str_insensitive(tz_str.as_str())
+                                                .unwrap()
+                                        })
+                                    })
+                                    .flatten(),
+                                longitude: stop.map(|x| x.point.map(|p| p.x)).flatten(),
+                                latitude: stop.map(|x| x.point.map(|p| p.y)).flatten(),
+                                scheduled_arrival_time_unix_seconds: None,
+                                scheduled_departure_time_unix_seconds: None,
+                                rt_arrival: stu.arrival.clone(),
+                                rt_departure: stu.departure.clone(),
+                                schedule_relationship: stu.schedule_relationship.as_ref().map(
+                                    |x| catenary::aspen_dataset::schedule_relationship_to_u8(&x),
+                                ),
+                                interpolated_stoptime_unix_seconds: None,
+                                timepoint: Some(false),
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    let last_stop_name = stop_times.last().map(|x| x.name.clone()).flatten();
+
+                    let route = catenary::schema::gtfs::routes::dsl::routes
+                        .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(&chateau))
+                        .filter(
+                            catenary::schema::gtfs::routes::dsl::route_id
+                                .eq(query.route_id.clone().unwrap()),
+                        )
+                        .select(catenary::models::Route::as_select())
+                        .load(conn)
+                        .await;
+
+                    if let Err(route_err) = &route {
+                        eprintln!("{}", route_err);
+                        return HttpResponse::InternalServerError()
+                            .body("Error fetching route data");
+                    }
+
+                    let route = route.unwrap();
+
+                    if route.is_empty() {
+                        return HttpResponse::NotFound().body("Route not found");
+                    }
+
+                    let route = &route[0];
+
+                    let route_id = route.route_id.clone();
+                    let route_type = route.route_type.clone();
+                    let route_short_name = route.short_name.clone();
+                    let route_long_name = route.long_name.clone();
+                    let route_color = route.color.clone();
+                    let route_text_color = route.text_color.clone();
+
+                    let first_tz = stop_times[0].timezone.clone().unwrap();
+
+                    let response = TripIntroductionInformation {
+                        stoptimes: stop_times,
+                        tz: first_tz,
+                        block_id: None,
+                        bikes_allowed: 0,
+                        wheelchair_accessible: 0,
+                        has_frequencies: false,
+                        route_id: route_id,
+                        trip_headsign: last_stop_name,
+                        route_short_name: route_short_name,
+                        trip_short_name: None,
+                        route_long_name: route_long_name,
+                        color: route_color,
+                        text_color: route_text_color,
+                        vehicle: None,
+                        route_type: route_type as i16,
+                        stop_id_to_alert_ids: BTreeMap::new(),
+                        alert_id_to_alert: BTreeMap::new(),
+                        alert_ids_for_this_route: vec![],
+                        alert_ids_for_this_trip: vec![],
+                        shape_polyline: None,
+                        trip_id_found_in_db: false,
+                        service_date: query
+                            .start_date
+                            .clone()
+                            .map(|x| {
+                                let date = chrono::NaiveDate::parse_from_str(&x, "%Y%md%d");
+
+                                match date {
+                                    Ok(date) => Some(date),
+                                    Err(_) => None,
+                                }
+                            })
+                            .flatten(),
+                        schedule_trip_exists: false,
+                    };
+
+                    let response = serde_json::to_string(&response).unwrap();
+
+                    return HttpResponse::Ok()
+                        .insert_header(("Content-Type", "application/json"))
+                        .body(response);
+                }
+            }
+        }
     }
 
     let trip_compressed = trip_compressed[0].clone();
@@ -951,33 +1186,6 @@ pub async fn get_trip_init(
 
     timer.add("stop_time_calculation");
 
-    let etcd = etcd_client::Client::connect(
-        etcd_connection_ips.ip_addresses.as_slice(),
-        etcd_connection_options.as_ref().as_ref().to_owned(),
-    )
-    .await;
-
-    timer.add("connect_to_etcd");
-
-    if let Err(etcd_err) = &etcd {
-        eprintln!("{:#?}", etcd_err);
-
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("Could not connect to etcd");
-    }
-
-    let mut etcd = etcd.unwrap();
-
-    let fetch_assigned_node_for_this_chateau = etcd
-        .get(
-            format!("/aspen_assigned_chateaus/{}", chateau).as_str(),
-            None,
-        )
-        .await;
-
-    timer.add("fetch_assigned_aspen_chateau_data_from_etcd");
-
     let mut vehicle = None;
 
     if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
@@ -1246,6 +1454,7 @@ pub async fn get_trip_init(
         shape_polyline,
         trip_id_found_in_db: true,
         service_date: Some(start_naive_date),
+        schedule_trip_exists: true,
     };
 
     let text = serde_json::to_string(&response).unwrap();
