@@ -599,11 +599,6 @@ pub async fn get_trip_init(
     if trip_compressed.is_empty() {
         //  return HttpResponse::NotFound().body("Compressed trip not found");
 
-        if query.route_id.is_none() {
-            return HttpResponse::NotFound()
-                .body("Compressed trip not found and route id is empty");
-        }
-
         let fetch_assigned_node_for_this_chateau_kv_first = fetch_assigned_node_for_this_chateau
             .as_ref()
             .unwrap()
