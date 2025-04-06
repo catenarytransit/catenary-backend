@@ -754,11 +754,44 @@ pub async fn get_trip_init(
                     let route_color = route.color.clone();
                     let route_text_color = route.text_color.clone();
 
-                    let first_tz = stop_times[0].timezone.clone().unwrap();
+                    let agency_id = route.agency_id.clone();
+                    let agency = catenary::schema::gtfs::agencies::dsl::agencies
+                        .filter(catenary::schema::gtfs::agencies::dsl::chateau.eq(&chateau))
+                        .select(catenary::models::Agency::as_select())
+                        .load(conn)
+                        .await;
+
+                    let tz =  match agency {
+                        Ok(agency) => {
+                            
+                            if !agency.is_empty() {
+                                let agency: &catenary::models::Agency = &agency[0];
+
+                                let tz_str = agency.agency_timezone.as_str();
+
+                                let tz = chrono_tz::Tz::from_str_insensitive(tz_str);
+
+                                match tz {
+                                    Ok(agency_timezone) => {
+                                        agency_timezone
+                                    }
+                                    _ => {
+                                        return HttpResponse::NotFound()
+                                            .body("Agency tz bad");
+                                    }
+                                }
+                            } else {
+                                return HttpResponse::NotFound().body("Agency not found");
+                            }
+                        },
+                        _ => {
+                            return HttpResponse::NotFound().body("Agency not found");
+                        }
+                    };
 
                     let response = TripIntroductionInformation {
                         stoptimes: stop_times,
-                        tz: first_tz,
+                        tz: tz,
                         block_id: None,
                         bikes_allowed: 0,
                         wheelchair_accessible: 0,
