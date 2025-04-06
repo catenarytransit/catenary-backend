@@ -673,6 +673,8 @@ pub async fn get_trip_init(
                         .map(|x| (x.gtfs_id.clone(), x))
                         .collect::<BTreeMap<_, _>>();
 
+                    let route_id = trip.trip.route_id.clone().unwrap_or_default();
+
                     let stop_times: Vec<StopTimeIntroduction> = trip
                         .stop_time_update
                         .iter()
@@ -725,7 +727,7 @@ pub async fn get_trip_init(
                         .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(&chateau))
                         .filter(
                             catenary::schema::gtfs::routes::dsl::route_id
-                                .eq(query.route_id.clone().unwrap()),
+                                .eq(route_id.as_str()),
                         )
                         .select(catenary::models::Route::as_select())
                         .load(conn)
