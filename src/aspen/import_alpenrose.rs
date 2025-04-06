@@ -714,6 +714,9 @@ pub async fn new_rt_data(
                         if trip_id.is_some() {
                             trip_updates_lookup_by_trip_id_to_trip_update_ids
                                 .entry(trip_id.as_ref().unwrap().into())
+                                .and_modify(|x| {
+                                    x.push(CompactString::new(&trip_update_entity.id))
+                                })
                                 .or_insert(vec![CompactString::new(&trip_update_entity.id)]);
 
                             if let Some(route_id) = &trip_update.trip.route_id {
