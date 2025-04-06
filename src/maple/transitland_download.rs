@@ -54,12 +54,21 @@ async fn data_public_lu_latest_resource(
     println!("Successfully parsed JSON response.");
 
     if api_data.resources.is_empty() {
+        println!("No resources found in the API response.");
         return Err(Box::from("No resources found in the API response"));
     }
 
     let mut resources_with_dates: Vec<(DateTime<FixedOffset>, LuxembourgResource)> = Vec::new();
     for resource in api_data.resources {
-        match DateTime::parse_from_rfc3339(&resource.last_modified) {
+
+        let mut str_to_parse = resource.last_modified.clone();
+
+        if !str_to_parse.contains("Z") {
+            //z is required to match rfc3339 as a zulu time aka utc time.
+            str_to_parse.push('Z');
+        }
+
+        match DateTime::parse_from_rfc3339(str_to_parse.as_str()) {
             Ok(parsed_date) => {
                 resources_with_dates.push((parsed_date, resource));
             }
