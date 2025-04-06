@@ -1,11 +1,13 @@
 use crate::CatenaryPostgresPool;
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use catenary::models::StaticDownloadAttempt;
+use chrono::{DateTime, FixedOffset};
 use diesel::prelude::*;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
 use reqwest::RequestBuilder;
 use reqwest::redirect::Policy;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
@@ -17,8 +19,6 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use url::{ParseError, Url};
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, FixedOffset};
 
 #[derive(Clone)]
 struct StaticFeedToDownload {
@@ -32,7 +32,7 @@ struct TokenResponse {
     access_token: String,
 }
 
-#[derive(Deserialize, Debug, Clone)] 
+#[derive(Deserialize, Debug, Clone)]
 struct LuxembourgResource {
     last_modified: String,
     latest: String,
@@ -45,9 +45,12 @@ struct LuxembourgApiResponse {
 }
 
 //copied luxembourg api parser from https://github.com/public-transport/transitous/blob/main/src/region_helpers.py
-async fn data_public_lu_latest_resource(api_url: &str) -> Result<String, Box<dyn std::error::Error + Sync + Send>> {
+async fn data_public_lu_latest_resource(
+    api_url: &str,
+) -> Result<String, Box<dyn std::error::Error + Sync + Send>> {
     let response = reqwest::get(api_url).await?;
-    response.error_for_status_ref()?; let api_data = response.json::<LuxembourgApiResponse>().await?; // reqwest::Error automatically boxed by ?
+    response.error_for_status_ref()?;
+    let api_data = response.json::<LuxembourgApiResponse>().await?; // reqwest::Error automatically boxed by ?
     println!("Successfully parsed JSON response.");
 
     if api_data.resources.is_empty() {
@@ -161,8 +164,12 @@ async fn try_to_download(
     }
 
     let new_url = match feed_id {
-        "f-administration~des~transports~publics~du~luxembourg" => data_public_lu_latest_resource(new_url.as_str()).await.unwrap_or(url.to_string()),
-        _ => new_url
+        "f-administration~des~transports~publics~du~luxembourg" => {
+            data_public_lu_latest_resource(new_url.as_str())
+                .await
+                .unwrap_or(url.to_string())
+        }
+        _ => new_url,
     };
 
     let request = client.get(&new_url);
