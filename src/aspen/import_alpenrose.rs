@@ -243,6 +243,11 @@ pub async fn new_rt_data(
         Vec<CompactString>,
     > = AHashMap::new();
 
+    let mut trip_updates_lookup_by_route_id_to_trip_update_ids: AHashMap<
+        CompactString,
+        Vec<CompactString>,
+    > = AHashMap::new();
+
     //let alerts hashmap
     let mut alerts: AHashMap<String, AspenisedAlert> = AHashMap::new();
 
@@ -620,6 +625,7 @@ pub async fn new_rt_data(
                             trip: trip_update.trip.clone().into(),
                             vehicle: trip_update.vehicle.clone().map(|x| x.into()),
                             trip_headsign: None,
+                            found_schedule_trip_id: compressed_trip.is_some(),
                             stop_time_update: trip_update
                                 .stop_time_update
                                 .iter()
@@ -709,6 +715,15 @@ pub async fn new_rt_data(
                             trip_updates_lookup_by_trip_id_to_trip_update_ids
                                 .entry(trip_id.as_ref().unwrap().into())
                                 .or_insert(vec![CompactString::new(&trip_update_entity.id)]);
+
+                            if let Some(route_id) = &trip_update.trip.route_id {
+                                trip_updates_lookup_by_route_id_to_trip_update_ids
+                                    .entry(route_id.into())
+                                    .and_modify(|x| {
+                                        x.push(CompactString::new(&trip_update_entity.id))
+                                    })
+                                    .or_insert(vec![CompactString::new(&trip_update_entity.id)]);
+                            }
                         }
 
                         trip_updates
@@ -865,6 +880,8 @@ pub async fn new_rt_data(
                 compressed_trip_internal_cache,
                 itinerary_pattern_internal_cache: ItineraryPatternInternalCache::new(),
                 last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
+                trip_updates_lookup_by_route_id_to_trip_update_ids:
+                    trip_updates_lookup_by_route_id_to_trip_update_ids,
             }
         }
         scc::hash_map::Entry::Vacant(ve) => {
@@ -882,6 +899,8 @@ pub async fn new_rt_data(
                 compressed_trip_internal_cache,
                 itinerary_pattern_internal_cache: ItineraryPatternInternalCache::new(),
                 last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
+                trip_updates_lookup_by_route_id_to_trip_update_ids:
+                    trip_updates_lookup_by_route_id_to_trip_update_ids,
             });
         }
     }

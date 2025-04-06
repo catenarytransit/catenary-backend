@@ -1,4 +1,3 @@
-
 use crate::RtCacheEntry;
 use crate::RtKey;
 use ahash::AHashMap;
@@ -48,7 +47,9 @@ pub struct AspenisedData {
     pub trip_updates: AHashMap<CompactString, AspenisedTripUpdate>,
     pub trip_updates_lookup_by_trip_id_to_trip_update_ids:
         AHashMap<CompactString, Vec<CompactString>>,
-    //        pub raw_alerts: AHashMap<String, gtfs_realtime::Alert>,
+    //  pub raw_alerts: AHashMap<String, gtfs_realtime::Alert>,
+    pub trip_updates_lookup_by_route_id_to_trip_update_ids:
+        AHashMap<CompactString, Vec<CompactString>>,
     pub aspenised_alerts: AHashMap<String, AspenisedAlert>,
     pub impacted_routes_alerts: AHashMap<String, Vec<String>>,
     pub impacted_stops_alerts: AHashMap<String, Vec<String>>,
@@ -214,6 +215,7 @@ pub struct AspenisedTripUpdate {
     pub stop_time_update: Vec<AspenisedStopTimeUpdate>,
     pub trip_properties: Option<AspenTripProperties>,
     pub trip_headsign: Option<CompactString>,
+    pub found_schedule_trip_id: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
