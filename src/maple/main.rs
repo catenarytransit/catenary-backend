@@ -642,6 +642,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             // Refresh the metadata tables after the ingestion is done
 
+            let dmfr_result = read_folders(&args.transitland)?;
+
+            //delete overlapping feeds
+            let dmfr_result = delete_overlapping_feeds_dmfr::delete_overlapping_feeds(dmfr_result);        
+
             refresh_metadata_tables::refresh_metadata_assignments(
                 &dmfr_result,
                 &chateau_result,
