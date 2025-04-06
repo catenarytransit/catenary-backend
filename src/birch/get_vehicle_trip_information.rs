@@ -4,6 +4,7 @@ use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenStopTimeEvent;
 use catenary::aspen_dataset::AspenisedAlert;
+use catenary::aspen_dataset::AspenisedScheduleRelationship;
 use catenary::aspen_dataset::AspenisedVehicleDescriptor;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -722,16 +723,18 @@ pub async fn get_trip_init(
                         .collect::<Vec<_>>();
 
                     let last_stop_name = stop_times
-                    .filter(|stu| stu.schedule_relationship != Some(AspenisedScheduleRelationship::Canceled) && 
-                    stu.schedule_relationship != Some(AspenisedScheduleRelationship::Deleted))
-                    .last().map(|x| x.name.clone()).flatten();
+                        .iter()
+                        .filter(|stu| {
+                            stu.schedule_relationship != Some(7)
+                                && stu.schedule_relationship != Some(3)
+                        })
+                        .last()
+                        .map(|x| x.name.clone())
+                        .flatten();
 
                     let route = catenary::schema::gtfs::routes::dsl::routes
                         .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(&chateau))
-                        .filter(
-                            catenary::schema::gtfs::routes::dsl::route_id
-                                .eq(route_id.as_str()),
-                        )
+                        .filter(catenary::schema::gtfs::routes::dsl::route_id.eq(route_id.as_str()))
                         .select(catenary::models::Route::as_select())
                         .load(conn)
                         .await;
@@ -764,9 +767,8 @@ pub async fn get_trip_init(
                         .load(conn)
                         .await;
 
-                    let tz =  match agency {
+                    let tz = match agency {
                         Ok(agency) => {
-                            
                             if !agency.is_empty() {
                                 let agency: &catenary::models::Agency = &agency[0];
 
@@ -775,18 +777,15 @@ pub async fn get_trip_init(
                                 let tz = chrono_tz::Tz::from_str_insensitive(tz_str);
 
                                 match tz {
-                                    Ok(agency_timezone) => {
-                                        agency_timezone
-                                    }
+                                    Ok(agency_timezone) => agency_timezone,
                                     _ => {
-                                        return HttpResponse::NotFound()
-                                            .body("Agency tz bad");
+                                        return HttpResponse::NotFound().body("Agency tz bad");
                                     }
                                 }
                             } else {
                                 return HttpResponse::NotFound().body("Agency not found");
                             }
-                        },
+                        }
                         _ => {
                             return HttpResponse::NotFound().body("Agency not found");
                         }
@@ -844,7 +843,8 @@ pub async fn get_trip_init(
     }
 
     if trip_compressed.is_empty() {
-        return HttpResponse::NotFound().body("Compressed trip not found and realtime lookup failed");
+        return HttpResponse::NotFound()
+            .body("Compressed trip not found and realtime lookup failed");
     }
 
     let trip_compressed = trip_compressed[0].clone();
