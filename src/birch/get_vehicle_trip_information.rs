@@ -801,6 +801,10 @@ pub async fn get_trip_init(
         }
     }
 
+    if trip_compressed.is_empty() {
+        return HttpResponse::NotFound().body("Compressed trip not found and realtime lookup failed");
+    }
+
     let trip_compressed = trip_compressed[0].clone();
     // get itin data and itin meta data, and calendar data
 
