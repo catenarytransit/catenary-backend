@@ -1206,9 +1206,9 @@ pub async fn nearby_from_coords(
                                         let trip_update = trip_updates[0].1;
                                         let trip_update_id = trip_updates[0].0;
 
-                                        if trip_update.trip.schedule_relationship == Some(3) {
+                                        if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) {
                                             is_cancelled = true;
-                                        } else if trip_update.trip.schedule_relationship == Some(7)
+                                        } else if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Deleted)
                                         {
                                             deleted = true;
                                         } else {

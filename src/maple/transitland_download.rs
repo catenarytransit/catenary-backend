@@ -60,7 +60,6 @@ async fn data_public_lu_latest_resource(
 
     let mut resources_with_dates: Vec<(DateTime<FixedOffset>, LuxembourgResource)> = Vec::new();
     for resource in api_data.resources {
-
         let mut str_to_parse = resource.last_modified.clone();
 
         if !str_to_parse.contains("Z") {

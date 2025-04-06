@@ -233,7 +233,7 @@ pub struct AspenRawTripInfo {
     pub direction_id: Option<u32>,
     pub start_time: Option<String>,
     pub start_date: Option<chrono::NaiveDate>,
-    pub schedule_relationship: Option<i32>,
+    pub schedule_relationship: Option<AspenisedTripScheduleRelationship>,
     pub modified_trip: Option<ModifiedTripSelector>,
 }
 
@@ -270,7 +270,9 @@ impl From<gtfs_realtime::TripDescriptor> for AspenRawTripInfo {
                 }
                 None => None,
             },
-            schedule_relationship: trip_descriptor.schedule_relationship,
+            schedule_relationship: option_i32_to_schedule_relationship(
+                &trip_descriptor.schedule_relationship,
+            ),
             modified_trip: trip_descriptor.modified_trip.map(|x| x.into()),
         }
     }
@@ -283,7 +285,7 @@ pub struct AspenisedStopTimeUpdate {
     pub arrival: Option<AspenStopTimeEvent>,
     pub departure: Option<AspenStopTimeEvent>,
     pub departure_occupancy_status: Option<AspenisedOccupancyStatus>,
-    pub schedule_relationship: Option<AspenisedScheduleRelationship>,
+    pub schedule_relationship: Option<AspenisedStopTimeScheduleRelationship>,
     pub stop_time_properties: Option<AspenisedStopTimeProperties>,
     pub platform_string: Option<ecow::EcoString>,
 }
@@ -322,30 +324,32 @@ pub fn occupancy_status_to_u8(occupancy_status: &AspenisedOccupancyStatus) -> u8
     }
 }
 
-pub fn schedule_relationship_to_u8(schedule_relationship: &AspenisedScheduleRelationship) -> u8 {
+pub fn schedule_relationship_to_u8(
+    schedule_relationship: &AspenisedTripScheduleRelationship,
+) -> u8 {
     match schedule_relationship {
-        AspenisedScheduleRelationship::Scheduled => 0,
-        AspenisedScheduleRelationship::Added => 1,
-        AspenisedScheduleRelationship::Unscheduled => 2,
-        AspenisedScheduleRelationship::Canceled => 3,
-        AspenisedScheduleRelationship::Replacement => 5,
-        AspenisedScheduleRelationship::Duplicated => 6,
-        AspenisedScheduleRelationship::Deleted => 7,
+        AspenisedTripScheduleRelationship::Scheduled => 0,
+        AspenisedTripScheduleRelationship::Added => 1,
+        AspenisedTripScheduleRelationship::Unscheduled => 2,
+        AspenisedTripScheduleRelationship::Cancelled => 3,
+        AspenisedTripScheduleRelationship::Replacement => 5,
+        AspenisedTripScheduleRelationship::Duplicated => 6,
+        AspenisedTripScheduleRelationship::Deleted => 7,
     }
 }
 
 pub fn option_i32_to_schedule_relationship(
     schedule_relationship: &Option<i32>,
-) -> Option<AspenisedScheduleRelationship> {
+) -> Option<AspenisedTripScheduleRelationship> {
     match schedule_relationship {
         Some(status) => match status {
-            0 => Some(AspenisedScheduleRelationship::Scheduled),
-            1 => Some(AspenisedScheduleRelationship::Added),
-            2 => Some(AspenisedScheduleRelationship::Unscheduled),
-            3 => Some(AspenisedScheduleRelationship::Canceled),
-            5 => Some(AspenisedScheduleRelationship::Replacement),
-            6 => Some(AspenisedScheduleRelationship::Duplicated),
-            7 => Some(AspenisedScheduleRelationship::Deleted),
+            0 => Some(AspenisedTripScheduleRelationship::Scheduled),
+            1 => Some(AspenisedTripScheduleRelationship::Added),
+            2 => Some(AspenisedTripScheduleRelationship::Unscheduled),
+            3 => Some(AspenisedTripScheduleRelationship::Cancelled),
+            5 => Some(AspenisedTripScheduleRelationship::Replacement),
+            6 => Some(AspenisedTripScheduleRelationship::Duplicated),
+            7 => Some(AspenisedTripScheduleRelationship::Deleted),
             _ => None,
         },
         None => None,
@@ -365,18 +369,91 @@ pub enum AspenisedOccupancyStatus {
     NotBoardable = 8,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum AspenisedScheduleRelationship {
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
+pub enum AspenisedTripScheduleRelationship {
     Scheduled = 0,
     Added = 1,
     Unscheduled = 2,
-    Canceled = 3,
+    Cancelled = 3,
     Replacement = 5,
     Duplicated = 6,
     Deleted = 7,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
+pub enum AspenisedStopTimeScheduleRelationship {
+    Scheduled = 0,
+    Skipped = 1,
+    NoData = 2,
+    Unscheduled = 3,
+}
+
+pub fn option_i32_to_stop_time_schedule_relationship(
+    schedule_relationship: &Option<i32>,
+) -> Option<AspenisedStopTimeScheduleRelationship> {
+    match schedule_relationship {
+        Some(status) => match status {
+            0 => Some(AspenisedStopTimeScheduleRelationship::Scheduled),
+            1 => Some(AspenisedStopTimeScheduleRelationship::Skipped),
+            2 => Some(AspenisedStopTimeScheduleRelationship::NoData),
+            3 => Some(AspenisedStopTimeScheduleRelationship::Unscheduled),
+            _ => None,
+        },
+        None => None,
+    }
+}
+
+impl Into<u8> for AspenisedStopTimeScheduleRelationship {
+     fn into(self) -> u8 {
+        match self {
+            AspenisedStopTimeScheduleRelationship::Scheduled => 0,
+            AspenisedStopTimeScheduleRelationship::Skipped => 1,
+            AspenisedStopTimeScheduleRelationship::NoData => 2,
+            AspenisedStopTimeScheduleRelationship::Unscheduled => 3,
+        }
+    }
+}
+
+impl Into<u8> for &AspenisedStopTimeScheduleRelationship {
+     fn into(self) -> u8 {
+        match self {
+            AspenisedStopTimeScheduleRelationship::Scheduled => 0,
+            AspenisedStopTimeScheduleRelationship::Skipped => 1,
+            AspenisedStopTimeScheduleRelationship::NoData => 2,
+            AspenisedStopTimeScheduleRelationship::Unscheduled => 3,
+        }
+    }
+}
+
+impl Into<u8> for AspenisedTripScheduleRelationship {
+     fn into(self) -> u8 {
+        match self {
+            AspenisedTripScheduleRelationship::Scheduled => 0,
+            AspenisedTripScheduleRelationship::Added => 1,
+            AspenisedTripScheduleRelationship::Unscheduled => 2,
+            AspenisedTripScheduleRelationship::Cancelled => 3,
+            AspenisedTripScheduleRelationship::Replacement => 5,
+            AspenisedTripScheduleRelationship::Duplicated => 6,
+            AspenisedTripScheduleRelationship::Deleted => 7,
+        }
+    }
+}
+
+impl Into<u8> for &AspenisedTripScheduleRelationship {
+     fn into(self) -> u8 {
+        match self {
+            AspenisedTripScheduleRelationship::Scheduled => 0,
+            AspenisedTripScheduleRelationship::Added => 1,
+            AspenisedTripScheduleRelationship::Unscheduled => 2,
+            AspenisedTripScheduleRelationship::Cancelled => 3,
+            AspenisedTripScheduleRelationship::Replacement => 5,
+            AspenisedTripScheduleRelationship::Duplicated => 6,
+            AspenisedTripScheduleRelationship::Deleted => 7,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct AspenisedStopTimeProperties {
     pub assigned_stop_id: Option<EcoString>,
 }
@@ -462,7 +539,7 @@ pub struct AspenisedVehicleTripInfo {
     pub direction_id: Option<u32>,
     pub start_time: Option<String>,
     pub start_date: Option<chrono::NaiveDate>,
-    pub schedule_relationship: Option<i32>,
+    pub schedule_relationship: Option<AspenisedTripScheduleRelationship>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]

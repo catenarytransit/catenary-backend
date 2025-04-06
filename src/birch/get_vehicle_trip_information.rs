@@ -4,7 +4,7 @@ use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenStopTimeEvent;
 use catenary::aspen_dataset::AspenisedAlert;
-use catenary::aspen_dataset::AspenisedScheduleRelationship;
+use catenary::aspen_dataset::AspenisedTripScheduleRelationship;
 use catenary::aspen_dataset::AspenisedVehicleDescriptor;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -406,7 +406,7 @@ pub async fn get_trip_rt_update(
                                             rt_arrival: stop_time_update.arrival.clone(),
                                             rt_departure: stop_time_update.departure.clone(),
                                             schedule_relationship: stop_time_update
-                                                .schedule_relationship .as_ref().map(|x| catenary::aspen_dataset::schedule_relationship_to_u8(&x)),
+                                                .schedule_relationship .as_ref().map(|x| x.into()),
                                             gtfs_stop_sequence: stop_time_update
                                                 .stop_sequence
                                                 .map(|x| x as u16),
@@ -714,7 +714,7 @@ pub async fn get_trip_init(
                                 rt_arrival: stu.arrival.clone(),
                                 rt_departure: stu.departure.clone(),
                                 schedule_relationship: stu.schedule_relationship.as_ref().map(
-                                    |x| catenary::aspen_dataset::schedule_relationship_to_u8(&x),
+                                    |x| x.into()
                                 ),
                                 interpolated_stoptime_unix_seconds: None,
                                 timepoint: Some(false),
@@ -724,10 +724,7 @@ pub async fn get_trip_init(
 
                     let last_stop_name = stop_times
                         .iter()
-                        .filter(|stu| {
-                            stu.schedule_relationship != Some(7)
-                                && stu.schedule_relationship != Some(3)
-                        })
+                        .filter(|stu| stu.schedule_relationship != Some(1))
                         .last()
                         .map(|x| x.name.clone())
                         .flatten();
@@ -1343,9 +1340,7 @@ pub async fn get_trip_init(
                                                 &stop_time_update.schedule_relationship
                                             {
                                                 stop_time.schedule_relationship =
-                                                Some(catenary::aspen_dataset::schedule_relationship_to_u8(
-                                                    &schedule_relationship,
-                                                ));
+                                                Some(schedule_relationship.into());
                                             }
 
                                             if let Some(rt_platform_string) =

@@ -494,7 +494,7 @@ pub async fn new_rt_data(
                                         None => None,
                                     },
                                    start_time: trip.start_time.clone(),
-                                    schedule_relationship: trip.schedule_relationship,
+                                    schedule_relationship: option_i32_to_schedule_relationship(&trip.schedule_relationship),
                                     route_id: recalculate_route_id.clone(),
                                     trip_headsign: match &trip.trip_id {
                                             Some(trip_id) => {
@@ -687,9 +687,10 @@ pub async fn new_rt_data(
                                         }
                                         _ => None,
                                     },
-                                    schedule_relationship: option_i32_to_schedule_relationship(
-                                        &stu.schedule_relationship,
-                                    ),
+                                    schedule_relationship:
+                                        option_i32_to_stop_time_schedule_relationship(
+                                            &stu.schedule_relationship,
+                                        ),
                                     departure_occupancy_status: option_i32_to_occupancy_status(
                                         &stu.departure_occupancy_status,
                                     ),
