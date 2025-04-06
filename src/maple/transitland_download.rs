@@ -17,6 +17,8 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use url::{ParseError, Url};
+use serde::{Deserialize, Serialize};
+use chrono::{DateTime, FixedOffset};
 
 #[derive(Clone)]
 struct StaticFeedToDownload {
@@ -25,11 +27,62 @@ struct StaticFeedToDownload {
 }
 
 //decoding auth login token to access Österreich (austria)
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 struct TokenResponse {
     access_token: String,
 }
 
+#[derive(Deserialize, Debug, Clone)] 
+struct LuxembourgResource {
+    last_modified: String,
+    latest: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct LuxembourgApiResponse {
+    resources: Vec<LuxembourgResource>,
+    // Add other top-level fields from the API response if needed
+}
+
+//copied luxembourg api parser from https://github.com/public-transport/transitous/blob/main/src/region_helpers.py
+async fn data_public_lu_latest_resource(api_url: &str) -> Result<String, Box<dyn std::error::Error + Sync + Send>> {
+    let response = reqwest::get(api_url).await?;
+    response.error_for_status_ref()?; let api_data = response.json::<LuxembourgApiResponse>().await?; // reqwest::Error automatically boxed by ?
+    println!("Successfully parsed JSON response.");
+
+    if api_data.resources.is_empty() {
+        return Err(Box::from("No resources found in the API response"));
+    }
+
+    let mut resources_with_dates: Vec<(DateTime<FixedOffset>, LuxembourgResource)> = Vec::new();
+    for resource in api_data.resources {
+        match DateTime::parse_from_rfc3339(&resource.last_modified) {
+            Ok(parsed_date) => {
+                resources_with_dates.push((parsed_date, resource));
+            }
+            Err(e) => {
+                // If any date fails to parse, return the error immediately, boxed.
+                let error_message = format!(
+                    "Failed to parse date string '{}': {}",
+                    resource.last_modified, e
+                );
+                return Err(Box::from(error_message));
+            }
+        }
+    }
+
+    resources_with_dates.sort_by(|a, b| {
+        // a.0 and b.0 are the DateTime<FixedOffset> values
+        b.0.cmp(&a.0) // Reverse comparison for descending order
+    });
+    println!("Resources sorted by last_modified date (descending).");
+
+    let latest_url = resources_with_dates[0].1.latest.clone();
+
+    Ok(latest_url)
+}
+
+//copied again from public-transport/transitous
 async fn get_mvo_keycloak_token(
     client: reqwest::Client,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -106,6 +159,11 @@ async fn try_to_download(
 
         return request.send().await;
     }
+
+    let new_url = match feed_id {
+        "f-administration~des~transports~publics~du~luxembourg" => data_public_lu_latest_resource(new_url.as_str()).await.unwrap_or(url.to_string()),
+        _ => new_url
+    };
 
     let request = client.get(&new_url);
 
