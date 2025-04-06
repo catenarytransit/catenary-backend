@@ -796,7 +796,11 @@ pub async fn get_trip_init(
                     return HttpResponse::Ok()
                         .insert_header(("Content-Type", "application/json"))
                         .body(response);
+                } else {
+                    return HttpResponse::NotFound().body("Trip not found in rt database");
                 }
+            } else {
+                eprintln!("Error fetching from aspen server: {:#?}", get_trips);
             }
         }
     }
