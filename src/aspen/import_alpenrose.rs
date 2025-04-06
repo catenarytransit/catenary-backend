@@ -711,6 +711,17 @@ pub async fn new_rt_data(
                             false => trip_update,
                         };
 
+                        if let Some(trip_properties) = &trip_update.trip_properties {
+                            if let Some(trip_id) = &trip_properties.trip_id {
+                                trip_updates_lookup_by_trip_id_to_trip_update_ids
+                                    .entry(trip_id.clone().into())
+                                    .and_modify(|x| {
+                                        x.push(CompactString::new(&trip_update_entity.id))
+                                    })
+                                    .or_insert(vec![CompactString::new(&trip_update_entity.id)]);
+                            }
+                        }
+
                         if trip_id.is_some() {
                             trip_updates_lookup_by_trip_id_to_trip_update_ids
                                 .entry(trip_id.as_ref().unwrap().into())
