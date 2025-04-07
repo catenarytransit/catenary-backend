@@ -405,7 +405,7 @@ pub async fn download_return_eligible_feeds(
                                                     answer.ingest = true;
                                                     println!("Never seen this zip file + maple version together: {}", &staticfeed.feed_id);
                                                 } else {
-            
+
                                                     // a previous succcessful ingest has happened
                                                     let check_for_previous_insert_sucesses = download_attempts_postgres_lookup
                                                         .iter()

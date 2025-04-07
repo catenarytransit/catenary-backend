@@ -406,15 +406,23 @@ pub async fn get_trip_rt_update(
                                             rt_arrival: stop_time_update.arrival.clone(),
                                             rt_departure: stop_time_update.departure.clone(),
                                             schedule_relationship: stop_time_update
-                                                .schedule_relationship .as_ref().map(|x| x.into()),
+                                                .schedule_relationship
+                                                .as_ref()
+                                                .map(|x| x.into()),
                                             gtfs_stop_sequence: stop_time_update
                                                 .stop_sequence
                                                 .map(|x| x as u16),
                                             rt_platform_string: stop_time_update
-                                                .platform_string.clone(),
+                                                .platform_string
+                                                .clone(),
                                             departure_occupancy_status: stop_time_update
-                                            
-                                                .departure_occupancy_status.as_ref().map(|x| catenary::aspen_dataset::occupancy_status_to_u8(&x)),
+                                                .departure_occupancy_status
+                                                .as_ref()
+                                                .map(|x| {
+                                                    catenary::aspen_dataset::occupancy_status_to_u8(
+                                                        &x,
+                                                    )
+                                                }),
                                         })
                                         .collect();
 
@@ -713,9 +721,10 @@ pub async fn get_trip_init(
                                 scheduled_departure_time_unix_seconds: None,
                                 rt_arrival: stu.arrival.clone(),
                                 rt_departure: stu.departure.clone(),
-                                schedule_relationship: stu.schedule_relationship.as_ref().map(
-                                    |x| x.into()
-                                ),
+                                schedule_relationship: stu
+                                    .schedule_relationship
+                                    .as_ref()
+                                    .map(|x| x.into()),
                                 interpolated_stoptime_unix_seconds: None,
                                 timepoint: Some(false),
                             }
@@ -1340,7 +1349,7 @@ pub async fn get_trip_init(
                                                 &stop_time_update.schedule_relationship
                                             {
                                                 stop_time.schedule_relationship =
-                                                Some(schedule_relationship.into());
+                                                    Some(schedule_relationship.into());
                                             }
 
                                             if let Some(rt_platform_string) =

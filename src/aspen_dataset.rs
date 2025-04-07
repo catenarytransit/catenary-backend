@@ -54,6 +54,7 @@ pub struct AspenisedData {
     pub impacted_routes_alerts: AHashMap<String, Vec<String>>,
     pub impacted_stops_alerts: AHashMap<String, Vec<String>>,
     pub impacted_trips_alerts: AHashMap<String, Vec<String>>,
+    pub trip_id_to_vehicle_gtfs_rt_id: AHashMap<String, Vec<String>>,
     pub last_updated_time_ms: u64,
     pub itinerary_pattern_internal_cache: ItineraryPatternInternalCache,
     pub compressed_trip_internal_cache: CompressedTripInternalCache,
@@ -404,7 +405,7 @@ pub fn option_i32_to_stop_time_schedule_relationship(
 }
 
 impl Into<u8> for AspenisedStopTimeScheduleRelationship {
-     fn into(self) -> u8 {
+    fn into(self) -> u8 {
         match self {
             AspenisedStopTimeScheduleRelationship::Scheduled => 0,
             AspenisedStopTimeScheduleRelationship::Skipped => 1,
@@ -415,7 +416,7 @@ impl Into<u8> for AspenisedStopTimeScheduleRelationship {
 }
 
 impl Into<u8> for &AspenisedStopTimeScheduleRelationship {
-     fn into(self) -> u8 {
+    fn into(self) -> u8 {
         match self {
             AspenisedStopTimeScheduleRelationship::Scheduled => 0,
             AspenisedStopTimeScheduleRelationship::Skipped => 1,
@@ -426,7 +427,7 @@ impl Into<u8> for &AspenisedStopTimeScheduleRelationship {
 }
 
 impl Into<u8> for AspenisedTripScheduleRelationship {
-     fn into(self) -> u8 {
+    fn into(self) -> u8 {
         match self {
             AspenisedTripScheduleRelationship::Scheduled => 0,
             AspenisedTripScheduleRelationship::Added => 1,
@@ -440,7 +441,7 @@ impl Into<u8> for AspenisedTripScheduleRelationship {
 }
 
 impl Into<u8> for &AspenisedTripScheduleRelationship {
-     fn into(self) -> u8 {
+    fn into(self) -> u8 {
         match self {
             AspenisedTripScheduleRelationship::Scheduled => 0,
             AspenisedTripScheduleRelationship::Added => 1,

@@ -18,6 +18,7 @@ use regex::Regex;
 use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -236,6 +237,7 @@ pub async fn new_rt_data(
     let mut aspenised_vehicle_positions: AHashMap<String, AspenisedVehiclePosition> =
         AHashMap::new();
     let mut gtfs_vehicle_labels_to_ids: AHashMap<String, String> = AHashMap::new();
+    let mut trip_id_to_vehicle_gtfs_rt_id: AHashMap<String, Vec<String>> = AHashMap::new();
     let mut vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache> = AHashMap::new();
     let mut trip_updates: AHashMap<CompactString, AspenisedTripUpdate> = AHashMap::new();
     let mut trip_updates_lookup_by_trip_id_to_trip_update_ids: AHashMap<
@@ -388,6 +390,7 @@ pub async fn new_rt_data(
             )
             .load::<catenary::models::CompressedTrip>(conn)
             .await?;
+
         let trip_duration = trip_start.elapsed();
 
         let mut trip_id_to_trip: AHashMap<String, catenary::models::CompressedTrip> =
@@ -402,6 +405,51 @@ pub async fn new_rt_data(
         }
 
         let trip_id_to_trip = trip_id_to_trip;
+
+        let missing_trip_ids = trip_ids_to_lookup
+            .iter()
+            .filter(|x| !trip_id_to_trip.contains_key(x.as_str()))
+            .map(|x| x.clone())
+            .collect::<BTreeSet<String>>();
+
+        let mut stop_ids_to_lookup: AHashSet<String> = AHashSet::new();
+
+        //pass through all the trip ids and get the last stop id that isnt skipped
+        if let Some(trip_gtfs_rt_for_feed_id) =
+            authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+        {
+            let trip_gtfs_rt_for_feed_id = trip_gtfs_rt_for_feed_id.get();
+
+            for trip_entity in trip_gtfs_rt_for_feed_id.entity.iter() {
+                if let Some(trip_update) = &trip_entity.trip_update {
+                    if let Some(trip_id) = &trip_update.trip.trip_id {
+                        let last_non_skipped_stop_id = trip_update
+                            .stop_time_update
+                            .iter()
+                            .filter(|x| x.schedule_relationship != Some(1))
+                            .last()
+                            .and_then(|x| x.stop_id.clone());
+
+                        if let Some(last_non_skipped_stop_id) = last_non_skipped_stop_id {
+                            stop_ids_to_lookup.insert(last_non_skipped_stop_id.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        let stops = catenary::schema::gtfs::stops::dsl::stops
+            .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&chateau_id))
+            .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq_any(&stop_ids_to_lookup))
+            .select(catenary::models::Stop::as_select())
+            .load::<catenary::models::Stop>(conn)
+            .await?;
+
+        let mut stop_id_to_stop: AHashMap<String, catenary::models::Stop> = AHashMap::new();
+
+        for stop in stops {
+            stop_id_to_stop.insert(stop.gtfs_id.clone(), stop);
+        }
 
         //also lookup all the headsigns from the trips via itinerary patterns
 
@@ -586,6 +634,13 @@ pub async fn new_rt_data(
                         aspenised_vehicle_positions
                             .insert(vehicle_entity.id.clone(), pos_aspenised);
 
+                        // insert the trip id to vehicle id mapping
+
+                        trip_id_to_vehicle_gtfs_rt_id
+                            .entry(vehicle_entity.id.clone())
+                            .and_modify(|x| x.push(vehicle_entity.id.clone()))
+                            .or_insert(vec![vehicle_entity.id.clone()]);
+
                         //insert the route cache
 
                         if let Some(trip) = &vehicle_pos.trip {
@@ -621,10 +676,30 @@ pub async fn new_rt_data(
                             None => None,
                         };
 
+                        let last_non_cancelled_stop_id = trip_update
+                            .stop_time_update
+                            .iter()
+                            .filter(|x| x.schedule_relationship != Some(1))
+                            .last()
+                            .and_then(|x| x.stop_id.clone());
+
+                        let trip_headsign = match missing_trip_ids
+                            .contains(trip_id.as_ref().unwrap())
+                        {
+                            true => None,
+                            false => match last_non_cancelled_stop_id {
+                                Some(last_non_cancelled_stop_id) => stop_id_to_stop
+                                    .get(&last_non_cancelled_stop_id)
+                                    .map(|s| s.name.as_ref().map(|name| CompactString::new(&name)))
+                                    .flatten(),
+                                None => None,
+                            },
+                        };
+
                         let trip_update = AspenisedTripUpdate {
                             trip: trip_update.trip.clone().into(),
                             vehicle: trip_update.vehicle.clone().map(|x| x.into()),
-                            trip_headsign: None,
+                            trip_headsign: trip_headsign.clone(),
                             found_schedule_trip_id: compressed_trip.is_some(),
                             stop_time_update: trip_update
                                 .stop_time_update
@@ -741,6 +816,28 @@ pub async fn new_rt_data(
 
                         trip_updates
                             .insert(CompactString::new(&trip_update_entity.id), trip_update);
+
+                        //if missing trip
+                        if let Some(trip_id) = &trip_id {
+                            if missing_trip_ids.contains(trip_id) {
+                                //update vehicles with correct headsign
+
+                                let vehicle_entity_ids = trip_id_to_vehicle_gtfs_rt_id.get(trip_id);
+
+                                if let Some(vehicle_entity_ids) = vehicle_entity_ids {
+                                    for vehicle_entity_id in vehicle_entity_ids {
+                                        if let Some(vehicle_pos) =
+                                            aspenised_vehicle_positions.get_mut(vehicle_entity_id)
+                                        {
+                                            if let Some(trip_assigned) = &mut vehicle_pos.trip {
+                                                trip_assigned.trip_headsign =
+                                                    trip_headsign.clone().map(|x| x.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -895,6 +992,7 @@ pub async fn new_rt_data(
                 last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
                 trip_updates_lookup_by_route_id_to_trip_update_ids:
                     trip_updates_lookup_by_route_id_to_trip_update_ids,
+                trip_id_to_vehicle_gtfs_rt_id: trip_id_to_vehicle_gtfs_rt_id,
             }
         }
         scc::hash_map::Entry::Vacant(ve) => {
@@ -910,6 +1008,7 @@ pub async fn new_rt_data(
                 vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
                 impacted_trips_alerts: impact_trip_id_to_alert_ids,
                 compressed_trip_internal_cache,
+                trip_id_to_vehicle_gtfs_rt_id: trip_id_to_vehicle_gtfs_rt_id,
                 itinerary_pattern_internal_cache: ItineraryPatternInternalCache::new(),
                 last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
                 trip_updates_lookup_by_route_id_to_trip_update_ids:
