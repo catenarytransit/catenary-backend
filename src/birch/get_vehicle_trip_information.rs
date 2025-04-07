@@ -26,6 +26,7 @@ use diesel::query_dsl::methods::SelectDsl;
 use diesel_async::RunQueryDsl;
 use ecow::EcoString;
 use geo::coord;
+use gtfs_realtime::Alert;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -644,6 +645,8 @@ pub async fn get_trip_init(
                 )
                 .await;
 
+            //get alerts for this trip
+
             if let Ok(get_trips) = get_trips {
                 //get list of stops to lookup
 
@@ -654,7 +657,7 @@ pub async fn get_trip_init(
 
                     let trip = &get_trip[0];
 
-                    let stop_ids_to_lookup: Vec<CompactString> = trip
+                    let stop_ids_to_lookup: Vec<String> = trip
                         .stop_time_update
                         .iter()
                         .map(|y| y.stop_id.clone())
@@ -683,6 +686,30 @@ pub async fn get_trip_init(
                         .collect::<BTreeMap<_, _>>();
 
                     let route_id = trip.trip.route_id.clone().unwrap_or_default();
+
+                    let alerts_response = get_alert_single_trip(
+                        &aspen_client,
+                        chateau.clone(),
+                        query.trip_id.clone(),
+                        route_id.clone(),
+                        stop_ids_to_lookup,
+                    )
+                    .await;
+
+                    let mut alert_id_to_alert: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
+                    let mut alert_ids_for_this_route: Vec<String> = vec![];
+                    let mut alert_ids_for_this_trip: Vec<String> = vec![];
+                
+                    let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+                    if let Ok(alerts_response) = alerts_response {
+                        alert_id_to_alert = alerts_response.alert_id_to_alert;
+                        alert_ids_for_this_route = alerts_response.alert_ids_for_this_route;
+                        alert_ids_for_this_trip = alerts_response.alert_ids_for_this_trip;
+                        stop_id_to_alert_ids = alerts_response.stop_id_to_alert_ids;
+                    } else {
+                        eprintln!("Error fetching alerts from aspen");
+                    }
 
                     let stop_times: Vec<StopTimeIntroduction> = trip
                         .stop_time_update
@@ -813,10 +840,10 @@ pub async fn get_trip_init(
                         text_color: route_text_color,
                         vehicle: None,
                         route_type: route_type as i16,
-                        stop_id_to_alert_ids: BTreeMap::new(),
-                        alert_id_to_alert: BTreeMap::new(),
-                        alert_ids_for_this_route: vec![],
-                        alert_ids_for_this_trip: vec![],
+                        stop_id_to_alert_ids: stop_id_to_alert_ids,
+                        alert_id_to_alert: alert_id_to_alert,
+                        alert_ids_for_this_route: alert_ids_for_this_route,
+                        alert_ids_for_this_trip: alert_ids_for_this_trip,
                         shape_polyline: None,
                         trip_id_found_in_db: false,
                         service_date: query
@@ -955,8 +982,8 @@ pub async fn get_trip_init(
 
     //convert shape data into polyline
 
-    let stop_ids_to_lookup: Vec<CompactString> =
-        itin_rows_to_use.iter().map(|x| x.stop_id.clone()).collect();
+    let stop_ids_to_lookup: Vec<String> =
+        itin_rows_to_use.iter().map(|x| x.stop_id.clone().into()).collect();
 
     let (stops_data, shape_lookup): (
         Result<Vec<catenary::models::Stop>, diesel::result::Error>,
@@ -1370,102 +1397,25 @@ pub async fn get_trip_init(
 
                     // GET ALERTS
 
-                    let alerts_for_route = aspen_client
-                        .get_alerts_from_route_id(
-                            context::current(),
-                            chateau.clone(),
-                            route.route_id.clone(),
-                        )
-                        .await;
-                    timer.add("query_alerts_for_route");
+                    let alerts_response = get_alert_single_trip(
+                        &aspen_client,
+                        chateau.clone(),
+                        query.trip_id.clone(),
+                        trip_compressed.route_id.clone(),
+                        stop_ids_to_lookup,
+                    )
+                    .await;
 
-                    let alerts_for_trip = aspen_client
-                        .get_alert_from_trip_id(
-                            context::current(),
-                            chateau.clone(),
-                            query.trip_id.clone(),
-                        )
-                        .await;
 
-                    timer.add("query_alerts_for_trip");
-
-                    if let Ok(alerts_for_route) = alerts_for_route {
-                        if let Some(alerts_for_route) = alerts_for_route {
-                            for (alert_id, alert) in alerts_for_route {
-                                alert_id_to_alert.insert(alert_id.clone(), alert.clone());
-                                alert_ids_for_this_route.push(alert_id.clone());
-                            }
-                        }
+                    if let Ok(alerts_response) = alerts_response {
+                        alert_id_to_alert = alerts_response.alert_id_to_alert;
+                        alert_ids_for_this_route = alerts_response.alert_ids_for_this_route;
+                        alert_ids_for_this_trip = alerts_response.alert_ids_for_this_trip;
+                        stop_id_to_alert_ids = alerts_response.stop_id_to_alert_ids;
+                    } else {
+                        eprintln!("Error fetching alerts from aspen");
                     }
-
-                    if let Ok(alerts_for_trip) = alerts_for_trip {
-                        if let Some(alerts_for_trip) = alerts_for_trip {
-                            for (alert_id, alert) in alerts_for_trip {
-                                alert_id_to_alert.insert(alert_id.clone(), alert.clone());
-                                alert_ids_for_this_trip.push(alert_id.clone());
-                            }
-                        }
-                    }
-
-                    // GET ALERTS FOR STOPS
-
-                    let alerts_for_stops = aspen_client
-                        .get_alert_from_stop_ids(
-                            context::current(),
-                            chateau.clone(),
-                            stop_ids_to_lookup
-                                .iter()
-                                .map(|x| x.to_string())
-                                .collect_vec(),
-                        )
-                        .await;
-
-                    if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
-                        let relevant_alert_ids = alerts_for_stops
-                            .alerts
-                            .iter()
-                            .filter(|(alert_id, alert)| {
-                                alert.informed_entity.iter().any(|entity| {
-                                    let route_id_covered = match &entity.route_id {
-                                        None => true,
-                                        Some(route_id) => route_id == &route.route_id,
-                                    };
-
-                                    let trip_covered = match &entity.trip {
-                                        None => true,
-                                        Some(trip) => match &trip.trip_id {
-                                            None => true,
-                                            Some(entity_trip_id) => {
-                                                entity_trip_id == &query.trip_id
-                                            }
-                                        },
-                                    };
-
-                                    route_id_covered && trip_covered
-                                })
-                            })
-                            .map(|(alert_id, _)| alert_id.clone())
-                            .collect::<BTreeSet<_>>();
-
-                        for (alert_id, alerts) in alerts_for_stops.alerts {
-                            if relevant_alert_ids.contains(&alert_id) {
-                                alert_id_to_alert.insert(alert_id.clone(), alerts.clone());
-                            }
-                        }
-
-                        for (stop_id, alert_ids) in alerts_for_stops.stops_to_alert_ids {
-                            stop_id_to_alert_ids.insert(
-                                stop_id.clone(),
-                                alert_ids
-                                    .iter()
-                                    .filter(|alert_id| {
-                                        relevant_alert_ids.contains(alert_id.as_str())
-                                    })
-                                    .cloned()
-                                    .collect::<Vec<_>>(),
-                            );
-                        }
-                    }
+                   
                 }
                 _ => {
                     eprintln!("Error connecting to assigned node. Failed to connect to tarpc");
@@ -1512,4 +1462,122 @@ pub async fn get_trip_init(
             timer.header_value(),
         ))
         .body(text)
+}
+
+struct AlertOutput {
+    alert_id_to_alert: BTreeMap<String, AspenisedAlert>,
+    alert_ids_for_this_route: Vec<String>,
+    alert_ids_for_this_trip: Vec<String>,
+    stop_id_to_alert_ids: BTreeMap<String, Vec<String>>,
+}
+
+async fn get_alert_single_trip(
+    aspen_client: &catenary::aspen::lib::AspenRpcClient,
+    chateau: String,
+    trip_id: String,
+    route_id: String,
+    stops: Vec<String>
+) -> Result<AlertOutput, Box<dyn std::error::Error + Sync + Send>> {
+    let alerts_for_route = aspen_client
+    .get_alerts_from_route_id(
+        context::current(),
+        chateau.clone(),
+        route_id.clone(),
+    )
+    .await;
+
+let alerts_for_trip = aspen_client
+    .get_alert_from_trip_id(
+        context::current(),
+        chateau.clone(),
+        trip_id.clone(),
+    )
+    .await;
+
+    let mut alert_id_to_alert: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
+
+    let mut alert_ids_for_this_route: Vec<String> = vec![];
+
+    let mut alert_ids_for_this_trip: Vec<String> = vec![];
+
+    let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    if let Ok(alerts_for_route) = alerts_for_route {
+        if let Some(alerts_for_route) = alerts_for_route {
+            for (alert_id, alert) in alerts_for_route {
+                alert_id_to_alert.insert(alert_id.clone(), alert.clone());
+                alert_ids_for_this_route.push(alert_id.clone());
+            }
+        }
+    }
+
+    if let Ok(alerts_for_trip) = alerts_for_trip {
+        if let Some(alerts_for_trip) = alerts_for_trip {
+            for (alert_id, alert) in alerts_for_trip {
+                alert_id_to_alert.insert(alert_id.clone(), alert.clone());
+                alert_ids_for_this_trip.push(alert_id.clone());
+            }
+        }
+    }
+
+    // GET ALERTS FOR STOPS
+
+    let alerts_for_stops = aspen_client
+        .get_alert_from_stop_ids(
+            context::current(),
+            chateau.clone(),
+            stops,
+        )
+        .await;
+
+    if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
+        let relevant_alert_ids = alerts_for_stops
+            .alerts
+            .iter()
+            .filter(|(alert_id, alert)| {
+                alert.informed_entity.iter().any(|entity| {
+                    let route_id_covered = match &entity.route_id {
+                        None => true,
+                        Some(route_id_entity) => route_id_entity == &route_id,
+                    };
+
+                    let trip_covered = match &entity.trip {
+                        None => true,
+                        Some(trip) => match &trip.trip_id {
+                            None => true,
+                            Some(entity_trip_id) => entity_trip_id == &trip_id,
+                        },
+                    };
+
+                    route_id_covered && trip_covered
+                })
+            })
+            .map(|(alert_id, _)| alert_id.clone())
+            .collect::<BTreeSet<_>>();
+
+        for (alert_id, alerts) in alerts_for_stops.alerts {
+            if relevant_alert_ids.contains(&alert_id) {
+                alert_id_to_alert.insert(alert_id.clone(), alerts.clone());
+            }
+        }
+
+        for (stop_id, alert_ids) in alerts_for_stops.stops_to_alert_ids {
+            stop_id_to_alert_ids.insert(
+                stop_id.clone(),
+                alert_ids
+                    .iter()
+                    .filter(|alert_id| relevant_alert_ids.contains(alert_id.as_str()))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+    
+    Ok(AlertOutput {
+        alert_id_to_alert,
+        alert_ids_for_this_route,
+        alert_ids_for_this_trip,
+        stop_id_to_alert_ids,
+    })
+
 }
