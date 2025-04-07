@@ -422,9 +422,7 @@ pub async fn new_rt_data(
 
             for trip_entity in trip_gtfs_rt_for_feed_id.entity.iter() {
                 if let Some(trip_update) = &trip_entity.trip_update {
-                    if missing_trip_ids
-                        .contains(trip_update.trip.trip_id.as_ref().unwrap())
-                    {
+                    if missing_trip_ids.contains(trip_update.trip.trip_id.as_ref().unwrap()) {
                         if let Some(trip_id) = &trip_update.trip.trip_id {
                             let last_non_skipped_stop_id = trip_update
                                 .stop_time_update
@@ -432,7 +430,7 @@ pub async fn new_rt_data(
                                 .filter(|x| x.schedule_relationship != Some(1))
                                 .last()
                                 .and_then(|x| x.stop_id.clone());
-    
+
                             if let Some(last_non_skipped_stop_id) = last_non_skipped_stop_id {
                                 stop_ids_to_lookup.insert(last_non_skipped_stop_id.clone());
                             }
@@ -446,11 +444,11 @@ pub async fn new_rt_data(
             0 => vec![],
             _ => {
                 let stops_answer = catenary::schema::gtfs::stops::dsl::stops
-                .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&chateau_id))
-                .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq_any(&stop_ids_to_lookup))
-                .select(catenary::models::Stop::as_select())
-                .load::<catenary::models::Stop>(conn)
-                .await;
+                    .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&chateau_id))
+                    .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq_any(&stop_ids_to_lookup))
+                    .select(catenary::models::Stop::as_select())
+                    .load::<catenary::models::Stop>(conn)
+                    .await;
 
                 match stops_answer {
                     Ok(stops) => stops,
@@ -699,17 +697,20 @@ pub async fn new_rt_data(
                             .last()
                             .and_then(|x| x.stop_id.clone());
 
-                        let trip_headsign = match missing_trip_ids
-                            .contains(trip_id.as_ref().unwrap())
-                        {
-                            true => None,
-                            false => match last_non_cancelled_stop_id {
-                                Some(last_non_cancelled_stop_id) => stop_id_to_stop
-                                    .get(&last_non_cancelled_stop_id)
-                                    .map(|s| s.name.as_ref().map(|name| CompactString::new(&name)))
-                                    .flatten(),
-                                None => None,
+                        let trip_headsign = match &trip_id {
+                            Some(trip_id) => match missing_trip_ids.contains(trip_id) {
+                                true => None,
+                                false => match last_non_cancelled_stop_id {
+                                    Some(last_non_cancelled_stop_id) => stop_id_to_stop
+                                        .get(&last_non_cancelled_stop_id)
+                                        .map(|s| {
+                                            s.name.as_ref().map(|name| CompactString::new(&name))
+                                        })
+                                        .flatten(),
+                                    None => None,
+                                },
                             },
+                            None => None,
                         };
 
                         let trip_update = AspenisedTripUpdate {
@@ -838,22 +839,24 @@ pub async fn new_rt_data(
                                         .and_modify(|x| {
                                             x.push(CompactString::new(&trip_update_entity.id))
                                         })
-                                        .or_insert(vec![CompactString::new(&trip_update_entity.id)]);
+                                        .or_insert(vec![CompactString::new(
+                                            &trip_update_entity.id,
+                                        )]);
                                 }
 
                                 if missing_trip_ids.contains(trip_id_in_properties) {
-                                    let vehicle_entity_ids = trip_id_to_vehicle_gtfs_rt_id.get(
-                                        trip_id_in_properties,
-                                    );
+                                    let vehicle_entity_ids =
+                                        trip_id_to_vehicle_gtfs_rt_id.get(trip_id_in_properties);
 
                                     if let Some(vehicle_entity_ids) = vehicle_entity_ids {
                                         for vehicle_entity_id in vehicle_entity_ids {
-                                            if let Some(vehicle_pos) =
-                                                aspenised_vehicle_positions.get_mut(vehicle_entity_id)
+                                            if let Some(vehicle_pos) = aspenised_vehicle_positions
+                                                .get_mut(vehicle_entity_id)
                                             {
                                                 if let Some(trip_assigned) = &mut vehicle_pos.trip {
-                                                    trip_assigned.trip_headsign =
-                                                        trip_headsign.clone().map(|x| x.to_string());
+                                                    trip_assigned.trip_headsign = trip_headsign
+                                                        .clone()
+                                                        .map(|x| x.to_string());
                                                 }
                                             }
                                         }
