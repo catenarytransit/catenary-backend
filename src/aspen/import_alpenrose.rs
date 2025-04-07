@@ -422,16 +422,20 @@ pub async fn new_rt_data(
 
             for trip_entity in trip_gtfs_rt_for_feed_id.entity.iter() {
                 if let Some(trip_update) = &trip_entity.trip_update {
-                    if let Some(trip_id) = &trip_update.trip.trip_id {
-                        let last_non_skipped_stop_id = trip_update
-                            .stop_time_update
-                            .iter()
-                            .filter(|x| x.schedule_relationship != Some(1))
-                            .last()
-                            .and_then(|x| x.stop_id.clone());
-
-                        if let Some(last_non_skipped_stop_id) = last_non_skipped_stop_id {
-                            stop_ids_to_lookup.insert(last_non_skipped_stop_id.clone());
+                    if missing_trip_ids
+                        .contains(trip_update.trip.trip_id.as_ref().unwrap())
+                    {
+                        if let Some(trip_id) = &trip_update.trip.trip_id {
+                            let last_non_skipped_stop_id = trip_update
+                                .stop_time_update
+                                .iter()
+                                .filter(|x| x.schedule_relationship != Some(1))
+                                .last()
+                                .and_then(|x| x.stop_id.clone());
+    
+                            if let Some(last_non_skipped_stop_id) = last_non_skipped_stop_id {
+                                stop_ids_to_lookup.insert(last_non_skipped_stop_id.clone());
+                            }
                         }
                     }
                 }
