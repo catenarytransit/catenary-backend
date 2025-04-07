@@ -897,7 +897,7 @@ pub async fn get_trip_init(
         return HttpResponse::InternalServerError().body("Error fetching route data");
     }
 
-    let route = route.unwrap();
+    let route: Vec<catenary::models::Route> = route.unwrap();
 
     if route.is_empty() {
         return HttpResponse::NotFound().body("Route not found");
