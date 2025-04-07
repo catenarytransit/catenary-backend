@@ -438,18 +438,20 @@ pub async fn new_rt_data(
             }
         }
 
-        let stops = catenary::schema::gtfs::stops::dsl::stops
+        let stops = match stop_ids_to_lookup.len() {
+            0 => vec![],
+            _ => catenary::schema::gtfs::stops::dsl::stops
             .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&chateau_id))
             .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq_any(&stop_ids_to_lookup))
             .select(catenary::models::Stop::as_select())
             .load::<catenary::models::Stop>(conn)
-            .await?;
+            .await?
+        };
 
-        let mut stop_id_to_stop: AHashMap<String, catenary::models::Stop> = AHashMap::new();
-
-        for stop in stops {
-            stop_id_to_stop.insert(stop.gtfs_id.clone(), stop);
-        }
+        let stop_id_to_stop: AHashMap<String, catenary::models::Stop> = stops
+            .into_iter()
+            .map(|stop| (stop.gtfs_id.clone(), stop))
+            .collect();
 
         //also lookup all the headsigns from the trips via itinerary patterns
 

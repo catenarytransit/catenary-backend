@@ -411,7 +411,7 @@ pub async fn get_realtime_locations(
     if fetch_assigned_node_for_this_realtime_feed.kvs().is_empty() {
         return HttpResponse::Ok()
             .append_header(("Cache-Control", "no-cache"))
-            .body("No assigned node found for this chateau");
+            .body("No assigned node found for this chateau according to etcd database");
     }
 
     //deserialise into ChateauMetadataZookeeper
@@ -488,6 +488,6 @@ pub async fn get_realtime_locations(
         },
         None => HttpResponse::Ok()
             .append_header(("Cache-Control", "no-cache"))
-            .body("No realtime data found for this chateau"),
+            .body("No realtime data found for this chateau, aspen server returned None"),
     }
 }
