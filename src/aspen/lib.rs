@@ -33,7 +33,7 @@ pub trait AspenRpc {
 
     async fn get_entire_trip_db(
         chateau_id: String,
-    ) -> -> Option<AHashMap<String, AspenisedTripUpdate>>;
+    ) -> Option<AHashMap<String, AspenisedTripUpdate>>;
 
     //maybesend gtfs rt?
     async fn from_alpenrose(
