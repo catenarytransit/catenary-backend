@@ -127,20 +127,6 @@ impl AspenRpc for AspenServer {
         format!("Hello, {name}! You are connected from {}", self.addr)
     }
 
-    async fn get_entire_trip_db(
-        self,
-        ctx: context::Context,
-        chateau_id: String,
-    ) -> Option<AHashMap<String, AspenisedTripUpdate>> {
-        match self.authoritative_data_store.get(&chateau_id) {
-            None => None,
-            Some(authoritative_data) => {
-                let authoritative_data = authoritative_data.get();
-                Some(authoritative_data.trip_updates.clone())
-            }
-        }
-    }
-
     async fn get_all_trips_with_ids(
         self,
         ctx: context::Context,
