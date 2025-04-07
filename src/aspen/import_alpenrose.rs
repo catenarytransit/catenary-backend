@@ -816,6 +816,38 @@ pub async fn new_rt_data(
                             }
                         }
 
+                        if let Some(trip_properties) = &trip_update.trip_properties {
+                            if let Some(trip_id_in_properties) = &trip_properties.trip_id {
+                                if let Some(route_id) = &trip_update.trip.route_id {
+                                    trip_updates_lookup_by_route_id_to_trip_update_ids
+                                        .entry(route_id.clone().into())
+                                        .and_modify(|x| {
+                                            x.push(CompactString::new(&trip_update_entity.id))
+                                        })
+                                        .or_insert(vec![CompactString::new(&trip_update_entity.id)]);
+                                }
+
+                                if missing_trip_ids.contains(trip_id_in_properties) {
+                                    let vehicle_entity_ids = trip_id_to_vehicle_gtfs_rt_id.get(
+                                        trip_id_in_properties,
+                                    );
+
+                                    if let Some(vehicle_entity_ids) = vehicle_entity_ids {
+                                        for vehicle_entity_id in vehicle_entity_ids {
+                                            if let Some(vehicle_pos) =
+                                                aspenised_vehicle_positions.get_mut(vehicle_entity_id)
+                                            {
+                                                if let Some(trip_assigned) = &mut vehicle_pos.trip {
+                                                    trip_assigned.trip_headsign =
+                                                        trip_headsign.clone().map(|x| x.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         trip_updates
                             .insert(CompactString::new(&trip_update_entity.id), trip_update);
 
