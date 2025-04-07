@@ -699,7 +699,7 @@ pub async fn get_trip_init(
                     let mut alert_id_to_alert: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
                     let mut alert_ids_for_this_route: Vec<String> = vec![];
                     let mut alert_ids_for_this_trip: Vec<String> = vec![];
-                
+
                     let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
                     if let Ok(alerts_response) = alerts_response {
@@ -982,8 +982,10 @@ pub async fn get_trip_init(
 
     //convert shape data into polyline
 
-    let stop_ids_to_lookup: Vec<String> =
-        itin_rows_to_use.iter().map(|x| x.stop_id.clone().into()).collect();
+    let stop_ids_to_lookup: Vec<String> = itin_rows_to_use
+        .iter()
+        .map(|x| x.stop_id.clone().into())
+        .collect();
 
     let (stops_data, shape_lookup): (
         Result<Vec<catenary::models::Stop>, diesel::result::Error>,
@@ -1406,7 +1408,6 @@ pub async fn get_trip_init(
                     )
                     .await;
 
-
                     if let Ok(alerts_response) = alerts_response {
                         alert_id_to_alert = alerts_response.alert_id_to_alert;
                         alert_ids_for_this_route = alerts_response.alert_ids_for_this_route;
@@ -1415,7 +1416,6 @@ pub async fn get_trip_init(
                     } else {
                         eprintln!("Error fetching alerts from aspen");
                     }
-                   
                 }
                 _ => {
                     eprintln!("Error connecting to assigned node. Failed to connect to tarpc");
@@ -1476,23 +1476,15 @@ async fn get_alert_single_trip(
     chateau: String,
     trip_id: String,
     route_id: String,
-    stops: Vec<String>
+    stops: Vec<String>,
 ) -> Result<AlertOutput, Box<dyn std::error::Error + Sync + Send>> {
     let alerts_for_route = aspen_client
-    .get_alerts_from_route_id(
-        context::current(),
-        chateau.clone(),
-        route_id.clone(),
-    )
-    .await;
+        .get_alerts_from_route_id(context::current(), chateau.clone(), route_id.clone())
+        .await;
 
-let alerts_for_trip = aspen_client
-    .get_alert_from_trip_id(
-        context::current(),
-        chateau.clone(),
-        trip_id.clone(),
-    )
-    .await;
+    let alerts_for_trip = aspen_client
+        .get_alert_from_trip_id(context::current(), chateau.clone(), trip_id.clone())
+        .await;
 
     let mut alert_id_to_alert: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
 
@@ -1523,11 +1515,7 @@ let alerts_for_trip = aspen_client
     // GET ALERTS FOR STOPS
 
     let alerts_for_stops = aspen_client
-        .get_alert_from_stop_ids(
-            context::current(),
-            chateau.clone(),
-            stops,
-        )
+        .get_alert_from_stop_ids(context::current(), chateau.clone(), stops)
         .await;
 
     if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
@@ -1572,12 +1560,11 @@ let alerts_for_trip = aspen_client
             );
         }
     }
-    
+
     Ok(AlertOutput {
         alert_id_to_alert,
         alert_ids_for_this_route,
         alert_ids_for_this_trip,
         stop_id_to_alert_ids,
     })
-
 }

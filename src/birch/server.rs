@@ -76,8 +76,8 @@ use rand::Rng;
 mod terrain_tiles_proxy;
 use terrain_tiles_proxy::proxy_for_maptiler_terrain_tiles;
 mod block_api;
-mod vehicle_api;
 mod nearby_departuresv2;
+mod vehicle_api;
 
 #[derive(Clone, Debug)]
 struct ChateauCache {
@@ -731,7 +731,7 @@ async fn main() -> std::io::Result<()> {
             .service(vehicle_api::get_vehicle_data_endpoint)
             .service(block_api::block_api)
             .service(size_bbox_zoom_birch)
-         //   .service(nearby_departuresv2::nearby_from_coords_v2)
+            //   .service(nearby_departuresv2::nearby_from_coords_v2)
             //we do some trolling
             .service(web::redirect(
                 "/.env",

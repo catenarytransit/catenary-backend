@@ -334,7 +334,6 @@ pub async fn new_rt_data(
                         trip_ids_to_lookup.insert(trip_id.clone());
                     }
 
-                    
                     if let Some(trip_property) = &trip_update.trip_properties {
                         if let Some(trip_id) = &trip_property.trip_id {
                             trip_ids_to_lookup.insert(trip_id.clone());
@@ -438,14 +437,13 @@ pub async fn new_rt_data(
                                     .filter(|x| x.schedule_relationship != Some(1))
                                     .last()
                                     .and_then(|x| x.stop_id.clone());
-    
+
                                 if let Some(last_non_skipped_stop_id) = last_non_skipped_stop_id {
                                     stop_ids_to_lookup.insert(last_non_skipped_stop_id.clone());
                                 }
                             }
                         }
                     }
-                   
                 }
             }
         }
