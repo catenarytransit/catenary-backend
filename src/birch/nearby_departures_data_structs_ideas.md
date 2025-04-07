@@ -83,3 +83,7 @@ Trips in the schedule can be checked if frequency data is contained.
 if the number is exact, simply duplicate the start time until it is finished duplicating.
 
 ## final data structure output is still unclear
+
+### Code should be broken up into function blocks 
+
+Needs flowchart.
