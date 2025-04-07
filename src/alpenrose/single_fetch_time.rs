@@ -504,7 +504,13 @@ pub fn make_reqwest_for_url(
                 }
             }
 
-            Some(request.build().unwrap())
+            match request.build() {
+                Ok(request) => Some(request),
+                Err(e) => {
+                    eprintln!("Error building request: {}", e);
+                    None
+                }
+            }
         }
         None => None,
     }
