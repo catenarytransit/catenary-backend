@@ -707,10 +707,9 @@ pub async fn new_rt_data(
                             .last()
                             .and_then(|x| x.stop_id.clone());
 
-                        let trip_headsign = match &trip_id {
+                        let mut trip_headsign = match &trip_id {
                             Some(trip_id) => match missing_trip_ids.contains(trip_id) {
-                                true => None,
-                                false => match last_non_cancelled_stop_id {
+                                true => match last_non_cancelled_stop_id {
                                     Some(last_non_cancelled_stop_id) => stop_id_to_stop
                                         .get(&last_non_cancelled_stop_id)
                                         .map(|s| {
@@ -719,6 +718,7 @@ pub async fn new_rt_data(
                                         .flatten(),
                                     None => None,
                                 },
+                                false => None,
                             },
                             None => None,
                         };
