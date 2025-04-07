@@ -115,7 +115,7 @@ fasthash = "0.4.0"
 clap = "4.5"
 rgb = "0.8.37"
 zotgtfs = "0.3.7"
-amtrak-gtfs-rt = "0.5.4"
+amtrak-gtfs-rt = "0.5.5"
 chrono-tz = { version = "0.10.1", features = ["case-insensitive", "serde"] }
 ping = "0.5.2"
 online = { version = "4.0.2", features = ["tokio-runtime"] }
