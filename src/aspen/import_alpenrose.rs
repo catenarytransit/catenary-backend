@@ -333,6 +333,13 @@ pub async fn new_rt_data(
                     if let Some(trip_id) = &trip_update.trip.trip_id {
                         trip_ids_to_lookup.insert(trip_id.clone());
                     }
+
+                    
+                    if let Some(trip_property) = &trip_update.trip_properties {
+                        if let Some(trip_id) = &trip_property.trip_id {
+                            trip_ids_to_lookup.insert(trip_id.clone());
+                        }
+                    }
                 }
             }
         }

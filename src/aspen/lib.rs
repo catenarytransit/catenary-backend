@@ -31,6 +31,10 @@ pub trait AspenRpc {
         trip_id: Vec<String>,
     ) -> Option<TripsSelectionResponse>;
 
+    async fn get_entire_trip_db(
+        chateau_id: String,
+    ) -> -> Option<AHashMap<String, AspenisedTripUpdate>>;
+
     //maybesend gtfs rt?
     async fn from_alpenrose(
         chateau_id: String,
