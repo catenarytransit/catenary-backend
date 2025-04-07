@@ -444,12 +444,22 @@ pub async fn new_rt_data(
 
         let stops = match stop_ids_to_lookup.len() {
             0 => vec![],
-            _ => catenary::schema::gtfs::stops::dsl::stops
-            .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&chateau_id))
-            .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq_any(&stop_ids_to_lookup))
-            .select(catenary::models::Stop::as_select())
-            .load::<catenary::models::Stop>(conn)
-            .await?
+            _ => {
+                let stops_answer = catenary::schema::gtfs::stops::dsl::stops
+                .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&chateau_id))
+                .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq_any(&stop_ids_to_lookup))
+                .select(catenary::models::Stop::as_select())
+                .load::<catenary::models::Stop>(conn)
+                .await;
+
+                match stops_answer {
+                    Ok(stops) => stops,
+                    Err(e) => {
+                        println!("Error fetching stops: {}", e);
+                        vec![]
+                    }
+                }
+            }
         };
 
         let stop_id_to_stop: AHashMap<String, catenary::models::Stop> = stops
