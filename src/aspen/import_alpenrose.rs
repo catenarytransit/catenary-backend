@@ -728,7 +728,7 @@ pub async fn new_rt_data(
 
                         match catenary::throw_away_start_dates.contains(&chateau_id.as_str()) {
                             true => trip_descriptor.start_date = None,
-                            false => {},
+                            false => {}
                         }
 
                         let trip_update = AspenisedTripUpdate {
@@ -826,6 +826,17 @@ pub async fn new_rt_data(
                             if let Some(trip_id) = &trip_properties.trip_id {
                                 trip_updates_lookup_by_trip_id_to_trip_update_ids
                                     .entry(trip_id.clone().into())
+                                    .and_modify(|x| {
+                                        x.push(CompactString::new(&trip_update_entity.id))
+                                    })
+                                    .or_insert(vec![CompactString::new(&trip_update_entity.id)]);
+                            }
+                        }
+
+                        if let Some(trip_id_modified) = &trip_update.trip.modified_trip {
+                            if let Some(trip_id_modified) = &trip_id_modified.affected_trip_id {
+                                trip_updates_lookup_by_trip_id_to_trip_update_ids
+                                    .entry(trip_id_modified.clone().into())
                                     .and_modify(|x| {
                                         x.push(CompactString::new(&trip_update_entity.id))
                                     })
