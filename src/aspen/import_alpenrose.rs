@@ -553,12 +553,15 @@ pub async fn new_rt_data(
                                     direction_id: trip.direction_id,
                                    start_date: match &trip.start_date {
                                         Some(start_date) => {
-                                            match chrono::NaiveDate::parse_from_str(
-                                                &start_date,
-                                                "%Y%m%d",
-                                            ) {
-                                                Ok(start_date) => Some(start_date),
-                                                Err(_) => None,
+                                            match catenary::throw_away_start_dates.contains(&chateau_id.as_str()) {
+                                                true => None,
+                                                false => match chrono::NaiveDate::parse_from_str(
+                                                    &start_date,
+                                                    "%Y%m%d",
+                                                ) {
+                                                    Ok(start_date) => Some(start_date),
+                                                    Err(_) => None,
+                                                }
                                             }
                                         },
                                         None => None,
@@ -721,8 +724,15 @@ pub async fn new_rt_data(
                             None => None,
                         };
 
+                        let mut trip_descriptor: AspenRawTripInfo = trip_update.trip.clone().into();
+
+                        match catenary::throw_away_start_dates.contains(&chateau_id.as_str()) {
+                            true => trip_descriptor.start_date = None,
+                            false => {},
+                        }
+
                         let trip_update = AspenisedTripUpdate {
-                            trip: trip_update.trip.clone().into(),
+                            trip: trip_descriptor,
                             vehicle: trip_update.vehicle.clone().map(|x| x.into()),
                             trip_headsign: trip_headsign.clone(),
                             found_schedule_trip_id: compressed_trip.is_some(),
