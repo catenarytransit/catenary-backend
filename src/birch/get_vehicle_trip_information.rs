@@ -265,6 +265,8 @@ struct TripIntroductionInformation {
     pub trip_id_found_in_db: bool,
     pub service_date: Option<chrono::NaiveDate>,
     pub schedule_trip_exists: bool,
+    pub rt_shape: bool,
+    pub old_shape_polyline: Option<String>,
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -543,6 +545,8 @@ pub async fn get_trip_init(
     let chateau = path.into_inner();
 
     let query = query.into_inner();
+
+    let mut rt_shape = false;
 
     // connect to pool
     let conn_pool = pool.as_ref();
@@ -824,6 +828,21 @@ pub async fn get_trip_init(
                         }
                     };
 
+                    let mut shape_polyline = None;
+
+                    if let Some(trip_properties) = &trip.trip_properties {
+                        if let Some(shape_id) = &trip_properties.shape_id {
+                            let shape_response = aspen_client
+                                .get_shape(context::current(), chateau.clone(), shape_id.clone())
+                                .await;
+
+                            if let Ok(Some(shape_response)) = shape_response {
+                                shape_polyline = Some(shape_response);
+                                rt_shape = true;
+                            }
+                        }
+                    }
+
                     let response = TripIntroductionInformation {
                         stoptimes: stop_times,
                         tz: tz,
@@ -859,6 +878,8 @@ pub async fn get_trip_init(
                             })
                             .flatten(),
                         schedule_trip_exists: false,
+                        rt_shape: false,
+                        old_shape_polyline: None,
                     };
 
                     let response = serde_json::to_string(&response).unwrap();
@@ -1020,7 +1041,7 @@ pub async fn get_trip_init(
 
     timer.add("query_stops_and_shape");
 
-    let shape_polyline = shape_lookup.map(|shape_info| {
+    let mut shape_polyline = shape_lookup.map(|shape_info| {
         polyline::encode_coordinates(
             geo::LineString::new(
                 shape_info
@@ -1039,6 +1060,8 @@ pub async fn get_trip_init(
         )
         .unwrap()
     });
+
+    let mut old_shape_polyline: Option<String> = None;
 
     timer.add("convert_polyline");
 
@@ -1333,6 +1356,55 @@ pub async fn get_trip_init(
                                         }
                                     };
 
+                                    let mut modifications_id_for_this_trip: Option<String> = None;
+
+                                    if let Some(modified_trip) = &rt_trip_update.trip.modified_trip
+                                    {
+                                        if let Some(modifications_id) =
+                                            &modified_trip.modifications_id
+                                        {
+                                            modifications_id_for_this_trip =
+                                                Some(modifications_id.clone());
+                                        }
+                                    }
+
+                                    if let Some(modifications_id_for_this_trip) =
+                                        &modifications_id_for_this_trip
+                                    {
+                                        //query aspen
+
+                                        let modifications_response = aspen_client
+                                            .get_trip_modification(
+                                                context::current(),
+                                                chateau.clone(),
+                                                modifications_id_for_this_trip.clone(),
+                                            )
+                                            .await;
+
+                                        if let Ok(Some(modifications_response)) =
+                                            modifications_response
+                                        {
+                                        }
+                                    }
+
+                                    if let Some(trip_properties) = &rt_trip_update.trip_properties {
+                                        if let Some(shape_id) = &trip_properties.shape_id {
+                                            let shape_response = aspen_client
+                                                .get_shape(
+                                                    context::current(),
+                                                    chateau.clone(),
+                                                    shape_id.clone(),
+                                                )
+                                                .await;
+
+                                            if let Ok(Some(shape_response)) = shape_response {
+                                                old_shape_polyline = shape_polyline;
+                                                shape_polyline = Some(shape_response);
+                                                rt_shape = true;
+                                            }
+                                        }
+                                    }
+
                                     vehicle = rt_trip_update.vehicle.clone();
 
                                     println!(
@@ -1450,6 +1522,8 @@ pub async fn get_trip_init(
         trip_id_found_in_db: true,
         service_date: Some(start_naive_date),
         schedule_trip_exists: true,
+        rt_shape: rt_shape,
+        old_shape_polyline,
     };
 
     let text = serde_json::to_string(&response).unwrap();

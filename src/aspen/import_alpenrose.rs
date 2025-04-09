@@ -935,6 +935,26 @@ pub async fn new_rt_data(
                                 .insert(shape_id.clone().into(), shape.encoded_polyline.clone());
                         }
                     }
+
+                    //trip mod
+
+                    if let Some(trip_modification) = &trip_update_entity.trip_modifications {
+                        trip_modifications.insert(
+                            trip_update_entity.id.clone().into(),
+                            trip_modification.clone().into(),
+                        );
+
+                        for selected_trip in trip_modification.selected_trips.iter() {
+                            for trip_id in selected_trip.trip_ids.iter() {
+                                trip_id_to_trip_modification_id
+                                    .entry(trip_id.clone().into())
+                                    .and_modify(|x| {
+                                        *x = trip_update_entity.id.clone().into();
+                                    })
+                                    .or_insert(trip_update_entity.id.clone().into());
+                            }
+                        }
+                    }
                 }
             }
 

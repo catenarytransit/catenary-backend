@@ -142,6 +142,68 @@ impl AspenRpc for AspenServer {
         }
     }
 
+    async fn get_trip_modification(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        modification_id: String,
+    ) -> Option<AspenisedTripModification> {
+        match self.authoritative_data_store.get(&chateau_id) {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let trip_modification = aspenised_data
+                    .trip_modifications
+                    .get(modification_id.as_str());
+
+                match trip_modification {
+                    Some(trip_modification) => Some(trip_modification.clone()),
+                    None => {
+                        println!(
+                            "Trip modification not found for modification id {}",
+                            modification_id
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
+        }
+    }
+
+    async fn get_trip_modifications(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        modification_ids: Vec<String>,
+    ) -> Option<AHashMap<String, AspenisedTripModification>> {
+        match self.authoritative_data_store.get(&chateau_id) {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let mut trip_modifications: AHashMap<String, AspenisedTripModification> =
+                    AHashMap::new();
+
+                for modification_id in modification_ids {
+                    if let Some(trip_modification) = aspenised_data
+                        .trip_modifications
+                        .get(modification_id.as_str())
+                    {
+                        trip_modifications.insert(modification_id, trip_modification.clone());
+                    } else {
+                        println!(
+                            "Trip modification not found for modification id {}",
+                            modification_id
+                        );
+                    }
+                }
+
+                Some(trip_modifications)
+            }
+            None => None,
+        }
+    }
+
     async fn hello(self, _: context::Context, name: String) -> String {
         let sleep_time = Duration::from_millis(
             Uniform::new_inclusive(1, 10)

@@ -33,6 +33,16 @@ pub trait AspenRpc {
 
     async fn get_shape(chateau_id: String, shape_id: String) -> Option<String>;
 
+    async fn get_trip_modification(
+        chateau_id: String,
+        modification_id: String,
+    ) -> Option<AspenisedTripModification>;
+
+    async fn get_trip_modifications(
+        chateau_id: String,
+        modification_ids: Vec<String>,
+    ) -> Option<AHashMap<String, AspenisedTripModification>>;
+
     //maybesend gtfs rt?
     async fn from_alpenrose(
         chateau_id: String,
