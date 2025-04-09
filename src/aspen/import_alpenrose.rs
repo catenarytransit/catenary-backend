@@ -12,6 +12,7 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
+use ecow::EcoString;
 use gtfs_realtime::FeedMessage;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -257,6 +258,12 @@ pub async fn new_rt_data(
     let mut impacted_stop_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
     let mut impact_trip_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
     let mut general_alerts: AHashMap<String, Vec<String>> = AHashMap::new();
+
+    let mut stop_id_to_stop: AHashMap<CompactString, AspenisedStop> = AHashMap::new();
+    let mut shape_id_to_shape: AHashMap<CompactString, Option<String>> = AHashMap::new();
+    let mut trip_modifications: AHashMap<CompactString, AspenisedTripModification> =
+        AHashMap::new();
+    let mut trip_id_to_trip_modification_id: AHashMap<CompactString, EcoString> = AHashMap::new();
 
     use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
@@ -919,6 +926,15 @@ pub async fn new_rt_data(
                             }
                         }
                     }
+
+                    //shapes are also grouped in the feed
+
+                    if let Some(shape) = &trip_update_entity.shape {
+                        if let Some(shape_id) = &shape.shape_id {
+                            shape_id_to_shape
+                                .insert(shape_id.clone().into(), shape.encoded_polyline.clone());
+                        }
+                    }
                 }
             }
 
@@ -1073,6 +1089,10 @@ pub async fn new_rt_data(
                 trip_updates_lookup_by_route_id_to_trip_update_ids:
                     trip_updates_lookup_by_route_id_to_trip_update_ids,
                 trip_id_to_vehicle_gtfs_rt_id: trip_id_to_vehicle_gtfs_rt_id,
+                stop_id_to_stop,
+                shape_id_to_shape,
+                trip_modifications: trip_modifications,
+                trip_id_to_trip_modification_id,
             }
         }
         scc::hash_map::Entry::Vacant(ve) => {
@@ -1093,6 +1113,10 @@ pub async fn new_rt_data(
                 last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
                 trip_updates_lookup_by_route_id_to_trip_update_ids:
                     trip_updates_lookup_by_route_id_to_trip_update_ids,
+                stop_id_to_stop,
+                shape_id_to_shape,
+                trip_modifications: trip_modifications,
+                trip_id_to_trip_modification_id,
             });
         }
     }

@@ -5,6 +5,7 @@ use compact_str::CompactString;
 use ecow::EcoString;
 use gtfs_realtime::FeedEntity;
 use std::hash::Hash;
+use std::sync::Arc;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ItineraryPatternInternalCache {
@@ -58,6 +59,147 @@ pub struct AspenisedData {
     pub last_updated_time_ms: u64,
     pub itinerary_pattern_internal_cache: ItineraryPatternInternalCache,
     pub compressed_trip_internal_cache: CompressedTripInternalCache,
+    pub stop_id_to_stop: AHashMap<CompactString, AspenisedStop>,
+    pub shape_id_to_shape: AHashMap<CompactString, Option<String>>,
+    pub trip_modifications: AHashMap<CompactString, AspenisedTripModification>,
+    pub trip_id_to_trip_modification_id: AHashMap<CompactString, EcoString>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AspenisedTripModification {
+    pub selected_trips: Vec<AspenSelectedTrips>,
+    pub start_times: Vec<String>,
+    pub service_dates: Vec<String>,
+    pub modifications: Vec<AspenModification>,
+}
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AspenSelectedTrips {
+    pub trip_ids: Vec<String>,
+    pub shape_id: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AspenStopSelector {
+    pub stop_sequence: Option<u32>,
+    pub stop_id: Option<EcoString>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AspenReplacementStop {
+    pub travel_time_to_stop: Option<i32>,
+    pub stop_id: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AspenModification {
+    pub start_stop_selector: Option<AspenStopSelector>,
+    pub end_stop_selector: Option<AspenStopSelector>,
+    pub propagated_modification_delay: Option<i32>,
+    pub replacement_stops: Vec<AspenReplacementStop>,
+    pub service_alert_id: Option<String>,
+    pub last_modified_time: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AspenisedStop {
+    pub stop_id: Option<String>,
+    pub stop_code: Option<AspenTranslatedString>,
+    pub stop_name: Option<AspenTranslatedString>,
+    pub tts_stop_name: Option<AspenTranslatedString>,
+    pub stop_desc: Option<AspenTranslatedString>,
+    pub stop_lat: Option<f32>,
+    pub stop_lon: Option<f32>,
+    pub zone_id: Option<String>,
+    pub stop_url: Option<AspenTranslatedString>,
+    pub parent_station: Option<String>,
+    pub stop_timezone: Option<String>,
+    pub wheelchair_boarding: Option<i32>,
+    pub level_id: Option<String>,
+    pub platform_code: Option<AspenTranslatedString>,
+}
+
+impl From<gtfs_realtime::TripModifications> for AspenisedTripModification {
+    fn from(trip_modifications: gtfs_realtime::TripModifications) -> Self {
+        AspenisedTripModification {
+            selected_trips: trip_modifications
+                .selected_trips
+                .into_iter()
+                .map(|x| x.into())
+                .collect(),
+            start_times: trip_modifications.start_times,
+            service_dates: trip_modifications.service_dates,
+            modifications: trip_modifications
+                .modifications
+                .into_iter()
+                .map(|x| x.into())
+                .collect(),
+        }
+    }
+}
+
+impl From<gtfs_realtime::trip_modifications::Modification> for AspenModification {
+    fn from(modification: gtfs_realtime::trip_modifications::Modification) -> Self {
+        AspenModification {
+            start_stop_selector: modification.start_stop_selector.map(|x| x.into()),
+            end_stop_selector: modification.end_stop_selector.map(|x| x.into()),
+            propagated_modification_delay: modification.propagated_modification_delay,
+            replacement_stops: modification
+                .replacement_stops
+                .into_iter()
+                .map(|x| x.into())
+                .collect(),
+            service_alert_id: modification.service_alert_id,
+            last_modified_time: modification.last_modified_time,
+        }
+    }
+}
+
+impl From<gtfs_realtime::trip_modifications::SelectedTrips> for AspenSelectedTrips {
+    fn from(selected_trips: gtfs_realtime::trip_modifications::SelectedTrips) -> Self {
+        AspenSelectedTrips {
+            trip_ids: selected_trips.trip_ids,
+            shape_id: selected_trips.shape_id,
+        }
+    }
+}
+
+impl From<gtfs_realtime::ReplacementStop> for AspenReplacementStop {
+    fn from(replacement_stop: gtfs_realtime::ReplacementStop) -> Self {
+        AspenReplacementStop {
+            travel_time_to_stop: replacement_stop.travel_time_to_stop,
+            stop_id: replacement_stop.stop_id,
+        }
+    }
+}
+
+impl From<gtfs_realtime::StopSelector> for AspenStopSelector {
+    fn from(stop_selector: gtfs_realtime::StopSelector) -> Self {
+        AspenStopSelector {
+            stop_sequence: stop_selector.stop_sequence,
+            stop_id: stop_selector.stop_id.map(|x| x.into()),
+        }
+    }
+}
+
+impl From<gtfs_realtime::Stop> for AspenisedStop {
+    fn from(stop: gtfs_realtime::Stop) -> Self {
+        AspenisedStop {
+            stop_id: stop.stop_id,
+            stop_code: stop.stop_code.map(|x| x.into()),
+            stop_name: stop.stop_name.map(|x| x.into()),
+            tts_stop_name: stop.tts_stop_name.map(|x| x.into()),
+            stop_desc: stop.stop_desc.map(|x| x.into()),
+            stop_lat: stop.stop_lat,
+            stop_lon: stop.stop_lon,
+            zone_id: stop.zone_id,
+            stop_url: stop.stop_url.map(|x| x.into()),
+            parent_station: stop.parent_station,
+            stop_timezone: stop.stop_timezone,
+            wheelchair_boarding: stop.wheelchair_boarding,
+            level_id: stop.level_id,
+            platform_code: stop.platform_code.map(|x| x.into()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]

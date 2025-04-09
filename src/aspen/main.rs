@@ -117,6 +117,31 @@ pub struct AspenServer {
 }
 
 impl AspenRpc for AspenServer {
+    async fn get_shape(
+        self,
+        context: tarpc::context::Context,
+        chateau_id: String,
+        shape_id: String,
+    ) -> Option<String> {
+        match self.authoritative_data_store.get(&chateau_id) {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let shape = aspenised_data.shape_id_to_shape.get(shape_id.as_str());
+
+                match shape {
+                    Some(shape) => Some(shape.clone()),
+                    None => {
+                        println!("Shape not found for shape id {}", shape_id);
+                        None
+                    }
+                }
+                .flatten()
+            }
+            None => None,
+        }
+    }
+
     async fn hello(self, _: context::Context, name: String) -> String {
         let sleep_time = Duration::from_millis(
             Uniform::new_inclusive(1, 10)

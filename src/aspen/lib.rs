@@ -31,6 +31,8 @@ pub trait AspenRpc {
         trip_id: Vec<String>,
     ) -> Option<TripsSelectionResponse>;
 
+    async fn get_shape(chateau_id: String, shape_id: String) -> Option<String>;
+
     //maybesend gtfs rt?
     async fn from_alpenrose(
         chateau_id: String,
