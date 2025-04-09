@@ -2,11 +2,11 @@ use actix_web::rt;
 use actix_web::{HttpResponse, Responder, web};
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
-use catenary::aspen_dataset::AspenStopTimeEvent;
 use catenary::aspen_dataset::AspenisedAlert;
 use catenary::aspen_dataset::AspenisedTripScheduleRelationship;
 use catenary::aspen_dataset::AspenisedVehicleDescriptor;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
+use catenary::aspen_dataset::{AspenStopTimeEvent, AspenisedTripModification};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::calendar as calendar_pg_schema;
 use catenary::schema::gtfs::calendar_dates as calendar_dates_pg_schema;
@@ -1358,6 +1358,10 @@ pub async fn get_trip_init(
 
                                     let mut modifications_id_for_this_trip: Option<String> = None;
 
+                                    let mut modifications_for_this_trip: Option<
+                                        AspenisedTripModification,
+                                    > = None;
+
                                     if let Some(modified_trip) = &rt_trip_update.trip.modified_trip
                                     {
                                         if let Some(modifications_id) =
@@ -1368,40 +1372,85 @@ pub async fn get_trip_init(
                                         }
                                     }
 
-                                    if let Some(modifications_id_for_this_trip) =
-                                        &modifications_id_for_this_trip
-                                    {
-                                        //query aspen
+                                    if modifications_id_for_this_trip.is_none() {
+                                        //fetch modifications id from the trip and service date
 
                                         let modifications_response = aspen_client
-                                            .get_trip_modification(
+                                            .trip_mod_lookup_for_trip_id_service_day(
                                                 context::current(),
                                                 chateau.clone(),
-                                                modifications_id_for_this_trip.clone(),
+                                                query.trip_id.clone(),
+                                                start_naive_date,
                                             )
                                             .await;
 
                                         if let Ok(Some(modifications_response)) =
                                             modifications_response
                                         {
+                                            modifications_for_this_trip =
+                                                Some(modifications_response);
+                                        }
+                                    }
+
+                                    let mut new_rt_shape_id: Option<String> = None;
+
+                                    if modifications_for_this_trip.is_none() {
+                                        if let Some(modifications_id_for_this_trip) =
+                                            &modifications_id_for_this_trip
+                                        {
+                                            //query aspen
+
+                                            let modifications_response = aspen_client
+                                                .get_trip_modification(
+                                                    context::current(),
+                                                    chateau.clone(),
+                                                    modifications_id_for_this_trip.clone(),
+                                                )
+                                                .await;
+
+                                            if let Ok(Some(modifications_response)) =
+                                                modifications_response
+                                            {
+                                                modifications_for_this_trip =
+                                                    Some(modifications_response);
+                                            }
+                                        }
+                                    }
+
+                                    if let Some(trip_modification) = modifications_for_this_trip {
+                                        //search for selected trip and the shape id
+
+                                        let shape_id = trip_modification
+                                            .selected_trips
+                                            .iter()
+                                            .find(|x| x.trip_ids.contains(&query.trip_id))
+                                            .map(|x| x.shape_id.clone())
+                                            .flatten();
+
+                                        if let Some(shape_id) = shape_id {
+                                            new_rt_shape_id = Some(shape_id);
                                         }
                                     }
 
                                     if let Some(trip_properties) = &rt_trip_update.trip_properties {
                                         if let Some(shape_id) = &trip_properties.shape_id {
-                                            let shape_response = aspen_client
-                                                .get_shape(
-                                                    context::current(),
-                                                    chateau.clone(),
-                                                    shape_id.clone(),
-                                                )
-                                                .await;
+                                            new_rt_shape_id = Some(shape_id.clone());
+                                        }
+                                    }
 
-                                            if let Ok(Some(shape_response)) = shape_response {
-                                                old_shape_polyline = shape_polyline;
-                                                shape_polyline = Some(shape_response);
-                                                rt_shape = true;
-                                            }
+                                    if let Some(new_rt_shape_id) = new_rt_shape_id {
+                                        let shape_response = aspen_client
+                                            .get_shape(
+                                                context::current(),
+                                                chateau.clone(),
+                                                new_rt_shape_id.clone(),
+                                            )
+                                            .await;
+
+                                        if let Ok(Some(shape_response)) = shape_response {
+                                            old_shape_polyline = shape_polyline;
+                                            shape_polyline = Some(shape_response);
+                                            rt_shape = true;
                                         }
                                     }
 

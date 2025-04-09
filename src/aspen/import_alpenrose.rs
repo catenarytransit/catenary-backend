@@ -263,7 +263,8 @@ pub async fn new_rt_data(
     let mut shape_id_to_shape: AHashMap<CompactString, Option<String>> = AHashMap::new();
     let mut trip_modifications: AHashMap<CompactString, AspenisedTripModification> =
         AHashMap::new();
-    let mut trip_id_to_trip_modification_id: AHashMap<CompactString, EcoString> = AHashMap::new();
+    let mut trip_id_to_trip_modification_ids: AHashMap<CompactString, Vec<EcoString>> =
+        AHashMap::new();
 
     use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
@@ -946,12 +947,10 @@ pub async fn new_rt_data(
 
                         for selected_trip in trip_modification.selected_trips.iter() {
                             for trip_id in selected_trip.trip_ids.iter() {
-                                trip_id_to_trip_modification_id
+                                trip_id_to_trip_modification_ids
                                     .entry(trip_id.clone().into())
-                                    .and_modify(|x| {
-                                        *x = trip_update_entity.id.clone().into();
-                                    })
-                                    .or_insert(trip_update_entity.id.clone().into());
+                                    .and_modify(|x| x.push(trip_update_entity.id.clone().into()))
+                                    .or_insert(vec![trip_update_entity.id.clone().into()]);
                             }
                         }
                     }
@@ -1112,7 +1111,7 @@ pub async fn new_rt_data(
                 stop_id_to_stop,
                 shape_id_to_shape,
                 trip_modifications: trip_modifications,
-                trip_id_to_trip_modification_id,
+                trip_id_to_trip_modification_ids,
             }
         }
         scc::hash_map::Entry::Vacant(ve) => {
@@ -1136,7 +1135,7 @@ pub async fn new_rt_data(
                 stop_id_to_stop,
                 shape_id_to_shape,
                 trip_modifications: trip_modifications,
-                trip_id_to_trip_modification_id,
+                trip_id_to_trip_modification_ids,
             });
         }
     }

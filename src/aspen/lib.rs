@@ -43,6 +43,12 @@ pub trait AspenRpc {
         modification_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedTripModification>>;
 
+    async fn trip_mod_lookup_for_trip_id_service_day(
+        chateau_id: String,
+        trip_id: String,
+        service_day: chrono::NaiveDate,
+    ) -> Option<AspenisedTripModification>;
+
     //maybesend gtfs rt?
     async fn from_alpenrose(
         chateau_id: String,

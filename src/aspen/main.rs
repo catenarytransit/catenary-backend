@@ -142,6 +142,59 @@ impl AspenRpc for AspenServer {
         }
     }
 
+    async fn trip_mod_lookup_for_trip_id_service_day(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        trip_id: String,
+        service_day: chrono::NaiveDate,
+    ) -> Option<AspenisedTripModification> {
+        match self.authoritative_data_store.get(&chateau_id) {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let trip_modification_ids = aspenised_data
+                    .trip_id_to_trip_modification_ids
+                    .get(trip_id.as_str());
+
+                //get all the trip modifications
+
+                let mut trip_modifications: Vec<&AspenisedTripModification> = vec![];
+
+                if let Some(trip_modification_ids) = trip_modification_ids {
+                    for trip_modification_id in trip_modification_ids {
+                        if let Some(trip_modification) = aspenised_data
+                            .trip_modifications
+                            .get(trip_modification_id.as_str())
+                        {
+                            trip_modifications.push(trip_modification);
+                        } else {
+                            println!(
+                                "Trip modification not found for modification id {}",
+                                trip_modification_id
+                            );
+                        }
+                    }
+                }
+
+                //filter for matching service day
+
+                let trip_modification = trip_modifications.iter().find(|trip_modification| {
+                    trip_modification.service_dates.contains(&service_day)
+                });
+
+                match trip_modification {
+                    Some(trip_modification) => Some(trip_modification.clone().to_owned()),
+                    None => {
+                        println!("Trip modification not found for trip id {}", trip_id);
+                        None
+                    }
+                }
+            }
+            None => None,
+        }
+    }
+
     async fn get_trip_modification(
         self,
         _: context::Context,

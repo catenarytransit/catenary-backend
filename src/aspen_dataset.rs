@@ -62,14 +62,14 @@ pub struct AspenisedData {
     pub stop_id_to_stop: AHashMap<CompactString, AspenisedStop>,
     pub shape_id_to_shape: AHashMap<CompactString, Option<String>>,
     pub trip_modifications: AHashMap<CompactString, AspenisedTripModification>,
-    pub trip_id_to_trip_modification_id: AHashMap<CompactString, EcoString>,
+    pub trip_id_to_trip_modification_ids: AHashMap<CompactString, Vec<EcoString>>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct AspenisedTripModification {
     pub selected_trips: Vec<AspenSelectedTrips>,
     pub start_times: Vec<String>,
-    pub service_dates: Vec<String>,
+    pub service_dates: Vec<chrono::NaiveDate>,
     pub modifications: Vec<AspenModification>,
 }
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -127,7 +127,12 @@ impl From<gtfs_realtime::TripModifications> for AspenisedTripModification {
                 .map(|x| x.into())
                 .collect(),
             start_times: trip_modifications.start_times,
-            service_dates: trip_modifications.service_dates,
+            service_dates: trip_modifications
+                .service_dates
+                .into_iter()
+                .map(|date| chrono::NaiveDate::parse_from_str(&date, "%Y%m%d"))
+                .flatten()
+                .collect(),
             modifications: trip_modifications
                 .modifications
                 .into_iter()
