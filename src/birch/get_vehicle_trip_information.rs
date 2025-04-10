@@ -1400,7 +1400,10 @@ pub async fn get_trip_init(
                                         {
                                             //query aspen
 
-                                            let modifications_response = aspen_client
+                                            let modifications_response: Result<
+                                                Option<AspenisedTripModification>,
+                                                tarpc::client::RpcError,
+                                            > = aspen_client
                                                 .get_trip_modification(
                                                     context::current(),
                                                     chateau.clone(),
@@ -1415,6 +1418,56 @@ pub async fn get_trip_init(
                                                     Some(modifications_response);
                                             }
                                         }
+                                    }
+
+                                    if let Some(modifications_for_this_trip) =
+                                        &modifications_for_this_trip
+                                    {
+                                        //trip modification algorithm
+
+                                        //get all stops matching the trip modification
+
+                                        let stops_to_fetch = modifications_for_this_trip
+                                            .modifications
+                                            .iter()
+                                            .map(|modification| {
+                                                modification
+                                                    .replacement_stops
+                                                    .iter()
+                                                    .map(|replacement_stop| {
+                                                        replacement_stop
+                                                            .stop_id
+                                                            .as_ref()
+                                                            .map(|x| x.to_string())
+                                                    })
+                                                    .flatten()
+                                            })
+                                            .flatten()
+                                            .collect::<BTreeSet<String>>();
+
+                                        //remove the stops that are already in the trip, we know about them
+
+                                        let stops_to_fetch = stops_to_fetch
+                                            .difference(
+                                                &stop_times_for_this_trip
+                                                    .iter()
+                                                    .map(|x| x.stop_id.to_string())
+                                                    .collect::<BTreeSet<String>>(),
+                                            )
+                                            .cloned()
+                                            .collect::<BTreeSet<_>>();
+
+                                        //look for postgres stops
+
+                                        let stops_data = stops_pg_schema::dsl::stops
+                                            .filter(stops_pg_schema::dsl::chateau.eq(&chateau))
+                                            .filter(
+                                                stops_pg_schema::dsl::gtfs_id
+                                                    .eq_any(&stops_to_fetch),
+                                            )
+                                            .select(catenary::models::Stop::as_select())
+                                            .load(conn)
+                                            .await;
                                     }
 
                                     if let Some(trip_modification) = modifications_for_this_trip {
