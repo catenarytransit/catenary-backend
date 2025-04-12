@@ -268,6 +268,7 @@ struct TripIntroductionInformation {
     pub schedule_trip_exists: bool,
     pub rt_shape: bool,
     pub old_shape_polyline: Option<String>,
+    pub cancelled_stoptimes: Vec<StopTimeIntroduction>,
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -880,6 +881,7 @@ pub async fn get_trip_init(
                         schedule_trip_exists: false,
                         rt_shape: false,
                         old_shape_polyline: None,
+                        cancelled_stoptimes: vec![],
                     };
 
                     let response = serde_json::to_string(&response).unwrap();
@@ -996,6 +998,8 @@ pub async fn get_trip_init(
     itin_rows_to_use.sort_by_key(|x| x.stop_sequence);
 
     let itin_rows_to_use = itin_rows_to_use;
+
+    let mut cancelled_stop_times = vec![];
 
     //query both at the same time
 
@@ -1774,8 +1778,19 @@ pub async fn get_trip_init(
                                                             }
                                                         }
 
-                                                        //rejoin the vecs
+                                                        //identify which stops have been cancelled
 
+                                                        let stops_to_cancel_in_old_group = old_stop_group.iter()
+                                                            .filter(|x| {
+                                                                !replacement_stops.iter().any(|y| y.stop_id == x.stop_id)
+                                                            })
+                                                            .cloned()
+                                                            .collect::<Vec<StopTimeIntroduction>>();
+
+                                                        cancelled_stop_times
+                                                            .extend(stops_to_cancel_in_old_group);
+
+                                                        //rejoin the vecs
                                                         stop_times_for_this_trip = [
                                                             before_start_selector,
                                                             replacement_stops,
@@ -1950,6 +1965,7 @@ pub async fn get_trip_init(
         schedule_trip_exists: true,
         rt_shape: rt_shape,
         old_shape_polyline,
+        cancelled_stoptimes: cancelled_stop_times,
     };
 
     let text = serde_json::to_string(&response).unwrap();
