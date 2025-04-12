@@ -1599,6 +1599,12 @@ pub async fn get_trip_init(
                                                                     [start_stop_selector_idx - 1]
                                                                     .clone()
                                                             };
+
+                                                        println!(
+                                                            "Reference stop {:?}",
+                                                            reference_stop
+                                                        );
+
                                                         let reference_stop_id =
                                                             reference_stop.stop_id.clone();
 
