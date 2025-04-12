@@ -1648,15 +1648,13 @@ pub async fn get_trip_init(
                                                                     .to_vec();
                                                         }
 
-                                                        let arrival_time_at_reference_stop = reference_stop
-                                                                .scheduled_arrival_time_unix_seconds
-                                                                .unwrap_or(reference_stop
-                                                                    .scheduled_departure_time_unix_seconds.unwrap_or(
-                                                                        reference_stop
-                                                                            .interpolated_stoptime_unix_seconds
-                                                                            .unwrap()
-                                                                    ))
-                                                                    ;
+                                                        let arrival_time_at_reference_stop = match reference_stop.scheduled_arrival_time_unix_seconds {
+                                                                Some(arrival_time) => arrival_time,
+                                                                None => match reference_stop.scheduled_departure_time_unix_seconds {
+                                                                    Some(departure_time) => departure_time,
+                                                                    None => reference_stop.interpolated_stoptime_unix_seconds.unwrap()
+                                                                }
+                                                            };
 
                                                         //make replacement stops
 
