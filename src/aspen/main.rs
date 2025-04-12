@@ -117,6 +117,37 @@ pub struct AspenServer {
 }
 
 impl AspenRpc for AspenServer {
+    async fn get_realtime_stops(
+        self,
+        context: tarpc::context::Context,
+        chateau_id: String,
+        stop_ids: Vec<String>,
+    ) -> Option<AHashMap<String, AspenisedStop>> {
+        match self.authoritative_data_store.get(&chateau_id) {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let mut stop_ids_set = AHashSet::new();
+                for stop_id in stop_ids {
+                    stop_ids_set.insert(stop_id);
+                }
+
+                let mut stops: AHashMap<String, AspenisedStop> = AHashMap::new();
+
+                for stop_id in stop_ids_set {
+                    if let Some(stop) = aspenised_data.stop_id_to_stop.get(stop_id.as_str()) {
+                        stops.insert(stop_id, stop.clone());
+                    } else {
+                        println!("Stop not found for stop id {}", stop_id);
+                    }
+                }
+
+                Some(stops)
+            }
+            None => None,
+        }
+    }
+
     async fn get_shape(
         self,
         context: tarpc::context::Context,

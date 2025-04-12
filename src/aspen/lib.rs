@@ -43,6 +43,11 @@ pub trait AspenRpc {
         modification_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedTripModification>>;
 
+    async fn get_realtime_stops(
+        chateau_id: String,
+        stop_ids: Vec<String>,
+    ) -> Option<AHashMap<String, AspenisedStop>>;
+
     async fn trip_mod_lookup_for_trip_id_service_day(
         chateau_id: String,
         trip_id: String,

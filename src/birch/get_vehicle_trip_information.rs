@@ -1,12 +1,13 @@
 use actix_web::rt;
 use actix_web::{HttpResponse, Responder, web};
+use ahash::AHashMap;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
-use catenary::aspen_dataset::AspenisedAlert;
 use catenary::aspen_dataset::AspenisedTripScheduleRelationship;
 use catenary::aspen_dataset::AspenisedVehicleDescriptor;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::aspen_dataset::{AspenStopTimeEvent, AspenisedTripModification};
+use catenary::aspen_dataset::{AspenisedAlert, AspenisedStop};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::calendar as calendar_pg_schema;
 use catenary::schema::gtfs::calendar_dates as calendar_dates_pg_schema;
@@ -284,7 +285,7 @@ struct StopTimeIntroduction {
     pub rt_arrival: Option<AspenStopTimeEvent>,
     pub rt_departure: Option<AspenStopTimeEvent>,
     pub schedule_relationship: Option<u8>,
-    pub gtfs_stop_sequence: u16,
+    pub gtfs_stop_sequence: Option<u16>,
     pub interpolated_stoptime_unix_seconds: Option<u64>,
     pub timepoint: Option<bool>,
 }
@@ -734,10 +735,7 @@ pub async fn get_trip_init(
                                 rt_platform_string: None,
                                 platform_code: None,
                                 code: stop.as_ref().map(|x| x.code.clone()).flatten(),
-                                gtfs_stop_sequence: stu
-                                    .stop_sequence
-                                    .map(|x| x as u16)
-                                    .unwrap_or(i as u16),
+                                gtfs_stop_sequence: stu.stop_sequence.map(|x| x as u16),
                                 timezone: stop
                                     .map(|x| {
                                         x.timezone.as_ref().map(|tz_str| {
@@ -1272,7 +1270,7 @@ pub async fn get_trip_init(
                     start_of_trip_datetime.timestamp() as u64 + interpolated_time_since_start as u64
                 },
             ),
-            gtfs_stop_sequence: row.gtfs_stop_sequence as u16,
+            gtfs_stop_sequence: Some(row.gtfs_stop_sequence as u16),
             rt_arrival: None,
             rt_departure: None,
             schedule_relationship: None,
@@ -1459,15 +1457,334 @@ pub async fn get_trip_init(
 
                                         //look for postgres stops
 
-                                        let stops_data = stops_pg_schema::dsl::stops
-                                            .filter(stops_pg_schema::dsl::chateau.eq(&chateau))
-                                            .filter(
-                                                stops_pg_schema::dsl::gtfs_id
-                                                    .eq_any(&stops_to_fetch),
+                                        let stops_data_for_modifications_from_postgres =
+                                            stops_pg_schema::dsl::stops
+                                                .filter(stops_pg_schema::dsl::chateau.eq(&chateau))
+                                                .filter(
+                                                    stops_pg_schema::dsl::gtfs_id
+                                                        .eq_any(&stops_to_fetch),
+                                                )
+                                                .select(catenary::models::Stop::as_select())
+                                                .load(conn)
+                                                .await;
+
+                                        let stops_still_missing = stops_to_fetch
+                                            .difference(
+                                                &stops_data_for_modifications_from_postgres
+                                                    .as_ref()
+                                                    .unwrap()
+                                                    .iter()
+                                                    .map(|x| x.gtfs_id.clone())
+                                                    .collect::<BTreeSet<String>>(),
                                             )
-                                            .select(catenary::models::Stop::as_select())
-                                            .load(conn)
+                                            .cloned()
+                                            .collect::<BTreeSet<_>>();
+
+                                        let stops_data_for_modifications_from_aspen = aspen_client
+                                            .get_realtime_stops(
+                                                context::current(),
+                                                chateau.clone(),
+                                                stops_still_missing
+                                                    .iter()
+                                                    .map(|x| x.to_string())
+                                                    .collect::<Vec<String>>(),
+                                            )
                                             .await;
+
+                                        let stops_data_for_modifications_from_aspen =
+                                            match stops_data_for_modifications_from_aspen {
+                                                Ok(Some(x)) => x,
+                                                _ => {
+                                                    eprintln!("Error fetching stops from aspen");
+                                                    AHashMap::new()
+                                                }
+                                            };
+
+                                        //modification loop
+
+                                        for modification in
+                                            &modifications_for_this_trip.modifications
+                                        {
+                                            let mut before_start_selector: Vec<
+                                                StopTimeIntroduction,
+                                            > = vec![];
+                                            let mut replacement_stops: Vec<StopTimeIntroduction> =
+                                                vec![];
+                                            let mut after_end_selector: Vec<StopTimeIntroduction> =
+                                                vec![];
+                                            let mut old_stop_group: Vec<StopTimeIntroduction> =
+                                                vec![];
+
+                                            let mut start_stop_selector_idx = None;
+                                            let mut end_stop_selector_idx = None;
+
+                                            if let Some(start_stop_selector) =
+                                                &modification.start_stop_selector
+                                            {
+                                                if start_stop_selector.stop_id.is_some()
+                                                    || start_stop_selector.stop_sequence.is_some()
+                                                {
+                                                    start_stop_selector_idx = stop_times_for_this_trip
+                                                        .iter()
+                                                        .position(|x| {
+                                                            match start_stop_selector.stop_id.clone() {
+                                                                Some(rt_stop_id) => {
+                                                                    match start_stop_selector.stop_sequence {
+                                                                        Some(rt_stop_sequence) => {
+                                                                            *rt_stop_id == *x.stop_id
+                                                                                && Some(rt_stop_sequence as u16)
+                                                                                    == x.gtfs_stop_sequence
+                                                                        }
+                                                                        None => *rt_stop_id == *x.stop_id,
+                                                                    }
+                                                                }
+                                                                None => match start_stop_selector.stop_sequence {
+                                                                    Some(rt_stop_sequence) => {
+                                                                        Some(rt_stop_sequence as u16)
+                                                                            == x.gtfs_stop_sequence
+                                                                    }
+                                                                    None => false,
+                                                                },
+                                                            }
+                                                        });
+
+                                                    if let Some(start_stop_selector_idx) =
+                                                        start_stop_selector_idx
+                                                    {
+                                                        //get the end stop
+
+                                                        if let Some(end_stop_selector) =
+                                                            &modification.end_stop_selector
+                                                        {
+                                                            end_stop_selector_idx = stop_times_for_this_trip
+                                                            .iter()
+                                                            .position(|x| {
+                                                                match end_stop_selector.stop_id.clone() {
+                                                                    Some(rt_stop_id) => {
+                                                                        match end_stop_selector.stop_sequence {
+                                                                            Some(rt_stop_sequence) => {
+                                                                                *rt_stop_id == *x.stop_id
+                                                                                    && x.gtfs_stop_sequence.is_some()
+                                                                                    && rt_stop_sequence as u16
+                                                                                        == x.gtfs_stop_sequence.unwrap()
+                                                                            }
+                                                                            None => *rt_stop_id == *x.stop_id,
+                                                                        }
+                                                                    }
+                                                                    None => match end_stop_selector.stop_sequence {
+                                                                        Some(rt_stop_sequence) => {
+                                                                            x.gtfs_stop_sequence.is_some() && rt_stop_sequence as u16
+                                                                                == x.gtfs_stop_sequence.unwrap()
+                                                                        }
+                                                                        None => false,
+                                                                    },
+                                                                }
+                                                            });
+                                                        }
+
+                                                        //get the reference stop, which is either the stop before the start stop or the start stop itself it its the first
+
+                                                        let reference_stop =
+                                                            if start_stop_selector_idx == 0 {
+                                                                stop_times_for_this_trip[0].clone()
+                                                            } else {
+                                                                stop_times_for_this_trip
+                                                                    [start_stop_selector_idx - 1]
+                                                                    .clone()
+                                                            };
+                                                        let reference_stop_id =
+                                                            reference_stop.stop_id.clone();
+
+                                                        //if the end time exists, split the vec before, after and old_stop_group using the indexes inclusively
+
+                                                        //if the end time does not exist, then no stops are replaced.
+                                                        //simply add the replacement stops at the starting index, and the end index is effectively right after the starting stop, since it is an insertion in the middle
+
+                                                        //add the modified delay starting after the replacement stops for both options
+
+                                                        if let Some(end_stop_selector_idx) =
+                                                            end_stop_selector_idx
+                                                        {
+                                                            //get the old stop group
+                                                            old_stop_group =
+                                                                stop_times_for_this_trip
+                                                                    [start_stop_selector_idx
+                                                                        ..end_stop_selector_idx
+                                                                            + 1]
+                                                                    .to_vec();
+                                                        }
+
+                                                        //split into 3 groups now
+
+                                                        before_start_selector =
+                                                            stop_times_for_this_trip
+                                                                [0..start_stop_selector_idx]
+                                                                .to_vec();
+
+                                                        if let Some(end_stop_selector_idx) =
+                                                            end_stop_selector_idx
+                                                        {
+                                                            after_end_selector =
+                                                                stop_times_for_this_trip
+                                                                    [end_stop_selector_idx + 1..]
+                                                                    .to_vec();
+                                                        } else {
+                                                            after_end_selector =
+                                                                stop_times_for_this_trip
+                                                                    [start_stop_selector_idx + 1..]
+                                                                    .to_vec();
+                                                        }
+
+                                                        let arrival_time_at_reference_stop = reference_stop
+                                                                .scheduled_arrival_time_unix_seconds
+                                                                .unwrap_or(reference_stop
+                                                                    .scheduled_departure_time_unix_seconds.unwrap_or(
+                                                                        reference_stop
+                                                                            .interpolated_stoptime_unix_seconds
+                                                                            .unwrap()
+                                                                    ))
+                                                                    ;
+
+                                                        //make replacement stops
+
+                                                        let response_replacement_stops = modification.replacement_stops.iter()
+                                                        .filter(|replacement_stop| replacement_stop.stop_id.is_some())
+                                                        .map(|replacement_stop| {
+
+                                                            //make stop from original stop lookup first, if not, next postgres request, then realtime data
+                                                        
+                                                                let stop_id = replacement_stop.stop_id.as_ref().unwrap();
+
+                                                            
+                                                            let stop: Option<StopPostgresOrAspen> = match stops_data_map.get(stop_id) {
+                                                                Some(stop) => {
+                                                                    Some(StopPostgresOrAspen::Postgres(stop.clone()))
+                                                                }
+                                                                None => {
+                                                                    let mut found_stop: Option<StopPostgresOrAspen> = None;
+                                                                    if let Ok(from_pg_again) = stops_data_for_modifications_from_postgres.as_ref() {
+                                                                        if let Some(stop) = from_pg_again.iter().find(|x| x.gtfs_id == *stop_id) {
+                                                                            found_stop = Some(StopPostgresOrAspen::Postgres(stop.clone()));
+                                                                        }
+                                                                    } 
+
+                                                                    if found_stop.is_none() {
+                                                                        if let Some(stop) = stops_data_for_modifications_from_aspen.get(stop_id) {
+                                                                            found_stop = Some(StopPostgresOrAspen::Aspen(stop.clone()));
+                                                                        } 
+                                                                    }
+
+                                                                    found_stop
+
+                                                                }
+                                                            };
+
+                                                            match stop {
+                                                                None => None,
+                                                                Some(stop) => 
+                                                                {
+    
+    
+                                                                    
+                                                                    let stop_id = match &stop {
+                                                                        StopPostgresOrAspen::Postgres(stop) => stop.gtfs_id.clone(),
+                                                                        StopPostgresOrAspen::Aspen(stop) => stop.stop_id.clone().unwrap_or("".to_string())
+                                                                    };
+    
+                                                                    let stop_name = match &stop {
+                                                                        StopPostgresOrAspen::Postgres(stop) => stop.name.clone(),
+                                                                        StopPostgresOrAspen::Aspen(stop) => match stop.stop_name.clone() {
+                                                                            Some(stop_name) => Some(stop_name.translation.into_iter().map(|x| x.text).collect::<Vec<String>>().join(", ")),
+                                                                            None => None
+                                                                        }
+                                                                    };
+                                                                    
+    
+                                                                    let stop_latitude = match &stop {
+                                                                        StopPostgresOrAspen::Postgres(stop) => stop.point.map(|point| point.y),
+                                                                        StopPostgresOrAspen::Aspen(stop) => stop.stop_lat.map(|x| x as f64)
+                                                                    };
+                                                                    let stop_longitude = match &stop {
+                                                                        StopPostgresOrAspen::Postgres(stop) => stop.point.map(|point| point.x),
+                                                                        StopPostgresOrAspen::Aspen(stop) => stop.stop_lon.map(|x| x as f64)
+                                                                    };
+    
+    
+                                                                    let stop_timezone = match &stop {
+                                                                        StopPostgresOrAspen::Postgres(stop) =>stop.timezone.as_ref().map(|pg_timezone| chrono_tz::Tz::from_str_insensitive(&pg_timezone).ok()).flatten(),
+                                                                        StopPostgresOrAspen::Aspen(stop) => {
+                                                                            //use reference timezone
+                                                                            reference_stop.timezone
+                                                                        }
+                                                                    };
+    
+    
+    
+                                                                    let stop_code = match &stop {
+                                                                        StopPostgresOrAspen::Postgres(stop) => stop.code.clone(),
+                                                                        StopPostgresOrAspen::Aspen(stop) => None
+                                                                    };
+    
+                                                                    
+                                                                return Some(StopTimeIntroduction {
+                                                                    stop_id: stop_id.into(),
+                                                                    name: stop_name,
+                                                                    translations: None,
+                                                                    platform_code: None,
+                                                                    timezone: stop_timezone,
+                                                                    code: stop_code,
+                                                                    longitude: stop_longitude,
+                                                                    latitude: stop_latitude,
+                                                                    //in the future, travel time should be calculated
+                                                                    scheduled_arrival_time_unix_seconds: Some(arrival_time_at_reference_stop as u64 + replacement_stop.travel_time_to_stop.unwrap_or(0) as u64),
+                                                                    scheduled_departure_time_unix_seconds: None,
+                                                                    interpolated_stoptime_unix_seconds: None,
+                                                                    gtfs_stop_sequence: None,
+                                                                    rt_arrival: None,
+                                                                    rt_departure: None,
+                                                                    schedule_relationship: None,
+                                                                    rt_platform_string: None,
+                                                                    timepoint: Some(false),
+                                                                    
+                                                                });
+                                                                }
+                                                                
+                                                               }
+                                                            
+                                                        })
+                                                        .flatten()
+                                                        .collect::<Vec<StopTimeIntroduction>>()
+                                                        ;
+
+                                                        //add propagated_modification_delay to the end part of the trips
+
+                                                        for post_end_stop in &mut after_end_selector
+                                                        {
+                                                            if let Some(
+                                                                propagated_modification_delay,
+                                                            ) = modification
+                                                                .propagated_modification_delay
+                                                            {
+                                                                post_end_stop.scheduled_arrival_time_unix_seconds = post_end_stop.scheduled_arrival_time_unix_seconds.map(|x| x + propagated_modification_delay as u64);
+                                                                post_end_stop.scheduled_departure_time_unix_seconds = post_end_stop.scheduled_departure_time_unix_seconds.map(|x| x + propagated_modification_delay as u64);
+                                                                post_end_stop.interpolated_stoptime_unix_seconds = post_end_stop.interpolated_stoptime_unix_seconds.map(|x| x + propagated_modification_delay as u64);
+                                                            }
+                                                        }
+
+                                                        //rejoin the vecs
+
+                                                        stop_times_for_this_trip = [
+                                                            before_start_selector,
+                                                            replacement_stops,
+                                                            after_end_selector,
+                                                        ]
+                                                        .concat();
+
+                                                        //end iteration of this loop, next modification after this can happen.
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
 
                                     if let Some(trip_modification) = modifications_for_this_trip {
@@ -1523,16 +1840,20 @@ pub async fn get_trip_init(
                                                         match stop_time_update.stop_sequence {
                                                             Some(rt_stop_sequence) => {
                                                                 *rt_stop_id == *x.stop_id
+                                                                    && x.gtfs_stop_sequence
+                                                                        .is_some()
                                                                     && rt_stop_sequence as u16
                                                                         == x.gtfs_stop_sequence
+                                                                            .unwrap()
                                                             }
                                                             None => *rt_stop_id == *x.stop_id,
                                                         }
                                                     }
                                                     None => match stop_time_update.stop_sequence {
                                                         Some(rt_stop_sequence) => {
-                                                            rt_stop_sequence as u16
-                                                                == x.gtfs_stop_sequence
+                                                            x.gtfs_stop_sequence.is_some()
+                                                                && rt_stop_sequence as u16
+                                                                    == x.gtfs_stop_sequence.unwrap()
                                                         }
                                                         None => false,
                                                     },
@@ -1743,4 +2064,9 @@ async fn get_alert_single_trip(
         alert_ids_for_this_trip,
         stop_id_to_alert_ids,
     })
+}
+
+pub enum StopPostgresOrAspen {
+    Postgres(catenary::models::Stop),
+    Aspen(AspenisedStop),
 }
