@@ -1600,10 +1600,6 @@ pub async fn get_trip_init(
                                                                     .clone()
                                                             };
 
-                                                        println!(
-                                                            "Reference stop {:?}",
-                                                            reference_stop
-                                                        );
 
                                                         let reference_stop_id =
                                                             reference_stop.stop_id.clone();
@@ -1648,11 +1644,19 @@ pub async fn get_trip_init(
                                                                     .to_vec();
                                                         }
 
+                                                        
+                                                        println!(
+                                                            "Reference stop {:?}",
+                                                            reference_stop
+                                                        );
+
+                                                        println!("check arrival time {:?}", reference_stop.scheduled_arrival_time_unix_seconds);
+
                                                         let arrival_time_at_reference_stop = match reference_stop.scheduled_arrival_time_unix_seconds {
                                                                 Some(arrival_time) => arrival_time,
                                                                 None => match reference_stop.scheduled_departure_time_unix_seconds {
                                                                     Some(departure_time) => departure_time,
-                                                                    None => reference_stop.interpolated_stoptime_unix_seconds.unwrap()
+                                                                    None => reference_stop.scheduled_arrival_time_unix_seconds.unwrap()
                                                                 }
                                                             };
 
