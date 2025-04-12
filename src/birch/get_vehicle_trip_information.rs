@@ -288,6 +288,7 @@ struct StopTimeIntroduction {
     pub gtfs_stop_sequence: Option<u16>,
     pub interpolated_stoptime_unix_seconds: Option<u64>,
     pub timepoint: Option<bool>,
+    pub replaced_stop: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -756,6 +757,7 @@ pub async fn get_trip_init(
                                     .map(|x| x.into()),
                                 interpolated_stoptime_unix_seconds: None,
                                 timepoint: Some(false),
+                                replaced_stop: false,
                             }
                         })
                         .collect::<Vec<_>>();
@@ -1276,6 +1278,7 @@ pub async fn get_trip_init(
             schedule_relationship: None,
             rt_platform_string: None,
             timepoint: row.timepoint,
+            replaced_stop: false,
         };
 
         stop_times_for_this_trip.push(stop_time);
@@ -1744,8 +1747,8 @@ pub async fn get_trip_init(
                                                                     rt_departure: None,
                                                                     schedule_relationship: None,
                                                                     rt_platform_string: None,
-                                                                    timepoint: Some(false),
-                                                                    
+                                                                    timepoint: Some(false),                           
+                                                                    replaced_stop: true,
                                                                 });
                                                                 }
                                                                 
