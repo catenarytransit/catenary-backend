@@ -213,6 +213,56 @@ pub async fn get_vehicle_data_endpoint(
                                 )
                                 .await
                             }
+                            "SF" => {
+                                let number = query.label.parse::<i32>().unwrap();
+
+                                match look_for_vehicle_number(
+                                    conn,
+                                    "north_america/united_states/california/sfmta-muni_rail",
+                                    number
+                                )
+                                .await
+                                {
+                                    Ok(vehicle) => HttpResponse::Ok().json(ResponseVehicleIndividual {
+                                        found_data: true,
+                                        vehicle,
+                                    }),
+                                    Err(e) => {
+                                        match look_for_vehicle_number(
+                                            conn,
+                                            "north_america/united_states/california/sfmta-muni_streetcar",
+                                            number,
+                                        )
+                                        .await
+                                        {
+                                            Ok(vehicle) => HttpResponse::Ok().json(ResponseVehicleIndividual {
+                                                found_data: true,
+                                                vehicle,
+                                            }),
+                                            Err(e) => {
+                                                match look_for_vehicle_number(
+                                                    conn,
+                                                    "north_america/united_states/california/sfmta-muni_bus",
+                                                    number,
+                                                )
+                                                .await
+                                                {
+                                                    Ok(vehicle) => HttpResponse::Ok().json(ResponseVehicleIndividual {
+                                                        found_data: true,
+                                                        vehicle,
+                                                    }),
+                                                    Err(e) => {
+                                                        HttpResponse::InternalServerError().json(ResponseVehicleIndividual {
+                                                            found_data: false,
+                                                            vehicle: None,
+                                                        })
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             _ => HttpResponse::Ok().json(ResponseVehicleIndividual {
                                 found_data: false,
                                 vehicle: None,

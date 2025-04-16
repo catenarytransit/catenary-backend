@@ -76,10 +76,10 @@ fn convert_to_output(input: &AspenisedVehiclePosition) -> AspenisedVehiclePositi
 
 fn category_to_allowed_route_ids(category: &CategoryOfRealtimeVehicleData) -> Vec<i16> {
     match category {
-        CategoryOfRealtimeVehicleData::Metro => vec![0, 1, 12],
+        CategoryOfRealtimeVehicleData::Metro => vec![0, 1, 7, 12],
         CategoryOfRealtimeVehicleData::Bus => vec![3, 11],
         CategoryOfRealtimeVehicleData::Rail => vec![2],
-        CategoryOfRealtimeVehicleData::Other => vec![4, 5, 6, 7],
+        CategoryOfRealtimeVehicleData::Other => vec![4, 5, 6],
     }
 }
 
