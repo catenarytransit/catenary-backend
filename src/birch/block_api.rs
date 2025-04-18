@@ -156,6 +156,10 @@ pub async fn block_api(
         }
     }
 
+    for (_, rows) in itin_row_map.iter_mut() {
+        rows.sort_by(|a, b| a.gtfs_stop_sequence.cmp(&b.gtfs_stop_sequence));
+    }
+
     //make itin meta map
 
     let mut itin_meta_map: HashMap<String, catenary::models::ItineraryPatternMeta> = HashMap::new();
