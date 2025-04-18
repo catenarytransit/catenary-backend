@@ -97,6 +97,9 @@ pub async fn query_stops_preview(
 
     let mut routes_to_query_by_chateau: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
+    let mut children_stops_to_query_by_chateau: BTreeMap<String, BTreeSet<String>> =
+        BTreeMap::new();
+
     for result in queries_for_stops {
         match result {
             Ok((chateau, stop_map)) => {
@@ -151,7 +154,87 @@ pub async fn query_stops_preview(
         }
     }
 
-    //for each chateau group, query the routes, futures buffer unordered
+    for (chateau, stop_map) in all_stops_chateau_groups.iter_mut() {
+        for stop in stop_map.values() {
+            let children_ids = stop.children_ids.clone();
+
+            let children_ids_missing = children_ids
+                .iter()
+                .filter(|id| !stop_map.contains_key(*id))
+                .cloned()
+                .collect::<BTreeSet<_>>();
+
+            for child_id in children_ids_missing {
+                let entry = children_stops_to_query_by_chateau
+                    .entry(chateau.clone())
+                    .or_insert(BTreeSet::new());
+                entry.insert(child_id);
+            }
+        }
+
+        //query the children stops
+
+        let children_stops = children_stops_to_query_by_chateau
+            .get(chateau)
+            .unwrap_or(&BTreeSet::new())
+            .clone();
+
+        let queried_children_stops = catenary::schema::gtfs::stops::table
+            .filter(catenary::schema::gtfs::stops::chateau.eq(chateau))
+            .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(children_stops))
+            .select(catenary::models::Stop::as_select())
+            .load::<catenary::models::Stop>(conn)
+            .await;
+
+        match queried_children_stops {
+            Ok(queried_children_stops) => {
+                //mutate the stop_map
+
+                for stop in queried_children_stops {
+                    let stop_deserialised = StopDeserialised {
+                        gtfs_id: stop.gtfs_id,
+                        name: stop.name,
+                        url: stop.url,
+                        timezone: stop.timezone,
+                        point: stop.point.map(|p| geo::Point::new(p.x, p.y)),
+                        level_id: stop.level_id,
+                        primary_route_type: stop.primary_route_type,
+                        route_types: stop.route_types.into_iter().filter_map(|r| r).collect(),
+                        platform_code: stop.platform_code,
+                        routes: stop.routes.into_iter().filter_map(|r| r.clone()).collect(),
+                        children_ids: stop.children_ids.iter().filter_map(|r| r.clone()).collect(),
+                        children_route_types: stop
+                            .children_route_types
+                            .into_iter()
+                            .filter_map(|r| r)
+                            .collect(),
+                        station_feature: stop.station_feature,
+                        wheelchair_boarding: stop.wheelchair_boarding,
+                    };
+
+                    //add route ids to parent stop
+
+                    if let Some(parent_stop_id) = stop.parent_station {
+                        let parent_stop = stop_map.get_mut(&parent_stop_id);
+
+                        if let Some(parent_stop) = parent_stop {
+                            parent_stop.routes.extend(stop_deserialised.routes.clone());
+                            parent_stop
+                                .route_types
+                                .extend(stop_deserialised.route_types.clone());
+                        }
+                    }
+
+                    stop_map.insert(stop_deserialised.gtfs_id.clone(), stop_deserialised);
+                }
+
+                //add the route id
+            }
+            Err(e) => {
+                eprintln!("Error querying children stops: {}", e);
+            }
+        }
+    }
 
     let queries_for_routes =
         futures::stream::iter(routes_to_query_by_chateau.iter().map(|(chateau, routes)| {
