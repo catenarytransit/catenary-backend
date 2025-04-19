@@ -27,7 +27,7 @@ struct NearbyFromStops {
     stop_id: String,
     chateau_id: String,
     departure_time: Option<u64>,
-    traverse_group: Option<bool>
+    traverse_group: Option<bool>,
 }
 
 #[actix_web::get("/departures_at_stop/")]

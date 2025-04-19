@@ -168,6 +168,7 @@ pub async fn gtfs_process_feed(
                 String::from("DB Fernverkehr AG"),
                 String::from("SNCF Voyages Deutschland"),
                 String::from("MVV-Regionalbus"),
+                String::from("U-Bahn München"),
             ]),
         ),
         "f-ahverkehrsverbund~schleswig~holstein~nah" => {
