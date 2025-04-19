@@ -167,6 +167,7 @@ pub async fn gtfs_process_feed(
                 String::from("DB Regio AG Bayern"),
                 String::from("DB Fernverkehr AG"),
                 String::from("SNCF Voyages Deutschland"),
+                String::from("MVV-Regionalbus")
             ]),
         ),
         "f-ahverkehrsverbund~schleswig~holstein~nah" => {
