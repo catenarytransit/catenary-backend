@@ -186,10 +186,7 @@ pub async fn query_stops_preview(
                             route_ids.dedup();
                         }
                         None => {
-                            route_ids_to_tack_on.insert(
-                                stop.gtfs_id.clone(),
-                                route_ids.clone(),
-                            );
+                            route_ids_to_tack_on.insert(stop.gtfs_id.clone(), route_ids.clone());
                         }
                     }
                 }
@@ -259,12 +256,17 @@ pub async fn query_stops_preview(
 
                             parent_stop.routes.sort();
                             parent_stop.routes.dedup();
-                            parent_stop
-                                .route_types
-                                .sort();
+                            parent_stop.route_types.sort();
                             parent_stop.route_types.dedup();
                         }
                     }
+
+                    //add to the list of routes to query
+
+                    routes_to_query_by_chateau
+                        .entry(chateau.clone())
+                        .or_insert(BTreeSet::new())
+                        .extend(stop_deserialised.routes.clone());
 
                     stop_map.insert(stop_deserialised.gtfs_id.clone(), stop_deserialised);
                 }
