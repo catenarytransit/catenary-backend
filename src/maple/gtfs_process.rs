@@ -170,6 +170,7 @@ pub async fn gtfs_process_feed(
                 String::from("MVV-Regionalbus"),
                 String::from("U-Bahn München"),
                 String::from("Straßenbahn München"),
+                String::from("Regionalverkehr Oberbayer (überregional)"),
             ]),
         ),
         "f-ahverkehrsverbund~schleswig~holstein~nah" => {
