@@ -155,6 +155,8 @@ pub async fn query_stops_preview(
     }
 
     for (chateau, stop_map) in all_stops_chateau_groups.iter_mut() {
+        let mut route_ids_to_tack_on: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
         for stop in stop_map.values() {
             let children_ids = stop.children_ids.clone();
 
@@ -169,6 +171,38 @@ pub async fn query_stops_preview(
                     .entry(chateau.clone())
                     .or_insert(BTreeSet::new());
                 entry.insert(child_id);
+            }
+
+            //for children stops that exist and are queried
+
+            for children_id in children_ids {
+                if let Some(child_stop) = stop_map.get(&children_id) {
+                    let route_ids = child_stop.routes.clone();
+
+                    match route_ids_to_tack_on.get_mut(stop.gtfs_id.as_str()) {
+                        Some(route_ids) => {
+                            route_ids.extend(route_ids.clone());
+                            route_ids.sort();
+                            route_ids.dedup();
+                        }
+                        None => {
+                            route_ids_to_tack_on.insert(
+                                stop.gtfs_id.clone(),
+                                route_ids.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        //mutate the stop_map with the route ids
+
+        for (stop_id, route_ids) in route_ids_to_tack_on {
+            if let Some(stop) = stop_map.get_mut(&stop_id) {
+                stop.routes.extend(route_ids);
+                stop.routes.sort();
+                stop.routes.dedup();
             }
         }
 
@@ -222,6 +256,13 @@ pub async fn query_stops_preview(
                             parent_stop
                                 .route_types
                                 .extend(stop_deserialised.route_types.clone());
+
+                            parent_stop.routes.sort();
+                            parent_stop.routes.dedup();
+                            parent_stop
+                                .route_types
+                                .sort();
+                            parent_stop.route_types.dedup();
                         }
                     }
 
