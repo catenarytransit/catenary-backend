@@ -36,7 +36,6 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "Österreichische Bundesbahnen",
         "FlixBus-de",
         "Kölner VB",
-        "Bus München",
         //f-u0z-vgn
         "VGN",
         //f-u281z9-mvv
