@@ -43,6 +43,9 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "MVV-Regionalbus",
         "Straßenbahn München",
         "Regionalverkehr Oberbayer (überregional)",
+        "Bus München",
+        "NachtTram München",
+        "NachtBus München",
     ];
 
     let to_delete_agencies = Vec::from(to_delete_agencies)
