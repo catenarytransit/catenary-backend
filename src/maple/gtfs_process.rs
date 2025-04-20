@@ -172,6 +172,9 @@ pub async fn gtfs_process_feed(
                 String::from("Straßenbahn München"),
                 String::from("Regionalverkehr Oberbayer (überregional)"),
                 String::from("Bus München"),
+                String::from("NachtTram München"),
+                String::from("NachtBus München"),
+                String::from("Nahreisezug"),
             ]),
         ),
         "f-ahverkehrsverbund~schleswig~holstein~nah" => {
