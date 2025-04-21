@@ -140,7 +140,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             "f-u0-sncf~transilien~rer",
             "f-eurostar",
             //duplicated in delfi data
-            "f-nvbw"
+            "f-nvbw",
         ]
         .into_iter()
         .map(String::from),

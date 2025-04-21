@@ -8,7 +8,7 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "Berliner Verkehrsbetriebe",
         "Karlsruher Verkehrsverbund",
         "Hamburger Verkehrsverbund",
-      //  "Freiburger Verkehrs AG",
+        //  "Freiburger Verkehrs AG",
         "Verkehrsverbund Rhein-Sieg",
         "Flixtrain",
         "Verkehrsverbund Rhein-Neckar",
@@ -35,7 +35,7 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "Bus München",
         "NachtTram München",
         "NachtBus München",
-        "MVV-Ruftaxi"
+        "MVV-Ruftaxi",
     ];
 
     let to_delete_agencies = Vec::from(to_delete_agencies)
