@@ -50,7 +50,7 @@ struct NearbyFromStopsResponse {
     children_and_related: Vec<StopInfoResponse>,
 }
 
-#[actix_web::get("/departures_at_stop/")]
+#[actix_web::get("/departures_at_stop")]
 pub async fn departures_at_stop(
     req: HttpRequest,
     query: Query<NearbyFromStops>,
