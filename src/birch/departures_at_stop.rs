@@ -19,8 +19,9 @@ use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::sql_types::Bool;
 use diesel_async::RunQueryDsl;
-use serde_derive::Deserialize;
+use serde::Deserialize;
 use std::sync::Arc;
+use serde::Serialize;
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyFromStops {
@@ -30,6 +31,7 @@ struct NearbyFromStops {
     departure_time: Option<u64>,
 }
 
+#[derive(Deserialize, Clone, Debug)]
 struct StopInfoResponse {
     chateau: String,
     stop_id: String,
@@ -44,6 +46,7 @@ struct StopInfoResponse {
     timezone: String,
 }
 
+#[derive(Serialize, Clone, Debug)]
 struct NearbyFromStopsResponse {
     primary: StopInfoResponse,
     parent: Option<StopInfoResponse>,
@@ -165,6 +168,8 @@ pub async fn departures_at_stop(
 
     //look through gtfs-rt times and hydrate the itineraries
 
+    //get a default timezone for the stop using the timezone of the direction if it doesnt exist
+
     let response = NearbyFromStopsResponse {
         primary: StopInfoResponse {
             chateau: stop.chateau,
@@ -177,11 +182,14 @@ pub async fn departures_at_stop(
             platform_code: stop.platform_code,
             parent_station: stop.parent_station,
             children_ids: vec![],
-            timezone: stop.timezone.unwrap(),
+            timezone: match stop.timezone {
+                Some(timezone) => timezone,
+                None => itin_meta[0].timezone.clone(),
+        },
         },
         parent: None,
         children_and_related: vec![],
     };
 
-    HttpResponse::Ok().body("Hello!")
+    HttpResponse::Ok().json(response)
 }
