@@ -53,6 +53,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use strumbra::UniqueString;
+use catenary::make_degree_length_as_distance_from_point;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItineraryPatternRowMerge {
@@ -1474,13 +1475,3 @@ pub fn make_calendar_structure_from_pg(
     Ok(calendar_structures)
 }
 
-fn make_degree_length_as_distance_from_point(point: &geo::Point, distance_metres: f64) -> f64 {
-    let direction = match point.x() > 0. {
-        true => 90.,
-        false => -90.,
-    };
-
-    let distance_calc_point = point.haversine_destination(direction, distance_metres);
-
-    f64::abs(distance_calc_point.x() - point.x())
-}

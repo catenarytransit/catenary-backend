@@ -265,6 +265,11 @@ pub async fn new_rt_data(
         AHashMap::new();
     let mut trip_id_to_trip_modification_ids: AHashMap<CompactString, Vec<EcoString>> =
         AHashMap::new();
+    let mut stop_id_to_trip_modification_ids: AHashMap<CompactString, Vec<EcoString>> =
+        AHashMap::new();
+    let mut stop_id_to_non_scheduled_trip_ids: AHashMap<
+        CompactString,
+        Vec<EcoString>> = AHashMap::new();
 
     use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
@@ -1112,6 +1117,8 @@ pub async fn new_rt_data(
                 shape_id_to_shape,
                 trip_modifications: trip_modifications,
                 trip_id_to_trip_modification_ids,
+                stop_id_to_trip_modification_ids,
+                stop_id_to_non_scheduled_trip_ids
             }
         }
         scc::hash_map::Entry::Vacant(ve) => {
@@ -1136,6 +1143,8 @@ pub async fn new_rt_data(
                 shape_id_to_shape,
                 trip_modifications: trip_modifications,
                 trip_id_to_trip_modification_ids,
+                stop_id_to_trip_modification_ids,
+                stop_id_to_non_scheduled_trip_ids
             });
         }
     }

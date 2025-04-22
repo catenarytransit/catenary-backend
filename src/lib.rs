@@ -833,3 +833,15 @@ mod test {
         println!("Size of AspenisedStopTimeUpdate: {}", x);
     }
 }
+
+use geo::HaversineDestination;
+pub fn make_degree_length_as_distance_from_point(point: &geo::Point, distance_metres: f64) -> f64 {
+    let direction = match point.x() > 0. {
+        true => 90.,
+        false => -90.,
+    };
+
+    let distance_calc_point = point.haversine_destination(direction, distance_metres);
+
+    f64::abs(distance_calc_point.x() - point.x())
+}

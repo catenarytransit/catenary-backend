@@ -22,6 +22,8 @@ use diesel_async::RunQueryDsl;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
+use diesel::sql_types::*;
+use catenary::make_degree_length_as_distance_from_point;
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyFromStops {
@@ -60,6 +62,7 @@ pub async fn departures_at_stop(
 
     pool: web::Data<Arc<CatenaryPostgresPool>>,
 ) -> impl Responder {
+    
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
@@ -81,6 +84,35 @@ pub async fn departures_at_stop(
 
     let stop = stops[0].clone();
 
+    //get stops to search
+
+    //search all stops within 20 m of the stop
+    
+    let point_raw = stop.point.clone().unwrap();
+
+    let latitude = point_raw.y;
+    let longitude = point_raw.x;
+    let point = geo::Point::new(longitude, latitude);
+
+    let spatial_resolution_in_degs = catenary::make_degree_length_as_distance_from_point(
+        &point,
+        50.0,
+    );
+
+    let where_query_for_stops = format!(
+        "ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
+       point.x(), point.y(), spatial_resolution_in_degs
+    );
+
+    let stops_nearby: diesel::prelude::QueryResult<Vec<catenary::models::Stop>> =
+        catenary::schema::gtfs::stops::dsl::stops
+            .filter(catenary::schema::gtfs::stops::chateau.eq(query.chateau_id.clone()))
+            .filter(sql::<Bool>(&where_query_for_stops))
+            .select(catenary::models::Stop::as_select())
+            .load::<catenary::models::Stop>(conn)
+            .await;
+    let stops_nearby = stops_nearby.unwrap();
+
     //get all children ids
 
     let mut combined_ids_to_search = vec![stop.gtfs_id.clone()];
@@ -88,6 +120,12 @@ pub async fn departures_at_stop(
     for child in stop.children_ids.clone() {
         combined_ids_to_search.push(child.unwrap());
     }
+
+    //chateau-> itinerary_id -> vec
+    let itinerary_row_map_by_chateau: BTreeMap<String, BTreeMap<String, Vec<ItineraryPatternRow>>> =
+        BTreeMap::new();
+    let itinerary_meta_map_by_chateau: BTreeMap<String, BTreeMap<String, ItineraryPatternMeta>> =
+        BTreeMap::new();
 
     // search through itineraries
 

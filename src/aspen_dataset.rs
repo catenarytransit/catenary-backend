@@ -63,6 +63,8 @@ pub struct AspenisedData {
     pub shape_id_to_shape: AHashMap<CompactString, Option<String>>,
     pub trip_modifications: AHashMap<CompactString, AspenisedTripModification>,
     pub trip_id_to_trip_modification_ids: AHashMap<CompactString, Vec<EcoString>>,
+    pub stop_id_to_trip_modification_ids: AHashMap<CompactString, Vec<EcoString>>,
+    pub stop_id_to_non_scheduled_trip_ids: AHashMap<CompactString, Vec<EcoString>>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
