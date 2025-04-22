@@ -20,8 +20,8 @@ use diesel::query_dsl::methods::SelectDsl;
 use diesel::sql_types::Bool;
 use diesel_async::RunQueryDsl;
 use serde::Deserialize;
-use std::sync::Arc;
 use serde::Serialize;
+use std::sync::Arc;
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyFromStops {
@@ -31,7 +31,7 @@ struct NearbyFromStops {
     departure_time: Option<u64>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug)]
 struct StopInfoResponse {
     chateau: String,
     stop_id: String,
@@ -185,7 +185,7 @@ pub async fn departures_at_stop(
             timezone: match stop.timezone {
                 Some(timezone) => timezone,
                 None => itin_meta[0].timezone.clone(),
-        },
+            },
         },
         parent: None,
         children_and_related: vec![],
