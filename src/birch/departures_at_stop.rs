@@ -12,6 +12,7 @@ use actix_web::web;
 use actix_web::web::Query;
 use amtrak_gtfs_rt::asm::Stop;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use compact_str::CompactString;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel::dsl::sql;
@@ -21,14 +22,18 @@ use diesel::sql_types::Bool;
 use diesel_async::RunQueryDsl;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::sync::Arc;
+
+// should be able to detect when a stop has detoured to this stop or detoured away from this stop
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyFromStops {
     //serialise and deserialise using serde_json into Vec<NearbyStopsDeserialize>
     stop_id: String,
     chateau_id: String,
-    departure_time: Option<u64>,
+    greater_than_time: Option<u64>,
+    less_than_time: Option<u64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -47,10 +52,29 @@ struct StopInfoResponse {
 }
 
 #[derive(Serialize, Clone, Debug)]
+struct StopEvents {
+    scheduled_arrival: Option<u64>,
+    scheduled_departure: Option<u64>,
+    realtime_arrival: Option<u64>,
+    realtime_departure: Option<u64>,
+    trip_modified: bool,
+    stop_cancelled: bool,
+    trip_cancelled: bool,
+    trip_id: String,
+    headsign: Option<String>,
+    route_id: String,
+    chateau: String,
+    stop_id: String,
+    uses_primary_stop: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
 struct NearbyFromStopsResponse {
     primary: StopInfoResponse,
     parent: Option<StopInfoResponse>,
     children_and_related: Vec<StopInfoResponse>,
+    events: Vec<StopEvents>,
+    routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>,
 }
 
 #[actix_web::get("/departures_at_stop")]
@@ -64,9 +88,14 @@ pub async fn departures_at_stop(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
 
-    let departure_time = match query.departure_time {
-        Some(departure_time) => departure_time,
-        None => catenary::duration_since_unix_epoch().as_secs(),
+    let greater_than_time = match query.greater_than_time {
+        Some(greater_than_time) => greater_than_time,
+        None => catenary::duration_since_unix_epoch().as_secs() - 3600,
+    };
+
+    let less_than_time = match query.less_than_time {
+        Some(less_than_time) => less_than_time,
+        None => catenary::duration_since_unix_epoch().as_secs() + 60 * 60 * 24,
     };
 
     let stops: diesel::prelude::QueryResult<Vec<catenary::models::Stop>> =
@@ -90,6 +119,9 @@ pub async fn departures_at_stop(
     }
 
     // search through itineraries
+
+    let itins_btreemap_by_chateau: BTreeMap<String, BTreeMap<String, Vec<catenary::models::ItineraryPatternRow>>> = BTreeMap::new();
+    let itin_meta_btreemap_by_chateau: BTreeMap<String, BTreeMap<String, Vec<catenary::models::ItineraryPatternMeta>>> = BTreeMap::new();
 
     let itins: diesel::prelude::QueryResult<Vec<catenary::models::ItineraryPatternRow>> =
         catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
@@ -123,6 +155,11 @@ pub async fn departures_at_stop(
             .await;
 
     let itin_meta = itin_meta.unwrap();
+
+    let stop_tz_txt = match stop.timezone {
+        Some(timezone) => timezone,
+        None => itin_meta[0].timezone.clone(),
+    };
 
     //get all matching directions
 
@@ -162,7 +199,88 @@ pub async fn departures_at_stop(
 
     let trips = trips.unwrap();
 
-    //get the start of the trip and the offset for the current stop
+    let routes_to_get = itin_meta
+        .iter()
+        .map(|x| x.route_id.clone())
+        .collect::<Vec<CompactString>>();
+
+    let routes: diesel::prelude::QueryResult<Vec<catenary::models::Route>> =
+        catenary::schema::gtfs::routes::dsl::routes
+            .filter(catenary::schema::gtfs::routes::chateau.eq(query.chateau_id.clone()))
+            .filter(catenary::schema::gtfs::routes::route_id.eq_any(routes_to_get.clone()))
+            .select(catenary::models::Route::as_select())
+            .load::<catenary::models::Route>(conn)
+            .await;
+
+    let routes = routes.unwrap();
+
+    let mut routes_map = BTreeMap::new();
+
+    routes_map.insert(
+        query.chateau_id.clone(),
+        routes
+            .iter()
+            .map(|x| (x.route_id.clone(), x.clone()))
+            .collect::<BTreeMap<String, catenary::models::Route>>(),
+    );
+
+    let service_ids = trips
+        .iter()
+        .map(|x| x.service_id.clone())
+        .collect::<Vec<CompactString>>();
+
+    let calendars: diesel::prelude::QueryResult<Vec<catenary::models::Calendar>> =
+        catenary::schema::gtfs::calendar::dsl::calendar
+            .filter(catenary::schema::gtfs::calendar::chateau.eq(query.chateau_id.clone()))
+            .filter(catenary::schema::gtfs::calendar::service_id.eq_any(service_ids.clone()))
+            .select(catenary::models::Calendar::as_select())
+            .load::<catenary::models::Calendar>(conn)
+            .await;
+
+    let calendar_dates: diesel::prelude::QueryResult<Vec<catenary::models::CalendarDate>> =
+        catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+            .filter(catenary::schema::gtfs::calendar_dates::chateau.eq(query.chateau_id.clone()))
+            .filter(catenary::schema::gtfs::calendar_dates::service_id.eq_any(service_ids.clone()))
+            .select(catenary::models::CalendarDate::as_select())
+            .load::<catenary::models::CalendarDate>(conn)
+            .await;
+
+    let calendar_dates = calendar_dates.unwrap();
+    let calendars = calendars.unwrap();
+
+    let calendar_structure =
+        catenary::make_calendar_structure_from_pg_single_chateau(calendars, calendar_dates);
+
+    // starting service date
+
+    let maximum_offset_to_seek_back = itins
+        .iter()
+        .map(|x| match x.departure_time_since_start {
+            Some(departure_time_since_start) => departure_time_since_start,
+            None => match x.arrival_time_since_start {
+                Some(arrival_time_since_start) => arrival_time_since_start,
+                None => match x.interpolated_time_since_start {
+                    Some(interpolated_time_since_start) => interpolated_time_since_start,
+                    None => 0,
+                },
+            },
+        })
+        .max()
+        .unwrap_or(0);
+
+    let stop_tz = chrono_tz::Tz::from_str_insensitive(&stop_tz_txt).unwrap();
+
+    //convert greater than time to DateTime Tz
+
+    let greater_than_time_utc = chrono::DateTime::from_timestamp(
+        greater_than_time as i64,
+        0,
+    );
+
+    let greater_than_date_time = greater_than_time_utc.with_timezone(&stop_tz);
+
+    let greater_than_date_time_minus_seek_back = greater_than_date_time
+        - chrono::Duration::seconds(maximum_offset_to_seek_back as i64) - chrono::Duration::seconds(86400);
 
     //look through time compressed and decompress the itineraries, using timezones and calendar calcs
 
@@ -182,13 +300,12 @@ pub async fn departures_at_stop(
             platform_code: stop.platform_code,
             parent_station: stop.parent_station,
             children_ids: vec![],
-            timezone: match stop.timezone {
-                Some(timezone) => timezone,
-                None => itin_meta[0].timezone.clone(),
-            },
+            timezone: stop_tz_txt,
         },
         parent: None,
         children_and_related: vec![],
+        events: vec![],
+        routes: routes_map,
     };
 
     HttpResponse::Ok().json(response)
