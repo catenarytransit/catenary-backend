@@ -54,6 +54,44 @@ pub async fn stops_into_postgres(
                     .replace(" Light Rail", "")
             });
 
+            let point = match stop.latitude.is_some() && stop.longitude.is_some() {
+                true => Some(postgis_diesel::types::Point::new(
+                    stop.longitude.unwrap(),
+                    stop.latitude.unwrap(),
+                    Some(4326),
+                )),
+                false => match stop.parent_station.is_some() {
+                    true => {
+                        let parent_station =
+                            gtfs.stops.get(stop.parent_station.as_ref().unwrap());
+                        match parent_station {
+                            Some(parent_station) => match parent_station.latitude.is_some()
+                                && parent_station.longitude.is_some()
+                            {
+                                true => Some(postgis_diesel::types::Point::new(
+                                    parent_station.longitude.unwrap(),
+                                    parent_station.latitude.unwrap(),
+                                    Some(4326),
+                                )),
+                                false => None,
+                            },
+                            None => None,
+                        }
+                    }
+                    false => None,
+                },
+            };
+
+            let timezone = match &stop.timezone {
+                Some(tz) => stop.timezone.clone(),
+                None => {
+                    tz_search::lookup(
+                        point.as_ref().unwrap().x,
+                        point.as_ref().unwrap().y
+                    )
+                }
+            };
+
             let stop_pg = catenary::models::Stop {
                 onestop_feed_id: feed_id.to_string(),
                 chateau: chateau_id.to_string(),
@@ -81,34 +119,8 @@ pub async fn stops_into_postgres(
                 parent_station: stop.parent_station.clone(),
                 zone_id: stop.zone_id.clone(),
                 url: stop.url.clone(),
-                point: match stop.latitude.is_some() && stop.longitude.is_some() {
-                    true => Some(postgis_diesel::types::Point::new(
-                        stop.longitude.unwrap(),
-                        stop.latitude.unwrap(),
-                        Some(4326),
-                    )),
-                    false => match stop.parent_station.is_some() {
-                        true => {
-                            let parent_station =
-                                gtfs.stops.get(stop.parent_station.as_ref().unwrap());
-                            match parent_station {
-                                Some(parent_station) => match parent_station.latitude.is_some()
-                                    && parent_station.longitude.is_some()
-                                {
-                                    true => Some(postgis_diesel::types::Point::new(
-                                        parent_station.longitude.unwrap(),
-                                        parent_station.latitude.unwrap(),
-                                        Some(4326),
-                                    )),
-                                    false => None,
-                                },
-                                None => None,
-                            }
-                        }
-                        false => None,
-                    },
-                },
-                timezone: stop.timezone.clone(),
+                point: point,
+                timezone: timezone,
                 level_id: stop.level_id.clone(),
                 station_feature: false,
                 wheelchair_boarding: availability_to_int(&stop.wheelchair_boarding),

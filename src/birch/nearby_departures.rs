@@ -53,6 +53,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use strumbra::UniqueString;
+use catenary::make_calendar_structure_from_pg;
 use catenary::make_degree_length_as_distance_from_point;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1373,105 +1374,5 @@ pub async fn nearby_from_coords(
             })
         }
     }
-}
-
-pub fn make_calendar_structure_from_pg(
-    services_calendar_lookup_queries_to_perform: Vec<
-        diesel::QueryResult<Vec<catenary::models::Calendar>>,
-    >,
-    services_calendar_dates_lookup_queries_to_perform: Vec<
-        diesel::QueryResult<Vec<catenary::models::CalendarDate>>,
-    >,
-) -> Result<
-    BTreeMap<String, BTreeMap<String, catenary::CalendarUnified>>,
-    Box<dyn std::error::Error + Sync + Send>,
-> {
-    let mut calendar_structures: BTreeMap<String, BTreeMap<String, catenary::CalendarUnified>> =
-        BTreeMap::new();
-
-    for calendar_group in services_calendar_lookup_queries_to_perform {
-        if let Err(calendar_group_err) = calendar_group {
-            return Err(Box::new(calendar_group_err));
-        }
-
-        let calendar_group = calendar_group.unwrap();
-
-        let chateau = match calendar_group.get(0) {
-            Some(calendar) => calendar.chateau.clone(),
-            None => continue,
-        };
-
-        let mut new_calendar_table: BTreeMap<String, catenary::CalendarUnified> = BTreeMap::new();
-
-        for calendar in calendar_group {
-            new_calendar_table.insert(
-                calendar.service_id.clone(),
-                catenary::CalendarUnified {
-                    id: calendar.service_id.clone(),
-                    general_calendar: Some(catenary::GeneralCalendar {
-                        days: make_weekdays(&calendar),
-                        start_date: calendar.gtfs_start_date,
-                        end_date: calendar.gtfs_end_date,
-                    }),
-                    exceptions: None,
-                },
-            );
-        }
-
-        calendar_structures.insert(chateau, new_calendar_table);
-    }
-
-    for calendar_date_group in services_calendar_dates_lookup_queries_to_perform {
-        if let Err(calendar_date_group) = calendar_date_group {
-            return Err(Box::new(calendar_date_group));
-        }
-
-        let calendar_date_group = calendar_date_group.unwrap();
-
-        if !calendar_date_group.is_empty() {
-            let chateau = match calendar_date_group.get(0) {
-                Some(calendar_date) => calendar_date.chateau.clone(),
-                None => continue,
-            };
-
-            let pile_of_calendars_exists = calendar_structures.contains_key(&chateau);
-
-            if !pile_of_calendars_exists {
-                calendar_structures.insert(chateau.clone(), BTreeMap::new());
-            }
-
-            let pile_of_calendars = calendar_structures.get_mut(&chateau).unwrap();
-
-            for calendar_date in calendar_date_group {
-                let exception_number = match calendar_date.exception_type {
-                    1 => gtfs_structures::Exception::Added,
-                    2 => gtfs_structures::Exception::Deleted,
-                    _ => panic!("WHAT IS THIS!!!!!!"),
-                };
-
-                match pile_of_calendars.entry(calendar_date.service_id.clone()) {
-                    btree_map::Entry::Occupied(mut oe) => {
-                        let mut calendar_unified = oe.get_mut();
-
-                        if let Some(entry) = &mut calendar_unified.exceptions {
-                            entry.insert(calendar_date.gtfs_date, exception_number);
-                        } else {
-                            calendar_unified.exceptions = Some(BTreeMap::from_iter([(
-                                calendar_date.gtfs_date,
-                                exception_number,
-                            )]));
-                        }
-                    }
-                    btree_map::Entry::Vacant(mut ve) => {
-                        ve.insert(CalendarUnified::empty_exception_from_calendar_date(
-                            &calendar_date,
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(calendar_structures)
 }
 
