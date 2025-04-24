@@ -116,6 +116,7 @@ pub struct DepartingTrip {
     pub cancelled: bool,
     pub deleted: bool,
     pub platform: Option<String>,
+    pub level_id: Option<String>
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -1086,6 +1087,16 @@ pub async fn nearby_from_coords(
                         let mut departure_time_rt: Option<u64> = None;
                         let mut platform: Option<String> = None;
 
+                        let stop = stops
+                            .iter()
+                            .find(|x| x.gtfs_id == trip.itinerary_options[0].stop_id);
+
+                        if let Some(stop) = stop {
+                            if let Some(platform_code) = &stop.platform_code {
+                                platform = Some(platform_code.clone());
+                            }
+                        }
+
                         if let Some(gtfs_trip_aspenised) = gtfs_trips_aspenised.as_ref() {
                             if let Some(trip_update_ids) = gtfs_trip_aspenised
                                 .trip_id_to_trip_update_ids
@@ -1267,6 +1278,7 @@ pub async fn nearby_from_coords(
                             tz: trip.timezone.as_ref().unwrap().name().to_string(),
                             is_frequency: trip.frequencies.is_some(),
                             platform: platform,
+                            level_id: None,
                             departure_schedule: match trip.itinerary_options[0]
                                 .departure_time_since_start
                             {
