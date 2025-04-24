@@ -219,6 +219,7 @@ pub async fn departures_at_stop(
     let mut itins_btreemap_by_chateau: BTreeMap<String, BTreeMap<String, Vec<catenary::models::ItineraryPatternRow>>> = BTreeMap::new();
     let mut itin_meta_btreemap_by_chateau: BTreeMap<String, BTreeMap<String,catenary::models::ItineraryPatternMeta>> = BTreeMap::new();
     let mut direction_meta_btreemap_by_chateau: BTreeMap<String, BTreeMap<String, catenary::models::DirectionPatternMeta>> = BTreeMap::new();
+    let mut trip_compressed_btreemap_by_chateau: BTreeMap<String, BTreeMap<String, catenary::models::CompressedTrip>> = BTreeMap::new();
 
     for (chateau_id_to_search, stop_id_to_search) in &stops_to_search {
         let itins: diesel::prelude::QueryResult<Vec<catenary::models::ItineraryPatternRow>> =
@@ -248,7 +249,7 @@ pub async fn departures_at_stop(
         let itin_meta: diesel::prelude::QueryResult<Vec<catenary::models::ItineraryPatternMeta>> =
             catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
                 .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau_id_to_search.clone()))
-                .filter(catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id.eq_any(itinerary_list))
+                .filter(catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id.eq_any(&itinerary_list))
                 .select(catenary::models::ItineraryPatternMeta::as_select())
                 .load::<catenary::models::ItineraryPatternMeta>(conn)
                 .await;
@@ -281,7 +282,30 @@ pub async fn departures_at_stop(
                 .or_insert(direction.clone());
         }
         direction_meta_btreemap_by_chateau.insert(chateau_id_to_search.clone(), direction_meta_btreemap);
+
+        let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+            .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_id_to_search.clone()))
+            .filter(catenary::schema::gtfs::trips_compressed::itinerary_pattern_id.eq_any(&itinerary_list))
+            .select(catenary::models::CompressedTrip::as_select())
+            .load::<catenary::models::CompressedTrip>(conn)
+            .await;
+
+        let trips = trips.unwrap();
+
+        let mut trip_compressed_btreemap = BTreeMap::<String, catenary::models::CompressedTrip>::new();
+        for trip in trips.iter() {
+            trip_compressed_btreemap
+                .entry(trip.trip_id.clone())
+                .or_insert(trip.clone());
+        }
+        trip_compressed_btreemap_by_chateau.insert(chateau_id_to_search.clone(), trip_compressed_btreemap);
     }
+
+    //query added trips and modifications by stop id, and also matching trips in chateau
+
+    //requery all the missing trips, and their itins and directions if they exist
+
+    //compute new scheduled time for the stop for trip modifications
 
     let stop_tz_txt = match &stop.timezone {
         Some(tz) => tz.clone(),
@@ -314,9 +338,7 @@ pub async fn departures_at_stop(
     let less_than_date_time = less_than_time_utc.with_timezone(&stop_tz);
 
     let greater_than_naive_date = greater_than_date_time_minus_seek_back.naive_local();
-    let less_than_naive_date = less_than_date_time.naive_local();
-
-
+    let less_than_naive_date = less_than_date_time.naive_local();    
 
     //iter from greater than naive date to less than naive date inclusive 
 

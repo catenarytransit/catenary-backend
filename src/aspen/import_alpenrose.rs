@@ -957,7 +957,7 @@ pub async fn new_rt_data(
                                     .and_modify(|x| x.push(trip_update_entity.id.clone().into()))
                                     .or_insert(vec![trip_update_entity.id.clone().into()]);
                             }
-                        }
+                        }                        
                     }
                 }
             }
