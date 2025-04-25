@@ -82,6 +82,18 @@ pub async fn stops_into_postgres(
                 },
             };
 
+            if point.as_ref().unwrap().x < -180.0
+                || point.as_ref().unwrap().x > 180.0
+                || point.as_ref().unwrap().y < -90.0
+                || point.as_ref().unwrap().y > 90.0
+            {
+                println!(
+                    "Deleted feed id {} stop id {} for being out of bounds",
+                    &feed_id, &stop_id
+                );
+                continue;
+            }
+
             let timezone = match &stop.timezone {
                 Some(tz) => stop.timezone.clone(),
                 None => {
