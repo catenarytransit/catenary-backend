@@ -311,8 +311,8 @@ pub async fn departures_at_stop(
         Some(tz) => tz.clone(),
         None => {
             tz_search::lookup(
-                point_raw.x,
                 point_raw.y,
+                point_raw.x,
             ).unwrap()
         }
     };
