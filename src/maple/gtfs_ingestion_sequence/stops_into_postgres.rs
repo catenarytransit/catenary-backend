@@ -86,8 +86,8 @@ pub async fn stops_into_postgres(
                 Some(tz) => stop.timezone.clone(),
                 None => {
                     tz_search::lookup(
-                        point.as_ref().unwrap().x,
-                        point.as_ref().unwrap().y
+                        point.as_ref().unwrap().y,
+                        point.as_ref().unwrap().x
                     )
                 }
             };

@@ -1007,7 +1007,7 @@ pub async fn nearby_from_coords(
                                     Ok(gtfs_trip_aspenised) => Some(gtfs_trip_aspenised),
                                     Err(err) => {
                                         eprintln!(
-                                            "Error getting trip updates, line 1006: {:#?}",
+                                            "Error getting trip updates, line 1010: {:#?}",
                                             err
                                         );
                                         None
