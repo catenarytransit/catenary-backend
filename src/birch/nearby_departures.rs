@@ -1341,7 +1341,7 @@ pub async fn nearby_from_coords(
 
                             //trip start time array
 
-                            let trip_start_times: Vec<u32> = frequencies
+                            let mut trip_start_times: Vec<u32> = frequencies
                                 .iter()
                                 .flat_map(|frequency| {
                                     (frequency.start_time..=frequency.end_time)
@@ -1349,6 +1349,11 @@ pub async fn nearby_from_coords(
                                         .collect::<Vec<u32>>()
                                 })
                                 .collect();
+
+                            trip_start_times.sort();
+                            trip_start_times.dedup();
+
+                            let trip_start_times = trip_start_times;
 
                             for scheduled_frequency_start_time in trip_start_times {
                                 if let Some(gtfs_trip_aspenised) = gtfs_trips_aspenised.as_ref() {
