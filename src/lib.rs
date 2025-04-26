@@ -834,6 +834,14 @@ pub fn convert_hhmmss_to_seconds(input: &str) -> Option<u32> {
     }
 }
 
+pub fn number_of_seconds_to_hhmmss(input: u32) -> String {
+    let hours = input / 3600;
+    let minutes = (input % 3600) / 60;
+    let seconds = input % 60;
+
+    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

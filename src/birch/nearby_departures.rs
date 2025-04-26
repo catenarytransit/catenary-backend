@@ -1314,7 +1314,7 @@ pub async fn nearby_from_coords(
                                 is_interpolated: trip.itinerary_options[0]
                                     .interpolated_time_since_start
                                     .is_some(),
-                                gtfs_frequency_start_time: None,
+                                gtfs_frequency_start_time:None,
                                 cancelled: is_cancelled,
                                 deleted: deleted,
                             });
@@ -1590,7 +1590,7 @@ pub async fn nearby_from_coords(
                                     is_interpolated: trip.itinerary_options[0]
                                         .interpolated_time_since_start
                                         .is_some(),
-                                    gtfs_frequency_start_time: None,
+                                    gtfs_frequency_start_time: Some(catenary::number_of_seconds_to_hhmmss(scheduled_frequency_start_time).into()),
                                     cancelled: is_cancelled,
                                     deleted: deleted,
                                 });
