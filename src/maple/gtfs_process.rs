@@ -84,7 +84,7 @@ pub async fn gtfs_process_feed(
             gtfs
         }
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
-            //there's 8184 school buses in the feed. I'm removing them lmfao.
+            // There are 8184 school buses in the feed. These are being removed for processing.
             let routes = gtfs
                 .routes
                 .into_iter()
