@@ -11,6 +11,10 @@ use actix_web::Responder;
 use actix_web::web;
 use actix_web::web::Query;
 use amtrak_gtfs_rt::asm::Stop;
+use catenary::make_calendar_structure_from_pg;
+use catenary::make_degree_length_as_distance_from_point;
+use catenary::models::ItineraryPatternMeta;
+use catenary::models::ItineraryPatternRow;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use compact_str::CompactString;
 use diesel::ExpressionMethods;
@@ -19,17 +23,12 @@ use diesel::dsl::sql;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::sql_types::Bool;
+use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use diesel::sql_types::*;
-use catenary::make_degree_length_as_distance_from_point;
-use catenary::models::ItineraryPatternRow;
-use catenary::models::ItineraryPatternMeta;
-use catenary::make_calendar_structure_from_pg;
-
 
 // should be able to detect when a stop has detoured to this stop or detoured away from this stop
 
@@ -41,7 +40,6 @@ struct NearbyFromStops {
     greater_than_time: Option<u64>,
     less_than_time: Option<u64>,
 }
-
 
 #[derive(Serialize, Clone, Debug)]
 struct StopInfoResponse {
@@ -91,7 +89,6 @@ pub async fn departures_at_stop(
 
     pool: web::Data<Arc<CatenaryPostgresPool>>,
 ) -> impl Responder {
-    
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
@@ -155,21 +152,21 @@ pub async fn departures_at_stop(
     }
 
     //search all stops within 20 m of the stop
-    
+
     let point_raw = stop.point.clone().unwrap();
 
     let latitude = point_raw.y;
     let longitude = point_raw.x;
     let point = geo::Point::new(longitude, latitude);
 
-    let spatial_resolution_in_degs = catenary::make_degree_length_as_distance_from_point(
-        &point,
-        50.0,
-    );
+    let spatial_resolution_in_degs =
+        catenary::make_degree_length_as_distance_from_point(&point, 50.0);
 
     let where_query_for_stops = format!(
         "ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) AND allowed_spatial_query = TRUE",
-       point.x(), point.y(), spatial_resolution_in_degs
+        point.x(),
+        point.y(),
+        spatial_resolution_in_degs
     );
 
     let stops_nearby: diesel::prelude::QueryResult<Vec<catenary::models::Stop>> =
@@ -183,20 +180,21 @@ pub async fn departures_at_stop(
 
     //get all children ids
 
-    let mut stops_to_search: BTreeMap<String, Vec<String>> =
-        BTreeMap::new();
+    let mut stops_to_search: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
-    stops_to_search.insert(
-        stop.chateau.clone(),
-        vec![stop.gtfs_id.clone()],
-    );
+    stops_to_search.insert(stop.chateau.clone(), vec![stop.gtfs_id.clone()]);
 
-    let children_of_stop = stop.children_ids.iter().cloned().filter(|x| x.is_some())
-    .map(|x| x.unwrap())
-    .collect::<Vec<String>>();
+    let children_of_stop = stop
+        .children_ids
+        .iter()
+        .cloned()
+        .filter(|x| x.is_some())
+        .map(|x| x.unwrap())
+        .collect::<Vec<String>>();
 
     for child in children_of_stop.iter() {
-        stops_to_search.entry(stop.chateau.clone())
+        stops_to_search
+            .entry(stop.chateau.clone())
             .or_insert(vec![])
             .push(
                 stops_nearby
@@ -208,31 +206,52 @@ pub async fn departures_at_stop(
             );
     }
 
-    for nearby_stop in stops_nearby.iter().filter(|s| s.chateau != query.chateau_id)
+    for nearby_stop in stops_nearby
+        .iter()
+        .filter(|s| s.chateau != query.chateau_id)
         .filter(|s| children_of_stop.contains(&s.gtfs_id) || stop.gtfs_id == s.gtfs_id)
-     {
-        stops_to_search.entry(nearby_stop.chateau.clone())
+    {
+        stops_to_search
+            .entry(nearby_stop.chateau.clone())
             .or_insert(vec![])
             .push(nearby_stop.gtfs_id.clone());
     }
 
-    let mut itins_btreemap_by_chateau: BTreeMap<String, BTreeMap<String, Vec<catenary::models::ItineraryPatternRow>>> = BTreeMap::new();
-    let mut itin_meta_btreemap_by_chateau: BTreeMap<String, BTreeMap<String,catenary::models::ItineraryPatternMeta>> = BTreeMap::new();
-    let mut direction_meta_btreemap_by_chateau: BTreeMap<String, BTreeMap<String, catenary::models::DirectionPatternMeta>> = BTreeMap::new();
-    let mut trip_compressed_btreemap_by_chateau: BTreeMap<String, BTreeMap<String, catenary::models::CompressedTrip>> = BTreeMap::new();
+    let mut itins_btreemap_by_chateau: BTreeMap<
+        String,
+        BTreeMap<String, Vec<catenary::models::ItineraryPatternRow>>,
+    > = BTreeMap::new();
+    let mut itin_meta_btreemap_by_chateau: BTreeMap<
+        String,
+        BTreeMap<String, catenary::models::ItineraryPatternMeta>,
+    > = BTreeMap::new();
+    let mut direction_meta_btreemap_by_chateau: BTreeMap<
+        String,
+        BTreeMap<String, catenary::models::DirectionPatternMeta>,
+    > = BTreeMap::new();
+    let mut trip_compressed_btreemap_by_chateau: BTreeMap<
+        String,
+        BTreeMap<String, catenary::models::CompressedTrip>,
+    > = BTreeMap::new();
 
     for (chateau_id_to_search, stop_id_to_search) in &stops_to_search {
         let itins: diesel::prelude::QueryResult<Vec<catenary::models::ItineraryPatternRow>> =
             catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_id_to_search.clone()))
-                .filter(catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(stop_id_to_search))
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern::chateau
+                        .eq(chateau_id_to_search.clone()),
+                )
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(stop_id_to_search),
+                )
                 .select(catenary::models::ItineraryPatternRow::as_select())
                 .load::<catenary::models::ItineraryPatternRow>(conn)
                 .await;
 
         let itins = itins.unwrap();
 
-        let mut itins_btreemap = BTreeMap::<String, Vec<catenary::models::ItineraryPatternRow>>::new();
+        let mut itins_btreemap =
+            BTreeMap::<String, Vec<catenary::models::ItineraryPatternRow>>::new();
         for itin in itins.iter() {
             itins_btreemap
                 .entry(itin.itinerary_pattern_id.clone())
@@ -240,65 +259,87 @@ pub async fn departures_at_stop(
                 .push(itin.clone());
         }
 
-        let itinerary_list = itins_btreemap.keys()
-            .cloned()
-            .collect::<Vec<String>>();
+        let itinerary_list = itins_btreemap.keys().cloned().collect::<Vec<String>>();
 
         itins_btreemap_by_chateau.insert(chateau_id_to_search.clone(), itins_btreemap);
 
         let itin_meta: diesel::prelude::QueryResult<Vec<catenary::models::ItineraryPatternMeta>> =
             catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau_id_to_search.clone()))
-                .filter(catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id.eq_any(&itinerary_list))
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern_meta::chateau
+                        .eq(chateau_id_to_search.clone()),
+                )
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id
+                        .eq_any(&itinerary_list),
+                )
                 .select(catenary::models::ItineraryPatternMeta::as_select())
                 .load::<catenary::models::ItineraryPatternMeta>(conn)
                 .await;
         let itin_meta = itin_meta.unwrap();
-        let mut itin_meta_btreemap = BTreeMap::<String, catenary::models::ItineraryPatternMeta>::new();
+        let mut itin_meta_btreemap =
+            BTreeMap::<String, catenary::models::ItineraryPatternMeta>::new();
         for itin in itin_meta.iter() {
             itin_meta_btreemap
                 .entry(itin.itinerary_pattern_id.clone())
                 .or_insert(itin.clone());
         }
 
-        let direction_ids_to_search = itin_meta.iter()
+        let direction_ids_to_search = itin_meta
+            .iter()
             .map(|x| x.direction_pattern_id.clone().unwrap())
             .collect::<Vec<String>>();
 
         itin_meta_btreemap_by_chateau.insert(chateau_id_to_search.clone(), itin_meta_btreemap);
 
-        let direction_meta: diesel::prelude::QueryResult<Vec<catenary::models::DirectionPatternMeta>> =
-            catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
-                .filter(catenary::schema::gtfs::direction_pattern_meta::chateau.eq(chateau_id_to_search.clone()))
-                .filter(catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id.eq_any(direction_ids_to_search))
-                .select(catenary::models::DirectionPatternMeta::as_select())
-                .load::<catenary::models::DirectionPatternMeta>(conn)
-                .await;
+        let direction_meta: diesel::prelude::QueryResult<
+            Vec<catenary::models::DirectionPatternMeta>,
+        > = catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+            .filter(
+                catenary::schema::gtfs::direction_pattern_meta::chateau
+                    .eq(chateau_id_to_search.clone()),
+            )
+            .filter(
+                catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id
+                    .eq_any(direction_ids_to_search),
+            )
+            .select(catenary::models::DirectionPatternMeta::as_select())
+            .load::<catenary::models::DirectionPatternMeta>(conn)
+            .await;
         let direction_meta = direction_meta.unwrap();
-        let mut direction_meta_btreemap = BTreeMap::<String, catenary::models::DirectionPatternMeta>::new();
+        let mut direction_meta_btreemap =
+            BTreeMap::<String, catenary::models::DirectionPatternMeta>::new();
         for direction in direction_meta.iter() {
             direction_meta_btreemap
                 .entry(direction.direction_pattern_id.clone())
                 .or_insert(direction.clone());
         }
-        direction_meta_btreemap_by_chateau.insert(chateau_id_to_search.clone(), direction_meta_btreemap);
+        direction_meta_btreemap_by_chateau
+            .insert(chateau_id_to_search.clone(), direction_meta_btreemap);
 
         let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-            .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_id_to_search.clone()))
-            .filter(catenary::schema::gtfs::trips_compressed::itinerary_pattern_id.eq_any(&itinerary_list))
+            .filter(
+                catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_id_to_search.clone()),
+            )
+            .filter(
+                catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                    .eq_any(&itinerary_list),
+            )
             .select(catenary::models::CompressedTrip::as_select())
             .load::<catenary::models::CompressedTrip>(conn)
             .await;
 
         let trips = trips.unwrap();
 
-        let mut trip_compressed_btreemap = BTreeMap::<String, catenary::models::CompressedTrip>::new();
+        let mut trip_compressed_btreemap =
+            BTreeMap::<String, catenary::models::CompressedTrip>::new();
         for trip in trips.iter() {
             trip_compressed_btreemap
                 .entry(trip.trip_id.clone())
                 .or_insert(trip.clone());
         }
-        trip_compressed_btreemap_by_chateau.insert(chateau_id_to_search.clone(), trip_compressed_btreemap);
+        trip_compressed_btreemap_by_chateau
+            .insert(chateau_id_to_search.clone(), trip_compressed_btreemap);
     }
 
     //query added trips and modifications by stop id, and also matching trips in chateau
@@ -310,10 +351,7 @@ pub async fn departures_at_stop(
     let stop_tz_txt = match &stop.timezone {
         Some(tz) => tz.clone(),
         None => {
-            tz_search::lookup(
-                point_raw.y,
-                point_raw.x,
-            ).unwrap_or_else(|| String::from("Etc/GMT"))
+            tz_search::lookup(point_raw.y, point_raw.x).unwrap_or_else(|| String::from("Etc/GMT"))
         }
     };
 
@@ -321,26 +359,22 @@ pub async fn departures_at_stop(
 
     //convert greater than time to DateTime Tz
 
-    let greater_than_time_utc = chrono::DateTime::from_timestamp(
-        greater_than_time as i64,
-        0,
-    ).unwrap();
+    let greater_than_time_utc =
+        chrono::DateTime::from_timestamp(greater_than_time as i64, 0).unwrap();
 
     let greater_than_date_time = greater_than_time_utc.with_timezone(&stop_tz);
 
     let greater_than_date_time_minus_seek_back = greater_than_date_time
-        - chrono::Duration::seconds(24 * 24 * 60 * 10) - chrono::Duration::seconds(86400);
+        - chrono::Duration::seconds(24 * 24 * 60 * 10)
+        - chrono::Duration::seconds(86400);
 
-    let less_than_time_utc = chrono::DateTime::from_timestamp(
-        less_than_time as i64,
-        0,
-    ).unwrap();
+    let less_than_time_utc = chrono::DateTime::from_timestamp(less_than_time as i64, 0).unwrap();
     let less_than_date_time = less_than_time_utc.with_timezone(&stop_tz);
 
     let greater_than_naive_date = greater_than_date_time_minus_seek_back.naive_local();
-    let less_than_naive_date = less_than_date_time.naive_local();    
+    let less_than_naive_date = less_than_date_time.naive_local();
 
-    //iter from greater than naive date to less than naive date inclusive 
+    //iter from greater than naive date to less than naive date inclusive
 
     //look through time compressed and decompress the itineraries, using timezones and calendar calcs
 

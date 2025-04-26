@@ -819,6 +819,17 @@ pub fn convert_text_12h_to_24h(input: &str) -> String {
         .to_string()
 }
 
+pub fn convert_hhmmss_to_seconds(input: &str) -> Option<u32> {
+    let parts: Vec<&str> = input.split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let hours: u32 = parts[0].parse().unwrap();
+    let minutes: u32 = parts[1].parse().unwrap();
+    let seconds: u32 = parts[2].parse().unwrap();
+    Some(hours * 3600 + minutes * 60 + seconds)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -945,4 +956,3 @@ pub fn make_calendar_structure_from_pg(
 
     Ok(calendar_structures)
 }
-

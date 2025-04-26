@@ -17,6 +17,8 @@ use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenisedTripUpdate;
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
+use catenary::make_calendar_structure_from_pg;
+use catenary::make_degree_length_as_distance_from_point;
 use catenary::make_weekdays;
 use catenary::maple_syrup::DirectionPattern;
 use catenary::models::DirectionPatternRow;
@@ -53,8 +55,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use strumbra::UniqueString;
-use catenary::make_calendar_structure_from_pg;
-use catenary::make_degree_length_as_distance_from_point;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItineraryPatternRowMerge {
@@ -116,7 +116,7 @@ pub struct DepartingTrip {
     pub cancelled: bool,
     pub deleted: bool,
     pub platform: Option<String>,
-    pub level_id: Option<String>
+    pub level_id: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -1081,39 +1081,40 @@ pub async fn nearby_from_coords(
                         ahash::AHashSet::new();
 
                     for trip in trip_grouping {
-                        let mut is_cancelled: bool = false;
-                        let mut deleted: bool = false;
+                        if trip.frequencies.is_none() {
+                            let mut is_cancelled: bool = false;
+                            let mut deleted: bool = false;
 
-                        let mut departure_time_rt: Option<u64> = None;
-                        let mut platform: Option<String> = None;
+                            let mut departure_time_rt: Option<u64> = None;
+                            let mut platform: Option<String> = None;
 
-                        let stop = stops
-                            .iter()
-                            .find(|x| x.gtfs_id == trip.itinerary_options[0].stop_id);
+                            let stop = stops
+                                .iter()
+                                .find(|x| x.gtfs_id == trip.itinerary_options[0].stop_id);
 
-                        if let Some(stop) = stop {
-                            if let Some(platform_code) = &stop.platform_code {
-                                platform = Some(platform_code.clone());
+                            if let Some(stop) = stop {
+                                if let Some(platform_code) = &stop.platform_code {
+                                    platform = Some(platform_code.clone());
+                                }
                             }
-                        }
 
-                        if let Some(gtfs_trip_aspenised) = gtfs_trips_aspenised.as_ref() {
-                            if let Some(trip_update_ids) = gtfs_trip_aspenised
-                                .trip_id_to_trip_update_ids
-                                .get(trip.trip_id.as_str())
-                            {
-                                if !trip_update_ids.is_empty() {
-                                    // let trip_update_id = trip_rt[0].clone();
+                            if let Some(gtfs_trip_aspenised) = gtfs_trips_aspenised.as_ref() {
+                                if let Some(trip_update_ids) = gtfs_trip_aspenised
+                                    .trip_id_to_trip_update_ids
+                                    .get(trip.trip_id.as_str())
+                                {
+                                    if !trip_update_ids.is_empty() {
+                                        // let trip_update_id = trip_rt[0].clone();
 
-                                    let does_trip_set_use_dates = gtfs_trip_aspenised
-                                        .trip_updates
-                                        .get(&trip_update_ids[0])
-                                        .unwrap()
-                                        .trip
-                                        .start_date
-                                        .is_some();
+                                        let does_trip_set_use_dates = gtfs_trip_aspenised
+                                            .trip_updates
+                                            .get(&trip_update_ids[0])
+                                            .unwrap()
+                                            .trip
+                                            .start_date
+                                            .is_some();
 
-                                    let trip_updates: Vec<(&String, &AspenisedTripUpdate)> =
+                                        let trip_updates: Vec<(&String, &AspenisedTripUpdate)> =
                                         trip_update_ids
                                             .iter()
                                             .map(|x| {
@@ -1215,11 +1216,11 @@ pub async fn nearby_from_coords(
                                            // })
                                             .collect();
 
-                                    if trip_updates.len() > 0 {
-                                        let trip_update = trip_updates[0].1;
-                                        let trip_update_id = trip_updates[0].0;
+                                        if trip_updates.len() > 0 {
+                                            let trip_update = trip_updates[0].1;
+                                            let trip_update_id = trip_updates[0].0;
 
-                                        if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) {
+                                            if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) {
                                             is_cancelled = true;
                                         } else if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Deleted)
                                         {
@@ -1260,58 +1261,341 @@ pub async fn nearby_from_coords(
                                             }
                                         }
 
-                                        // add to used list
-                                        already_used_trip_update_id.insert(trip_update_id.clone());
+                                            // add to used list
+                                            already_used_trip_update_id
+                                                .insert(trip_update_id.clone());
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        headsign_group.trips.push(DepartingTrip {
-                            trip_id: trip.trip_id.clone(),
-                            gtfs_schedule_start_day: trip.trip_service_date,
-                            departure_realtime: departure_time_rt,
-                            arrival_schedule: None,
-                            arrival_realtime: None,
-                            stop_id: trip.itinerary_options[0].stop_id.clone(),
-                            trip_short_name: trip.trip_short_name.clone(),
-                            tz: trip.timezone.as_ref().unwrap().name().to_string(),
-                            is_frequency: trip.frequencies.is_some(),
-                            platform: platform,
-                            level_id: None,
-                            departure_schedule: match trip.itinerary_options[0]
-                                .departure_time_since_start
-                            {
-                                Some(departure_time_since_start) => Some(
-                                    trip.reference_start_of_service_date.timestamp() as u64
-                                        + trip.trip_start_time as u64
-                                        + departure_time_since_start as u64,
-                                ),
-                                None => match trip.itinerary_options[0].arrival_time_since_start {
-                                    Some(arrival) => Some(
+                            headsign_group.trips.push(DepartingTrip {
+                                trip_id: trip.trip_id.clone(),
+                                gtfs_schedule_start_day: trip.trip_service_date,
+                                departure_realtime: departure_time_rt,
+                                arrival_schedule: None,
+                                arrival_realtime: None,
+                                stop_id: trip.itinerary_options[0].stop_id.clone(),
+                                trip_short_name: trip.trip_short_name.clone(),
+                                tz: trip.timezone.as_ref().unwrap().name().to_string(),
+                                is_frequency: trip.frequencies.is_some(),
+                                platform: platform,
+                                level_id: None,
+                                departure_schedule: match trip.itinerary_options[0]
+                                    .departure_time_since_start
+                                {
+                                    Some(departure_time_since_start) => Some(
                                         trip.reference_start_of_service_date.timestamp() as u64
                                             + trip.trip_start_time as u64
-                                            + arrival as u64,
+                                            + departure_time_since_start as u64,
                                     ),
-                                    None => match trip.itinerary_options[0]
-                                        .interpolated_time_since_start
-                                    {
-                                        Some(interpolated) => Some(
-                                            trip.reference_start_of_service_date.timestamp() as u64
-                                                + trip.trip_start_time as u64
-                                                + interpolated as u64,
-                                        ),
-                                        None => None,
-                                    },
+                                    None => {
+                                        match trip.itinerary_options[0].arrival_time_since_start {
+                                            Some(arrival) => Some(
+                                                trip.reference_start_of_service_date.timestamp()
+                                                    as u64
+                                                    + trip.trip_start_time as u64
+                                                    + arrival as u64,
+                                            ),
+                                            None => match trip.itinerary_options[0]
+                                                .interpolated_time_since_start
+                                            {
+                                                Some(interpolated) => Some(
+                                                    trip.reference_start_of_service_date.timestamp()
+                                                        as u64
+                                                        + trip.trip_start_time as u64
+                                                        + interpolated as u64,
+                                                ),
+                                                None => None,
+                                            },
+                                        }
+                                    }
                                 },
-                            },
-                            is_interpolated: trip.itinerary_options[0]
-                                .interpolated_time_since_start
-                                .is_some(),
-                            gtfs_frequency_start_time: None,
-                            cancelled: is_cancelled,
-                            deleted: deleted,
-                        });
+                                is_interpolated: trip.itinerary_options[0]
+                                    .interpolated_time_since_start
+                                    .is_some(),
+                                gtfs_frequency_start_time: None,
+                                cancelled: is_cancelled,
+                                deleted: deleted,
+                            });
+                        } else {
+                            //duplicate trip based on frequency
+
+                            let frequencies = trip.frequencies.as_ref().unwrap();
+
+                            let mut is_cancelled: bool = false;
+                            let mut deleted: bool = false;
+
+                            let mut departure_time_rt: Option<u64> = None;
+                            let mut platform: Option<String> = None;
+
+                            let stop = stops
+                                .iter()
+                                .find(|x| x.gtfs_id == trip.itinerary_options[0].stop_id);
+
+                            if let Some(stop) = stop {
+                                if let Some(platform_code) = &stop.platform_code {
+                                    platform = Some(platform_code.clone());
+                                }
+                            }
+
+                            //trip start time array
+
+                            let trip_start_times: Vec<u32> = frequencies
+                                .iter()
+                                .flat_map(|frequency| {
+                                    (frequency.start_time..=frequency.end_time)
+                                        .step_by(frequency.headway_secs as usize)
+                                        .collect::<Vec<u32>>()
+                                })
+                                .collect();
+
+                            for scheduled_frequency_start_time in trip_start_times {
+                                if let Some(gtfs_trip_aspenised) = gtfs_trips_aspenised.as_ref() {
+                                    if let Some(trip_update_ids) = gtfs_trip_aspenised
+                                        .trip_id_to_trip_update_ids
+                                        .get(trip.trip_id.as_str())
+                                    {
+                                        if !trip_update_ids.is_empty() {
+                                            // let trip_update_id = trip_rt[0].clone();
+
+                                            let does_trip_set_use_dates = gtfs_trip_aspenised
+                                                .trip_updates
+                                                .get(&trip_update_ids[0])
+                                                .unwrap()
+                                                .trip
+                                                .start_date
+                                                .is_some();
+
+                                            let trip_updates: Vec<(&String, &AspenisedTripUpdate)> =
+                                            trip_update_ids
+                                                .iter()
+                                                .map(|x| {
+                                                    (
+                                                        x,
+                                                        gtfs_trip_aspenised
+                                                            .trip_updates
+                                                            .get(x)
+                                                            .unwrap(),
+                                                    )
+                                                })
+                                                .filter(|(x, trip_update)| 
+                                                    {
+
+                                                        match &trip_update.trip.start_time {
+                                                            Some(trip_update_start_time) => { let seconds = catenary::convert_hhmmss_to_seconds(trip_update_start_time);
+
+                                                                if seconds.is_none() {
+                                                                    return false;
+                                                                }
+         
+                                                                let seconds = seconds.unwrap();
+         
+                                                                scheduled_frequency_start_time == seconds   },
+                                                            None => {
+                                                                return false;
+                                                            }
+                                                        }
+                                                      
+                                                    }
+                                                )
+                                                    
+                                                .filter(
+                                                    |(x, trip_update)| match does_trip_set_use_dates {
+                                                        true => {
+                                                            trip_update.trip.start_date
+                                                                == Some(
+                                                                    trip.trip_service_date
+                                                                )
+                                                        }
+                                                        false => {
+                                                            //if there is only 1 trip update, assign it to the current service date
+    
+                                                            //what is the current trip offset from the reference start of service date
+    
+                                                            let trip_offset = trip.itinerary_options[0].departure_time_since_start.unwrap_or(trip.itinerary_options[0].arrival_time_since_start.unwrap_or(trip.itinerary_options[0].interpolated_time_since_start.unwrap_or(0))) as u64;
+    
+                                                            // get current naive date in the timezone from the earliest item in the trip update
+    
+                                                            let naive_date_approx_guess = trip_update.stop_time_update.iter()
+                                                            .filter(|x| x.departure.is_some() || x.arrival.is_some())
+                                                            .filter_map(|x| {
+                                                                if let Some(departure) = &x.departure {
+                                                                    Some(departure.time)
+                                                                } else {
+                                                                    if let Some(arrival) = &x.arrival {
+                                                                        Some(arrival.time)
+                                                                    } else {
+                                                                        None
+                                                                    }
+                                                                }
+                                                            }).flatten().min();
+    
+                                                            match naive_date_approx_guess {
+                                                                Some(least_num) => {
+                                                                    let tz = trip.timezone.as_ref().unwrap();
+    
+                                                                    let rt_least_naive_date = tz.timestamp(least_num as i64, 0);
+    
+                                                                    let approx_service_date_start = rt_least_naive_date - chrono::Duration::seconds(trip_offset as i64);
+    
+                                                                    let approx_service_date = approx_service_date_start.date();
+    
+                                                                    //score dates within 1 day of the service date
+                                                                    let mut vec_possible_dates: Vec<(chrono::Date<chrono_tz::Tz>, i64)> = vec![];
+    
+                                                                    //iter from day before to day after
+    
+                                                                    let day_before = approx_service_date - chrono::Duration::days(2);
+    
+                                                                    for day in day_before.naive_local().iter_days().take(3) {
+                                                                       //check service id for trip id, then check if calendar is allowed
+    
+                                                                         let service_id = trip.service_id.as_str();
+    
+                                                                        let service = calendar_in_chateau.get(service_id);
+    
+                                                                        if let Some(service) = service {
+                                                                            if catenary::datetime_in_service(&service, day) {
+                                                                                let day_in_tz_midnight = day.and_hms(12, 0, 0).and_local_timezone(*tz).unwrap() - chrono::Duration::hours(12);
+    
+                                                                                let time_delta = rt_least_naive_date.signed_duration_since(day_in_tz_midnight);
+        
+                                                                                vec_possible_dates.push((day_in_tz_midnight.date(), time_delta.num_seconds().abs()));
+                                                                            }
+                                                                        }
+                                                                    }
+    
+                                                                    let best_service_date = vec_possible_dates.iter().min_by_key(|x| x.1);
+    
+                                                                    match best_service_date {
+                                                                        Some(best_service_date) => {
+                                                                            trip.trip_service_date == best_service_date.0.naive_local()
+                                                                        },
+                                                                        None => {
+                                                                            false
+                                                                        }
+                                                                    }
+    
+                                                                },
+                                                                None => {
+                                                                    false
+                                                                }
+                                                            }
+                                                        },
+                                                    },
+                                                )
+                                               //.filter(|(x, trip_update)| {
+                                               //     !already_used_trip_update_id.contains(*x)
+                                               // })
+                                                .collect();
+
+                                            if trip_updates.len() > 0 {
+                                                let trip_update = trip_updates[0].1;
+                                                let trip_update_id = trip_updates[0].0;
+
+                                                if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) {
+                                                is_cancelled = true;
+                                            } else if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Deleted)
+                                            {
+                                                deleted = true;
+                                            } else {
+                                                let relevant_stop_time_update =
+                                                    trip_update.stop_time_update.iter().find(|x| {
+                                                        x.stop_id
+                                                            .as_ref()
+                                                            .map(|compare| compare.as_str())
+                                                            == Some(&trip.itinerary_options[0].stop_id)
+                                                    });
+    
+                                                if let Some(relevant_stop_time_update) =
+                                                    relevant_stop_time_update
+                                                {
+                                                    if let Some(departure) =
+                                                        &relevant_stop_time_update.departure
+                                                    {
+                                                        if let Some(time) = departure.time {
+                                                            departure_time_rt = Some(time as u64);
+                                                        }
+                                                    } else {
+                                                        if let Some(arrival) =
+                                                            &relevant_stop_time_update.arrival
+                                                        {
+                                                            if let Some(time) = arrival.time {
+                                                                departure_time_rt = Some(time as u64);
+                                                            }
+                                                        }
+                                                    }
+    
+                                                    if let Some(platform_id) =
+                                                        &relevant_stop_time_update.platform_string
+                                                    {
+                                                        platform = Some(platform_id.to_string());
+                                                    }
+                                                }
+                                            }
+
+                                                // add to used list
+                                                already_used_trip_update_id
+                                                    .insert(trip_update_id.clone());
+                                            }
+                                        }
+                                    }
+                                }
+
+                                headsign_group.trips.push(DepartingTrip {
+                                    trip_id: trip.trip_id.clone(),
+                                    gtfs_schedule_start_day: trip.trip_service_date,
+                                    departure_realtime: departure_time_rt,
+                                    arrival_schedule: None,
+                                    arrival_realtime: None,
+                                    stop_id: trip.itinerary_options[0].stop_id.clone(),
+                                    trip_short_name: trip.trip_short_name.clone(),
+                                    tz: trip.timezone.as_ref().unwrap().name().to_string(),
+                                    is_frequency: trip.frequencies.is_some(),
+                                    platform: platform.clone(),
+                                    level_id: None,
+                                    departure_schedule: match trip.itinerary_options[0]
+                                        .departure_time_since_start
+                                    {
+                                        Some(departure_time_since_start) => Some(
+                                            trip.reference_start_of_service_date.timestamp() as u64
+                                                + scheduled_frequency_start_time as u64
+                                                + departure_time_since_start as u64,
+                                        ),
+                                        None => {
+                                            match trip.itinerary_options[0].arrival_time_since_start
+                                            {
+                                                Some(arrival) => Some(
+                                                    trip.reference_start_of_service_date.timestamp()
+                                                        as u64
+                                                        + scheduled_frequency_start_time as u64
+                                                        + arrival as u64,
+                                                ),
+                                                None => match trip.itinerary_options[0]
+                                                    .interpolated_time_since_start
+                                                {
+                                                    Some(interpolated) => Some(
+                                                        trip.reference_start_of_service_date
+                                                            .timestamp()
+                                                            as u64
+                                                            + scheduled_frequency_start_time as u64
+                                                            + interpolated as u64,
+                                                    ),
+                                                    None => None,
+                                                },
+                                            }
+                                        }
+                                    },
+                                    is_interpolated: trip.itinerary_options[0]
+                                        .interpolated_time_since_start
+                                        .is_some(),
+                                    gtfs_frequency_start_time: None,
+                                    cancelled: is_cancelled,
+                                    deleted: deleted,
+                                });
+                            }
+                        }
                     }
 
                     headsign_group
@@ -1387,4 +1671,3 @@ pub async fn nearby_from_coords(
         }
     }
 }
-

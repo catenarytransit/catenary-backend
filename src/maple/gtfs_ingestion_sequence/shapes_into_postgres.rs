@@ -87,14 +87,16 @@ pub async fn shapes_into_postgres(
 
             let threshold_degree_broken = match route_type_number {
                 4 => 5.,
-                _ => 1.
+                _ => 1.,
             };
 
             //Lines are only valid in postgres if they contain 2 or more points
             if preshape.len() >= 2 {
                 for (idx, point) in preshape.iter().enumerate().skip(1) {
-                    if (preshape[idx - 1].longitude - point.longitude).abs() > threshold_degree_broken
-                        || (preshape[idx - 1].latitude - point.latitude).abs() > threshold_degree_broken
+                    if (preshape[idx - 1].longitude - point.longitude).abs()
+                        > threshold_degree_broken
+                        || (preshape[idx - 1].latitude - point.latitude).abs()
+                            > threshold_degree_broken
                     {
                         is_line_too_stupidly_broken = true;
                         break;

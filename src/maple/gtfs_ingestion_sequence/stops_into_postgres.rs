@@ -62,8 +62,7 @@ pub async fn stops_into_postgres(
                 )),
                 false => match stop.parent_station.is_some() {
                     true => {
-                        let parent_station =
-                            gtfs.stops.get(stop.parent_station.as_ref().unwrap());
+                        let parent_station = gtfs.stops.get(stop.parent_station.as_ref().unwrap());
                         match parent_station {
                             Some(parent_station) => match parent_station.latitude.is_some()
                                 && parent_station.longitude.is_some()
@@ -96,12 +95,7 @@ pub async fn stops_into_postgres(
 
             let timezone = match &stop.timezone {
                 Some(tz) => stop.timezone.clone(),
-                None => {
-                    tz_search::lookup(
-                        point.as_ref().unwrap().y,
-                        point.as_ref().unwrap().x
-                    )
-                }
+                None => tz_search::lookup(point.as_ref().unwrap().y, point.as_ref().unwrap().x),
             };
 
             let stop_pg = catenary::models::Stop {
