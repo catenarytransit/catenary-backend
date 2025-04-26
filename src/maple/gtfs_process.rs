@@ -85,40 +85,26 @@ pub async fn gtfs_process_feed(
         }
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
             //there's 8184 school buses in the feed. I'm removing them lmfao.
-            let mut gtfs = gtfs;
-
-            let route_ids_to_keep = gtfs
+            let routes = gtfs
                 .routes
-                .iter()
-                .filter_map(|(route_id, route)| match route.desc {
-                    Some(ref desc) => {
-                        if desc.contains("School") {
-                            None
-                        } else {
-                            Some(route_id)
-                        }
-                    }
-                    _ => Some(route_id),
+                .into_iter()
+                .filter(|(_, route)| match route.desc {
+                    Some(ref desc) => !desc.contains("School"),
+                    _ => true,
                 })
-                .cloned()
-                .collect::<BTreeSet<_>>();
+                .collect::<HashMap<String, gtfs_structures::Route>>();
 
-            let trips_to_keep = gtfs
+            let route_ids_to_keep: BTreeSet<_> = routes.keys().cloned().collect();
+
+            let trips = gtfs
                 .trips
-                .iter()
-                .filter_map(|(trip_id, trip)| {
-                    route_ids_to_keep
-                        .contains(&trip.route_id)
-                        .then_some(trip_id)
-                })
-                .cloned()
-                .collect::<BTreeSet<_>>();
+                .into_iter()
+                .filter(|(_, trip)| route_ids_to_keep.contains(&trip.route_id))
+                .collect::<HashMap<String, gtfs_structures::Trip>>();
 
-            gtfs.trips
-                .retain(|trip_id, _| trips_to_keep.contains(trip_id));
-
-            gtfs.routes
-                .retain(|route_id, _| route_ids_to_keep.contains(route_id));
+            let mut gtfs = gtfs;
+            gtfs.routes = routes;
+            gtfs.trips = trips;
 
             println!("Filtered NSW, removed school buses");
             gtfs.print_stats();
@@ -407,42 +393,44 @@ pub async fn gtfs_process_feed(
     } = shape_to_colour(feed_id, &gtfs);
 
     //insert agencies
-    let mut agency_id_already_done: HashSet<Option<&String>> = HashSet::new();
+    use catenary::schema::gtfs::agencies::dsl::agencies;
 
-    for agency in &gtfs.agencies {
-        use catenary::schema::gtfs::agencies::dsl::agencies;
+    let agency_rows: Vec<catenary::models::Agency> = gtfs
+        .agencies
+        .iter()
+        .filter_map(|agency| {
+            // agency id duplication check, might need better handling depending on data
+            if agency.id.is_some() {
+                Some(catenary::models::Agency {
+                    static_onestop_id: feed_id.to_string(),
+                    agency_id: agency.id.clone().unwrap_or_else(|| "".to_string()),
+                    attempt_id: attempt_id.to_string(),
+                    agency_name: agency.name.clone(),
+                    agency_name_translations: None,
+                    agency_url_translations: None,
+                    agency_url: agency.url.clone(),
+                    agency_fare_url: agency.fare_url.clone(),
+                    agency_fare_url_translations: None,
+                    chateau: chateau_id.to_string(),
+                    agency_lang: agency.lang.clone(),
+                    agency_phone: agency.phone.clone(),
+                    agency_timezone: agency.timezone.clone(),
+                })
+            } else {
+                eprintln!("Warning: Agency found without an ID: {:?}", agency);
+                None
+            }
+        })
+        .collect();
 
-        if !agency_id_already_done.contains(&agency.id.as_ref()) {
-            let agency_row = catenary::models::Agency {
-                static_onestop_id: feed_id.to_string(),
-                agency_id: agency.id.clone().unwrap_or_else(|| "".to_string()),
-                attempt_id: attempt_id.to_string(),
-                agency_name: agency.name.clone(),
-                agency_name_translations: None,
-                agency_url_translations: None,
-                agency_url: agency.url.clone(),
-                agency_fare_url: agency.fare_url.clone(),
-                agency_fare_url_translations: None,
-                chateau: chateau_id.to_string(),
-                agency_lang: agency.lang.clone(),
-                agency_phone: agency.phone.clone(),
-                agency_timezone: agency.timezone.clone(),
-            };
-
-            diesel::insert_into(agencies)
-                .values(agency_row)
-                .execute(conn)
-                .await?;
-
-            agency_id_already_done.insert(agency.id.as_ref());
-        } else {
-            eprintln!("Warning! Duplicate agency id found: \n{:?}", agency);
-        }
+    if !agency_rows.is_empty() {
+        diesel::insert_into(agencies)
+            .values(agency_rows)
+            .execute(conn)
+            .await?;
     }
 
     println!("Agency insertion done for {}", feed_id);
-
-    drop(agency_id_already_done);
 
     println!("Inserting shapes for {}", feed_id);
 
