@@ -313,7 +313,7 @@ pub async fn departures_at_stop(
             tz_search::lookup(
                 point_raw.y,
                 point_raw.x,
-            ).unwrap()
+            ).unwrap_or_else(|| String::from("Etc/GMT"))
         }
     };
 
