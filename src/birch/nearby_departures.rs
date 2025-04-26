@@ -1314,7 +1314,7 @@ pub async fn nearby_from_coords(
                                 is_interpolated: trip.itinerary_options[0]
                                     .interpolated_time_since_start
                                     .is_some(),
-                                gtfs_frequency_start_time:None,
+                                gtfs_frequency_start_time: None,
                                 cancelled: is_cancelled,
                                 deleted: deleted,
                             });
@@ -1381,22 +1381,18 @@ pub async fn nearby_from_coords(
                                                 })
                                                 .filter(|(x, trip_update)| 
                                                     {
-
-                                                        match &trip_update.trip.start_time {
-                                                            Some(trip_update_start_time) => { let seconds = catenary::convert_hhmmss_to_seconds(trip_update_start_time);
-
-                                                                if seconds.is_none() {
-                                                                    return false;
-                                                                }
-         
-                                                                let seconds = seconds.unwrap();
-         
-                                                                scheduled_frequency_start_time == seconds   },
-                                                            None => {
-                                                                return false;
-                                                            }
-                                                        }
-                                                      
+                                                        trip_update
+                                                            .trip
+                                                            .start_time
+                                                            .as_ref()
+                                                            .and_then(|trip_update_start_time| {
+                                                                catenary::convert_hhmmss_to_seconds(
+                                                                    trip_update_start_time,
+                                                                )
+                                                            })
+                                                            .map_or(false, |seconds| {
+                                                                scheduled_frequency_start_time == seconds
+                                                            })
                                                     }
                                                 )
                                                     
@@ -1590,7 +1586,12 @@ pub async fn nearby_from_coords(
                                     is_interpolated: trip.itinerary_options[0]
                                         .interpolated_time_since_start
                                         .is_some(),
-                                    gtfs_frequency_start_time: Some(catenary::number_of_seconds_to_hhmmss(scheduled_frequency_start_time).into()),
+                                    gtfs_frequency_start_time: Some(
+                                        catenary::number_of_seconds_to_hhmmss(
+                                            scheduled_frequency_start_time,
+                                        )
+                                        .into(),
+                                    ),
                                     cancelled: is_cancelled,
                                     deleted: deleted,
                                 });
