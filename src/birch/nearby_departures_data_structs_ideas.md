@@ -87,3 +87,5 @@ if the number is exact, simply duplicate the start time until it is finished dup
 ### Code should be broken up into function blocks 
 
 Needs flowchart.
+
+### Grouping should be done by route.

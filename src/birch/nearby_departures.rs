@@ -1431,7 +1431,7 @@ pub async fn nearby_from_coords(
                                                                 Some(least_num) => {
                                                                     let tz = trip.timezone.as_ref().unwrap();
     
-                                                                    let rt_least_naive_date = tz.timestamp(least_num as i64, 0);
+                                                                    let rt_least_naive_date = tz.timestamp_opt(least_num as i64, 0).unwrap();
     
                                                                     let approx_service_date_start = rt_least_naive_date - chrono::Duration::seconds(trip_offset as i64);
     
