@@ -824,10 +824,14 @@ pub fn convert_hhmmss_to_seconds(input: &str) -> Option<u32> {
     if parts.len() != 3 {
         return None;
     }
-    let hours: u32 = parts[0].parse().unwrap();
-    let minutes: u32 = parts[1].parse().unwrap();
-    let seconds: u32 = parts[2].parse().unwrap();
-    Some(hours * 3600 + minutes * 60 + seconds)
+    let hours: Result<u32, _> = parts[0].parse();
+    let minutes: Result<u32, _> = parts[1].parse();
+    let seconds: Result<u32, _> = parts[2].parse();
+
+    match (hours, minutes, seconds) {
+        (Ok(hours), Ok(minutes), Ok(seconds)) => Some(hours * 3600 + minutes * 60 + seconds),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

@@ -1106,30 +1106,14 @@ pub async fn get_trip_init(
 
     let added_seconds_to_ref_midnight = match &query.start_time {
         Some(start_time) => {
-            let start_split: Vec<&str> = start_time.split(':').collect::<Vec<&str>>();
+            let start_time_seconds = catenary::convert_hhmmss_to_seconds(start_time);
 
-            if start_split.len() != 3 {
-                eprintln!("Invalid start time format");
+            if start_time_seconds.is_none() {
+                eprintln!("Invalid start time");
                 return HttpResponse::BadRequest().body("Invalid start time");
             }
 
-            let (h, m, s): (
-                Result<u8, std::num::ParseIntError>,
-                Result<u8, std::num::ParseIntError>,
-                Result<u8, std::num::ParseIntError>,
-            ) = (
-                start_split[0].parse(),
-                start_split[1].parse(),
-                start_split[2].parse(),
-            );
-
-            match (h, m, s) {
-                (Ok(h), Ok(m), Ok(s)) => (h as i64 * 3600) + (m as i64 * 60) + s as i64,
-                _ => {
-                    eprintln!("Invalid start time format");
-                    return HttpResponse::BadRequest().body("Invalid start time");
-                }
-            }
+            start_time_seconds.unwrap() as i64
         }
         None => trip_compressed.start_time as i64,
     };
