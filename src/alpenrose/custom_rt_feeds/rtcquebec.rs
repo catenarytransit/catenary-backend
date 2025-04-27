@@ -18,11 +18,16 @@ pub async fn fetch_rtc_data(
         "192.121.245.31:8118",
         "23.227.39.226:80",
         "23.227.39.191:80",
-        "23.227.39.30:80"
+        "23.227.39.30:80",
     ];
 
     let client_proxy = reqwest::Client::builder()
-        .proxy(reqwest::Proxy::http(http_proxy_addresses[rand::rng().random_range(0..http_proxy_addresses.len())]).unwrap())
+        .proxy(
+            reqwest::Proxy::http(
+                http_proxy_addresses[rand::rng().random_range(0..http_proxy_addresses.len())],
+            )
+            .unwrap(),
+        )
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap();
@@ -32,8 +37,15 @@ pub async fn fetch_rtc_data(
     if let Some(data) = fetch_assigned_node_meta {
         let worker_id = data.worker_id;
 
-        let rtc_gtfs_rt_res =
-            rtc_quebec_gtfs_rt::faire_les_donnees_gtfs_rt(gtfs, client_proxy.clone()).await;
+        let proxy_addresses_vec: Vec<String> =
+            http_proxy_addresses.iter().map(|x| x.to_string()).collect();
+
+        let rtc_gtfs_rt_res = rtc_quebec_gtfs_rt::faire_les_donnees_gtfs_rt(
+            gtfs,
+            client_proxy.clone(),
+            Some(&proxy_addresses_vec),
+        )
+        .await;
 
         match rtc_gtfs_rt_res {
             Ok(rtc_gtfs_rt_res) => {

@@ -16,13 +16,13 @@ use catenary::make_degree_length_as_distance_from_point;
 use catenary::models::ItineraryPatternMeta;
 use catenary::models::ItineraryPatternRow;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use chrono::Datelike;
 use compact_str::CompactString;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel::dsl::sql;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
-use chrono::Datelike;
 use diesel::sql_types::Bool;
 use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
@@ -73,7 +73,7 @@ struct StopEvents {
     chateau: String,
     stop_id: String,
     uses_primary_stop: bool,
-    unscheduled_trip: bool
+    unscheduled_trip: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -388,13 +388,15 @@ pub async fn departures_at_stop(
         greater_than_naive_date.year(),
         greater_than_naive_date.month(),
         greater_than_naive_date.day(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut date_iter_end = chrono::NaiveDate::from_ymd_opt(
         less_than_naive_date.year(),
         less_than_naive_date.month(),
         less_than_naive_date.day(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut date_iter_vec: Vec<chrono::NaiveDate> = vec![];
 
@@ -404,8 +406,6 @@ pub async fn departures_at_stop(
     }
 
     //look through time compressed and decompress the itineraries, using timezones and calendar calcs
-
-
 
     //look through gtfs-rt times and hydrate the itineraries
 
