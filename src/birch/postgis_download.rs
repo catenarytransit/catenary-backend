@@ -1018,6 +1018,9 @@ pub async fn shapes_intercity_rail_meta(req: HttpRequest) -> impl Responder {
             String::from(
                 "https://birch_intercity_rail_shape_2.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}",
             ),
+            String::from(
+                "https://birch_intercity_rail_shape_3.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}",
+            ),
         ],
         attribution: None,
     };
