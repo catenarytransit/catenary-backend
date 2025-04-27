@@ -2,6 +2,7 @@ use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id_kvclient;
 use chrono::Timelike;
 use prost::Message;
+use rand::Rng;
 use std::collections::HashSet;
 
 pub async fn fetch_rtc_data(
@@ -10,7 +11,18 @@ pub async fn fetch_rtc_data(
     gtfs: &gtfs_structures::Gtfs,
     client: &reqwest::Client,
 ) {
-    let client = reqwest::Client::new();
+    let http_proxy_addresses = [
+        "3.99.131.31:3128",
+        "51.79.80.224:3535",
+        "69.70.244.34:80",
+        "192.121.245.31:8118"
+    ];
+
+    let client_proxy = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::http(http_proxy_addresses[rand::rng().random_range(0..http_proxy_addresses.len())]).unwrap())
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
 
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 

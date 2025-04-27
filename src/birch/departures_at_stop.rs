@@ -73,6 +73,7 @@ struct StopEvents {
     chateau: String,
     stop_id: String,
     uses_primary_stop: bool,
+    unscheduled_trip: bool
 }
 
 #[derive(Serialize, Clone, Debug)]
