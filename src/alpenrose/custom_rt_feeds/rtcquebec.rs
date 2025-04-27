@@ -32,7 +32,7 @@ pub async fn fetch_rtc_data(
         let worker_id = data.worker_id;
 
         let rtc_gtfs_rt_res =
-            rtc_quebec_gtfs_rt::faire_les_donnees_gtfs_rt(gtfs, client.clone()).await;
+            rtc_quebec_gtfs_rt::faire_les_donnees_gtfs_rt(gtfs, client_proxy.clone()).await;
 
         match rtc_gtfs_rt_res {
             Ok(rtc_gtfs_rt_res) => {
