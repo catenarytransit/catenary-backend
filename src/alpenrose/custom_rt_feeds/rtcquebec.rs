@@ -15,7 +15,9 @@ pub async fn fetch_rtc_data(
         "3.99.131.31:3128",
         "51.79.80.224:3535",
         "69.70.244.34:80",
-        "192.121.245.31:8118"
+        "192.121.245.31:8118",
+        "23.227.39.226:80",
+        "23.227.39.191:80"
     ];
 
     let client_proxy = reqwest::Client::builder()
@@ -74,6 +76,13 @@ pub async fn fetch_rtc_data(
                     if !list_of_route_ids.contains("1-801") {
                         eprintln!(
                             "Failed to fetch Rtc Quebec data, route 1-801 is missing during busy hours"
+                        );
+                        return;
+                    }
+
+                    if !list_of_route_ids.contains("1-802") {
+                        eprintln!(
+                            "Failed to fetch Rtc Quebec data, route 1-802 is missing during busy hours"
                         );
                         return;
                     }
