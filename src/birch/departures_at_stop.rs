@@ -22,12 +22,14 @@ use diesel::SelectableHelper;
 use diesel::dsl::sql;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
+use chrono::Datelike;
 use diesel::sql_types::Bool;
 use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 // should be able to detect when a stop has detoured to this stop or detoured away from this stop
@@ -340,6 +342,11 @@ pub async fn departures_at_stop(
         }
         trip_compressed_btreemap_by_chateau
             .insert(chateau_id_to_search.clone(), trip_compressed_btreemap);
+
+        let service_ids_to_search = trips
+            .iter()
+            .map(|x| x.service_id.clone())
+            .collect::<BTreeSet<CompactString>>();
     }
 
     //query added trips and modifications by stop id, and also matching trips in chateau
@@ -376,7 +383,28 @@ pub async fn departures_at_stop(
 
     //iter from greater than naive date to less than naive date inclusive
 
+    let mut date_iter = chrono::NaiveDate::from_ymd_opt(
+        greater_than_naive_date.year(),
+        greater_than_naive_date.month(),
+        greater_than_naive_date.day(),
+    ).unwrap();
+
+    let mut date_iter_end = chrono::NaiveDate::from_ymd_opt(
+        less_than_naive_date.year(),
+        less_than_naive_date.month(),
+        less_than_naive_date.day(),
+    ).unwrap();
+
+    let mut date_iter_vec: Vec<chrono::NaiveDate> = vec![];
+
+    while date_iter <= date_iter_end {
+        date_iter_vec.push(date_iter);
+        date_iter = date_iter.succ_opt().unwrap();
+    }
+
     //look through time compressed and decompress the itineraries, using timezones and calendar calcs
+
+
 
     //look through gtfs-rt times and hydrate the itineraries
 
