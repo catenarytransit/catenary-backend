@@ -256,7 +256,7 @@ pub async fn download_return_eligible_feeds(
     restrict_to_feed_id: &Option<String>,
     transitland_path: &str,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
-    let threads: usize = 32;
+    let threads: usize = 64;
 
     if !std::path::Path::new(gtfs_temp_storage).exists() {
         fs::create_dir(gtfs_temp_storage)
