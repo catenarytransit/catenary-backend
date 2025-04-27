@@ -20,7 +20,7 @@ pub async fn openrailwaymap_proxy(path: actix_web::web::Path<String>) -> impl Re
                     *tile = tile_url
                         .replace(
                             "https://openrailwaymap.fly.dev/",
-                            "https://birch.catenarymaps.org/openrailwaymap_proxy/",
+                            "https://birch_orm1.catenarymaps.org/openrailwaymap_proxy/",
                         )
                         .into();
                 }
