@@ -77,6 +77,7 @@ mod terrain_tiles_proxy;
 use terrain_tiles_proxy::proxy_for_maptiler_terrain_tiles;
 mod block_api;
 mod nearby_departuresv2;
+mod openrailwaymap_proxy;
 mod stop_preview;
 mod vehicle_api;
 
@@ -733,6 +734,7 @@ async fn main() -> std::io::Result<()> {
             .service(block_api::block_api)
             .service(size_bbox_zoom_birch)
             .service(stop_preview::query_stops_preview)
+            .service(openrailwaymap_proxy::openrailwaymap_proxy)
             //   .service(nearby_departuresv2::nearby_from_coords_v2)
             //we do some trolling
             .service(web::redirect(
