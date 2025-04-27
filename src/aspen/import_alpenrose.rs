@@ -716,6 +716,19 @@ pub async fn new_rt_data(
                             None => None,
                         };
 
+                        if compressed_trip.is_none() {
+                            for trip_update in trip_update.stop_time_update.iter() {
+                                if let Some(stop_id) = &trip_update.stop_id {
+                                    stop_id_to_non_scheduled_trip_ids
+                                        .entry(stop_id.clone().into())
+                                        .and_modify(|x| {
+                                            x.push(trip_update_entity.id.clone().into())
+                                        })
+                                        .or_insert(vec![trip_update_entity.id.clone().into()]);
+                                }
+                            }
+                        }
+
                         let last_non_cancelled_stop_id = trip_update
                             .stop_time_update
                             .iter()
@@ -958,6 +971,19 @@ pub async fn new_rt_data(
                                     .entry(trip_id.clone().into())
                                     .and_modify(|x| x.push(trip_update_entity.id.clone().into()))
                                     .or_insert(vec![trip_update_entity.id.clone().into()]);
+                            }
+                        }
+
+                        for modification in trip_modification.modifications.iter() {
+                            for stop_time_update in modification.replacement_stops.iter() {
+                                if let Some(stop_id) = &stop_time_update.stop_id {
+                                    stop_id_to_trip_modification_ids
+                                        .entry(stop_id.clone().into())
+                                        .and_modify(|x| {
+                                            x.push(trip_update_entity.id.clone().into())
+                                        })
+                                        .or_insert(vec![trip_update_entity.id.clone().into()]);
+                                }
                             }
                         }
                     }
