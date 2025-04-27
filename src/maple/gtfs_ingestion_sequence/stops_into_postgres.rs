@@ -81,6 +81,10 @@ pub async fn stops_into_postgres(
                 },
             };
 
+            if point.is_none() {
+                continue;
+            }
+
             if point.as_ref().unwrap().x < -180.0
                 || point.as_ref().unwrap().x > 180.0
                 || point.as_ref().unwrap().y < -90.0
