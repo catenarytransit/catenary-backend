@@ -618,7 +618,10 @@ pub async fn new_rt_data(
                                 longitude: position.longitude,
                                 bearing: position.bearing,
                                 odometer: position.odometer,
-                                speed: position.speed,
+                                speed: match chateau_id.as_str() {
+                                    "vy~yhtymä~oyj" => position.speed.map(|x| x/3.6),
+                                    _ => position.speed,
+                                },
                                 }),
                             timestamp: vehicle_pos.timestamp,
                             vehicle: vehicle_pos.vehicle.as_ref().map(|vehicle| AspenisedVehicleDescriptor {

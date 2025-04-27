@@ -17,7 +17,12 @@ pub async fn openrailwaymap_proxy(path: actix_web::web::Path<String>) -> impl Re
         if let Some(tiles) = json["tiles"].as_array_mut() {
             for tile in tiles {
                 if let Some(tile_url) = tile.as_str() {
-                    *tile = tile_url.replace("https://openrailwaymap.fly.dev/", "https://birch.catenarymaps.org/openrailwaymap_proxy/").into();
+                    *tile = tile_url
+                        .replace(
+                            "https://openrailwaymap.fly.dev/",
+                            "https://birch.catenarymaps.org/openrailwaymap_proxy/",
+                        )
+                        .into();
                 }
             }
         }
