@@ -870,12 +870,9 @@ pub fn make_degree_length_as_distance_from_point(point: &geo::Point, distance_me
 }
 
 pub fn make_calendar_structure_from_pg(
-    services_calendar_lookup_queries_to_perform: Vec<
-        diesel::QueryResult<Vec<crate::models::Calendar>>,
-    >,
+    services_calendar_lookup_queries_to_perform: Vec<Vec<crate::models::Calendar>>,
     services_calendar_dates_lookup_queries_to_perform: Vec<
-        diesel::QueryResult<Vec<crate::models::CalendarDate>>,
-    >,
+        Vec<crate::models::CalendarDate>>,
 ) -> Result<
     BTreeMap<String, BTreeMap<String, crate::CalendarUnified>>,
     Box<dyn std::error::Error + Sync + Send>,
@@ -884,11 +881,6 @@ pub fn make_calendar_structure_from_pg(
         BTreeMap::new();
 
     for calendar_group in services_calendar_lookup_queries_to_perform {
-        if let Err(calendar_group_err) = calendar_group {
-            return Err(Box::new(calendar_group_err));
-        }
-
-        let calendar_group = calendar_group.unwrap();
 
         let chateau = match calendar_group.get(0) {
             Some(calendar) => calendar.chateau.clone(),
@@ -916,11 +908,6 @@ pub fn make_calendar_structure_from_pg(
     }
 
     for calendar_date_group in services_calendar_dates_lookup_queries_to_perform {
-        if let Err(calendar_date_group) = calendar_date_group {
-            return Err(Box::new(calendar_date_group));
-        }
-
-        let calendar_date_group = calendar_date_group.unwrap();
 
         if !calendar_date_group.is_empty() {
             let chateau = match calendar_date_group.get(0) {
