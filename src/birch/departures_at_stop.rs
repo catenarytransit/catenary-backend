@@ -17,6 +17,7 @@ use catenary::models::ItineraryPatternMeta;
 use catenary::models::ItineraryPatternRow;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use chrono::Datelike;
+use chrono::NaiveDate;
 use compact_str::CompactString;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
@@ -31,6 +32,39 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItinOption {
+    pub onestop_feed_id: String,
+    pub attempt_id: String,
+    pub arrival_time_since_start: Option<i32>,
+    pub departure_time_since_start: Option<i32>,
+    pub interpolated_time_since_start: Option<i32>,
+    pub stop_id: CompactString,
+    pub chateau: CompactString,
+    pub gtfs_stop_sequence: u32,
+    pub trip_headsign: Option<String>,
+    pub trip_headsign_translations: Option<serde_json::Value>,
+    pub timezone: String,
+    pub route_id: CompactString,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ValidTripSet {
+    pub chateau_id: String,
+    pub trip_id: CompactString,
+    pub frequencies: Option<Vec<gtfs_structures::Frequency>>,
+    pub trip_service_date: NaiveDate,
+    pub itinerary_options: Vec<ItinOption>,
+    pub reference_start_of_service_date: chrono::DateTime<chrono_tz::Tz>,
+    pub itinerary_pattern_id: String,
+    pub direction_pattern_id: String,
+    pub route_id: CompactString,
+    pub timezone: Option<chrono_tz::Tz>,
+    pub trip_start_time: u32,
+    pub trip_short_name: Option<CompactString>,
+    pub service_id: CompactString,
+}
 
 // should be able to detect when a stop has detoured to this stop or detoured away from this stop
 
@@ -431,7 +465,7 @@ pub async fn departures_at_stop(
     )
     .unwrap();
 
-    let mut date_iter_end = chrono::NaiveDate::from_ymd_opt(
+    let date_iter_end = chrono::NaiveDate::from_ymd_opt(
         less_than_naive_date.year(),
         less_than_naive_date.month(),
         less_than_naive_date.day(),
@@ -444,6 +478,8 @@ pub async fn departures_at_stop(
         date_iter_vec.push(date_iter);
         date_iter = date_iter.succ_opt().unwrap();
     }
+
+    //fetch data from realtime server
 
     //look through time compressed and decompress the itineraries, using timezones and calendar calcs
 

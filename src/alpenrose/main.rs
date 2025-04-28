@@ -158,8 +158,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let make_lease = etcd
         .lease_grant(
-            //30 seconds
-            30,
+            //15 seconds
+            15,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id)),
         )
         .await?;
