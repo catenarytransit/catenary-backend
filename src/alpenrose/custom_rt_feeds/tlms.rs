@@ -80,16 +80,38 @@ pub async fn fetch_tlms_data(
                         let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(
                             &worker_metadata.socket,
                         )
-                        .await
-                        .unwrap();
+                        .await;
 
-                        let mut dresden_rt_data = dresden_rt_data;
+                        if let Ok(aspen_client) = aspen_client {
+                            println!(
+                                "Successfully connected to Aspen at {}",
+                                worker_metadata.socket
+                            );
 
-                        //replace route ids properly
+                            let mut dresden_rt_data = dresden_rt_data;
 
-                        for entity in dresden_rt_data.vehicle_positions.entity.iter_mut() {
-                            entity.vehicle.as_mut().map(|vehicle| {
-                                vehicle.trip.as_mut().map(|trip| {
+                            //replace route ids properly
+
+                            for entity in dresden_rt_data.vehicle_positions.entity.iter_mut() {
+                                entity.vehicle.as_mut().map(|vehicle| {
+                                    vehicle.trip.as_mut().map(|trip| {
+                                        if let Some(existing_route_id) = &trip.route_id {
+                                            if let Some(lookup) =
+                                                route_id_to_short_name.get(existing_route_id)
+                                            {
+                                                trip.route_id = Some(lookup.clone());
+                                            }
+                                        }
+
+                                        trip.trip_id = Some("Unknown".to_string());
+                                    });
+                                });
+                            }
+
+                            for entity in dresden_rt_data.trip_updates.entity.iter_mut() {
+                                entity.trip_update.as_mut().map(|trip_update| {
+                                    let trip = &mut trip_update.trip;
+
                                     if let Some(existing_route_id) = &trip.route_id {
                                         if let Some(lookup) =
                                             route_id_to_short_name.get(existing_route_id)
@@ -100,58 +122,45 @@ pub async fn fetch_tlms_data(
 
                                     trip.trip_id = Some("Unknown".to_string());
                                 });
-                            });
-                        }
+                            }
 
-                        for entity in dresden_rt_data.trip_updates.entity.iter_mut() {
-                            entity.trip_update.as_mut().map(|trip_update| {
-                                let trip = &mut trip_update.trip;
+                            let dresden_rt_data = dresden_rt_data;
 
-                                if let Some(existing_route_id) = &trip.route_id {
-                                    if let Some(lookup) =
-                                        route_id_to_short_name.get(existing_route_id)
-                                    {
-                                        trip.route_id = Some(lookup.clone());
-                                    }
+                            let tarpc_send_to_aspen = aspen_client
+                                .from_alpenrose(
+                                    tarpc::context::current(),
+                                    worker_metadata.chateau_id.clone(),
+                                    String::from(feed_id),
+                                    Some(dresden_rt_data.vehicle_positions.encode_to_vec()),
+                                    None,
+                                    None,
+                                    true,
+                                    true,
+                                    false,
+                                    Some(200),
+                                    None,
+                                    None,
+                                    duration_since_unix_epoch().as_millis() as u64,
+                                )
+                                .await;
+
+                            match tarpc_send_to_aspen {
+                                Ok(_) => {
+                                    println!(
+                                        "Successfully sent dresden f-tlms~rt data to {}, feed {} to chateau {}",
+                                        worker_metadata.socket, feed_id, worker_metadata.chateau_id
+                                    );
                                 }
-
-                                trip.trip_id = Some("Unknown".to_string());
-                            });
-                        }
-
-                        let dresden_rt_data = dresden_rt_data;
-
-                        let tarpc_send_to_aspen = aspen_client
-                            .from_alpenrose(
-                                tarpc::context::current(),
-                                worker_metadata.chateau_id.clone(),
-                                String::from(feed_id),
-                                Some(dresden_rt_data.vehicle_positions.encode_to_vec()),
-                                None,
-                                None,
-                                true,
-                                true,
-                                false,
-                                Some(200),
-                                None,
-                                None,
-                                duration_since_unix_epoch().as_millis() as u64,
-                            )
-                            .await;
-
-                        match tarpc_send_to_aspen {
-                            Ok(_) => {
-                                println!(
-                                    "Successfully sent dresden f-tlms~rt data to {}, feed {} to chateau {}",
-                                    worker_metadata.socket, feed_id, worker_metadata.chateau_id
-                                );
+                                Err(e) => {
+                                    eprintln!(
+                                        "{}: Error sending data to {}: {}",
+                                        feed_id, worker_id, e
+                                    );
+                                }
                             }
-                            Err(e) => {
-                                eprintln!(
-                                    "{}: Error sending data to {}: {}",
-                                    feed_id, worker_id, e
-                                );
-                            }
+                        } else {
+                            eprintln!("Failed to connect to Aspen at {}", worker_metadata.socket);
+                            return;
                         }
                     }
                     _ => {

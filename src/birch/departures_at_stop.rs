@@ -388,13 +388,8 @@ pub async fn departures_at_stop(
 
         let calendar: diesel::prelude::QueryResult<Vec<catenary::models::Calendar>> =
             catenary::schema::gtfs::calendar::dsl::calendar
-                .filter(
-                    catenary::schema::gtfs::calendar::chateau
-                        .eq(chateau_id_to_search.clone()),
-                )
-                .filter(
-                    catenary::schema::gtfs::calendar::service_id.eq_any(&service_ids_to_search),
-                )
+                .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_id_to_search.clone()))
+                .filter(catenary::schema::gtfs::calendar::service_id.eq_any(&service_ids_to_search))
                 .select(catenary::models::Calendar::as_select())
                 .load::<catenary::models::Calendar>(conn)
                 .await;
@@ -402,27 +397,25 @@ pub async fn departures_at_stop(
 
         calender_responses.push(calendar);
 
-        let calendar_dates: diesel::prelude::QueryResult<
-            Vec<catenary::models::CalendarDate>,
-        > = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
-            .filter(
-                catenary::schema::gtfs::calendar_dates::chateau
-                    .eq(chateau_id_to_search.clone()),
-            )
-            .filter(
-                catenary::schema::gtfs::calendar_dates::service_id.eq_any(&service_ids_to_search),
-            )
-            .select(catenary::models::CalendarDate::as_select())
-            .load::<catenary::models::CalendarDate>(conn)
-            .await;
+        let calendar_dates: diesel::prelude::QueryResult<Vec<catenary::models::CalendarDate>> =
+            catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                .filter(
+                    catenary::schema::gtfs::calendar_dates::chateau
+                        .eq(chateau_id_to_search.clone()),
+                )
+                .filter(
+                    catenary::schema::gtfs::calendar_dates::service_id
+                        .eq_any(&service_ids_to_search),
+                )
+                .select(catenary::models::CalendarDate::as_select())
+                .load::<catenary::models::CalendarDate>(conn)
+                .await;
         let calendar_dates = calendar_dates.unwrap();
         calendar_dates_responses.push(calendar_dates);
     }
 
-    let calendar_structure = make_calendar_structure_from_pg(
-        calender_responses,
-        calendar_dates_responses
-    ).unwrap();
+    let calendar_structure =
+        make_calendar_structure_from_pg(calender_responses, calendar_dates_responses).unwrap();
 
     //query added trips and modifications by stop id, and also matching trips in chateau
 

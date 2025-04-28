@@ -834,9 +834,10 @@ pub async fn nearby_from_coords(
     );
 
     let calendar_structure = make_calendar_structure_from_pg(
-        services_calendar_lookup_queries_to_perform.into_iter()
-        .filter_map(|x| x.ok())
-        .collect::<Vec<Vec<catenary::models::Calendar>>>(),
+        services_calendar_lookup_queries_to_perform
+            .into_iter()
+            .filter_map(|x| x.ok())
+            .collect::<Vec<Vec<catenary::models::Calendar>>>(),
         services_calendar_dates_lookup_queries_to_perform
             .into_iter()
             .filter_map(|x| x.ok())
