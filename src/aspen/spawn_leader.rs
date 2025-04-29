@@ -18,7 +18,7 @@ async fn main() {
     let etcd_username = std::env::var("ETCD_USERNAME");
 
     let etcd_password = std::env::var("ETCD_PASSWORD");
-    let etcd_lease_id_for_this_worker: i64 = rand::thread_rng().gen_range(0..i64::MAX);
+    let etcd_lease_id_for_this_worker: i64 = rand::rng().random_range(0..i64::MAX);
     let etcd_connect_options: Option<etcd_client::ConnectOptions> =
         match (etcd_username, etcd_password) {
             (Ok(username), Ok(password)) => {

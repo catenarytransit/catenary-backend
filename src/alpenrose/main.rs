@@ -133,7 +133,9 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let etcd_urls_original =
         std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
-    let etcd_urls = etcd_urls_original.split(',').collect::<Vec<&str>>();
+    let etcd_urls = etcd_urls_original.split(',').map(|x| x.to_string()).collect::<Vec<String>>();
+
+    let etcd_urls = Arc::new(etcd_urls);
 
     let etcd_username = std::env::var("ETCD_USERNAME");
 
@@ -150,16 +152,16 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let arc_etcd_connection_options = Arc::new(etcd_connection_options.clone());
 
     let mut etcd =
-        etcd_client::Client::connect(&etcd_urls, etcd_connection_options.clone()).await?;
+        etcd_client::Client::connect(etcd_urls.as_ref(), etcd_connection_options.clone()).await?;
 
     println!("Connected to etcd");
 
-    let etcd_lease_id: i64 = rand::thread_rng().random_range(0..i64::MAX);
+    let etcd_lease_id: i64 = rand::rng().random_range(0..i64::MAX);
 
     let make_lease = etcd
         .lease_grant(
-            //15 seconds
-            15,
+            //30 seconds
+            30,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id)),
         )
         .await?;
@@ -212,6 +214,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     loop {
         let is_online = online::tokio::check(Some(5)).await.is_ok();
+
+        let mut etcd = etcd.clone();
 
         if is_online {
             //renew the etcd lease
@@ -361,8 +365,19 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 }
             }
 
-            //renew the lease
-            let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
+            // Spawn a background task to renew the etcd lease
+            
+                let mut etcd = etcd.clone();
+                let lease_id = etcd_lease_id;
+                
+                let etcd_keep_alive_tokio = tokio::spawn(async move {
+                    
+                        match etcd.lease_keep_alive(lease_id).await {
+                            Ok(_) => (),
+                            Err(e) => eprintln!("Failed to renew lease: {}", e),
+                        }
+                    
+                });
 
             //get the feed data from the feeds assigned to this worker
 
@@ -374,12 +389,21 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&amtrak_gtfs),
                 Arc::clone(&chicago_trips_str),
                 Arc::clone(&rtc_quebec_gtfs),
-                &etcd_urls,
-                &etcd_connection_options,
-                &etcd_lease_id,
+                etcd_urls.clone(),
+                etcd_connection_options.clone(),
+                etcd_lease_id,
                 hashes_of_data.clone(),
             )
             .await?;
+
+            //check if the worker is still alive
+
+            let tokio_checker = tokio::join!(etcd_keep_alive_tokio);
+
+            if let Err(e) = tokio_checker.0 {
+                eprintln!("Error in tokio checker: {}", e);
+                Err(e)?;
+            }
         } else {
             //revoke the lease
 

@@ -415,7 +415,7 @@ pub mod unzip_uk {
     use std::io::Read;
     pub async fn get_raw_gtfs_rt(
         client: &reqwest::Client,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Sync + Send>> {
         let url = "https://data.bus-data.dft.gov.uk/avl/download/gtfsrt";
         let response = client.get(url).send().await?;
         let bytes = response.bytes().await?;

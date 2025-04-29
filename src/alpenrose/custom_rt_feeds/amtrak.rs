@@ -7,7 +7,7 @@ pub async fn fetch_amtrak_data(
     feed_id: &str,
     gtfs: &gtfs_structures::Gtfs,
     client: &reqwest::Client,
-) {
+) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 
     if let Some(data) = fetch_assigned_node_meta {
@@ -22,9 +22,8 @@ pub async fn fetch_amtrak_data(
                 let trip_data = amtrak_gtfs_rt.trip_updates.encode_to_vec();
                 let alert_data = amtrak_gtfs_rt.alerts.encode_to_vec();
 
-                let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
-                    .await
-                    .unwrap();
+                let aspen_client =
+                    catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket).await?;
 
                 let tarpc_send_to_aspen = aspen_client
                     .from_alpenrose(
@@ -53,12 +52,14 @@ pub async fn fetch_amtrak_data(
                     }
                 }
             }
-            _ => {
+            Err(e) => {
                 eprintln!("Failed to fetch Amtrak data");
-                eprintln!("{:?}", amtrak_gtfs_rt.unwrap_err());
+                eprintln!("{:?}", e);
             }
         }
     } else {
         println!("No assigned node found for Amtrak");
     }
+
+    Ok(())
 }

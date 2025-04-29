@@ -23,6 +23,9 @@ pub struct RealtimeFeedFetch {
     pub fetch_interval_ms: Option<i32>,
 }
 
+unsafe impl Send for RealtimeFeedFetch {}
+unsafe impl Sync for RealtimeFeedFetch {}
+
 pub async fn get_feed_metadata(
     arc_conn_pool: Arc<CatenaryPostgresPool>,
 ) -> Result<Vec<RealtimeFeedFetch>, Box<dyn Error + Sync + Send>> {

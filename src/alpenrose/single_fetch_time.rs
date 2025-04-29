@@ -81,20 +81,26 @@ pub async fn single_fetch_time(
     amtrak_gtfs: Arc<gtfs_structures::Gtfs>, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
     chicago_text_str: Arc<Option<String>>,
     rtcquebec_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
-    etcd_urls: &Vec<&str>,
-    etcd_connection_options: &Option<etcd_client::ConnectOptions>,
-    lease_id: &i64,
+    etcd_urls: Arc<Vec<String>>,
+    etcd_connection_options: Option<etcd_client::ConnectOptions>,
+    lease_id: i64,
     hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let start = Instant::now();
 
     let assignments_lock = assignments.read().await;
 
-    let mut etcd = etcd_client::Client::connect(etcd_urls, etcd_connection_options.clone())
-        .await
-        .unwrap();
+    let etcd = etcd_client::Client::connect(etcd_urls.as_ref(), etcd_connection_options)
+        .await?;
 
-    futures::stream::iter(assignments_lock.iter().map(|(feed_id, assignment)| {
+    futures::stream::iter(assignments_lock.iter()
+    .map(|(feed_id, assignment)| {
+        let feed_id = feed_id.clone();
+        let assignment = assignment.clone();
+
+        (feed_id, assignment)
+    })
+    .map(|(feed_id, assignment)| {
         let client = client.clone();
         let hashes_of_data = Arc::clone(&hashes_of_data);
         let last_fetch_per_feed = last_fetch_per_feed.clone();
@@ -138,12 +144,12 @@ pub async fn single_fetch_time(
             last_fetch_per_feed.insert(feed_id.clone(), Instant::now());
 
             let vehicle_positions_request =
-                make_reqwest_for_url(UrlType::VehiclePositions, assignment, client.clone());
+                make_reqwest_for_url(UrlType::VehiclePositions, &assignment, client.clone());
 
             let trip_updates_request =
-                make_reqwest_for_url(UrlType::TripUpdates, assignment, client.clone());
+                make_reqwest_for_url(UrlType::TripUpdates, &assignment, client.clone());
 
-            let alerts_request = make_reqwest_for_url(UrlType::Alerts, assignment, client.clone());
+            let alerts_request = make_reqwest_for_url(UrlType::Alerts, &assignment, client.clone());
 
             //run all requests concurrently
             let vehicle_positions_future =
@@ -177,13 +183,13 @@ pub async fn single_fetch_time(
                     || (trip_updates_http_status == Some(429))
                     || (alerts_http_status == Some(429))
                 {
-                    println!("{}: 429 Rate limited", feed_id);
+                    println!("{}: 429 Rate limited", &feed_id);
                     return;
                 }
 
                 //lookup currently assigned realtime dataset in zookeeper
                 let fetch_assigned_node_meta =
-                    get_node_for_realtime_feed_id_kvclient(&mut kv_client, feed_id).await;
+                    get_node_for_realtime_feed_id_kvclient(&mut kv_client, &feed_id).await;
 
                 match fetch_assigned_node_meta {
                     Some(data) => {
@@ -209,7 +215,7 @@ pub async fn single_fetch_time(
                                             cleanup_response(
                                                 response,
                                                 UrlType::VehiclePositions,
-                                                feed_id,
+                                                &feed_id,
                                                 Arc::clone(&hashes_of_data),
                                             )
                                             .await
@@ -222,7 +228,7 @@ pub async fn single_fetch_time(
                                             cleanup_response(
                                                 response,
                                                 UrlType::TripUpdates,
-                                                feed_id,
+                                                &feed_id,
                                                 Arc::clone(&hashes_of_data),
                                             )
                                             .await
@@ -235,7 +241,7 @@ pub async fn single_fetch_time(
                                             cleanup_response(
                                                 response,
                                                 UrlType::Alerts,
-                                                feed_id,
+                                                &feed_id,
                                                 Arc::clone(&hashes_of_data),
                                             )
                                             .await
@@ -329,26 +335,26 @@ pub async fn single_fetch_time(
             } else {
                 match feed_id.as_str() {
                     "f-amtrak~rt" => {
-                        custom_rt_feeds::amtrak::fetch_amtrak_data(
+                        let _ = custom_rt_feeds::amtrak::fetch_amtrak_data(
                             &mut kv_client,
-                            feed_id,
+                            &feed_id,
                             &amtrak_gtfs,
                             &client,
                         )
                         .await;
                     }
                     "f-viarail~rt" => {
-                        custom_rt_feeds::viarail::fetch_via_data(&mut kv_client, feed_id, &client)
+                        custom_rt_feeds::viarail::fetch_via_data(&mut kv_client, &feed_id, &client)
                             .await;
                     }
                     "f-mta~nyc~rt~lirr" => {
-                        custom_rt_feeds::mta::fetch_mta_lirr_data(&mut kv_client, feed_id, &client)
+                        let _ = custom_rt_feeds::mta::fetch_mta_lirr_data(&mut kv_client, &feed_id, &client)
                             .await;
                     }
                     "f-mta~nyc~rt~mnr" => {
-                        custom_rt_feeds::mta::fetch_mta_metronorth_data(
+                        let _ = custom_rt_feeds::mta::fetch_mta_metronorth_data(
                             &mut kv_client,
-                            feed_id,
+                            &feed_id,
                             &client,
                         )
                         .await;
@@ -356,20 +362,20 @@ pub async fn single_fetch_time(
                     "f-metrolinktrains~extra~rt" => {
                         custom_rt_feeds::metrolink_extra::fetch_data(
                             &mut kv_client,
-                            feed_id,
+                            &feed_id,
                             &client,
                         )
                         .await
                     }
                     "f-bus~dft~gov~uk~rt" => {
-                        custom_rt_feeds::uk::fetch_dft_bus_data(&mut kv_client, feed_id, &client)
+                        let _ = custom_rt_feeds::uk::fetch_dft_bus_data(&mut kv_client, &feed_id, &client)
                             .await;
                     }
                     "f-dp3-cta~rt" => match chicago_text_str.as_ref() {
                         Some(chicago_text_str) => {
                             custom_rt_feeds::chicagotransit::fetch_chicago_data(
                                 &mut kv_client,
-                                feed_id,
+                                &feed_id,
                                 &client,
                                 chicago_text_str.as_str(),
                             )
@@ -378,14 +384,14 @@ pub async fn single_fetch_time(
                         None => {}
                     },
                     "f-tlms~rt" => {
-                        custom_rt_feeds::tlms::fetch_tlms_data(&mut kv_client, feed_id, &client)
+                        custom_rt_feeds::tlms::fetch_tlms_data(&mut kv_client, &feed_id, &client)
                             .await;
                     }
                     "f-rtcquebec~rt" => {
                         if let Some(rtcquebec_gtfs) = rtcquebec_gtfs.as_ref() {
                             custom_rt_feeds::rtcquebec::fetch_rtc_data(
                                 &mut kv_client,
-                                feed_id,
+                                &feed_id,
                                 rtcquebec_gtfs,
                                 &client,
                             )
@@ -405,7 +411,7 @@ pub async fn single_fetch_time(
 
             //renew lease
             if rand::rng().random_bool(0.1) {
-                let _ = lease_client.keep_alive(*lease_id).await;
+                let _ = lease_client.keep_alive(lease_id).await;
             }
         }
     }))
@@ -454,8 +460,7 @@ pub fn make_reqwest_for_url(
                     client
                         .request(reqwest::Method::POST, url)
                         .multipart(form)
-                        .build()
-                        .unwrap(),
+                        .build().unwrap(),
                 );
             }
 

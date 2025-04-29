@@ -19,7 +19,7 @@ crossbeam-utils = "0.8.21"
 memoffset = "0.9.1"
 time = "0.3"
 rouille = "3.0"
-reqwest = {version = "0.12", features = ["gzip","brotli","rustls-tls","deflate","cookies","multipart"]}
+reqwest = {version = "0.12", features = ["gzip","brotli","rustls-tls","deflate","cookies","multipart","blocking"]}
 protobuf = "3.7.2"
 csv = "1.3"
 serde = { version = "1.0", features = ["derive"] }
@@ -109,13 +109,13 @@ crossbeam = "0.8.4"
 leapfrog = { version = "0.3.0", features = ["stable_alloc"] }
 scc = "2.3.3"
 env_logger = "0.11.3"
-ron = "0.8.1"
+ron = "0.10.1"
 regex = "1.10.4"
 fasthash = "0.4.0"
 clap = "4.5"
 rgb = "0.8.37"
 zotgtfs = "0.3.7"
-amtrak-gtfs-rt = "0.5.5"
+amtrak-gtfs-rt = "0.5.6"
 chrono-tz = { version = "0.10.1", features = ["case-insensitive", "serde"] }
 ping = "0.5.2"
 online = { version = "4.0.2", features = ["tokio-runtime"] }

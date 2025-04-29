@@ -11,7 +11,7 @@ pub async fn fetch_mta_lirr_data(
     etcd: &mut etcd_client::KvClient,
     feed_id: &str,
     client: &reqwest::Client,
-) {
+) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let fetch_url =
         "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=LIRR";
 
@@ -25,7 +25,7 @@ pub async fn fetch_mta_lirr_data(
 
     if let Ok(request) = request {
         if let Ok(gtfs_rt_trips) = gtfs_rt_trips {
-            let body = request.text().await.unwrap();
+            let body = request.text().await?;
 
             let import_data = serde_json::from_str::<Vec<MtaTrain>>(body.as_str());
 
@@ -48,13 +48,15 @@ pub async fn fetch_mta_lirr_data(
             }
         }
     }
+
+    Ok(())
 }
 
 pub async fn fetch_mta_metronorth_data(
     etcd: &mut etcd_client::KvClient,
     feed_id: &str,
     client: &reqwest::Client,
-) {
+) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let fetch_url = "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=MNR";
 
     let request = client
@@ -90,6 +92,8 @@ pub async fn fetch_mta_metronorth_data(
             }
         }
     }
+
+    Ok(())
 }
 
 fn get_lirr_train_id(entity: &gtfs_realtime::FeedEntity) -> String {
@@ -121,7 +125,7 @@ fn get_lirr_train_id(entity: &gtfs_realtime::FeedEntity) -> String {
 async fn get_mta_trips(
     client: &reqwest::Client,
     url: &str,
-) -> Result<gtfs_realtime::FeedMessage, Box<dyn std::error::Error>> {
+) -> Result<gtfs_realtime::FeedMessage, Box<dyn std::error::Error + Sync + Send>> {
     let bytes = client
         .get(url)
         //exposed on purpose. Not my key, this is from the MTA
