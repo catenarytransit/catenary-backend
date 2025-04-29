@@ -237,10 +237,16 @@ pub async fn single_fetch_time(
                                             aspen_client = Some(aspen_client_new);
                                         }
                                         Err(aspen_connection_error) => {
-                                            eprintln!(
-                                                "aspen connection error: {:#?}",
-                                                aspen_connection_error
-                                            );
+                                            if let Some(aspen_client_get) =
+                                                hashmap_of_connections.get(&data.socket)
+                                            {
+                                                aspen_client = Some(aspen_client_get.clone());
+                                            } else {
+                                                eprintln!(
+                                                    "aspen connection error: {:#?}",
+                                                    aspen_connection_error
+                                                );
+                                            }
                                         }
                                     }
                                 }
