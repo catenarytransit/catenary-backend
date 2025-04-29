@@ -237,7 +237,7 @@ pub async fn fetch_alerts_from_root_metrolink(
         alert_details.push(alert);
     }
 
-    println!("alert details: {:?}", alert_details);
+    // println!("alert details: {:?}", alert_details);
 
     Ok(alert_details)
 }
