@@ -306,6 +306,35 @@ pub async fn new_rt_data(
 
     let route_id_to_route = route_id_to_route;
 
+    let santa_cruz_supp_data = match chateau_id.as_str() {
+        "santacruzmetro" => {
+            let route_ids = &route_id_to_route
+                .keys()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>();
+
+            let fetch_santa_cruz_supp =
+                catenary::santa_cruz::fetch_santa_cruz_clever_data(route_ids);
+
+            match fetch_santa_cruz_supp.await {
+                Ok(santa_cruz_supp) => {
+                    let mut hashmap_by_vehicle = AHashMap::new();
+
+                    for s in santa_cruz_supp {
+                        hashmap_by_vehicle.insert(s.vid.clone(), s);
+                    }
+
+                    Some(hashmap_by_vehicle)
+                }
+                Err(e) => {
+                    println!("Error fetching santa cruz data: {}", e);
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
     //combine them together and insert them with the vehicles positions
 
     // trips can be left fairly raw for now, with a lot of data references
@@ -558,6 +587,35 @@ pub async fn new_rt_data(
                             None => None,
                         };
 
+                        let mut position = vehicle_pos.position.as_ref().map(|position| {
+                            CatenaryRtVehiclePosition {
+                                latitude: position.latitude,
+                                longitude: position.longitude,
+                                bearing: position.bearing,
+                                odometer: position.odometer,
+                                speed: match chateau_id.as_str() {
+                                    "vy~yhtymä~oyj" => position.speed.map(|x| x / 3.6),
+                                    _ => position.speed,
+                                },
+                            }
+                        });
+
+                        if santa_cruz_supp_data.is_some() {
+                            if let Some(santa_cruz_supp_data) = &santa_cruz_supp_data {
+                                if let Some(santa_cruz_supp_data) =
+                                    santa_cruz_supp_data.get(&vehicle_entity.id)
+                                {
+                                    position = Some(CatenaryRtVehiclePosition {
+                                        latitude: santa_cruz_supp_data.lat,
+                                        longitude: santa_cruz_supp_data.lon,
+                                        bearing: Some(santa_cruz_supp_data.heading),
+                                        odometer: position.as_ref().map(|x| x.odometer).flatten(),
+                                        speed: Some(santa_cruz_supp_data.speed_metres_per_second),
+                                    });
+                                }
+                            }
+                        }
+
                         let pos_aspenised = AspenisedVehiclePosition {
                             trip: vehicle_pos.trip.as_ref().map(|trip| {
                                 AspenisedVehicleTripInfo {
@@ -613,16 +671,7 @@ pub async fn new_rt_data(
                                     }
                                 }
                             }),
-                            position: vehicle_pos.position.as_ref().map(|position| CatenaryRtVehiclePosition {
-                                latitude: position.latitude,
-                                longitude: position.longitude,
-                                bearing: position.bearing,
-                                odometer: position.odometer,
-                                speed: match chateau_id.as_str() {
-                                    "vy~yhtymä~oyj" => position.speed.map(|x| x/3.6),
-                                    _ => position.speed,
-                                },
-                                }),
+                            position: position,
                             timestamp: vehicle_pos.timestamp,
                             vehicle: vehicle_pos.vehicle.as_ref().map(|vehicle| AspenisedVehicleDescriptor {
                                 id: vehicle.id.clone(),

@@ -724,7 +724,7 @@ impl AspenRpc for AspenServer {
 
             //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
-            if new_data {
+            if new_data || chateau_id.as_str() == "santacruzmetro" {
                 let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
 
                 if !lock_chateau_queue.contains(&chateau_id) {

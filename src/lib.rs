@@ -51,6 +51,7 @@ pub mod maple_syrup;
 pub mod models;
 pub mod postgis_to_diesel;
 pub mod postgres_tools;
+pub mod santa_cruz;
 pub mod schema;
 pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataEtcd;

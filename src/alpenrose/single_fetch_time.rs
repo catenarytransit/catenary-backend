@@ -93,7 +93,9 @@ pub async fn single_fetch_time(
 
     let etcd = etcd_client::Client::connect(etcd_urls.as_ref(), etcd_connection_options).await?;
 
-    let hashmap_of_connections: Arc<SccHashMap<std::net::SocketAddr, catenary::aspen::lib::AspenRpcClient>> = Arc::new(scc::HashMap::new());
+    let hashmap_of_connections: Arc<
+        SccHashMap<std::net::SocketAddr, catenary::aspen::lib::AspenRpcClient>,
+    > = Arc::new(scc::HashMap::new());
 
     futures::stream::iter(
         assignments_lock
@@ -216,7 +218,8 @@ pub async fn single_fetch_time(
                                 // );
 
                                 let mut aspen_client = None;
-                                if let Some(aspen_client_get) = hashmap_of_connections.get(&data.socket)
+                                if let Some(aspen_client_get) =
+                                    hashmap_of_connections.get(&data.socket)
                                 {
                                     aspen_client = Some(aspen_client_get.clone());
                                 } else {
