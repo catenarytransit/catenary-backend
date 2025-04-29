@@ -40,6 +40,7 @@ pub struct Vehicle {
     pub stsd: String,
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CleanedOutput {
     pub vid: String,
     pub lat: f32,
