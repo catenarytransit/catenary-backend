@@ -12,6 +12,7 @@ use flate2::write::ZlibEncoder;
 use futures::StreamExt;
 use gtfs_realtime::alert;
 use lazy_static::lazy_static;
+use leapfrog::hashmap;
 use rand::prelude::*;
 use rand::seq::SliceRandom;
 use reqwest::Response;
@@ -92,6 +93,8 @@ pub async fn single_fetch_time(
 
     let etcd = etcd_client::Client::connect(etcd_urls.as_ref(), etcd_connection_options).await?;
 
+    let hashmap_of_connections: Arc<SccHashMap<std::net::SocketAddr, catenary::aspen::lib::AspenRpcClient>> = Arc::new(scc::HashMap::new());
+
     futures::stream::iter(
         assignments_lock
             .iter()
@@ -111,6 +114,8 @@ pub async fn single_fetch_time(
 
                 let mut kv_client = etcd.kv_client();
                 let mut lease_client = etcd.lease_client();
+
+                let hashmap_of_connections = hashmap_of_connections.clone();
 
                 async move {
                     let start = Instant::now();
@@ -210,86 +215,91 @@ pub async fn single_fetch_time(
                                 //      feed_id, data.socket
                                 // );
 
-                                let aspen_client =
-                                    catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
+                                let mut aspen_client = None;
+                                if let Some(aspen_client_get) = hashmap_of_connections.get(&data.socket)
+                                {
+                                    aspen_client = Some(aspen_client_get.clone());
+                                } else {
+                                    let aspen_client_new =
+                                        catenary::aspen::lib::spawn_aspen_client_from_ip(
+                                            &data.socket,
+                                        )
                                         .await;
 
-                                match aspen_client {
-                                    Ok(aspen_client) => {
-                                        if vehicle_positions_http_status == Some(200)
-                                            || trip_updates_http_status == Some(200)
-                                            || alerts_http_status == Some(200)
+                                    match aspen_client_new {
+                                        Ok(aspen_client_new) => {
+                                            let _ = hashmap_of_connections
+                                                .upsert(data.socket, aspen_client_new.clone());
+
+                                            aspen_client = Some(aspen_client_new);
+                                        }
+                                        Err(aspen_connection_error) => {
+                                            eprintln!(
+                                                "aspen connection error: {:#?}",
+                                                aspen_connection_error
+                                            );
+                                        }
+                                    }
+                                }
+
+                                let aspen_client = aspen_client;
+
+                                if let Some(aspen_client) = aspen_client {
+                                    if vehicle_positions_http_status == Some(200)
+                                        || trip_updates_http_status == Some(200)
+                                        || alerts_http_status == Some(200)
+                                    {
+                                        let vehicle_positions_cleanup = match vehicle_positions_data
                                         {
-                                            let vehicle_positions_cleanup =
-                                                match vehicle_positions_data {
-                                                    Some(Ok(response)) => {
-                                                        cleanup_response(
-                                                            response,
-                                                            UrlType::VehiclePositions,
-                                                            &feed_id,
-                                                            Arc::clone(&hashes_of_data),
-                                                        )
-                                                        .await
-                                                    }
-                                                    _ => None,
-                                                };
-
-                                            let trip_updates_cleanup = match trip_updates_data {
-                                                Some(Ok(response)) => {
-                                                    cleanup_response(
-                                                        response,
-                                                        UrlType::TripUpdates,
-                                                        &feed_id,
-                                                        Arc::clone(&hashes_of_data),
-                                                    )
-                                                    .await
-                                                }
-                                                _ => None,
-                                            };
-
-                                            let mut alerts_cleanup = match alerts_data {
-                                                Some(Ok(response)) => {
-                                                    cleanup_response(
-                                                        response,
-                                                        UrlType::Alerts,
-                                                        &feed_id,
-                                                        Arc::clone(&hashes_of_data),
-                                                    )
-                                                    .await
-                                                }
-                                                _ => None,
-                                            };
-
-                                            let mut alert_dupe_trips = false;
-
-                                            if alerts_cleanup == trip_updates_cleanup {
-                                                alerts_cleanup = None;
-                                                alert_dupe_trips = true;
+                                            Some(Ok(response)) => {
+                                                cleanup_response(
+                                                    response,
+                                                    UrlType::VehiclePositions,
+                                                    &feed_id,
+                                                    Arc::clone(&hashes_of_data),
+                                                )
+                                                .await
                                             }
+                                            _ => None,
+                                        };
 
-                                            //map compression for all data
+                                        let trip_updates_cleanup = match trip_updates_data {
+                                            Some(Ok(response)) => {
+                                                cleanup_response(
+                                                    response,
+                                                    UrlType::TripUpdates,
+                                                    &feed_id,
+                                                    Arc::clone(&hashes_of_data),
+                                                )
+                                                .await
+                                            }
+                                            _ => None,
+                                        };
 
-                                            let vehicle_positions_cleanup =
-                                                vehicle_positions_cleanup.map(|v| {
-                                                    let mut encoder = ZlibEncoder::new(
-                                                        Vec::new(),
-                                                        Compression::new(2),
-                                                    );
-                                                    encoder.write_all(v.as_slice()).unwrap();
-                                                    encoder.finish().unwrap()
-                                                });
+                                        let mut alerts_cleanup = match alerts_data {
+                                            Some(Ok(response)) => {
+                                                cleanup_response(
+                                                    response,
+                                                    UrlType::Alerts,
+                                                    &feed_id,
+                                                    Arc::clone(&hashes_of_data),
+                                                )
+                                                .await
+                                            }
+                                            _ => None,
+                                        };
 
-                                            let trip_updates_cleanup =
-                                                trip_updates_cleanup.map(|v| {
-                                                    let mut encoder = ZlibEncoder::new(
-                                                        Vec::new(),
-                                                        Compression::new(2),
-                                                    );
-                                                    encoder.write_all(v.as_slice()).unwrap();
-                                                    encoder.finish().unwrap()
-                                                });
+                                        let mut alert_dupe_trips = false;
 
-                                            let alerts_cleanup = alerts_cleanup.map(|v| {
+                                        if alerts_cleanup == trip_updates_cleanup {
+                                            alerts_cleanup = None;
+                                            alert_dupe_trips = true;
+                                        }
+
+                                        //map compression for all data
+
+                                        let vehicle_positions_cleanup = vehicle_positions_cleanup
+                                            .map(|v| {
                                                 let mut encoder = ZlibEncoder::new(
                                                     Vec::new(),
                                                     Compression::new(2),
@@ -298,56 +308,63 @@ pub async fn single_fetch_time(
                                                 encoder.finish().unwrap()
                                             });
 
-                                            let tarpc_send_to_aspen = aspen_client
-                                                .from_alpenrose_compressed(
-                                                    tarpc::context::current(),
-                                                    data.chateau_id.clone(),
-                                                    feed_id.clone(),
-                                                    vehicle_positions_cleanup,
-                                                    trip_updates_cleanup,
-                                                    alerts_cleanup,
-                                                    assignment.realtime_vehicle_positions.is_some(),
-                                                    assignment.realtime_trip_updates.is_some(),
-                                                    assignment.realtime_alerts.is_some(),
-                                                    vehicle_positions_http_status,
-                                                    trip_updates_http_status,
-                                                    alerts_http_status,
-                                                    duration_since_unix_epoch().as_millis() as u64,
-                                                    alert_dupe_trips,
-                                                )
-                                                .await;
+                                        let trip_updates_cleanup = trip_updates_cleanup.map(|v| {
+                                            let mut encoder =
+                                                ZlibEncoder::new(Vec::new(), Compression::new(2));
+                                            encoder.write_all(v.as_slice()).unwrap();
+                                            encoder.finish().unwrap()
+                                        });
 
-                                            match tarpc_send_to_aspen {
-                                                Ok(_) => {
-                                                    //      println!(
-                                                    //  "feed {}|chateau {}: Successfully sent data sent to {}",
-                                                    //  feed_id, data.chateau_id, worker_id
-                                                    // );
-                                                }
-                                                Err(e) => {
-                                                    eprintln!(
-                                                        "{}: Error sending data to {}: {}",
-                                                        feed_id, worker_id, e
-                                                    );
-                                                }
-                                            }
-                                        } else {
-                                            println!(
-                                                "HTTP statuses for feed {}, v {:?}, t{:?}, a{:?}",
-                                                feed_id,
+                                        let alerts_cleanup = alerts_cleanup.map(|v| {
+                                            let mut encoder =
+                                                ZlibEncoder::new(Vec::new(), Compression::new(2));
+                                            encoder.write_all(v.as_slice()).unwrap();
+                                            encoder.finish().unwrap()
+                                        });
+
+                                        let tarpc_send_to_aspen = aspen_client
+                                            .from_alpenrose_compressed(
+                                                tarpc::context::current(),
+                                                data.chateau_id.clone(),
+                                                feed_id.clone(),
+                                                vehicle_positions_cleanup,
+                                                trip_updates_cleanup,
+                                                alerts_cleanup,
+                                                assignment.realtime_vehicle_positions.is_some(),
+                                                assignment.realtime_trip_updates.is_some(),
+                                                assignment.realtime_alerts.is_some(),
                                                 vehicle_positions_http_status,
                                                 trip_updates_http_status,
-                                                alerts_http_status
-                                            );
+                                                alerts_http_status,
+                                                duration_since_unix_epoch().as_millis() as u64,
+                                                alert_dupe_trips,
+                                            )
+                                            .await;
+
+                                        match tarpc_send_to_aspen {
+                                            Ok(_) => {
+                                                //      println!(
+                                                //  "feed {}|chateau {}: Successfully sent data sent to {}",
+                                                //  feed_id, data.chateau_id, worker_id
+                                                // );
+                                            }
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "{}: Error sending data to {}: {}",
+                                                    feed_id, worker_id, e
+                                                );
+                                            }
                                         }
-                                    }
-                                    Err(aspen_connection_error) => {
-                                        eprintln!(
-                                            "aspen connection error: {:#?}",
-                                            aspen_connection_error
+                                    } else {
+                                        println!(
+                                            "HTTP statuses for feed {}, v {:?}, t{:?}, a{:?}",
+                                            feed_id,
+                                            vehicle_positions_http_status,
+                                            trip_updates_http_status,
+                                            alerts_http_status
                                         );
                                     }
-                                };
+                                }
                             }
                             None => {
                                 eprintln!("{} was not assigned to a worker", feed_id);

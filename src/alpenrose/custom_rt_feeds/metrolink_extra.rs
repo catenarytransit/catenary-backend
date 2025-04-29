@@ -37,40 +37,38 @@ pub async fn fetch_data(etcd: &mut etcd_client::KvClient, feed_id: &str, client:
                         .await;
 
                 if let Ok(aspen_client) = aspen_client {
-                    
+                    let tarpc_send_to_aspen = aspen_client
+                        .from_alpenrose(
+                            tarpc::context::current(),
+                            assigned_chateau_data.chateau_id.clone(),
+                            String::from(feed_id),
+                            None,
+                            None,
+                            Some(alerts_proto),
+                            false,
+                            false,
+                            true,
+                            None,
+                            None,
+                            Some(200),
+                            duration_since_unix_epoch().as_millis() as u64,
+                        )
+                        .await;
 
-                let tarpc_send_to_aspen = aspen_client
-                .from_alpenrose(
-                    tarpc::context::current(),
-                    assigned_chateau_data.chateau_id.clone(),
-                    String::from(feed_id),
-                    None,
-                    None,
-                    Some(alerts_proto),
-                    false,
-                    false,
-                    true,
-                    None,
-                    None,
-                    Some(200),
-                    duration_since_unix_epoch().as_millis() as u64,
-                )
-                .await;
-
-            match tarpc_send_to_aspen {
-                Ok(_) => {
-                    println!(
-                        "Successfully sent Metrolink Alerts Extra feed data sent to {}",
-                        feed_id
-                    );
-                }
-                Err(e) => {
-                    eprintln!(
-                        "{}: Error sending Metrolink Alerts Extra feed data to {}: {}",
-                        feed_id, worker_id, e
-                    );
-                }
-            }
+                    match tarpc_send_to_aspen {
+                        Ok(_) => {
+                            println!(
+                                "Successfully sent Metrolink Alerts Extra feed data sent to {}",
+                                feed_id
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "{}: Error sending Metrolink Alerts Extra feed data to {}: {}",
+                                feed_id, worker_id, e
+                            );
+                        }
+                    }
                 } else {
                     eprintln!(
                         "Failed to connect to Aspen at {}, {}, {:?}",
