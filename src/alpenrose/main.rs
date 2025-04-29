@@ -133,7 +133,10 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let etcd_urls_original =
         std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
-    let etcd_urls = etcd_urls_original.split(',').map(|x| x.to_string()).collect::<Vec<String>>();
+    let etcd_urls = etcd_urls_original
+        .split(',')
+        .map(|x| x.to_string())
+        .collect::<Vec<String>>();
 
     let etcd_urls = Arc::new(etcd_urls);
 
@@ -366,18 +369,16 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             }
 
             // Spawn a background task to renew the etcd lease
-            
-                let mut etcd = etcd.clone();
-                let lease_id = etcd_lease_id;
-                
-                let etcd_keep_alive_tokio = tokio::spawn(async move {
-                    
-                        match etcd.lease_keep_alive(lease_id).await {
-                            Ok(_) => (),
-                            Err(e) => eprintln!("Failed to renew lease: {}", e),
-                        }
-                    
-                });
+
+            let mut etcd = etcd.clone();
+            let lease_id = etcd_lease_id;
+
+            let etcd_keep_alive_tokio = tokio::spawn(async move {
+                match etcd.lease_keep_alive(lease_id).await {
+                    Ok(_) => (),
+                    Err(e) => eprintln!("Failed to renew lease: {}", e),
+                }
+            });
 
             //get the feed data from the feeds assigned to this worker
 

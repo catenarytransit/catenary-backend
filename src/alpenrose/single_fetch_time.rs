@@ -90,331 +90,369 @@ pub async fn single_fetch_time(
 
     let assignments_lock = assignments.read().await;
 
-    let etcd = etcd_client::Client::connect(etcd_urls.as_ref(), etcd_connection_options)
-        .await?;
+    let etcd = etcd_client::Client::connect(etcd_urls.as_ref(), etcd_connection_options).await?;
 
-    futures::stream::iter(assignments_lock.iter()
-    .map(|(feed_id, assignment)| {
-        let feed_id = feed_id.clone();
-        let assignment = assignment.clone();
+    futures::stream::iter(
+        assignments_lock
+            .iter()
+            .map(|(feed_id, assignment)| {
+                let feed_id = feed_id.clone();
+                let assignment = assignment.clone();
 
-        (feed_id, assignment)
-    })
-    .map(|(feed_id, assignment)| {
-        let client = client.clone();
-        let hashes_of_data = Arc::clone(&hashes_of_data);
-        let last_fetch_per_feed = last_fetch_per_feed.clone();
-        let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
-        let rtcquebec_gtfs = rtcquebec_gtfs.clone();
-        let chicago_text_str = chicago_text_str.clone();
+                (feed_id, assignment)
+            })
+            .map(|(feed_id, assignment)| {
+                let client = client.clone();
+                let hashes_of_data = Arc::clone(&hashes_of_data);
+                let last_fetch_per_feed = last_fetch_per_feed.clone();
+                let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
+                let rtcquebec_gtfs = rtcquebec_gtfs.clone();
+                let chicago_text_str = chicago_text_str.clone();
 
-        let mut kv_client = etcd.kv_client();
-        let mut lease_client = etcd.lease_client();
+                let mut kv_client = etcd.kv_client();
+                let mut lease_client = etcd.lease_client();
 
-        async move {
-            let start = Instant::now();
+                async move {
+                    let start = Instant::now();
 
-            let fetch_interval_ms = assignment.fetch_interval_ms.unwrap_or(1_000);
+                    let fetch_interval_ms = assignment.fetch_interval_ms.unwrap_or(1_000);
 
-            if let Some(last_fetch) = last_fetch_per_feed.get(&feed_id.clone()) {
-                let duration_since_last_fetch = last_fetch.elapsed().as_millis();
+                    if let Some(last_fetch) = last_fetch_per_feed.get(&feed_id.clone()) {
+                        let duration_since_last_fetch = last_fetch.elapsed().as_millis();
 
-                if duration_since_last_fetch < fetch_interval_ms as u128 {
-                    //skip because timeout has not been reached
-                    return;
-                }
-            }
+                        if duration_since_last_fetch < fetch_interval_ms as u128 {
+                            //skip because timeout has not been reached
+                            return;
+                        }
+                    }
 
-            if let Some(trip_url) = &assignment.realtime_trip_updates {
-                if trip_url.contains("api.goswift.ly") && assignment.passwords.is_none() {
-                    println!("Skipping {} because no password provided", feed_id);
+                    if let Some(trip_url) = &assignment.realtime_trip_updates {
+                        if trip_url.contains("api.goswift.ly") && assignment.passwords.is_none() {
+                            println!("Skipping {} because no password provided", feed_id);
 
-                    return;
-                }
-            }
+                            return;
+                        }
+                    }
 
-            if let Some(alert_url) = &assignment.realtime_alerts {
-                if alert_url.contains("api.goswift.ly") && assignment.passwords.is_none() {
-                    println!("Skipping {} because no password provided", feed_id);
+                    if let Some(alert_url) = &assignment.realtime_alerts {
+                        if alert_url.contains("api.goswift.ly") && assignment.passwords.is_none() {
+                            println!("Skipping {} because no password provided", feed_id);
 
-                    return;
-                }
-            }
+                            return;
+                        }
+                    }
 
-            last_fetch_per_feed.insert(feed_id.clone(), Instant::now());
+                    last_fetch_per_feed.insert(feed_id.clone(), Instant::now());
 
-            let vehicle_positions_request =
-                make_reqwest_for_url(UrlType::VehiclePositions, &assignment, client.clone());
+                    let vehicle_positions_request = make_reqwest_for_url(
+                        UrlType::VehiclePositions,
+                        &assignment,
+                        client.clone(),
+                    );
 
-            let trip_updates_request =
-                make_reqwest_for_url(UrlType::TripUpdates, &assignment, client.clone());
+                    let trip_updates_request =
+                        make_reqwest_for_url(UrlType::TripUpdates, &assignment, client.clone());
 
-            let alerts_request = make_reqwest_for_url(UrlType::Alerts, &assignment, client.clone());
+                    let alerts_request =
+                        make_reqwest_for_url(UrlType::Alerts, &assignment, client.clone());
 
-            //run all requests concurrently
-            let vehicle_positions_future =
-                run_optional_req(vehicle_positions_request, client.clone());
-            let trip_updates_future = run_optional_req(trip_updates_request, client.clone());
-            let alerts_future = run_optional_req(alerts_request, client.clone());
+                    //run all requests concurrently
+                    let vehicle_positions_future =
+                        run_optional_req(vehicle_positions_request, client.clone());
+                    let trip_updates_future =
+                        run_optional_req(trip_updates_request, client.clone());
+                    let alerts_future = run_optional_req(alerts_request, client.clone());
 
-            // println!("{}: Fetching data", feed_id);
-            let (vehicle_positions_data, trip_updates_data, alerts_data) =
-                futures::join!(vehicle_positions_future, trip_updates_future, alerts_future,);
+                    // println!("{}: Fetching data", feed_id);
+                    let (vehicle_positions_data, trip_updates_data, alerts_data) = futures::join!(
+                        vehicle_positions_future,
+                        trip_updates_future,
+                        alerts_future,
+                    );
 
-            //send the data to aspen via tarpc
+                    //send the data to aspen via tarpc
 
-            if !CUSTOM_FEEDS.contains(feed_id.as_str()) {
-                let vehicle_positions_http_status = match &vehicle_positions_data {
-                    Some(Ok(response)) => Some(response.status().as_u16()),
-                    _ => None,
-                };
+                    if !CUSTOM_FEEDS.contains(feed_id.as_str()) {
+                        let vehicle_positions_http_status = match &vehicle_positions_data {
+                            Some(Ok(response)) => Some(response.status().as_u16()),
+                            _ => None,
+                        };
 
-                let trip_updates_http_status = match &trip_updates_data {
-                    Some(Ok(response)) => Some(response.status().as_u16()),
-                    _ => None,
-                };
+                        let trip_updates_http_status = match &trip_updates_data {
+                            Some(Ok(response)) => Some(response.status().as_u16()),
+                            _ => None,
+                        };
 
-                let alerts_http_status = match &alerts_data {
-                    Some(Ok(response)) => Some(response.status().as_u16()),
-                    _ => None,
-                };
+                        let alerts_http_status = match &alerts_data {
+                            Some(Ok(response)) => Some(response.status().as_u16()),
+                            _ => None,
+                        };
 
-                if (vehicle_positions_http_status == Some(429))
-                    || (trip_updates_http_status == Some(429))
-                    || (alerts_http_status == Some(429))
-                {
-                    println!("{}: 429 Rate limited", &feed_id);
-                    return;
-                }
+                        if (vehicle_positions_http_status == Some(429))
+                            || (trip_updates_http_status == Some(429))
+                            || (alerts_http_status == Some(429))
+                        {
+                            println!("{}: 429 Rate limited", &feed_id);
+                            return;
+                        }
 
-                //lookup currently assigned realtime dataset in zookeeper
-                let fetch_assigned_node_meta =
-                    get_node_for_realtime_feed_id_kvclient(&mut kv_client, &feed_id).await;
+                        //lookup currently assigned realtime dataset in zookeeper
+                        let fetch_assigned_node_meta =
+                            get_node_for_realtime_feed_id_kvclient(&mut kv_client, &feed_id).await;
 
-                match fetch_assigned_node_meta {
-                    Some(data) => {
-                        let worker_id = data.worker_id;
+                        match fetch_assigned_node_meta {
+                            Some(data) => {
+                                let worker_id = data.worker_id;
 
-                        //send the data to the worker
-                        //  println!(
-                        //      "Attempting to send {} data to {} via tarpc",
-                        //      feed_id, data.socket
-                        // );
+                                //send the data to the worker
+                                //  println!(
+                                //      "Attempting to send {} data to {} via tarpc",
+                                //      feed_id, data.socket
+                                // );
 
-                        let aspen_client =
-                            catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket).await;
-
-                        match aspen_client {
-                            Ok(aspen_client) => {
-                                if vehicle_positions_http_status == Some(200)
-                                    || trip_updates_http_status == Some(200)
-                                    || alerts_http_status == Some(200)
-                                {
-                                    let vehicle_positions_cleanup = match vehicle_positions_data {
-                                        Some(Ok(response)) => {
-                                            cleanup_response(
-                                                response,
-                                                UrlType::VehiclePositions,
-                                                &feed_id,
-                                                Arc::clone(&hashes_of_data),
-                                            )
-                                            .await
-                                        }
-                                        _ => None,
-                                    };
-
-                                    let trip_updates_cleanup = match trip_updates_data {
-                                        Some(Ok(response)) => {
-                                            cleanup_response(
-                                                response,
-                                                UrlType::TripUpdates,
-                                                &feed_id,
-                                                Arc::clone(&hashes_of_data),
-                                            )
-                                            .await
-                                        }
-                                        _ => None,
-                                    };
-
-                                    let mut alerts_cleanup = match alerts_data {
-                                        Some(Ok(response)) => {
-                                            cleanup_response(
-                                                response,
-                                                UrlType::Alerts,
-                                                &feed_id,
-                                                Arc::clone(&hashes_of_data),
-                                            )
-                                            .await
-                                        }
-                                        _ => None,
-                                    };
-
-                                    let mut alert_dupe_trips = false;
-
-                                    if alerts_cleanup == trip_updates_cleanup {
-                                        alerts_cleanup = None;
-                                        alert_dupe_trips = true;
-                                    }
-
-                                    //map compression for all data
-
-                                    let vehicle_positions_cleanup =
-                                        vehicle_positions_cleanup.map(|v| {
-                                            let mut encoder =
-                                                ZlibEncoder::new(Vec::new(), Compression::new(2));
-                                            encoder.write_all(v.as_slice()).unwrap();
-                                            encoder.finish().unwrap()
-                                        });
-
-                                    let trip_updates_cleanup = trip_updates_cleanup.map(|v| {
-                                        let mut encoder =
-                                            ZlibEncoder::new(Vec::new(), Compression::new(2));
-                                        encoder.write_all(v.as_slice()).unwrap();
-                                        encoder.finish().unwrap()
-                                    });
-
-                                    let alerts_cleanup = alerts_cleanup.map(|v| {
-                                        let mut encoder =
-                                            ZlibEncoder::new(Vec::new(), Compression::new(2));
-                                        encoder.write_all(v.as_slice()).unwrap();
-                                        encoder.finish().unwrap()
-                                    });
-
-                                    let tarpc_send_to_aspen = aspen_client
-                                        .from_alpenrose_compressed(
-                                            tarpc::context::current(),
-                                            data.chateau_id.clone(),
-                                            feed_id.clone(),
-                                            vehicle_positions_cleanup,
-                                            trip_updates_cleanup,
-                                            alerts_cleanup,
-                                            assignment.realtime_vehicle_positions.is_some(),
-                                            assignment.realtime_trip_updates.is_some(),
-                                            assignment.realtime_alerts.is_some(),
-                                            vehicle_positions_http_status,
-                                            trip_updates_http_status,
-                                            alerts_http_status,
-                                            duration_since_unix_epoch().as_millis() as u64,
-                                            alert_dupe_trips,
-                                        )
+                                let aspen_client =
+                                    catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
                                         .await;
 
-                                    match tarpc_send_to_aspen {
-                                        Ok(_) => {
-                                            //      println!(
-                                            //  "feed {}|chateau {}: Successfully sent data sent to {}",
-                                            //  feed_id, data.chateau_id, worker_id
-                                            // );
-                                        }
-                                        Err(e) => {
-                                            eprintln!(
-                                                "{}: Error sending data to {}: {}",
-                                                feed_id, worker_id, e
+                                match aspen_client {
+                                    Ok(aspen_client) => {
+                                        if vehicle_positions_http_status == Some(200)
+                                            || trip_updates_http_status == Some(200)
+                                            || alerts_http_status == Some(200)
+                                        {
+                                            let vehicle_positions_cleanup =
+                                                match vehicle_positions_data {
+                                                    Some(Ok(response)) => {
+                                                        cleanup_response(
+                                                            response,
+                                                            UrlType::VehiclePositions,
+                                                            &feed_id,
+                                                            Arc::clone(&hashes_of_data),
+                                                        )
+                                                        .await
+                                                    }
+                                                    _ => None,
+                                                };
+
+                                            let trip_updates_cleanup = match trip_updates_data {
+                                                Some(Ok(response)) => {
+                                                    cleanup_response(
+                                                        response,
+                                                        UrlType::TripUpdates,
+                                                        &feed_id,
+                                                        Arc::clone(&hashes_of_data),
+                                                    )
+                                                    .await
+                                                }
+                                                _ => None,
+                                            };
+
+                                            let mut alerts_cleanup = match alerts_data {
+                                                Some(Ok(response)) => {
+                                                    cleanup_response(
+                                                        response,
+                                                        UrlType::Alerts,
+                                                        &feed_id,
+                                                        Arc::clone(&hashes_of_data),
+                                                    )
+                                                    .await
+                                                }
+                                                _ => None,
+                                            };
+
+                                            let mut alert_dupe_trips = false;
+
+                                            if alerts_cleanup == trip_updates_cleanup {
+                                                alerts_cleanup = None;
+                                                alert_dupe_trips = true;
+                                            }
+
+                                            //map compression for all data
+
+                                            let vehicle_positions_cleanup =
+                                                vehicle_positions_cleanup.map(|v| {
+                                                    let mut encoder = ZlibEncoder::new(
+                                                        Vec::new(),
+                                                        Compression::new(2),
+                                                    );
+                                                    encoder.write_all(v.as_slice()).unwrap();
+                                                    encoder.finish().unwrap()
+                                                });
+
+                                            let trip_updates_cleanup =
+                                                trip_updates_cleanup.map(|v| {
+                                                    let mut encoder = ZlibEncoder::new(
+                                                        Vec::new(),
+                                                        Compression::new(2),
+                                                    );
+                                                    encoder.write_all(v.as_slice()).unwrap();
+                                                    encoder.finish().unwrap()
+                                                });
+
+                                            let alerts_cleanup = alerts_cleanup.map(|v| {
+                                                let mut encoder = ZlibEncoder::new(
+                                                    Vec::new(),
+                                                    Compression::new(2),
+                                                );
+                                                encoder.write_all(v.as_slice()).unwrap();
+                                                encoder.finish().unwrap()
+                                            });
+
+                                            let tarpc_send_to_aspen = aspen_client
+                                                .from_alpenrose_compressed(
+                                                    tarpc::context::current(),
+                                                    data.chateau_id.clone(),
+                                                    feed_id.clone(),
+                                                    vehicle_positions_cleanup,
+                                                    trip_updates_cleanup,
+                                                    alerts_cleanup,
+                                                    assignment.realtime_vehicle_positions.is_some(),
+                                                    assignment.realtime_trip_updates.is_some(),
+                                                    assignment.realtime_alerts.is_some(),
+                                                    vehicle_positions_http_status,
+                                                    trip_updates_http_status,
+                                                    alerts_http_status,
+                                                    duration_since_unix_epoch().as_millis() as u64,
+                                                    alert_dupe_trips,
+                                                )
+                                                .await;
+
+                                            match tarpc_send_to_aspen {
+                                                Ok(_) => {
+                                                    //      println!(
+                                                    //  "feed {}|chateau {}: Successfully sent data sent to {}",
+                                                    //  feed_id, data.chateau_id, worker_id
+                                                    // );
+                                                }
+                                                Err(e) => {
+                                                    eprintln!(
+                                                        "{}: Error sending data to {}: {}",
+                                                        feed_id, worker_id, e
+                                                    );
+                                                }
+                                            }
+                                        } else {
+                                            println!(
+                                                "HTTP statuses for feed {}, v {:?}, t{:?}, a{:?}",
+                                                feed_id,
+                                                vehicle_positions_http_status,
+                                                trip_updates_http_status,
+                                                alerts_http_status
                                             );
                                         }
                                     }
-                                } else {
-                                    println!(
-                                        "HTTP statuses for feed {}, v {:?}, t{:?}, a{:?}",
-                                        feed_id,
-                                        vehicle_positions_http_status,
-                                        trip_updates_http_status,
-                                        alerts_http_status
-                                    );
+                                    Err(aspen_connection_error) => {
+                                        eprintln!(
+                                            "aspen connection error: {:#?}",
+                                            aspen_connection_error
+                                        );
+                                    }
+                                };
+                            }
+                            None => {
+                                eprintln!("{} was not assigned to a worker", feed_id);
+                            }
+                        }
+                    } else {
+                        match feed_id.as_str() {
+                            "f-amtrak~rt" => {
+                                let _ = custom_rt_feeds::amtrak::fetch_amtrak_data(
+                                    &mut kv_client,
+                                    &feed_id,
+                                    &amtrak_gtfs,
+                                    &client,
+                                )
+                                .await;
+                            }
+                            "f-viarail~rt" => {
+                                custom_rt_feeds::viarail::fetch_via_data(
+                                    &mut kv_client,
+                                    &feed_id,
+                                    &client,
+                                )
+                                .await;
+                            }
+                            "f-mta~nyc~rt~lirr" => {
+                                let _ = custom_rt_feeds::mta::fetch_mta_lirr_data(
+                                    &mut kv_client,
+                                    &feed_id,
+                                    &client,
+                                )
+                                .await;
+                            }
+                            "f-mta~nyc~rt~mnr" => {
+                                let _ = custom_rt_feeds::mta::fetch_mta_metronorth_data(
+                                    &mut kv_client,
+                                    &feed_id,
+                                    &client,
+                                )
+                                .await;
+                            }
+                            "f-metrolinktrains~extra~rt" => {
+                                custom_rt_feeds::metrolink_extra::fetch_data(
+                                    &mut kv_client,
+                                    &feed_id,
+                                    &client,
+                                )
+                                .await
+                            }
+                            "f-bus~dft~gov~uk~rt" => {
+                                let _ = custom_rt_feeds::uk::fetch_dft_bus_data(
+                                    &mut kv_client,
+                                    &feed_id,
+                                    &client,
+                                )
+                                .await;
+                            }
+                            "f-dp3-cta~rt" => match chicago_text_str.as_ref() {
+                                Some(chicago_text_str) => {
+                                    custom_rt_feeds::chicagotransit::fetch_chicago_data(
+                                        &mut kv_client,
+                                        &feed_id,
+                                        &client,
+                                        chicago_text_str.as_str(),
+                                    )
+                                    .await;
+                                }
+                                None => {}
+                            },
+                            "f-tlms~rt" => {
+                                custom_rt_feeds::tlms::fetch_tlms_data(
+                                    &mut kv_client,
+                                    &feed_id,
+                                    &client,
+                                )
+                                .await;
+                            }
+                            "f-rtcquebec~rt" => {
+                                if let Some(rtcquebec_gtfs) = rtcquebec_gtfs.as_ref() {
+                                    custom_rt_feeds::rtcquebec::fetch_rtc_data(
+                                        &mut kv_client,
+                                        &feed_id,
+                                        rtcquebec_gtfs,
+                                        &client,
+                                    )
+                                    .await;
                                 }
                             }
-                            Err(aspen_connection_error) => {
-                                eprintln!("aspen connection error: {:#?}", aspen_connection_error);
-                            }
-                        };
-                    }
-                    None => {
-                        eprintln!("{} was not assigned to a worker", feed_id);
-                    }
-                }
-            } else {
-                match feed_id.as_str() {
-                    "f-amtrak~rt" => {
-                        let _ = custom_rt_feeds::amtrak::fetch_amtrak_data(
-                            &mut kv_client,
-                            &feed_id,
-                            &amtrak_gtfs,
-                            &client,
-                        )
-                        .await;
-                    }
-                    "f-viarail~rt" => {
-                        custom_rt_feeds::viarail::fetch_via_data(&mut kv_client, &feed_id, &client)
-                            .await;
-                    }
-                    "f-mta~nyc~rt~lirr" => {
-                        let _ = custom_rt_feeds::mta::fetch_mta_lirr_data(&mut kv_client, &feed_id, &client)
-                            .await;
-                    }
-                    "f-mta~nyc~rt~mnr" => {
-                        let _ = custom_rt_feeds::mta::fetch_mta_metronorth_data(
-                            &mut kv_client,
-                            &feed_id,
-                            &client,
-                        )
-                        .await;
-                    }
-                    "f-metrolinktrains~extra~rt" => {
-                        custom_rt_feeds::metrolink_extra::fetch_data(
-                            &mut kv_client,
-                            &feed_id,
-                            &client,
-                        )
-                        .await
-                    }
-                    "f-bus~dft~gov~uk~rt" => {
-                        let _ = custom_rt_feeds::uk::fetch_dft_bus_data(&mut kv_client, &feed_id, &client)
-                            .await;
-                    }
-                    "f-dp3-cta~rt" => match chicago_text_str.as_ref() {
-                        Some(chicago_text_str) => {
-                            custom_rt_feeds::chicagotransit::fetch_chicago_data(
-                                &mut kv_client,
-                                &feed_id,
-                                &client,
-                                chicago_text_str.as_str(),
-                            )
-                            .await;
-                        }
-                        None => {}
-                    },
-                    "f-tlms~rt" => {
-                        custom_rt_feeds::tlms::fetch_tlms_data(&mut kv_client, &feed_id, &client)
-                            .await;
-                    }
-                    "f-rtcquebec~rt" => {
-                        if let Some(rtcquebec_gtfs) = rtcquebec_gtfs.as_ref() {
-                            custom_rt_feeds::rtcquebec::fetch_rtc_data(
-                                &mut kv_client,
-                                &feed_id,
-                                rtcquebec_gtfs,
-                                &client,
-                            )
-                            .await;
+                            //    "f-uc~irvine~anteater~express~rt" => {
+                            //       custom_rt_feeds::uci::fetch_uci_data(&mut etcd, feed_id).await;
+                            //   }
+                            _ => {}
                         }
                     }
-                    //    "f-uc~irvine~anteater~express~rt" => {
-                    //       custom_rt_feeds::uci::fetch_uci_data(&mut etcd, feed_id).await;
-                    //   }
-                    _ => {}
+
+                    let duration = start.elapsed();
+                    let duration = duration.as_secs_f64();
+                    //println!("{}: took {:.3?}s", feed_id, duration);
+
+                    //renew lease
+                    if rand::rng().random_bool(0.1) {
+                        let _ = lease_client.keep_alive(lease_id).await;
+                    }
                 }
-            }
-
-            let duration = start.elapsed();
-            let duration = duration.as_secs_f64();
-            //println!("{}: took {:.3?}s", feed_id, duration);
-
-            //renew lease
-            if rand::rng().random_bool(0.1) {
-                let _ = lease_client.keep_alive(lease_id).await;
-            }
-        }
-    }))
+            }),
+    )
     .buffer_unordered(request_limit)
     .collect::<Vec<()>>()
     .await;
@@ -460,7 +498,8 @@ pub fn make_reqwest_for_url(
                     client
                         .request(reqwest::Method::POST, url)
                         .multipart(form)
-                        .build().unwrap(),
+                        .build()
+                        .unwrap(),
                 );
             }
 

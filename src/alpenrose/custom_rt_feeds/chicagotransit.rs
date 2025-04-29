@@ -20,38 +20,46 @@ pub async fn fetch_chicago_data(
         match chicago_rt_data {
             Ok(chicago_rt_data) => {
                 let aspen_client =
-                    catenary::aspen::lib::spawn_aspen_client_from_ip(&worker_metadata.socket)
-                        .await
-                        .unwrap();
+                    catenary::aspen::lib::spawn_aspen_client_from_ip(&worker_metadata.socket).await;
 
-                let tarpc_send_to_aspen = aspen_client
-                    .from_alpenrose(
-                        tarpc::context::current(),
-                        worker_metadata.chateau_id.clone(),
-                        String::from(feed_id),
-                        Some(chicago_rt_data.vehicle_positions.encode_to_vec()),
-                        None,
-                        None,
-                        true,
-                        true,
-                        false,
-                        Some(200),
-                        None,
-                        None,
-                        duration_since_unix_epoch().as_millis() as u64,
-                    )
-                    .await;
+                if let Ok(aspen_client) = aspen_client {
+                    println!(
+                        "Successfully connected to Aspen at {}",
+                        worker_metadata.socket
+                    );
 
-                match tarpc_send_to_aspen {
-                    Ok(_) => {
-                        println!(
-                            "Successfully sent chicago data to {}, feed {} to chateau {}",
-                            worker_metadata.socket, feed_id, worker_metadata.chateau_id
-                        );
+                    let tarpc_send_to_aspen = aspen_client
+                        .from_alpenrose(
+                            tarpc::context::current(),
+                            worker_metadata.chateau_id.clone(),
+                            String::from(feed_id),
+                            Some(chicago_rt_data.vehicle_positions.encode_to_vec()),
+                            None,
+                            None,
+                            true,
+                            true,
+                            false,
+                            Some(200),
+                            None,
+                            None,
+                            duration_since_unix_epoch().as_millis() as u64,
+                        )
+                        .await;
+
+                    match tarpc_send_to_aspen {
+                        Ok(_) => {
+                            println!(
+                                "Successfully sent chicago data to {}, feed {} to chateau {}",
+                                worker_metadata.socket, feed_id, worker_metadata.chateau_id
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("{}: Error sending data to {}: {}", feed_id, worker_id, e);
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("{}: Error sending data to {}: {}", feed_id, worker_id, e);
-                    }
+                } else {
+                    eprintln!("Failed to connect to Aspen at {}", worker_metadata.socket);
+                    return;
                 }
             }
             _ => {
