@@ -1081,7 +1081,9 @@ pub async fn new_rt_data(
                                         "Catenary Maps",
                                     )
                                     .to_string().replace("For Real-Time tracking, please visit rt.scmetro.org.", "")
-                                    .replace("Para el rastreo en tiempo real, por favor visite https://rt.scmetro.org.", "");
+                                    .replace("Para el rastreo en tiempo real, por favor visite https://rt.scmetro.org.", "")
+                                    .replace("For real-time tracking, visit https://rt.scmetro.org.", "")
+                                    .replace("Para seguimiento en tiempo real, visite https://rt.scmetro.org.", "");
                             }
                         }
 
