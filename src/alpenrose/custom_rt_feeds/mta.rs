@@ -399,8 +399,16 @@ pub async fn send_mta_rail_to_aspen(
         let worker_id = data.worker_id;
 
         let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&data.socket)
-            .await
-            .unwrap();
+            .await;
+
+        if let Err(e) = aspen_client {
+            eprintln!(
+                "Failed to connect to Aspen at {}: {}",
+                data.socket, e
+            );
+            return;
+        }
+        let aspen_client = aspen_client.unwrap();
 
         let tarpc_send_to_aspen = aspen_client
             .from_alpenrose(
