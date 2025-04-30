@@ -832,11 +832,6 @@ pub async fn new_rt_data(
 
                         if santa_cruz_supp_data.is_some() {
                             if let Some(santa_cruz_supp_data) = &santa_cruz_supp_data {
-                                println!(
-                                    "santacruzmetro item count {}",
-                                    santa_cruz_supp_data.len()
-                                );
-
                                 if let Some(santa_cruz_supp_data) =
                                     santa_cruz_supp_data.get(&vehicle_entity.id)
                                 {
