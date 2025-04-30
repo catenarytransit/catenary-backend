@@ -461,6 +461,14 @@ pub async fn new_rt_data(
 
         let mut stop_ids_to_lookup: AHashSet<String> = AHashSet::new();
 
+        let mut vehicle_id_to_closest_temporal_stop_update: AHashMap<CompactString, gtfs_realtime::trip_update::StopTimeUpdate> =
+            AHashMap::new();
+
+        let current_time_unix_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         //pass through all the trip ids and get the last stop id that isnt skipped
         if let Some(trip_gtfs_rt_for_feed_id) =
             authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
@@ -481,6 +489,118 @@ pub async fn new_rt_data(
 
                                 if let Some(last_non_skipped_stop_id) = last_non_skipped_stop_id {
                                     stop_ids_to_lookup.insert(last_non_skipped_stop_id.clone());
+                                }
+
+                                //this algorithm finds the current stop time update
+                                //if there is a stop time update in which the current time is greater than the arrival time but less than the departure time, use it
+
+                                //otherwise, we pick the one with the next next arrival / departure time, by sorting it by time
+                                //if every departure time is already in the past, just pick the last one
+
+                                let mut closest_stop_time_update: Option<gtfs_realtime::trip_update::StopTimeUpdate> =
+                                    None;
+
+                                let current_stop_time = trip_update.stop_time_update.iter()
+                                .find(|stop_time_update| {
+                                    if let Some(arrival_event) = stop_time_update.arrival {
+                                        if let Some(departure_event) = stop_time_update.departure {
+                                            if let Some(arrival_time) = arrival_event.time {
+                                                if let Some(departure_time) = departure_event.time {
+                                                    return current_time_unix_timestamp >= arrival_time as u64
+                                                        && current_time_unix_timestamp <= departure_time as u64;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    false
+                                });
+
+                                if let Some(current_stop_time) = current_stop_time {
+                                    closest_stop_time_update = Some(current_stop_time.clone());
+                                } else {
+                                    let mut sorted_stop_time_updates = trip_update
+                                        .stop_time_update
+                                        .iter()
+                                        .filter(|x| x.schedule_relationship != Some(1))
+                                        .collect::<Vec<&gtfs_realtime::trip_update::StopTimeUpdate>>();
+
+                                    sorted_stop_time_updates.sort_by(|a, b| {
+                                        let a_arrival_time = a.arrival.as_ref().and_then(|arrival| arrival.time);
+                                        let b_arrival_time = b.arrival.as_ref().and_then(|arrival| arrival.time);
+
+                                        match (a_arrival_time, b_arrival_time) {
+                                            (Some(a_time), Some(b_time)) => return a_time.cmp(&b_time),
+                                            (Some(_), None) => return std::cmp::Ordering::Less,
+                                            (None, Some(_)) => return std::cmp::Ordering::Greater,
+                                            (None, None) => {}
+                                        }
+
+                                        let a_departure_time = a.departure.as_ref().and_then(|departure| departure.time);
+                                        let b_departure_time = b.departure.as_ref().and_then(|departure| departure.time);
+
+                                        match (a_departure_time, b_departure_time) {
+                                            (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
+                                            (Some(_), None) => std::cmp::Ordering::Less,
+                                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                                            (None, None) => std::cmp::Ordering::Equal,
+                                        }
+                                    });
+
+                                    //if everything is in the past, set the closest stop time update to the last one
+
+                                    if sorted_stop_time_updates.is_empty() {
+                                        closest_stop_time_update = None;
+                                    } else {
+                                        //is everything over?
+
+                                        let are_all_events_in_past = sorted_stop_time_updates.iter().all(|x| {
+                                            if let Some(arrival_event) = x.arrival {
+                                                if let Some(arrival_time) = arrival_event.time {
+                                                    return current_time_unix_timestamp >= arrival_time as u64;
+                                                }
+                                            }
+
+                                            if let Some(departure_event) = x.departure {
+                                                if let Some(departure_time) = departure_event.time {
+                                                    return current_time_unix_timestamp >= departure_time as u64;
+                                                }
+                                            }
+                                            false
+                                        });
+                                        if are_all_events_in_past {
+                                            closest_stop_time_update = sorted_stop_time_updates.last().map(|x| (*x).to_owned());
+                                        } else {
+                                           //no, find the closest next one
+                                           let closest_next_stop_event = sorted_stop_time_updates.iter()
+                                                .find(|x| {
+                                                    if let Some(arrival_event) = x.arrival {
+                                                        if let Some(arrival_time) = arrival_event.time {
+                                                            return current_time_unix_timestamp < arrival_time as u64;
+                                                        }
+                                                    }
+                                                    false
+                                                });
+
+                                            closest_stop_time_update = closest_next_stop_event.map(|x| (*x).to_owned());
+                                        }
+                                    }
+                                }
+                                
+
+                                if let Some(closest_stop_time_update) = closest_stop_time_update {
+                                    let vehicle_id = trip_update
+                                        .vehicle
+                                        .as_ref()
+                                        .and_then(|vehicle| vehicle.id.clone());
+
+                                        if let Some(vehicle_id) = vehicle_id {
+                                            vehicle_id_to_closest_temporal_stop_update.insert(
+                                                vehicle_id.into(),
+                                                closest_stop_time_update,
+                                            );
+                                    }
+
+                                   
                                 }
                             }
                         }
@@ -556,6 +676,75 @@ pub async fn new_rt_data(
         let itinerary_pattern_id_to_itinerary_pattern_meta =
             itinerary_pattern_id_to_itinerary_pattern_meta;
 
+        let direction_patterns_to_get: AHashSet<String> = itinerary_pattern_id_to_itinerary_pattern_meta
+            .values()
+            .map(|x| x.direction_pattern_id.clone())
+            .flatten()
+            .collect();
+
+        let direction_patterns = catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+            .filter(
+                catenary::schema::gtfs::direction_pattern_meta::dsl::chateau.eq(&chateau_id),
+            )
+            .filter(
+                catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_id
+                    .eq_any(&direction_patterns_to_get),
+            )
+            .select(catenary::models::DirectionPatternMeta::as_select())
+            .load::<catenary::models::DirectionPatternMeta>(conn)
+            .await?;
+
+        let mut direction_pattern_id_to_direction_pattern_meta: AHashMap<
+            String,
+            catenary::models::DirectionPatternMeta,
+        > = AHashMap::new();
+
+        for direction_pattern in direction_patterns {
+            direction_pattern_id_to_direction_pattern_meta.insert(
+                direction_pattern.direction_pattern_id.clone(),
+                direction_pattern,
+            );
+        }
+
+        let direction_pattern_id_to_direction_pattern_meta =
+            direction_pattern_id_to_direction_pattern_meta;
+
+        //query itinerary pattern rows
+
+        let mut itinerary_pattern_rows = 
+            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(&chateau_id),
+                )
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id
+                        .eq_any(&list_of_itinerary_patterns_to_lookup),
+                )
+                .select(catenary::models::ItineraryPatternRow::as_select())
+                .load::<catenary::models::ItineraryPatternRow>(conn)
+                .await?;
+
+        //split into hashmap by itinerary pattern id, sort by stop sequence
+
+        let mut itinerary_pattern_id_to_itinerary_pattern_rows: AHashMap<
+            String,
+            Vec<catenary::models::ItineraryPatternRow>,
+        > = AHashMap::new();
+
+        for itinerary_pattern_row in itinerary_pattern_rows {
+            let mut itinerary_pattern_rows = itinerary_pattern_id_to_itinerary_pattern_rows
+                .entry(itinerary_pattern_row.itinerary_pattern_id.clone())
+                .or_insert(vec![]);
+
+            itinerary_pattern_rows.push(itinerary_pattern_row);
+        }
+        for itinerary_pattern_rows in itinerary_pattern_id_to_itinerary_pattern_rows.values_mut() {
+            itinerary_pattern_rows.sort_by(|a, b| a.stop_sequence.cmp(&b.stop_sequence));
+        }
+
+        let itinerary_pattern_id_to_itinerary_pattern_rows =
+            itinerary_pattern_id_to_itinerary_pattern_rows;
+
         let mut route_ids_to_insert = AHashSet::new();
 
         for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
@@ -621,6 +810,117 @@ pub async fn new_rt_data(
                             }
                         }
 
+                        // get the next stop based on the realtime data
+
+                        let current_stop_event = match &vehicle_pos.vehicle {
+                            None => None,
+                            Some(vehicle) => {
+                                match &vehicle.id {
+                                    Some(vehicle_id) => {
+                                        vehicle_id_to_closest_temporal_stop_update
+                                            .get(vehicle_id.as_str())
+                                    }
+                                    None => {
+                                       None
+                                    }
+                                }
+                            }
+                        };
+                       
+
+                        let trip_headsign = match &vehicle_pos.trip {
+                            Some(trip) => {
+                                match &trip.trip_id {
+                                    Some(trip_id) => {
+                                        let trip = trip_id_to_trip.get(&trip_id.clone());
+                                        match trip {
+                                            Some(trip) => {
+                                                let itinerary_pattern = itinerary_pattern_id_to_itinerary_pattern_meta.get(&trip.itinerary_pattern_id);
+                                                match itinerary_pattern {
+                                                    Some(itinerary_pattern) => {
+
+                                                        //get direction pattern
+                                                        let direction_pattern = 
+                                                            direction_pattern_id_to_direction_pattern_meta
+                                                                .get(itinerary_pattern.direction_pattern_id.as_ref().unwrap().as_str());
+
+                                                        match direction_pattern {
+                                                            Some(direction_pattern) => {
+                                                                let mut headsign = direction_pattern.headsign_or_destination.clone();
+
+                                                                match &direction_pattern.stop_headsigns_unique_list {
+                                                                    Some(stop_headsigns) => {
+                                                                        let stop_headsigns_flattened = 
+                                                                            stop_headsigns
+                                                                                .iter()
+                                                                                .filter_map(|x| x.as_ref())
+                                                                                .map(|x| x.to_string())
+                                                                                .collect::<Vec<String>>();
+
+                                                                        //get current stop event
+
+                                                                        if let Some(current_stop_event) = current_stop_event {
+                                                                            //get matching itinerary row
+
+                                                                            let current_stop_id = current_stop_event.stop_id.clone();
+
+                                                                            let itinerary_pattern_rows = itinerary_pattern_id_to_itinerary_pattern_rows.get(&trip.itinerary_pattern_id);
+
+                                                                            match itinerary_pattern_rows {
+
+                                                                                Some(itinerary_pattern_rows) => {
+
+                                                                                    if let Some(current_stop_id) = &current_stop_id {
+                                                                                        let matching_itinerary_row = itinerary_pattern_rows
+                                                                                        .iter()
+                                                                                        .find(|x| x.stop_id == current_stop_id);
+
+                                                                                    match matching_itinerary_row {
+                                                                                        Some(matching_itinerary_row) => {
+                                                                                            match matching_itinerary_row.stop_headsign_idx  {
+                                                                                                Some(stop_headsign_idx) => {
+                                                                                                    let aspenised_stop_headsigns = stop_headsigns_flattened.get(stop_headsign_idx as usize);
+                                                                                                    match aspenised_stop_headsigns {
+                                                                                                        Some(aspenised_stop_headsigns) => {
+                                                                                                            headsign = aspenised_stop_headsigns.to_string();
+                                                                                                        },
+                                                                                                        None => {}
+                                                                                                    }
+                                                                                                },
+                                                                                                None => {}
+                                                                                            }
+                                                                                        },
+                                                                                        None => {}
+                                                                                    }
+                                                                                    }
+                                                                                    
+                                                                                },
+                                                                                None => {}
+                                                                            }
+                                                                        }
+                                                                    },
+                                                                    None => {
+                                                                        
+                                                                    }
+                                                                }
+
+                                                                Some(headsign)
+                                                            },
+                                                            None => None
+                                                        }
+                                                    },
+                                                    None => None
+                                                }
+                                            },
+                                            None => None
+                                        }
+                                    },
+                                    None => None
+                                }.map(|headsign| headsign.replace("-Exact Fare", "").replace(" - Funded in part by/SB County Measure A", ""))
+                            },
+                            None => None
+                        };
+
                         let pos_aspenised = AspenisedVehiclePosition {
                             trip: vehicle_pos.trip.as_ref().map(|trip| {
                                 AspenisedVehicleTripInfo {
@@ -644,24 +944,7 @@ pub async fn new_rt_data(
                                    start_time: trip.start_time.clone(),
                                     schedule_relationship: option_i32_to_schedule_relationship(&trip.schedule_relationship),
                                     route_id: recalculate_route_id.clone(),
-                                    trip_headsign: match &trip.trip_id {
-                                            Some(trip_id) => {
-                                                let trip = trip_id_to_trip.get(&trip_id.clone());
-                                                match trip {
-                                                    Some(trip) => {
-                                                        let itinerary_pattern = itinerary_pattern_id_to_itinerary_pattern_meta.get(&trip.itinerary_pattern_id);
-                                                        match itinerary_pattern {
-                                                            Some(itinerary_pattern) => {
-                                                                itinerary_pattern.trip_headsign.clone()
-                                                            },
-                                                            None => None
-                                                        }
-                                                    },
-                                                    None => None
-                                                }
-                                            },
-                                            None => None
-                                        }.map(|headsign| headsign.replace("-Exact Fare", "").replace(" - Funded in part by/SB County Measure A", "")),
+                                    trip_headsign: trip_headsign,
                                     trip_short_name: match &trip.trip_id {
                                         Some(trip_id) => {
                                             let trip = trip_id_to_trip.get(&trip_id.clone());
