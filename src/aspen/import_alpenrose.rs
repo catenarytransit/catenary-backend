@@ -461,8 +461,10 @@ pub async fn new_rt_data(
 
         let mut stop_ids_to_lookup: AHashSet<String> = AHashSet::new();
 
-        let mut vehicle_id_to_closest_temporal_stop_update: AHashMap<CompactString, gtfs_realtime::trip_update::StopTimeUpdate> =
-            AHashMap::new();
+        let mut vehicle_id_to_closest_temporal_stop_update: AHashMap<
+            CompactString,
+            gtfs_realtime::trip_update::StopTimeUpdate,
+        > = AHashMap::new();
 
         let current_time_unix_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -497,23 +499,33 @@ pub async fn new_rt_data(
                                 //otherwise, we pick the one with the next next arrival / departure time, by sorting it by time
                                 //if every departure time is already in the past, just pick the last one
 
-                                let mut closest_stop_time_update: Option<gtfs_realtime::trip_update::StopTimeUpdate> =
-                                    None;
+                                let mut closest_stop_time_update: Option<
+                                    gtfs_realtime::trip_update::StopTimeUpdate,
+                                > = None;
 
-                                let current_stop_time = trip_update.stop_time_update.iter()
-                                .find(|stop_time_update| {
-                                    if let Some(arrival_event) = stop_time_update.arrival {
-                                        if let Some(departure_event) = stop_time_update.departure {
-                                            if let Some(arrival_time) = arrival_event.time {
-                                                if let Some(departure_time) = departure_event.time {
-                                                    return current_time_unix_timestamp >= arrival_time as u64
-                                                        && current_time_unix_timestamp <= departure_time as u64;
+                                let current_stop_time =
+                                    trip_update
+                                        .stop_time_update
+                                        .iter()
+                                        .find(|stop_time_update| {
+                                            if let Some(arrival_event) = stop_time_update.arrival {
+                                                if let Some(departure_event) =
+                                                    stop_time_update.departure
+                                                {
+                                                    if let Some(arrival_time) = arrival_event.time {
+                                                        if let Some(departure_time) =
+                                                            departure_event.time
+                                                        {
+                                                            return current_time_unix_timestamp
+                                                                >= arrival_time as u64
+                                                                && current_time_unix_timestamp
+                                                                    <= departure_time as u64;
+                                                        }
+                                                    }
                                                 }
                                             }
-                                        }
-                                    }
-                                    false
-                                });
+                                            false
+                                        });
 
                                 if let Some(current_stop_time) = current_stop_time {
                                     closest_stop_time_update = Some(current_stop_time.clone());
@@ -525,18 +537,28 @@ pub async fn new_rt_data(
                                         .collect::<Vec<&gtfs_realtime::trip_update::StopTimeUpdate>>();
 
                                     sorted_stop_time_updates.sort_by(|a, b| {
-                                        let a_arrival_time = a.arrival.as_ref().and_then(|arrival| arrival.time);
-                                        let b_arrival_time = b.arrival.as_ref().and_then(|arrival| arrival.time);
+                                        let a_arrival_time =
+                                            a.arrival.as_ref().and_then(|arrival| arrival.time);
+                                        let b_arrival_time =
+                                            b.arrival.as_ref().and_then(|arrival| arrival.time);
 
                                         match (a_arrival_time, b_arrival_time) {
-                                            (Some(a_time), Some(b_time)) => return a_time.cmp(&b_time),
+                                            (Some(a_time), Some(b_time)) => {
+                                                return a_time.cmp(&b_time);
+                                            }
                                             (Some(_), None) => return std::cmp::Ordering::Less,
                                             (None, Some(_)) => return std::cmp::Ordering::Greater,
                                             (None, None) => {}
                                         }
 
-                                        let a_departure_time = a.departure.as_ref().and_then(|departure| departure.time);
-                                        let b_departure_time = b.departure.as_ref().and_then(|departure| departure.time);
+                                        let a_departure_time = a
+                                            .departure
+                                            .as_ref()
+                                            .and_then(|departure| departure.time);
+                                        let b_departure_time = b
+                                            .departure
+                                            .as_ref()
+                                            .and_then(|departure| departure.time);
 
                                         match (a_departure_time, b_departure_time) {
                                             (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
@@ -553,39 +575,49 @@ pub async fn new_rt_data(
                                     } else {
                                         //is everything over?
 
-                                        let are_all_events_in_past = sorted_stop_time_updates.iter().all(|x| {
-                                            if let Some(arrival_event) = x.arrival {
-                                                if let Some(arrival_time) = arrival_event.time {
-                                                    return current_time_unix_timestamp >= arrival_time as u64;
+                                        let are_all_events_in_past =
+                                            sorted_stop_time_updates.iter().all(|x| {
+                                                if let Some(arrival_event) = x.arrival {
+                                                    if let Some(arrival_time) = arrival_event.time {
+                                                        return current_time_unix_timestamp
+                                                            >= arrival_time as u64;
+                                                    }
                                                 }
-                                            }
 
-                                            if let Some(departure_event) = x.departure {
-                                                if let Some(departure_time) = departure_event.time {
-                                                    return current_time_unix_timestamp >= departure_time as u64;
+                                                if let Some(departure_event) = x.departure {
+                                                    if let Some(departure_time) =
+                                                        departure_event.time
+                                                    {
+                                                        return current_time_unix_timestamp
+                                                            >= departure_time as u64;
+                                                    }
                                                 }
-                                            }
-                                            false
-                                        });
+                                                false
+                                            });
                                         if are_all_events_in_past {
-                                            closest_stop_time_update = sorted_stop_time_updates.last().map(|x| (*x).to_owned());
+                                            closest_stop_time_update = sorted_stop_time_updates
+                                                .last()
+                                                .map(|x| (*x).to_owned());
                                         } else {
-                                           //no, find the closest next one
-                                           let closest_next_stop_event = sorted_stop_time_updates.iter()
-                                                .find(|x| {
+                                            //no, find the closest next one
+                                            let closest_next_stop_event =
+                                                sorted_stop_time_updates.iter().find(|x| {
                                                     if let Some(arrival_event) = x.arrival {
-                                                        if let Some(arrival_time) = arrival_event.time {
-                                                            return current_time_unix_timestamp < arrival_time as u64;
+                                                        if let Some(arrival_time) =
+                                                            arrival_event.time
+                                                        {
+                                                            return current_time_unix_timestamp
+                                                                < arrival_time as u64;
                                                         }
                                                     }
                                                     false
                                                 });
 
-                                            closest_stop_time_update = closest_next_stop_event.map(|x| (*x).to_owned());
+                                            closest_stop_time_update =
+                                                closest_next_stop_event.map(|x| (*x).to_owned());
                                         }
                                     }
                                 }
-                                
 
                                 if let Some(closest_stop_time_update) = closest_stop_time_update {
                                     let vehicle_id = trip_update
@@ -593,14 +625,10 @@ pub async fn new_rt_data(
                                         .as_ref()
                                         .and_then(|vehicle| vehicle.id.clone());
 
-                                        if let Some(vehicle_id) = vehicle_id {
-                                            vehicle_id_to_closest_temporal_stop_update.insert(
-                                                vehicle_id.into(),
-                                                closest_stop_time_update,
-                                            );
+                                    if let Some(vehicle_id) = vehicle_id {
+                                        vehicle_id_to_closest_temporal_stop_update
+                                            .insert(vehicle_id.into(), closest_stop_time_update);
                                     }
-
-                                   
                                 }
                             }
                         }
@@ -676,23 +704,25 @@ pub async fn new_rt_data(
         let itinerary_pattern_id_to_itinerary_pattern_meta =
             itinerary_pattern_id_to_itinerary_pattern_meta;
 
-        let direction_patterns_to_get: AHashSet<String> = itinerary_pattern_id_to_itinerary_pattern_meta
-            .values()
-            .map(|x| x.direction_pattern_id.clone())
-            .flatten()
-            .collect();
+        let direction_patterns_to_get: AHashSet<String> =
+            itinerary_pattern_id_to_itinerary_pattern_meta
+                .values()
+                .map(|x| x.direction_pattern_id.clone())
+                .flatten()
+                .collect();
 
-        let direction_patterns = catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
-            .filter(
-                catenary::schema::gtfs::direction_pattern_meta::dsl::chateau.eq(&chateau_id),
-            )
-            .filter(
-                catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_id
-                    .eq_any(&direction_patterns_to_get),
-            )
-            .select(catenary::models::DirectionPatternMeta::as_select())
-            .load::<catenary::models::DirectionPatternMeta>(conn)
-            .await?;
+        let direction_patterns =
+            catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                .filter(
+                    catenary::schema::gtfs::direction_pattern_meta::dsl::chateau.eq(&chateau_id),
+                )
+                .filter(
+                    catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_id
+                        .eq_any(&direction_patterns_to_get),
+                )
+                .select(catenary::models::DirectionPatternMeta::as_select())
+                .load::<catenary::models::DirectionPatternMeta>(conn)
+                .await?;
 
         let mut direction_pattern_id_to_direction_pattern_meta: AHashMap<
             String,
@@ -711,11 +741,9 @@ pub async fn new_rt_data(
 
         //query itinerary pattern rows
 
-        let mut itinerary_pattern_rows = 
+        let mut itinerary_pattern_rows =
             catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(&chateau_id),
-                )
+                .filter(catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(&chateau_id))
                 .filter(
                     catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id
                         .eq_any(&list_of_itinerary_patterns_to_lookup),
@@ -814,19 +842,12 @@ pub async fn new_rt_data(
 
                         let current_stop_event = match &vehicle_pos.vehicle {
                             None => None,
-                            Some(vehicle) => {
-                                match &vehicle.id {
-                                    Some(vehicle_id) => {
-                                        vehicle_id_to_closest_temporal_stop_update
-                                            .get(vehicle_id.as_str())
-                                    }
-                                    None => {
-                                       None
-                                    }
-                                }
-                            }
+                            Some(vehicle) => match &vehicle.id {
+                                Some(vehicle_id) => vehicle_id_to_closest_temporal_stop_update
+                                    .get(vehicle_id.as_str()),
+                                None => None,
+                            },
                         };
-                       
 
                         let trip_headsign = match &vehicle_pos.trip {
                             Some(trip) => {
@@ -917,18 +938,22 @@ pub async fn new_rt_data(
                                     },
                                     None => None
                                 }.map(|headsign| headsign.replace("-Exact Fare", "").replace(" - Funded in part by/SB County Measure A", ""))
-                            },
-                            None => None
+                            }
+                            None => None,
                         };
 
                         let pos_aspenised = AspenisedVehiclePosition {
-                            trip: vehicle_pos.trip.as_ref().map(|trip| {
-                                AspenisedVehicleTripInfo {
+                            trip: vehicle_pos
+                                .trip
+                                .as_ref()
+                                .map(|trip| AspenisedVehicleTripInfo {
                                     trip_id: trip.trip_id.clone(),
                                     direction_id: trip.direction_id,
-                                   start_date: match &trip.start_date {
+                                    start_date: match &trip.start_date {
                                         Some(start_date) => {
-                                            match catenary::throw_away_start_dates.contains(&chateau_id.as_str()) {
+                                            match catenary::throw_away_start_dates
+                                                .contains(&chateau_id.as_str())
+                                            {
                                                 true => None,
                                                 false => match chrono::NaiveDate::parse_from_str(
                                                     &start_date,
@@ -936,40 +961,44 @@ pub async fn new_rt_data(
                                                 ) {
                                                     Ok(start_date) => Some(start_date),
                                                     Err(_) => None,
-                                                }
+                                                },
                                             }
-                                        },
+                                        }
                                         None => None,
                                     },
-                                   start_time: trip.start_time.clone(),
-                                    schedule_relationship: option_i32_to_schedule_relationship(&trip.schedule_relationship),
+                                    start_time: trip.start_time.clone(),
+                                    schedule_relationship: option_i32_to_schedule_relationship(
+                                        &trip.schedule_relationship,
+                                    ),
                                     route_id: recalculate_route_id.clone(),
                                     trip_headsign: trip_headsign,
                                     trip_short_name: match &trip.trip_id {
                                         Some(trip_id) => {
                                             let trip = trip_id_to_trip.get(&trip_id.clone());
                                             match trip {
-                                                Some(trip) => {
-                                                    trip.trip_short_name.as_ref().map(|x| x.to_string())
-                                                },
-                                                None => None
+                                                Some(trip) => trip
+                                                    .trip_short_name
+                                                    .as_ref()
+                                                    .map(|x| x.to_string()),
+                                                None => None,
                                             }
-                                        },
-                                        None => None
-                                    }
-                                }
-                            }),
+                                        }
+                                        None => None,
+                                    },
+                                }),
                             position: position,
                             timestamp: vehicle_pos.timestamp,
-                            vehicle: vehicle_pos.vehicle.as_ref().map(|vehicle| AspenisedVehicleDescriptor {
-                                id: vehicle.id.clone(),
-                                label: match realtime_feed_id.as_str() {
-                                    "f-trimet~rt" => vehicle.id.clone(),
-                                    _ => vehicle.label.clone()
-                                },
-                                license_plate: vehicle.license_plate.clone(),
-                                wheelchair_accessible: vehicle.wheelchair_accessible,
-                                }),
+                            vehicle: vehicle_pos.vehicle.as_ref().map(|vehicle| {
+                                AspenisedVehicleDescriptor {
+                                    id: vehicle.id.clone(),
+                                    label: match realtime_feed_id.as_str() {
+                                        "f-trimet~rt" => vehicle.id.clone(),
+                                        _ => vehicle.label.clone(),
+                                    },
+                                    license_plate: vehicle.license_plate.clone(),
+                                    wheelchair_accessible: vehicle.wheelchair_accessible,
+                                }
+                            }),
                             route_type: match realtime_feed_id.as_str() {
                                 "f-mta~nyc~rt~lirr" => 2,
                                 "f-mta~nyc~rt~mnr" => 2,
@@ -980,19 +1009,19 @@ pub async fn new_rt_data(
                                             let route = route_id_to_route.get(route_id);
                                             match route {
                                                 Some(route) => route.route_type,
-                                                None => 3
+                                                None => 3,
                                             }
-                                        },
-                                        None => 3
+                                        }
+                                        None => 3,
                                     },
-                                    None => 3
-                                }
+                                    None => 3,
+                                },
                             },
                             current_status: vehicle_pos.current_status,
                             current_stop_sequence: vehicle_pos.current_stop_sequence,
                             occupancy_status: vehicle_pos.occupancy_status,
                             occupancy_percentage: vehicle_pos.occupancy_percentage,
-                            congestion_level: vehicle_pos.congestion_level
+                            congestion_level: vehicle_pos.congestion_level,
                         };
 
                         let pos_aspenised = vehicle_pos_supplement(
