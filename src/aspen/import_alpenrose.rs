@@ -610,6 +610,15 @@ pub async fn new_rt_data(
                                                                 < arrival_time as u64;
                                                         }
                                                     }
+
+                                                    if let Some(departure_event) = x.departure {
+                                                        if let Some(departure_time) =
+                                                            departure_event.time
+                                                        {
+                                                            return current_time_unix_timestamp
+                                                                < departure_time as u64;
+                                                        }
+                                                    }
                                                     false
                                                 });
 
@@ -626,6 +635,10 @@ pub async fn new_rt_data(
                                         .and_then(|vehicle| vehicle.id.clone());
 
                                     if let Some(vehicle_id) = vehicle_id {
+                                        if chateau_id == "santacruzmetro" {
+                                            println!("Inserting santacruzmetro vehicle {}, {:?}", vehicle_id, closest_stop_time_update.stop_id);
+                                        }
+
                                         vehicle_id_to_closest_temporal_stop_update
                                             .insert(vehicle_id.into(), closest_stop_time_update);
                                     }
