@@ -492,157 +492,145 @@ pub async fn new_rt_data(
                                 if let Some(last_non_skipped_stop_id) = last_non_skipped_stop_id {
                                     stop_ids_to_lookup.insert(last_non_skipped_stop_id.clone());
                                 }
+                            }
+                        }
 
-                                //this algorithm finds the current stop time update
-                                //if there is a stop time update in which the current time is greater than the arrival time but less than the departure time, use it
+                        //this algorithm finds the current stop time update
+                        //if there is a stop time update in which the current time is greater than the arrival time but less than the departure time, use it
 
-                                //otherwise, we pick the one with the next next arrival / departure time, by sorting it by time
-                                //if every departure time is already in the past, just pick the last one
+                        //otherwise, we pick the one with the next next arrival / departure time, by sorting it by time
+                        //if every departure time is already in the past, just pick the last one
 
-                                let mut closest_stop_time_update: Option<
-                                    gtfs_realtime::trip_update::StopTimeUpdate,
-                                > = None;
+                        let mut closest_stop_time_update: Option<
+                            gtfs_realtime::trip_update::StopTimeUpdate,
+                        > = None;
 
-                                let current_stop_time =
-                                    trip_update
-                                        .stop_time_update
-                                        .iter()
-                                        .find(|stop_time_update| {
-                                            if let Some(arrival_event) = stop_time_update.arrival {
-                                                if let Some(departure_event) =
-                                                    stop_time_update.departure
-                                                {
-                                                    if let Some(arrival_time) = arrival_event.time {
-                                                        if let Some(departure_time) =
-                                                            departure_event.time
-                                                        {
-                                                            return current_time_unix_timestamp
-                                                                >= arrival_time as u64
-                                                                && current_time_unix_timestamp
-                                                                    <= departure_time as u64;
-                                                        }
-                                                    }
+                        let current_stop_time =
+                            trip_update
+                                .stop_time_update
+                                .iter()
+                                .find(|stop_time_update| {
+                                    if let Some(arrival_event) = stop_time_update.arrival {
+                                        if let Some(departure_event) = stop_time_update.departure {
+                                            if let Some(arrival_time) = arrival_event.time {
+                                                if let Some(departure_time) = departure_event.time {
+                                                    return current_time_unix_timestamp
+                                                        >= arrival_time as u64
+                                                        && current_time_unix_timestamp
+                                                            <= departure_time as u64;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    false
+                                });
+
+                        if let Some(current_stop_time) = current_stop_time {
+                            closest_stop_time_update = Some(current_stop_time.clone());
+                        } else {
+                            let mut sorted_stop_time_updates = trip_update
+                                .stop_time_update
+                                .iter()
+                                .filter(|x| x.schedule_relationship != Some(1))
+                                .collect::<Vec<&gtfs_realtime::trip_update::StopTimeUpdate>>();
+
+                            sorted_stop_time_updates.sort_by(|a, b| {
+                                let a_arrival_time =
+                                    a.arrival.as_ref().and_then(|arrival| arrival.time);
+                                let b_arrival_time =
+                                    b.arrival.as_ref().and_then(|arrival| arrival.time);
+
+                                match (a_arrival_time, b_arrival_time) {
+                                    (Some(a_time), Some(b_time)) => {
+                                        return a_time.cmp(&b_time);
+                                    }
+                                    (Some(_), None) => return std::cmp::Ordering::Less,
+                                    (None, Some(_)) => return std::cmp::Ordering::Greater,
+                                    (None, None) => {}
+                                }
+
+                                let a_departure_time =
+                                    a.departure.as_ref().and_then(|departure| departure.time);
+                                let b_departure_time =
+                                    b.departure.as_ref().and_then(|departure| departure.time);
+
+                                match (a_departure_time, b_departure_time) {
+                                    (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
+                                    (Some(_), None) => std::cmp::Ordering::Less,
+                                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                                    (None, None) => std::cmp::Ordering::Equal,
+                                }
+                            });
+
+                            //if everything is in the past, set the closest stop time update to the last one
+
+                            if sorted_stop_time_updates.is_empty() {
+                                closest_stop_time_update = None;
+                            } else {
+                                //is everything over?
+
+                                let are_all_events_in_past =
+                                    sorted_stop_time_updates.iter().all(|x| {
+                                        if let Some(arrival_event) = x.arrival {
+                                            if let Some(arrival_time) = arrival_event.time {
+                                                return current_time_unix_timestamp
+                                                    >= arrival_time as u64;
+                                            }
+                                        }
+
+                                        if let Some(departure_event) = x.departure {
+                                            if let Some(departure_time) = departure_event.time {
+                                                return current_time_unix_timestamp
+                                                    >= departure_time as u64;
+                                            }
+                                        }
+                                        false
+                                    });
+                                if are_all_events_in_past {
+                                    closest_stop_time_update =
+                                        sorted_stop_time_updates.last().map(|x| (*x).to_owned());
+                                } else {
+                                    //no, find the closest next one
+                                    let closest_next_stop_event =
+                                        sorted_stop_time_updates.iter().find(|x| {
+                                            if let Some(arrival_event) = x.arrival {
+                                                if let Some(arrival_time) = arrival_event.time {
+                                                    return current_time_unix_timestamp
+                                                        < arrival_time as u64;
+                                                }
+                                            }
+
+                                            if let Some(departure_event) = x.departure {
+                                                if let Some(departure_time) = departure_event.time {
+                                                    return current_time_unix_timestamp
+                                                        < departure_time as u64;
                                                 }
                                             }
                                             false
                                         });
 
-                                if let Some(current_stop_time) = current_stop_time {
-                                    closest_stop_time_update = Some(current_stop_time.clone());
-                                } else {
-                                    let mut sorted_stop_time_updates = trip_update
-                                        .stop_time_update
-                                        .iter()
-                                        .filter(|x| x.schedule_relationship != Some(1))
-                                        .collect::<Vec<&gtfs_realtime::trip_update::StopTimeUpdate>>();
+                                    closest_stop_time_update =
+                                        closest_next_stop_event.map(|x| (*x).to_owned());
+                                }
+                            }
+                        }
 
-                                    sorted_stop_time_updates.sort_by(|a, b| {
-                                        let a_arrival_time =
-                                            a.arrival.as_ref().and_then(|arrival| arrival.time);
-                                        let b_arrival_time =
-                                            b.arrival.as_ref().and_then(|arrival| arrival.time);
+                        if let Some(closest_stop_time_update) = closest_stop_time_update {
+                            let vehicle_id = trip_update
+                                .vehicle
+                                .as_ref()
+                                .and_then(|vehicle| vehicle.id.clone());
 
-                                        match (a_arrival_time, b_arrival_time) {
-                                            (Some(a_time), Some(b_time)) => {
-                                                return a_time.cmp(&b_time);
-                                            }
-                                            (Some(_), None) => return std::cmp::Ordering::Less,
-                                            (None, Some(_)) => return std::cmp::Ordering::Greater,
-                                            (None, None) => {}
-                                        }
-
-                                        let a_departure_time = a
-                                            .departure
-                                            .as_ref()
-                                            .and_then(|departure| departure.time);
-                                        let b_departure_time = b
-                                            .departure
-                                            .as_ref()
-                                            .and_then(|departure| departure.time);
-
-                                        match (a_departure_time, b_departure_time) {
-                                            (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
-                                            (Some(_), None) => std::cmp::Ordering::Less,
-                                            (None, Some(_)) => std::cmp::Ordering::Greater,
-                                            (None, None) => std::cmp::Ordering::Equal,
-                                        }
-                                    });
-
-                                    //if everything is in the past, set the closest stop time update to the last one
-
-                                    if sorted_stop_time_updates.is_empty() {
-                                        closest_stop_time_update = None;
-                                    } else {
-                                        //is everything over?
-
-                                        let are_all_events_in_past =
-                                            sorted_stop_time_updates.iter().all(|x| {
-                                                if let Some(arrival_event) = x.arrival {
-                                                    if let Some(arrival_time) = arrival_event.time {
-                                                        return current_time_unix_timestamp
-                                                            >= arrival_time as u64;
-                                                    }
-                                                }
-
-                                                if let Some(departure_event) = x.departure {
-                                                    if let Some(departure_time) =
-                                                        departure_event.time
-                                                    {
-                                                        return current_time_unix_timestamp
-                                                            >= departure_time as u64;
-                                                    }
-                                                }
-                                                false
-                                            });
-                                        if are_all_events_in_past {
-                                            closest_stop_time_update = sorted_stop_time_updates
-                                                .last()
-                                                .map(|x| (*x).to_owned());
-                                        } else {
-                                            //no, find the closest next one
-                                            let closest_next_stop_event =
-                                                sorted_stop_time_updates.iter().find(|x| {
-                                                    if let Some(arrival_event) = x.arrival {
-                                                        if let Some(arrival_time) =
-                                                            arrival_event.time
-                                                        {
-                                                            return current_time_unix_timestamp
-                                                                < arrival_time as u64;
-                                                        }
-                                                    }
-
-                                                    if let Some(departure_event) = x.departure {
-                                                        if let Some(departure_time) =
-                                                            departure_event.time
-                                                        {
-                                                            return current_time_unix_timestamp
-                                                                < departure_time as u64;
-                                                        }
-                                                    }
-                                                    false
-                                                });
-
-                                            closest_stop_time_update =
-                                                closest_next_stop_event.map(|x| (*x).to_owned());
-                                        }
-                                    }
+                            if let Some(vehicle_id) = vehicle_id {
+                                if chateau_id == "santacruzmetro" {
+                                    println!(
+                                        "Inserting santacruzmetro vehicle {}, {:?}",
+                                        vehicle_id, closest_stop_time_update.stop_id
+                                    );
                                 }
 
-                                if let Some(closest_stop_time_update) = closest_stop_time_update {
-                                    let vehicle_id = trip_update
-                                        .vehicle
-                                        .as_ref()
-                                        .and_then(|vehicle| vehicle.id.clone());
-
-                                    if let Some(vehicle_id) = vehicle_id {
-                                        if chateau_id == "santacruzmetro" {
-                                            println!("Inserting santacruzmetro vehicle {}, {:?}", vehicle_id, closest_stop_time_update.stop_id);
-                                        }
-
-                                        vehicle_id_to_closest_temporal_stop_update
-                                            .insert(vehicle_id.into(), closest_stop_time_update);
-                                    }
-                                }
+                                vehicle_id_to_closest_temporal_stop_update
+                                    .insert(vehicle_id.into(), closest_stop_time_update);
                             }
                         }
                     }
@@ -863,9 +851,7 @@ pub async fn new_rt_data(
                             if let Some(current_stop_event) = current_stop_event {
                                 println!(
                                     "santacruzmetro Current stop event, vehicle {}, route {:?}: {:?}",
-                                    vehicle_entity.id,
-                                    recalculate_route_id,
-                                    current_stop_event
+                                    vehicle_entity.id, recalculate_route_id, current_stop_event
                                 );
                             } else {
                                 println!(
