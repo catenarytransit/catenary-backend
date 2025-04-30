@@ -849,98 +849,89 @@ pub async fn new_rt_data(
                             },
                         };
 
-                        let trip_headsign = match &vehicle_pos.trip {
-                            Some(trip) => {
-                                match &trip.trip_id {
-                                    Some(trip_id) => {
-                                        let trip = trip_id_to_trip.get(&trip_id.clone());
-                                        match trip {
-                                            Some(trip) => {
-                                                let itinerary_pattern = itinerary_pattern_id_to_itinerary_pattern_meta.get(&trip.itinerary_pattern_id);
-                                                match itinerary_pattern {
-                                                    Some(itinerary_pattern) => {
+                        //some debugging
 
-                                                        //get direction pattern
-                                                        let direction_pattern = 
-                                                            direction_pattern_id_to_direction_pattern_meta
-                                                                .get(itinerary_pattern.direction_pattern_id.as_ref().unwrap().as_str());
+                        if chateau_id == "santacruzmetro" {
+                            if let Some(current_stop_event) = current_stop_event {
+                                println!(
+                                    "santacruzmetro Current stop event, vehicle {}, route {:?}: {:?}",
+                                    vehicle_entity.id,
+                                    recalculate_route_id,
+                                    current_stop_event
+                                );
+                            } else {
+                                println!(
+                                    "santacruzmetro Current stop event, vehicle {}, route {:?}: None",
+                                    vehicle_entity.id, recalculate_route_id
+                                );
+                            }
+                        }
 
-                                                        match direction_pattern {
-                                                            Some(direction_pattern) => {
-                                                                let mut headsign = direction_pattern.headsign_or_destination.clone();
+                        let trip_headsign = vehicle_pos.trip.as_ref().and_then(|trip| {
+                            trip.trip_id.as_ref().and_then(|trip_id| {
+                                trip_id_to_trip.get(trip_id).and_then(|trip| {
+                                    itinerary_pattern_id_to_itinerary_pattern_meta
+                                        .get(&trip.itinerary_pattern_id)
+                                        .and_then(|itinerary_pattern| {
+                                            itinerary_pattern
+                                                .direction_pattern_id
+                                                .as_ref()
+                                                .and_then(|direction_pattern_id| {
+                                                    direction_pattern_id_to_direction_pattern_meta
+                                                        .get(direction_pattern_id.as_str())
+                                                        .map(|direction_pattern| {
+                                                            let mut headsign =
+                                                                direction_pattern.headsign_or_destination.clone();
 
-                                                                match &direction_pattern.stop_headsigns_unique_list {
-                                                                    Some(stop_headsigns) => {
-                                                                        let stop_headsigns_flattened = 
-                                                                            stop_headsigns
-                                                                                .iter()
-                                                                                .filter_map(|x| x.as_ref())
-                                                                                .map(|x| x.to_string())
-                                                                                .collect::<Vec<String>>();
+                                                            if let Some(stop_headsigns) =
+                                                                &direction_pattern.stop_headsigns_unique_list
+                                                            {
+                                                                let stop_headsigns_flattened: Vec<String> =
+                                                                    stop_headsigns
+                                                                        .iter()
+                                                                        .filter_map(|x| x.as_ref())
+                                                                        .map(|x| x.to_string())
+                                                                        .collect();
 
-                                                                        //get current stop event
-
-                                                                        if let Some(current_stop_event) = current_stop_event {
-                                                                            //get matching itinerary row
-
-                                                                            let current_stop_id = current_stop_event.stop_id.clone();
-
-                                                                            let itinerary_pattern_rows = itinerary_pattern_id_to_itinerary_pattern_rows.get(&trip.itinerary_pattern_id);
-
-                                                                            match itinerary_pattern_rows {
-
-                                                                                Some(itinerary_pattern_rows) => {
-
-                                                                                    if let Some(current_stop_id) = &current_stop_id {
-                                                                                        let matching_itinerary_row = itinerary_pattern_rows
-                                                                                        .iter()
-                                                                                        .find(|x| x.stop_id == current_stop_id);
-
-                                                                                    match matching_itinerary_row {
-                                                                                        Some(matching_itinerary_row) => {
-                                                                                            match matching_itinerary_row.stop_headsign_idx  {
-                                                                                                Some(stop_headsign_idx) => {
-                                                                                                    let aspenised_stop_headsigns = stop_headsigns_flattened.get(stop_headsign_idx as usize);
-                                                                                                    match aspenised_stop_headsigns {
-                                                                                                        Some(aspenised_stop_headsigns) => {
-                                                                                                            headsign = aspenised_stop_headsigns.to_string();
-                                                                                                        },
-                                                                                                        None => {}
-                                                                                                    }
-                                                                                                },
-                                                                                                None => {}
-                                                                                            }
-                                                                                        },
-                                                                                        None => {}
-                                                                                    }
-                                                                                    }
-                                                                                    
-                                                                                },
-                                                                                None => {}
+                                                                if let Some(current_stop_event) =
+                                                                    current_stop_event
+                                                                {
+                                                                    if let Some(itinerary_pattern_rows) =
+                                                                        itinerary_pattern_id_to_itinerary_pattern_rows
+                                                                            .get(&trip.itinerary_pattern_id)
+                                                                    {
+                                                                        if let Some(matching_itinerary_row) =
+                                                                            current_stop_event.stop_id.as_ref().and_then(|current_stop_id| {
+                                                                                itinerary_pattern_rows.iter().find(|x| x.stop_id == *current_stop_id)
+                                                                            })
+                                                                        {
+                                                                            if let Some(stop_headsign_idx) =
+                                                                                matching_itinerary_row.stop_headsign_idx
+                                                                            {
+                                                                                if let Some(aspenised_stop_headsigns) =
+                                                                                    stop_headsigns_flattened.get(stop_headsign_idx as usize)
+                                                                                {
+                                                                                    headsign =
+                                                                                        aspenised_stop_headsigns.to_string();
+                                                                                }
                                                                             }
                                                                         }
-                                                                    },
-                                                                    None => {
-                                                                        
                                                                     }
                                                                 }
+                                                            }
 
-                                                                Some(headsign)
-                                                            },
-                                                            None => None
-                                                        }
-                                                    },
-                                                    None => None
-                                                }
-                                            },
-                                            None => None
-                                        }
-                                    },
-                                    None => None
-                                }.map(|headsign| headsign.replace("-Exact Fare", "").replace(" - Funded in part by/SB County Measure A", ""))
-                            }
-                            None => None,
-                        };
+                                                            headsign
+                                                        })
+                                                })
+                                        })
+                                })
+                            })
+                        })
+                        .map(|headsign| {
+                            headsign
+                                .replace("-Exact Fare", "")
+                                .replace(" - Funded in part by/SB County Measure A", "")
+                        });
 
                         let pos_aspenised = AspenisedVehiclePosition {
                             trip: vehicle_pos
