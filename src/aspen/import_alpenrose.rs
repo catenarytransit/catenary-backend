@@ -742,6 +742,7 @@ pub async fn new_rt_data(
 
         //query itinerary pattern rows
 
+        let itinerary_pattern_row_timer = std::time::Instant::now();
         let mut itinerary_pattern_rows =
             catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
                 .filter(catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(&chateau_id))
@@ -752,6 +753,7 @@ pub async fn new_rt_data(
                 .select(catenary::models::ItineraryPatternRow::as_select())
                 .load::<catenary::models::ItineraryPatternRow>(conn)
                 .await?;
+        let itinerary_pattern_row_duration = itinerary_pattern_row_timer.elapsed();
 
         //split into hashmap by itinerary pattern id, sort by stop sequence
 
@@ -1451,8 +1453,8 @@ pub async fn new_rt_data(
         }
 
         println!(
-            "Finished processing {} chateau took {:?} for route lookup, {:?} for trips, {:?} for itins",
-            chateau_id, routes_query_elapsed, trip_duration, itin_lookup_duration
+            "Finished processing {} chateau took {:?} for route lookup, {:?} for trips, {:?} for itin meta, {:?} for itin rows",
+            chateau_id, routes_query_elapsed, trip_duration, itin_lookup_duration, itinerary_pattern_row_duration
         );
     }
 
