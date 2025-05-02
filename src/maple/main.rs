@@ -478,7 +478,33 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                 let conn = &mut conn_pre.unwrap();
         
                                 let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
+
+                                let get_hash_of_file_contents = catenary::hashfolder::hash_folder_sip_zero(
+                                    format!("{}/{}", gtfs_uncompressed_temp_storage, &feed_id).as_str()
+                                ).await;
+
+                                let get_hash_of_file_contents = match get_hash_of_file_contents {
                                 
+                                    Ok(hash) => Some(hash),
+                                    Err(_) => None,
+                                
+                                };
+
+                                let hash_of_file_contents_string = get_hash_of_file_contents.map(|hash| hash.to_string());
+
+                                use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
+                                //search for matching hash in the database
+
+                                let matching_hash_rows = static_download_attempts
+                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::file_hash.eq(hash_of_file_contents_string.clone()))
+                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
+                                    .select(catenary::models::StaticDownloadAttempt::as_select())
+                                    .load::<catenary::models::StaticDownloadAttempt>(conn)
+                                    .await.unwrap();
+
+                                let file_contents_exists = matching_hash_rows.len() > 0;
+
+                                if !file_contents_exists || std::env::var("FORCE_INGEST_ALL").is_ok() {
                                     if delete_everything_in_feed_before_ingest {
                                         let wipe_whole_feed_result = wipe_whole_feed(
                                             &feed_id,
@@ -520,8 +546,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                     if gtfs_process_result.is_ok() {
                                         // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
         
-                                        use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
-        
                                         let _ = diesel::update(static_download_attempts)
                                             .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
                                             .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
@@ -548,6 +572,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                             feed_expiration_date: None,
                                             feed_start_date: None,
                                             ingestion_version: MAPLE_INGESTION_VERSION,
+                                            hash_of_file_contents: hash_of_file_contents_string.clone(),
                                         };
 
                                         let ingested_static_result = diesel::insert_into(ingested_static)
@@ -602,6 +627,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         }
                                         }
                                     }
+                                } else {
+                                    println!("Feed {} already exists in database, skipping ingestion", feed_id);
+                                }
+                                
+                                   
                             }
                     }
             ))

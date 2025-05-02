@@ -36,7 +36,8 @@ pub enum FolderHashError {
     InvalidPath(PathBuf),
 }
 
-macro_rules! io_err { // Same helper macro
+macro_rules! io_err {
+    // Same helper macro
     ($path:expr, $err:expr) => {
         FolderHashError::Io {
             path: $path.to_path_buf(),

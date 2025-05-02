@@ -218,6 +218,7 @@ pub mod gtfs {
             default_lang -> Nullable<Text>,
             languages_avaliable -> Array<Nullable<Text>>,
             ingestion_version -> Int4,
+            hash_of_file_contents -> Nullable<Text>,
         }
     }
 

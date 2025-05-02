@@ -200,7 +200,7 @@ pub struct StopsForRoute {
     pub chateau: String,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[derive(Queryable, Selectabcarle, Insertable, Debug, Clone)]
 #[diesel(table_name = crate::schema::gtfs::ingested_static)]
 pub struct IngestedStatic {
     pub onestop_feed_id: String,
@@ -219,6 +219,7 @@ pub struct IngestedStatic {
     pub ingestion_version: i32,
     pub default_lang: Option<String>,
     pub languages_avaliable: Vec<Option<String>>,
+    pub hash_of_file_contents: Option<String>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]

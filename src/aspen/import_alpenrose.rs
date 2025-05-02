@@ -1454,7 +1454,11 @@ pub async fn new_rt_data(
 
         println!(
             "Finished processing {} chateau took {:?} for route lookup, {:?} for trips, {:?} for itin meta, {:?} for itin rows",
-            chateau_id, routes_query_elapsed, trip_duration, itin_lookup_duration, itinerary_pattern_row_duration
+            chateau_id,
+            routes_query_elapsed,
+            trip_duration,
+            itin_lookup_duration,
+            itinerary_pattern_row_duration
         );
     }
 
