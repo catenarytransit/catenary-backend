@@ -57,6 +57,7 @@ pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataEtcd;
 pub mod custom_alerts;
 pub mod shape_fetcher;
+pub mod hashfolder;
 use ahash::AHasher;
 use chrono::Datelike;
 use chrono::NaiveDate;
