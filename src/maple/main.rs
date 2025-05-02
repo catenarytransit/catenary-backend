@@ -477,10 +477,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                 let conn_pre = conn_pool.get().await;
                                 let conn = &mut conn_pre.unwrap();
         
-                                let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
+                                 let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
 
                                 let get_hash_of_file_contents = catenary::hashfolder::hash_folder_sip_zero(
-                                    format!("{}/{}", gtfs_uncompressed_temp_storage, &feed_id).as_str()
+                                    std::path::Path::new(format!("{}/{}", gtfs_uncompressed_temp_storage, &feed_id).as_str())
                                 ).await;
 
                                 let get_hash_of_file_contents = match get_hash_of_file_contents {
