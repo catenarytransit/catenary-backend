@@ -167,7 +167,7 @@ pub struct RealtimeFeedMetadataEtcd {
 }
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq)]
-pub struct ChateausLeaderHashMap {
+pub struct ChateauxLeaderHashMap {
     pub chateaus: BTreeMap<String, ChateauDataNoGeometry>,
 }
 

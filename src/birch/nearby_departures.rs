@@ -871,7 +871,7 @@ pub async fn nearby_from_coords(
     for chateau_id in chateaus {
         let etcd_data = etcd
             .get(
-                format!("/aspen_assigned_chateaus/{}", chateau_id.clone()).as_str(),
+                format!("/aspen_assigned_chateaux/{}", chateau_id.clone()).as_str(),
                 None,
             )
             .await;

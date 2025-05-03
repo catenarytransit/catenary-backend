@@ -493,14 +493,17 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                 let hash_of_file_contents_string = get_hash_of_file_contents.map(|hash| hash.to_string());
 
                                 use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
+                                
+                                use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
                                 //search for matching hash in the database
 
-                                let matching_hash_rows = static_download_attempts
-                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::file_hash.eq(hash_of_file_contents_string.clone()))
-                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
-                                    .select(catenary::models::StaticDownloadAttempt::as_select())
-                                    .load::<catenary::models::StaticDownloadAttempt>(conn)
-                                    .await.unwrap();
+                                let matching_hash_rows = ingested_static
+                                    .filter(catenary::schema::gtfs::ingested_static::dsl::hash_of_file_contents.eq(hash_of_file_contents_string.clone()))
+                                    .filter(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(false))
+                                    .select(catenary::models::IngestedStatic::as_select())
+                                    .load::<catenary::models::IngestedStatic>(conn)
+                                    .await
+                                    .unwrap();
 
                                 let file_contents_exists = matching_hash_rows.len() > 0;
 
@@ -553,7 +556,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                             .execute(conn)
                                             .await;
 
-                                        use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
 
                                         let ingested_static_pq = catenary::models::IngestedStatic {
                                             onestop_feed_id: feed_id.clone(),
@@ -630,6 +632,12 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                 } else {
                                     println!("Feed {} already exists in database, skipping ingestion", feed_id);
 
+                                    let _ = diesel::update(static_download_attempts)
+                                            .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
+                                            .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
+                                            .set(catenary::schema::gtfs::static_download_attempts::dsl::ingested.eq(true))
+                                            .execute(conn)
+                                            .await;
                                     
                                     let mut ingest_progress = ingest_progress.lock().unwrap();
                                     *ingest_progress += 1;

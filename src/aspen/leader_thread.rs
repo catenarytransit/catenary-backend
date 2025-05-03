@@ -1,4 +1,4 @@
-use catenary::aspen::lib::ChateausLeaderHashMap;
+use catenary::aspen::lib::ChateauxLeaderHashMap;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use std::error::Error;
 use std::net::IpAddr;
@@ -9,7 +9,7 @@ mod aspen_assignment;
 
 pub async fn aspen_leader_thread(
     workers_nodes: Arc<Mutex<Vec<String>>>,
-    feeds_list: Arc<Mutex<Option<ChateausLeaderHashMap>>>,
+    feeds_list: Arc<Mutex<Option<ChateauxLeaderHashMap>>>,
     this_worker_id: Arc<String>,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
     etcd_addresses: Arc<Vec<String>>,

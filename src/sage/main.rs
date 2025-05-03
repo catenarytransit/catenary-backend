@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     println!("Connected to Postgres");
 
-    let excluded_chateaus = BTreeSet::from_iter([
+    let excluded_chateaux = BTreeSet::from_iter([
         "uc~irvine~anteater~express",
         "lagunabeachtransit",
         "greyhound~flix",
@@ -207,15 +207,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     //create list of chateaus to check
 
-    let chateaus_list = stops_query_filtered
+    let chateaux_list = stops_query_filtered
         .iter()
         .map(|stop| stop.chateau.clone())
         .collect::<BTreeSet<String>>();
 
-    println!("Chateaus List  {}", chateaus_list.len());
+    println!("Chateaux List  {}", chateaux_list.len());
 
-    for chateau in chateaus_list {
-        if excluded_chateaus.contains(chateau.as_str()) {
+    for chateau in chateaux_list {
+        if excluded_chateaux.contains(chateau.as_str()) {
             continue;
         }
 

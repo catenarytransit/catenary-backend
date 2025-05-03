@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use catenary::postgres_tools::*;
 
-use catenary::aspen::lib::ChateausLeaderHashMap;
+use catenary::aspen::lib::ChateauxLeaderHashMap;
 use tokio::sync::Mutex;
 
 #[tokio::main]
@@ -37,7 +37,7 @@ async fn main() {
     let etcd_addresses = Arc::new(etcd_urls);
 
     let arc_etcd_connect_options = Arc::new(etcd_connect_options.clone());
-    let chateau_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
+    let chateau_list: Arc<Mutex<Option<ChateauxLeaderHashMap>>> = Arc::new(Mutex::new(None));
 
     let chateau_list_for_leader_thread = Arc::clone(&chateau_list);
 

@@ -66,7 +66,7 @@ pub async fn get_vehicle_information_from_label(
 
     let fetch_assigned_node_for_this_chateau = etcd
         .get(
-            format!("/aspen_assigned_chateaus/{}", chateau).as_str(),
+            format!("/aspen_assigned_chateaux/{}", chateau).as_str(),
             None,
         )
         .await;
@@ -153,7 +153,7 @@ pub async fn get_vehicle_information(
 
     let fetch_assigned_node_for_this_chateau = etcd
         .get(
-            format!("/aspen_assigned_chateaus/{}", chateau).as_str(),
+            format!("/aspen_assigned_chateaux/{}", chateau).as_str(),
             None,
         )
         .await;
@@ -329,7 +329,7 @@ pub async fn get_trip_rt_update(
 
     let fetch_assigned_node_for_this_chateau = etcd
         .get(
-            format!("/aspen_assigned_chateaus/{}", chateau).as_str(),
+            format!("/aspen_assigned_chateaux/{}", chateau).as_str(),
             None,
         )
         .await;
@@ -606,7 +606,7 @@ pub async fn get_trip_init(
 
     let fetch_assigned_node_for_this_chateau = etcd
         .get(
-            format!("/aspen_assigned_chateaus/{}", chateau).as_str(),
+            format!("/aspen_assigned_chateaux/{}", chateau).as_str(),
             None,
         )
         .await;

@@ -183,7 +183,7 @@ pub async fn bulk_realtime_fetch_v1(
         async move {
             let fetch_assigned_node_for_this_realtime_feed = etcd
                 .get(
-                    format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
+                    format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
                     None,
                 )
                 .await;
@@ -390,7 +390,7 @@ pub async fn get_realtime_locations(
 
     let fetch_assigned_node_for_this_realtime_feed = etcd
         .get(
-            format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
+            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
             None,
         )
         .await;

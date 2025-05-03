@@ -304,7 +304,7 @@ pub async fn route_info(
 
     let fetch_assigned_node_for_this_chateau = etcd
         .get(
-            format!("/aspen_assigned_chateaus/{}", &query.chateau).as_str(),
+            format!("/aspen_assigned_chateaux/{}", &query.chateau).as_str(),
             None,
         )
         .await;

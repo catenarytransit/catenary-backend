@@ -1270,7 +1270,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let workers_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let chateau_list: Arc<Mutex<Option<ChateausLeaderHashMap>>> = Arc::new(Mutex::new(None));
+    let chateau_list: Arc<Mutex<Option<ChateauxLeaderHashMap>>> = Arc::new(Mutex::new(None));
 
     let process_from_alpenrose_queue = Arc::new(Injector::<ProcessAlpenroseData>::new());
     let raw_gtfs = Arc::new(SccHashMap::new());

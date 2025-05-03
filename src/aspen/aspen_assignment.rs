@@ -1,7 +1,7 @@
 use catenary::ChateauDataNoGeometry;
 use catenary::aspen::lib::AspenWorkerMetadataEtcd;
 use catenary::aspen::lib::ChateauMetadataEtcd;
-use catenary::aspen::lib::ChateausLeaderHashMap;
+use catenary::aspen::lib::ChateauxLeaderHashMap;
 use catenary::aspen::lib::RealtimeFeedMetadataEtcd;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::SelectableHelper;
@@ -17,7 +17,7 @@ pub async fn assign_chateaus(
     etcd: &mut etcd_client::Client,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
     workers_nodes: Arc<Mutex<Vec<String>>>,
-    feeds_list: Arc<Mutex<Option<ChateausLeaderHashMap>>>,
+    feeds_list: Arc<Mutex<Option<ChateauxLeaderHashMap>>>,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
@@ -29,20 +29,20 @@ pub async fn assign_chateaus(
     let conn = &mut conn_pre?;
 
     // read out from postgres
-    let chateaus_pg_query = catenary::schema::gtfs::chateaus::table
+    let chateaux_pg_query = catenary::schema::gtfs::chateaus::table
         .select(catenary::models::Chateau::as_select())
         .load::<catenary::models::Chateau>(conn)
         .await;
 
-    if let Ok(chateaus) = chateaus_pg_query {
+    if let Ok(chateaux) = chateaux_pg_query {
         let mut chateau_list_lock = feeds_list.lock().await;
         let mut workers_nodes_lock = workers_nodes.lock().await;
 
-        let chateau_cache_for_aspen_leader = ChateausLeaderHashMap {
+        let chateau_cache_for_aspen_leader = ChateauxLeaderHashMap {
             chateaus: {
-                let mut chateaus_btree: BTreeMap<String, ChateauDataNoGeometry> = BTreeMap::new();
-                for chateau in chateaus {
-                    chateaus_btree.insert(
+                let mut chateaux_btree: BTreeMap<String, ChateauDataNoGeometry> = BTreeMap::new();
+                for chateau in chateaux {
+                    chateaux_btree.insert(
                         chateau.chateau.clone(),
                         ChateauDataNoGeometry {
                             chateau_id: chateau.chateau.clone(),
@@ -61,7 +61,7 @@ pub async fn assign_chateaus(
                         },
                     );
                 }
-                chateaus_btree
+                chateaux_btree
             },
         };
 
@@ -116,11 +116,11 @@ pub async fn assign_chateaus(
         } else {
             println!("Assigning tasks to workers....");
 
-            //prefix fetch aspen_assigned_chateaus
+            //prefix fetch aspen_assigned_chateaux
 
             let mut fetch_assigned_chateaus = etcd
                 .get(
-                    "/aspen_assigned_chateaus",
+                    "/aspen_assigned_chateaux",
                     Some(etcd_client::GetOptions::new().with_prefix()),
                 )
                 .await?;
@@ -135,7 +135,7 @@ pub async fn assign_chateaus(
 
                 if let Ok(decoded_metadata) = decoded_metadata {
                     let key = kv.key_str().unwrap();
-                    let chateau = key.replace("/aspen_assigned_chateaus/", "");
+                    let chateau = key.replace("/aspen_assigned_chateaux/", "");
                     existing_assigned_chateaus.insert(chateau, decoded_metadata);
                 }
             }
@@ -169,7 +169,7 @@ pub async fn assign_chateaus(
                     // For example, taking only the orphened nodes and redistributing them
                     // if a new node is added, carefully reassign the data
 
-                    //for now this simply round robins the chateaus around
+                    //for now this simply round robins the chateaux around
 
                     let selected_aspen_worker_to_assign =
                         workers_nodes_lock[index % workers_nodes_lock.len()].clone();
@@ -195,7 +195,7 @@ pub async fn assign_chateaus(
                     if assign_chateau_required {
                         let save_to_etcd = etcd
                             .put(
-                                format!("/aspen_assigned_chateaus/{}", chateau_id).as_str(),
+                                format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
                                 catenary::bincode_serialize(&assigned_chateau_data).unwrap(),
                                 Some(
                                     etcd_client::PutOptions::new()
@@ -242,7 +242,7 @@ pub async fn assign_chateaus(
                 }
 
                 println!(
-                    "Assigned {} chateaus across {} workers",
+                    "Assigned {} chateaux across {} workers",
                     chateau_list_lock.chateaus.len(),
                     workers_nodes_lock.len()
                 );
