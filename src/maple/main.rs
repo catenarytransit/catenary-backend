@@ -629,6 +629,19 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                     }
                                 } else {
                                     println!("Feed {} already exists in database, skipping ingestion", feed_id);
+
+                                    
+                                    let mut ingest_progress = ingest_progress.lock().unwrap();
+                                    *ingest_progress += 1;
+            
+                                    println!(
+                                        "Completion progress: {}/{} [{:.2}%]",
+                                        ingest_progress,
+                                        total_feeds_to_process,
+                                        (*ingest_progress as f32/total_feeds_to_process as f32) * 100.0
+                                    );
+
+                                    std::mem::drop(ingest_progress);
                                 }
                                 
                                    
