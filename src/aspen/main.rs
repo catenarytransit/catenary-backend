@@ -103,7 +103,7 @@ pub struct AspenServer {
     pub authoritative_trip_updates_by_gtfs_feed_history:
         Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
     pub alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
-    pub alpenrose_to_process_queue_chateaus: Arc<Mutex<HashSet<String>>>,
+    pub alpenrose_to_process_queue_chateaux: Arc<Mutex<HashSet<String>>>,
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
     pub hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>>,
     pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
@@ -725,7 +725,7 @@ impl AspenRpc for AspenServer {
             //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
             if new_data || chateau_id.as_str() == "santacruzmetro" {
-                let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
+                let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaux.lock().await;
 
                 if !lock_chateau_queue.contains(&chateau_id) {
                     lock_chateau_queue.insert(chateau_id.clone());
@@ -991,7 +991,7 @@ impl AspenRpc for AspenServer {
             //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
             if new_data {
-                let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaus.lock().await;
+                let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaux.lock().await;
 
                 if !lock_chateau_queue.contains(&chateau_id) {
                     lock_chateau_queue.insert(chateau_id.clone());
@@ -1277,7 +1277,7 @@ async fn main() -> anyhow::Result<()> {
     let authoritative_data_store = Arc::new(SccHashMap::new());
     let backup_data_store = Arc::new(SccHashMap::new());
     let backup_raw_gtfs = Arc::new(SccHashMap::new());
-    let alpenrose_to_process_queue_chateaus = Arc::new(Mutex::new(HashSet::new()));
+    let alpenrose_to_process_queue_chateaux = Arc::new(Mutex::new(HashSet::new()));
     let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
     let hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>> =
@@ -1299,7 +1299,7 @@ async fn main() -> anyhow::Result<()> {
         b_authoritative_data_store,
         b_conn_pool,
         b_thread_count,
-        Arc::clone(&alpenrose_to_process_queue_chateaus),
+        Arc::clone(&alpenrose_to_process_queue_chateaux),
         etcd_lease_id_for_this_worker,
     ));
 
@@ -1388,8 +1388,8 @@ async fn main() -> anyhow::Result<()> {
                             authoritative_gtfs_rt_store: Arc::clone(&raw_gtfs),
                             backup_data_store: Arc::clone(&backup_data_store),
                             backup_gtfs_rt_store: Arc::clone(&backup_raw_gtfs),
-                            alpenrose_to_process_queue_chateaus: Arc::clone(
-                                &alpenrose_to_process_queue_chateaus,
+                            alpenrose_to_process_queue_chateaux: Arc::clone(
+                                &alpenrose_to_process_queue_chateaux,
                             ),
                             rough_hash_of_gtfs_rt: Arc::clone(&rough_hash_of_gtfs_rt),
                             hash_of_raw_gtfs_rt_protobuf: Arc::clone(&hash_of_raw_gtfs_rt_protobuf),

@@ -373,14 +373,14 @@ async fn chateaus(
     let conn = &mut conn_pre.unwrap();
 
     // fetch out of table
-    let existing_chateaus = catenary::schema::gtfs::chateaus::table
+    let existing_chateaux = catenary::schema::gtfs::chateaus::table
         .select(catenary::models::Chateau::as_select())
         .load::<catenary::models::Chateau>(conn)
         .await
         .unwrap();
 
     // convert hulls to standardised `geo` crate
-    let mut formatted_chateaus = existing_chateaus
+    let mut formatted_chateaux = existing_chateaux
         .into_iter()
         .filter(|pg_chateau| pg_chateau.hull.is_some())
         .map(|pg_chateau| ChateauToSend {
@@ -394,10 +394,10 @@ async fn chateaus(
         })
         .collect::<Vec<ChateauToSend>>();
 
-    formatted_chateaus.sort_by_key(|x| x.chateau.clone());
+    formatted_chateaux.sort_by_key(|x| x.chateau.clone());
 
     // conversion to `geojson` structs
-    let features = formatted_chateaus
+    let features = formatted_chateaux
         .iter()
         .map(|chateau| {
             let value = geojson::Value::from(&chateau.hull);
@@ -486,14 +486,14 @@ async fn chateaus_no_geom(
     let conn = &mut conn_pre.unwrap();
 
     // fetch out of table
-    let existing_chateaus = catenary::schema::gtfs::chateaus::table
+    let existing_chateaux = catenary::schema::gtfs::chateaus::table
         .select(catenary::models::Chateau::as_select())
         .load::<catenary::models::Chateau>(conn)
         .await
         .unwrap();
 
     // convert hulls to standardised `geo` crate
-    let mut formatted_chateaus = existing_chateaus
+    let mut formatted_chateaux = existing_chateaux
         .into_iter()
         .filter(|pg_chateau| pg_chateau.hull.is_some())
         .map(|pg_chateau| ChateauToSendNoGeom {
@@ -503,9 +503,9 @@ async fn chateaus_no_geom(
         })
         .collect::<Vec<ChateauToSendNoGeom>>();
 
-    formatted_chateaus.sort_by_key(|x| x.chateau.clone());
+    formatted_chateaux.sort_by_key(|x| x.chateau.clone());
 
-    let serialised_chateaus = serde_json::to_string(&formatted_chateaus).unwrap();
+    let serialised_chateaus = serde_json::to_string(&formatted_chateaux).unwrap();
 
     HttpResponse::Ok()
         .insert_header(("Content-Type", "application/json"))
