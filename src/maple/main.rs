@@ -151,7 +151,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     println!("Initializing database connection");
 
     let restrict_to_feed_id = match std::env::var("ONLY_FEED_ID") {
-        Ok(feed_id) => Some(feed_id),w
+        Ok(feed_id) => Some(feed_id),
         Err(_) => None,
     };
 
