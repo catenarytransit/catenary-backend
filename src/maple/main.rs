@@ -151,7 +151,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     println!("Initializing database connection");
 
     let restrict_to_feed_id = match std::env::var("ONLY_FEED_ID") {
-        Ok(feed_id) => Some(feed_id),
+        Ok(feed_id) => Some(feed_id),w
         Err(_) => None,
     };
 
@@ -370,7 +370,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                         (to_ingest_feed.feed_id.clone(), flatten_feed_result.is_ok())
                     }
                 }))
-                .buffer_unordered(8)
+                .buffer_unordered(16)
                 .collect::<Vec<(String, bool)>>()
                 .await;
 
