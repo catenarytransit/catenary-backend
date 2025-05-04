@@ -658,7 +658,7 @@ pub async fn new_rt_data(
             }
         };
 
-        let stop_id_to_stop: AHashMap<String, catenary::models::Stop> = stops
+        let stop_id_to_stop_from_postgres: AHashMap<String, catenary::models::Stop> = stops
             .into_iter()
             .map(|stop| (stop.gtfs_id.clone(), stop))
             .collect();
@@ -776,7 +776,7 @@ pub async fn new_rt_data(
         let itinerary_pattern_id_to_itinerary_pattern_rows =
             itinerary_pattern_id_to_itinerary_pattern_rows;
 
-        let mut route_ids_to_insert = AHashSet::new();
+        let mut route_ids_to_insert: AHashSet<String> = AHashSet::new();
 
         for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
             if let Some(vehicle_gtfs_rt_for_feed_id) =
@@ -1092,12 +1092,16 @@ pub async fn new_rt_data(
                         let mut trip_headsign = match &trip_id {
                             Some(trip_id) => match missing_trip_ids.contains(trip_id) {
                                 true => match last_non_cancelled_stop_id {
-                                    Some(last_non_cancelled_stop_id) => stop_id_to_stop
-                                        .get(&last_non_cancelled_stop_id)
-                                        .map(|s| {
-                                            s.name.as_ref().map(|name| CompactString::new(&name))
-                                        })
-                                        .flatten(),
+                                    Some(last_non_cancelled_stop_id) => {
+                                        stop_id_to_stop_from_postgres
+                                            .get(&last_non_cancelled_stop_id)
+                                            .map(|s| {
+                                                s.name
+                                                    .as_ref()
+                                                    .map(|name| CompactString::new(&name))
+                                            })
+                                            .flatten()
+                                    }
                                     None => None,
                                 },
                                 false => None,
@@ -1338,6 +1342,29 @@ pub async fn new_rt_data(
                                         .or_insert(vec![trip_update_entity.id.clone().into()]);
                                 }
                             }
+                        }
+                    }
+
+                    if let Some(stop_rt) = &trip_update_entity.stop {
+                        if let Some(stop_id) = &stop_rt.stop_id {
+                            stop_id_to_stop.entry(stop_id.clone().into()).or_insert(
+                                AspenisedStop {
+                                    stop_id: stop_id.clone().into(),
+                                    stop_name: stop_rt.stop_name.clone().map(|x| x.into()),
+                                    stop_code: stop_rt.stop_code.clone().map(|x| x.into()),
+                                    tts_stop_name: stop_rt.tts_stop_name.clone().map(|x| x.into()),
+                                    stop_desc: stop_rt.stop_desc.clone().map(|x| x.into()),
+                                    stop_lat: stop_rt.stop_lat,
+                                    stop_lon: stop_rt.stop_lon,
+                                    zone_id: stop_rt.zone_id.clone(),
+                                    stop_url: stop_rt.stop_url.clone().map(|x| x.into()),
+                                    parent_station: stop_rt.parent_station.clone(),
+                                    stop_timezone: stop_rt.stop_timezone.clone(),
+                                    wheelchair_boarding: stop_rt.wheelchair_boarding,
+                                    level_id: stop_rt.level_id.clone(),
+                                    platform_code: stop_rt.platform_code.clone().map(|x| x.into()),
+                                },
+                            );
                         }
                     }
                 }
