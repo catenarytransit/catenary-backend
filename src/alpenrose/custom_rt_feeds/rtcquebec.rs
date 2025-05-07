@@ -1,6 +1,7 @@
 use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id_kvclient;
 use chrono::Timelike;
+use futures::future::join_all;
 use prost::Message;
 use rand::Rng;
 use std::collections::HashSet;
@@ -19,12 +20,62 @@ pub async fn fetch_rtc_data(
         "23.227.39.226:80",
         "23.227.39.191:80",
         "23.227.39.30:80",
+        "54.39.32.10:9595",
+        "130.107.144.68:3128",
+        "158.69.59.135:80",
+        "184.107.109.168:3128",
     ];
+
+    //test proxy addresses, filter out the ones that don't work
+
+    let mut working_proxies = Vec::new();
+    let mut futures = Vec::new();
+
+    for proxy in http_proxy_addresses.iter() {
+        let proxy = proxy.to_string();
+        let future = async move {
+            let proxy_url = proxy.clone();
+
+            let proxy_client = reqwest::Client::builder()
+                .proxy(reqwest::Proxy::http(&proxy_url).unwrap())
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap();
+
+            let res = proxy_client
+                .get("https://api.ipify.org?format=json")
+                .send()
+                .await;
+
+            match res {
+                Ok(_) => Some(proxy.to_string()),
+                Err(_) => {
+                    println!("Proxy {} is not working", &proxy);
+                    None
+                }
+            }
+        };
+
+        futures.push(future);
+    }
+
+    let results = join_all(futures).await;
+
+    for result in results {
+        if let Some(proxy) = result {
+            working_proxies.push(proxy);
+        }
+    }
+
+    if working_proxies.len() == 0 {
+        eprintln!("No working proxies found");
+        return;
+    }
 
     let client_proxy = reqwest::Client::builder()
         .proxy(
             reqwest::Proxy::http(
-                http_proxy_addresses[rand::rng().random_range(0..http_proxy_addresses.len())],
+                working_proxies[rand::rng().random_range(0..working_proxies.len())].clone(),
             )
             .unwrap(),
         )
@@ -38,7 +89,7 @@ pub async fn fetch_rtc_data(
         let worker_id = data.worker_id;
 
         let proxy_addresses_vec: Vec<String> =
-            http_proxy_addresses.iter().map(|x| x.to_string()).collect();
+            working_proxies.iter().map(|x| x.to_string()).collect();
 
         let rtc_gtfs_rt_res = rtc_quebec_gtfs_rt::faire_les_donnees_gtfs_rt(
             gtfs,

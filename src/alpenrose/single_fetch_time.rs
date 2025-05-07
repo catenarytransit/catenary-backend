@@ -200,6 +200,7 @@ pub async fn single_fetch_time(
                             || (alerts_http_status == Some(429))
                         {
                             println!("{}: 429 Rate limited", &feed_id);
+
                             return;
                         }
 
