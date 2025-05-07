@@ -25,6 +25,7 @@ pub async fn fetch_rtc_data(
         "158.69.59.135:80",
         "184.107.109.168:3128",
         "54.39.85.84:3128",
+        "198.91.163.172:808",
     ];
 
     //test proxy addresses, filter out the ones that don't work
