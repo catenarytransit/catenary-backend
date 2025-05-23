@@ -1623,6 +1623,10 @@ pub async fn new_rt_data(
     aspenised_vehicle_positions.shrink_to_fit();
     vehicle_routes_cache.shrink_to_fit();
     trip_updates.shrink_to_fit();
+
+    trip_updates_lookup_by_trip_id_to_trip_update_ids.sort();
+    trip_updates_lookup_by_trip_id_to_trip_update_ids.dedup();
+
     trip_updates_lookup_by_trip_id_to_trip_update_ids.shrink_to_fit();
     alerts.shrink_to_fit();
     impacted_route_id_to_alert_ids.shrink_to_fit();
