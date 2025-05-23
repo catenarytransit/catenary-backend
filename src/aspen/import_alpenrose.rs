@@ -1281,7 +1281,13 @@ pub async fn new_rt_data(
                                                         None => false
                                                     }
 
-                                                ).collect::<Vec<_>>();
+                                                )
+                                                .map(|old_stu| {
+                                                    let mut old_stu = old_stu.clone();
+                                                    old_stu.old_rt_data = true;
+                                                    old_stu
+                                                })
+                                                .collect::<Vec<_>>();
                                                 Some(old_stop_time_update)
                                             },
                                             None => None
