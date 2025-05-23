@@ -170,7 +170,10 @@ pub async fn new_rt_data(
             None => CompressedTripInternalCache::new(),
         };
 
-    let previous_authoritative_data_store = authoritative_data_store.get(chateau_id);
+    let previous_authoritative_data_store = match authoritative_data_store.get(chateau_id) {
+        Some(data) => Some(data.clone()),
+        None => None
+    };
 
     let fetch_supplemental_data_positions_metrolink: Option<AHashMap<CompactString, MetrolinkPos>> =
         match realtime_feed_id {
