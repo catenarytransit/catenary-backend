@@ -532,11 +532,13 @@ pub fn make_reqwest_for_url(
 
             let mut request = client.get(url);
 
+            // many servers do not accept a response without a user agent
             request = request.header(
                 "User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0",
             );
 
+            //on some azure api systems and api gateways, a no-cache value is required to return fresh data.
             request = request.header("Cache-Control", "no-cache");
 
             if let Some(passwords) = &assignment.passwords {
