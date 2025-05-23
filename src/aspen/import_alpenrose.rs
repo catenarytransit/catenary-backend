@@ -1247,6 +1247,7 @@ pub async fn new_rt_data(
 
                         //merge with old data
 
+                        /*
                         let old_data_to_add_to_start: Option<Vec<AspenisedStopTimeUpdate>> =
                             match &trip_id {
                                 Some(trip_id) => match &previous_authoritative_data_store {
@@ -1313,7 +1314,7 @@ pub async fn new_rt_data(
                                 new_vec
                             }
                             None => stop_time_update,
-                        };
+                        };*/
 
                         let trip_update = AspenisedTripUpdate {
                             trip: trip_descriptor,
