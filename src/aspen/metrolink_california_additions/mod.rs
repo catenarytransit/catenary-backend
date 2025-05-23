@@ -6,11 +6,11 @@ use compact_str::CompactString;
 pub fn vehicle_pos_supplement(
     pos_aspenised: AspenisedVehiclePosition,
     fetch_supplemental_data_positions_metrolink: &Option<AHashMap<CompactString, MetrolinkPos>>,
-    chateau_id: &String,
+    chateau_id: &str,
 ) -> AspenisedVehiclePosition {
     let mut pos_aspenised = pos_aspenised;
 
-    match chateau_id.as_str() {
+    match chateau_id {
         "metrolinktrains" => match fetch_supplemental_data_positions_metrolink {
             Some(supp_metrolink_data) => {
                 if let Some(vehicle_ids) = &pos_aspenised.vehicle {

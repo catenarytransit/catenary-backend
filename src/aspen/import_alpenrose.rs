@@ -146,8 +146,8 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
 pub async fn new_rt_data(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
-    chateau_id: String,
-    realtime_feed_id: String,
+    chateau_id: &str,
+    realtime_feed_id: &str,
     has_vehicles: bool,
     has_trips: bool,
     has_alerts: bool,
@@ -165,15 +165,15 @@ pub async fn new_rt_data(
     //either fetch the mutable reference to trip compressed cache or make an empty one
 
     let mut compressed_trip_internal_cache: CompressedTripInternalCache =
-        match authoritative_data_store.get(&chateau_id) {
+        match authoritative_data_store.get(chateau_id) {
             Some(data) => data.compressed_trip_internal_cache.clone(),
             None => CompressedTripInternalCache::new(),
         };
 
-    let previous_authoritative_data_store = authoritative_data_store.get(&chateau_id);
+    let previous_authoritative_data_store = authoritative_data_store.get(chateau_id);
 
     let fetch_supplemental_data_positions_metrolink: Option<AHashMap<CompactString, MetrolinkPos>> =
-        match realtime_feed_id.as_str() {
+        match realtime_feed_id {
             "f-metrolinktrains~rt" => {
                 let raw_data_req =
                     reqwest::get("https://rtt.metrolinktrains.com/trainlist.json").await;
@@ -314,7 +314,7 @@ pub async fn new_rt_data(
 
     let route_id_to_route = route_id_to_route;
 
-    let santa_cruz_supp_data = match chateau_id.as_str() {
+    let santa_cruz_supp_data = match chateau_id {
         "santacruzmetro" => {
             let route_ids = &route_id_to_route
                 .keys()
@@ -821,7 +821,7 @@ pub async fn new_rt_data(
                                 longitude: position.longitude,
                                 bearing: position.bearing,
                                 odometer: position.odometer,
-                                speed: match chateau_id.as_str() {
+                                speed: match chateau_id {
                                     "vy~yhtymä~oyj" => position.speed.map(|x| x / 3.6),
                                     _ => position.speed,
                                 },
@@ -947,7 +947,7 @@ pub async fn new_rt_data(
                                     start_date: match &trip.start_date {
                                         Some(start_date) => {
                                             match catenary::throw_away_start_dates
-                                                .contains(&chateau_id.as_str())
+                                                .contains(&chateau_id)
                                             {
                                                 true => None,
                                                 false => match chrono::NaiveDate::parse_from_str(
@@ -1022,7 +1022,7 @@ pub async fn new_rt_data(
                         let pos_aspenised = vehicle_pos_supplement(
                             pos_aspenised,
                             &fetch_supplemental_data_positions_metrolink,
-                            &chateau_id,
+                            chateau_id,
                         );
 
                         let pos_aspenised = match realtime_feeds_to_use_vehicle_ids
@@ -1119,7 +1119,7 @@ pub async fn new_rt_data(
 
                         let mut trip_descriptor: AspenRawTripInfo = trip_update.trip.clone().into();
 
-                        match catenary::throw_away_start_dates.contains(&chateau_id.as_str()) {
+                        match catenary::throw_away_start_dates.contains(&chateau_id) {
                             true => trip_descriptor.start_date = None,
                             false => {}
                         }
@@ -1143,7 +1143,7 @@ pub async fn new_rt_data(
                                         uncertainty: departure.uncertainty,
                                     }
                                 }),
-                                platform_string: match chateau_id.as_str() {
+                                platform_string: match chateau_id {
                                     "metrolinktrains" => {
                                         let mut track_resp = None;
 
@@ -1633,7 +1633,7 @@ pub async fn new_rt_data(
 
     //Insert data back into process-wide authoritative_data_store
 
-    match authoritative_data_store.entry(chateau_id.clone()) {
+    match authoritative_data_store.entry(chateau_id.to_string()) {
         scc::hash_map::Entry::Occupied(mut oe) => {
             let mut data = oe.get_mut();
             *data = AspenisedData {
