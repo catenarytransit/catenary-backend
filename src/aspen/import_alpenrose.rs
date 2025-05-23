@@ -41,11 +41,11 @@ struct MetrolinkTrackData {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct MetrolinkTrackDataCleaned {
-    track_movement_time_arrival: Option<u64>,
-    track_movement_time_departure: Option<u64>,
-    stop_id: String,
-    formatted_track_designation: String,
+pub struct MetrolinkTrackDataCleaned {
+    pub track_movement_time_arrival: Option<u64>,
+    pub track_movement_time_departure: Option<u64>,
+    pub stop_id: String,
+    pub formatted_track_designation: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -55,15 +55,21 @@ enum MetrolinkEventType {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct MetrolinkOutputTrackData {
+pub struct MetrolinkOutputTrackData {
     //cleaned 3 digit trip number -> stop_id -> MetrolinkTrackDataCleaned
-    track_lookup: HashMap<String, HashMap<String, MetrolinkTrackDataCleaned>>,
+    pub track_lookup: HashMap<String, HashMap<String, MetrolinkTrackDataCleaned>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AmtrakTrackDataMultisource {
+    pub metrolink: Option<MetrolinkOutputTrackData>,
 }
 
 #[derive(Clone, Debug)]
 pub enum TrackData {
     //output Option<MetrolinkOutputTrackData> instead
     Metrolink(Option<MetrolinkOutputTrackData>),
+    Amtrak(AmtrakTrackDataMultisource),
     None,
 }
 
@@ -1180,6 +1186,49 @@ pub async fn new_rt_data(
 
                                             track_resp
                                         }
+                                        "amtrak" => {
+                                            let mut track_resp: Option<EcoString> = None;
+
+                                            if let TrackData::Amtrak(amtrak_track_multisource) =
+                                                &fetched_track_data
+                                            {
+                                                if let Some(track_data_scax) =
+                                                    &amtrak_track_multisource.metrolink
+                                                {
+                                                    let mut metrolink_code = String::from("A");
+
+                                                    if let Some(compressed_trip) = compressed_trip {
+                                                        if let Some(trip_short_name) =
+                                                            compressed_trip.trip_short_name.as_ref()
+                                                        {
+                                                            metrolink_code
+                                                                .push_str(trip_short_name);
+                                                        }
+                                                    }
+
+                                                    if let Some(train_data) = track_data_scax
+                                                        .track_lookup
+                                                        .get(&metrolink_code)
+                                                    {
+                                                        if let Some(stop_id) = &stu.stop_id {
+                                                            if let Some(train_and_stop_scax) =
+                                                                train_data.get(stop_id)
+                                                            {
+                                                                track_resp = Some(
+                                                                    train_and_stop_scax
+                                                                        .formatted_track_designation
+                                                                        .clone()
+                                                                        .replace("Platform ", "")
+                                                                        .into(),
+                                                                );
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            track_resp
+                                        }
                                         _ => None,
                                     },
                                     schedule_relationship:
@@ -1568,6 +1617,72 @@ pub async fn new_rt_data(
     Ok(true)
 }
 
+enum MetrolinkOrAmtrakStopCodes {
+    Metrolink,
+    Amtrak,
+}
+
+async fn metrolink_station_schedule_decode(
+    response: Vec<MetrolinkTrackData>,
+    stop_codes_to_use: MetrolinkOrAmtrakStopCodes,
+) -> MetrolinkOutputTrackData {
+    let mut track_lookup: HashMap<String, HashMap<String, MetrolinkTrackDataCleaned>> =
+        HashMap::new();
+
+    for t in response {
+        if !track_lookup.contains_key(&t.train_designation) {
+            track_lookup.insert(t.train_designation.clone(), HashMap::new());
+        }
+
+        let mut train_lookup_entry = track_lookup.get_mut(&t.train_designation).unwrap();
+
+        let stop_id_find = match stop_codes_to_use {
+            MetrolinkOrAmtrakStopCodes::Metrolink => {
+                catenary::metrolink_ptc_to_stop_id::METROLINK_STOP_LIST
+                    .iter()
+                    .find(|x| x.1 == &t.platform_name)
+            }
+            MetrolinkOrAmtrakStopCodes::Amtrak => {
+                catenary::metrolink_ptc_to_stop_id::AMTRAK_STOP_TO_SCAX_PTC_LIST
+                    .iter()
+                    .find(|x| x.1 == &t.platform_name)
+            }
+        };
+
+        if let Some((stop_id, _)) = stop_id_find {
+            if !train_lookup_entry.contains_key(*stop_id) {
+                train_lookup_entry.insert(
+                    stop_id.to_string(),
+                    MetrolinkTrackDataCleaned {
+                        track_movement_time_arrival: None,
+                        track_movement_time_departure: None,
+                        stop_id: stop_id.to_string(),
+                        formatted_track_designation: t.formatted_track_designation.clone(),
+                    },
+                );
+            }
+
+            let train_and_stop_entry = train_lookup_entry.get_mut(&stop_id.to_string()).unwrap();
+
+            match t.event_type.as_str() {
+                "Arrival" => {
+                    train_and_stop_entry.track_movement_time_arrival =
+                        Some(catenary::metrolink_unix_fix(&t.train_movement_time));
+                }
+                "Departure" => {
+                    train_and_stop_entry.track_movement_time_departure =
+                        Some(catenary::metrolink_unix_fix(&t.train_movement_time));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    MetrolinkOutputTrackData {
+        track_lookup: track_lookup,
+    }
+}
+
 pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
     match chateau_id {
         "metrolinktrains" => {
@@ -1581,64 +1696,13 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
 
                     match response {
                         Ok(response) => {
-                            let mut track_lookup: HashMap<
-                                String,
-                                HashMap<String, MetrolinkTrackDataCleaned>,
-                            > = HashMap::new();
+                            let track_lookup = metrolink_station_schedule_decode(
+                                response,
+                                MetrolinkOrAmtrakStopCodes::Metrolink,
+                            )
+                            .await;
 
-                            for t in response {
-                                if !track_lookup.contains_key(&t.train_designation) {
-                                    track_lookup
-                                        .insert(t.train_designation.clone(), HashMap::new());
-                                }
-
-                                let mut train_lookup_entry =
-                                    track_lookup.get_mut(&t.train_designation).unwrap();
-
-                                let stop_id_find =
-                                    catenary::metrolink_ptc_to_stop_id::METROLINK_STOP_LIST
-                                        .iter()
-                                        .find(|x| x.1 == &t.platform_name);
-
-                                if let Some((stop_id, _)) = stop_id_find {
-                                    if !train_lookup_entry.contains_key(*stop_id) {
-                                        train_lookup_entry.insert(
-                                            stop_id.to_string(),
-                                            MetrolinkTrackDataCleaned {
-                                                track_movement_time_arrival: None,
-                                                track_movement_time_departure: None,
-                                                stop_id: stop_id.to_string(),
-                                                formatted_track_designation: t
-                                                    .formatted_track_designation
-                                                    .clone(),
-                                            },
-                                        );
-                                    }
-
-                                    let train_and_stop_entry =
-                                        train_lookup_entry.get_mut(&stop_id.to_string()).unwrap();
-
-                                    match t.event_type.as_str() {
-                                        "Arrival" => {
-                                            train_and_stop_entry.track_movement_time_arrival =
-                                                Some(catenary::metrolink_unix_fix(
-                                                    &t.train_movement_time,
-                                                ));
-                                        }
-                                        "Departure" => {
-                                            train_and_stop_entry.track_movement_time_departure =
-                                                Some(catenary::metrolink_unix_fix(
-                                                    &t.train_movement_time,
-                                                ));
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-
-                            TrackData::Metrolink(Some(MetrolinkOutputTrackData {
-                                track_lookup: track_lookup,
-                            }))
+                            TrackData::Metrolink(Some(track_lookup))
                         }
                         Err(e) => {
                             println!("Error decoding Metrolink data: {}", e);
@@ -1651,6 +1715,39 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
                     TrackData::Metrolink(None)
                 }
             }
+        }
+        "amtrak" => {
+            let url = "https://rtt.metrolinktrains.com/StationScheduleList.json";
+
+            let mut multisource = AmtrakTrackDataMultisource { metrolink: None };
+
+            match reqwest::get(url).await {
+                Ok(r) => {
+                    let response = r.json::<Vec<MetrolinkTrackData>>().await;
+
+                    //println!("{:?}", response);
+
+                    match response {
+                        Ok(response) => {
+                            let track_lookup = metrolink_station_schedule_decode(
+                                response,
+                                MetrolinkOrAmtrakStopCodes::Amtrak,
+                            )
+                            .await;
+
+                            multisource.metrolink = Some(track_lookup);
+                        }
+                        Err(e) => {
+                            println!("Error decoding Metrolink data: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("Error fetching Metrolink data: {}", e);
+                }
+            }
+
+            TrackData::Amtrak(multisource)
         }
         _ => TrackData::None,
     }
@@ -1666,6 +1763,26 @@ mod tests {
                 assert!(m_data.is_some());
             }
             _ => panic!("Expected Metrolink data"),
+        }
+
+        let track_data = super::fetch_track_data("amtrak").await;
+        match track_data {
+            super::TrackData::Amtrak(a_data) => {
+                assert!(a_data.metrolink.is_some());
+
+                println!(
+                    "{:#?}",
+                    a_data
+                        .metrolink
+                        .as_ref()
+                        .unwrap()
+                        .track_lookup
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<String>>()
+                );
+            }
+            _ => panic!("Expected Amtrak data"),
         }
     }
 }

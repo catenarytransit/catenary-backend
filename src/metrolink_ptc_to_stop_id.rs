@@ -1,4 +1,4 @@
-//stop_id metrolink gtfs -> ptc 
+//stop_id metrolink gtfs -> ptc
 pub const METROLINK_STOP_LIST: [(&str, &str); 68] = [
     ("191", "REDLANDS-ESRI"),
     ("190", "REDLANDS-DOWNTOWN-ARROW"),
@@ -100,9 +100,9 @@ pub const AMTRAK_STOP_TO_SCAX_PTC_LIST: [(&str, &str); 21] = [
     //northridge
     ("NRG", "NORTHRIDGE"),
     //chatsworth
-    ("CWT","CHATSWORTH"),
+    ("CWT", "CHATSWORTH"),
     //simi valley
-    ("SIM","SIMIVALLEY"),
+    ("SIM", "SIMIVALLEY"),
     //moorpark
     ("MPK", "MOORPARK"),
     //Camarillo
@@ -116,6 +116,5 @@ pub const AMTRAK_STOP_TO_SCAX_PTC_LIST: [(&str, &str); 21] = [
     //riverside amtrak downtown
     ("RIV", "RIVERSIDE-DOWNTOWN"),
     //downtown pomona amtrak station
-    ("POS", "POMONA-DOWNTOWN")
-    //ontario station amtrak is not shared with metrolink, do not include
+    ("POS", "POMONA-DOWNTOWN"), //ontario station amtrak is not shared with metrolink, do not include
 ];
