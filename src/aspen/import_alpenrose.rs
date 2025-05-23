@@ -170,6 +170,8 @@ pub async fn new_rt_data(
             None => CompressedTripInternalCache::new(),
         };
 
+    let previous_authoritative_data_store = authoritative_data_store.get(&chateau_id);
+
     let fetch_supplemental_data_positions_metrolink: Option<AHashMap<CompactString, MetrolinkPos>> =
         match realtime_feed_id.as_str() {
             "f-metrolinktrains~rt" => {
@@ -1122,17 +1124,13 @@ pub async fn new_rt_data(
                             false => {}
                         }
 
-                        let trip_update = AspenisedTripUpdate {
-                            trip: trip_descriptor,
-                            vehicle: trip_update.vehicle.clone().map(|x| x.into()),
-                            trip_headsign: trip_headsign.clone(),
-                            found_schedule_trip_id: compressed_trip.is_some(),
-                            stop_time_update: trip_update
+                        let stop_time_update: Vec<AspenisedStopTimeUpdate> = trip_update
                                 .stop_time_update
                                 .iter()
                                 .map(|stu| AspenisedStopTimeUpdate {
                                     stop_sequence: stu.stop_sequence.map(|x| x as u16),
                                     stop_id: stu.stop_id.as_ref().map(|x| x.into()),
+                                    old_rt_data: false,
                                     arrival: stu.arrival.clone().map(|arrival| {
                                         AspenStopTimeEvent {
                                             delay: None,
@@ -1243,7 +1241,77 @@ pub async fn new_rt_data(
                                         .clone()
                                         .map(|x| x.into()),
                                 })
-                                .collect(),
+                                .collect();
+
+                        let new_stop_ids = stop_time_update.iter().map(|stu| stu.stop_id.clone())
+                        .flatten()
+                        .collect::<BTreeSet<EcoString>>();
+
+                        //merge with old data
+
+                        let old_data_to_add_to_start: Option<Vec<AspenisedStopTimeUpdate>> = match &trip_id {
+                            Some(trip_id) => {
+                                match &previous_authoritative_data_store {
+                            Some(previous_authoritative_data_store) => {
+                                let previous_trip_update_id = match previous_authoritative_data_store.trip_updates_lookup_by_trip_id_to_trip_update_ids.get(trip_id.as_str()) {
+                                    Some(trip_updates_lookup_by_trip_id_to_trip_update_ids) => {
+                                        match trip_updates_lookup_by_trip_id_to_trip_update_ids.len() {
+                                            0 => None,
+                                        
+                                            1 => Some(trip_updates_lookup_by_trip_id_to_trip_update_ids[0].clone()),
+                                            _ => None
+                                        }
+                                    },
+                                    None => None
+                                };
+
+                                match previous_trip_update_id {
+                                    Some(previous_trip_update_id) => {
+                                        
+                                        let trip_update = previous_authoritative_data_store.trip_updates.get(&previous_trip_update_id);
+                                        
+                                        match trip_update {
+                                            Some(trip_update) => {
+                                                let mut old_stop_time_update = trip_update.stop_time_update.clone().into_iter().filter(|old_stu| 
+                                                
+                                                    match &old_stu.stop_id {
+                                                        Some(old_stu_stop_id) => {
+                                                            !new_stop_ids.contains(old_stu_stop_id.as_str())
+                                                        },
+                                                        None => false
+                                                    }
+
+                                                ).collect::<Vec<_>>();
+                                                Some(old_stop_time_update)
+                                            },
+                                            None => None
+                                        }
+                                    },
+                                    None => None
+                                }
+                            },
+                            None => {
+                                None
+                            }
+                        
+                        }},
+                            None => None
+                        };
+
+                        let stop_time_update = match old_data_to_add_to_start {
+                            Some(old_data_to_add_to_start) => {
+                                let new_vec = old_data_to_add_to_start.into_iter().chain(stop_time_update.into_iter()).collect::<Vec<_>>();
+                                new_vec
+                            },
+                            None => stop_time_update
+                        };
+
+                        let trip_update = AspenisedTripUpdate {
+                            trip: trip_descriptor,
+                            vehicle: trip_update.vehicle.clone().map(|x| x.into()),
+                            trip_headsign: trip_headsign.clone(),
+                            found_schedule_trip_id: compressed_trip.is_some(),
+                            stop_time_update: stop_time_update,
                             timestamp: trip_update.timestamp,
                             delay: trip_update.delay,
                             trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),

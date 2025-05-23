@@ -438,6 +438,7 @@ pub struct AspenisedStopTimeUpdate {
     pub schedule_relationship: Option<AspenisedStopTimeScheduleRelationship>,
     pub stop_time_properties: Option<AspenisedStopTimeProperties>,
     pub platform_string: Option<ecow::EcoString>,
+    pub old_rt_data: bool
 }
 
 pub fn option_i32_to_occupancy_status(
