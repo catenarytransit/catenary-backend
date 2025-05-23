@@ -1247,7 +1247,6 @@ pub async fn new_rt_data(
 
                         //merge with old data
 
-                        /*
                         let old_data_to_add_to_start: Option<Vec<AspenisedStopTimeUpdate>> =
                             match &trip_id {
                                 Some(trip_id) => match &previous_authoritative_data_store {
@@ -1263,42 +1262,42 @@ pub async fn new_rt_data(
                                     None => None
                                 };
 
-                                        match previous_trip_update_id {
-                                            Some(previous_trip_update_id) => {
-                                                let trip_update = previous_authoritative_data_store
-                                                    .trip_updates
-                                                    .get(&previous_trip_update_id);
+                                match previous_trip_update_id {
+                                    Some(previous_trip_update_id) => {
+                                        let trip_update = previous_authoritative_data_store
+                                            .trip_updates
+                                            .get(&previous_trip_update_id);
 
-                                                match trip_update {
-                                                    Some(trip_update) => {
-                                                        let old_stop_time_update = trip_update
-                                                            .stop_time_update
-                                                            .iter()
-                                                            .filter(|old_stu| {
-                                                                match &old_stu.stop_id {
-                                                                    Some(old_stu_stop_id) => {
-                                                                        !new_stop_ids.contains(
-                                                                            old_stu_stop_id
-                                                                                .as_str(),
-                                                                        )
-                                                                    }
-                                                                    None => false,
-                                                                }
-                                                            })
-                                                            .cloned()
-                                                            .map(|old_stu| {
-                                                                let mut old_stu = old_stu.clone();
-                                                                old_stu.old_rt_data = true;
-                                                                old_stu
-                                                            })
-                                                            .collect::<Vec<_>>();
-                                                        Some(old_stop_time_update)
-                                                    }
-                                                    None => None,
-                                                }
+                                        match trip_update {
+                                            Some(trip_update) => {
+                                                let old_stop_time_update = trip_update
+                                                    .stop_time_update
+                                                    .iter()
+                                                    .filter(|old_stu| {
+                                                        match &old_stu.stop_id {
+                                                            Some(old_stu_stop_id) => {
+                                                                !new_stop_ids.contains(
+                                                                    old_stu_stop_id
+                                                                        .as_str(),
+                                                                )
+                                                            }
+                                                            None => false,
+                                                        }
+                                                    })
+                                                    .cloned()
+                                                    .map(|old_stu| {
+                                                        let mut old_stu = old_stu.clone();
+                                                        old_stu.old_rt_data = true;
+                                                        old_stu
+                                                    })
+                                                    .collect::<Vec<_>>();
+                                                Some(old_stop_time_update)
                                             }
                                             None => None,
                                         }
+                                    }
+                                    None => None,
+                                }
                                     }
                                     None => None,
                                 },
@@ -1314,7 +1313,7 @@ pub async fn new_rt_data(
                                 new_vec
                             }
                             None => stop_time_update,
-                        };*/
+                        };
 
                         let trip_update = AspenisedTripUpdate {
                             trip: trip_descriptor,
