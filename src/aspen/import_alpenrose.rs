@@ -1125,34 +1125,72 @@ pub async fn new_rt_data(
                         }
 
                         let stop_time_update: Vec<AspenisedStopTimeUpdate> = trip_update
-                                .stop_time_update
-                                .iter()
-                                .map(|stu| AspenisedStopTimeUpdate {
-                                    stop_sequence: stu.stop_sequence.map(|x| x as u16),
-                                    stop_id: stu.stop_id.as_ref().map(|x| x.into()),
-                                    old_rt_data: false,
-                                    arrival: stu.arrival.clone().map(|arrival| {
-                                        AspenStopTimeEvent {
-                                            delay: None,
-                                            time: arrival.time,
-                                            uncertainty: arrival.uncertainty,
-                                        }
-                                    }),
-                                    departure: stu.departure.clone().map(|departure| {
-                                        AspenStopTimeEvent {
-                                            delay: None,
-                                            time: departure.time,
-                                            uncertainty: departure.uncertainty,
-                                        }
-                                    }),
-                                    platform_string: match chateau_id.as_str() {
-                                        "metrolinktrains" => {
-                                            let mut track_resp = None;
+                            .stop_time_update
+                            .iter()
+                            .map(|stu| AspenisedStopTimeUpdate {
+                                stop_sequence: stu.stop_sequence.map(|x| x as u16),
+                                stop_id: stu.stop_id.as_ref().map(|x| x.into()),
+                                old_rt_data: false,
+                                arrival: stu.arrival.clone().map(|arrival| AspenStopTimeEvent {
+                                    delay: None,
+                                    time: arrival.time,
+                                    uncertainty: arrival.uncertainty,
+                                }),
+                                departure: stu.departure.clone().map(|departure| {
+                                    AspenStopTimeEvent {
+                                        delay: None,
+                                        time: departure.time,
+                                        uncertainty: departure.uncertainty,
+                                    }
+                                }),
+                                platform_string: match chateau_id.as_str() {
+                                    "metrolinktrains" => {
+                                        let mut track_resp = None;
 
-                                            if let TrackData::Metrolink(Some(track_data_scax)) =
-                                                &fetched_track_data
+                                        if let TrackData::Metrolink(Some(track_data_scax)) =
+                                            &fetched_track_data
+                                        {
+                                            let mut metrolink_code = String::from("M");
+
+                                            if let Some(compressed_trip) = compressed_trip {
+                                                if let Some(trip_short_name) =
+                                                    compressed_trip.trip_short_name.as_ref()
+                                                {
+                                                    metrolink_code.push_str(trip_short_name);
+                                                }
+                                            }
+
+                                            if let Some(train_data) =
+                                                track_data_scax.track_lookup.get(&metrolink_code)
                                             {
-                                                let mut metrolink_code = String::from("M");
+                                                if let Some(stop_id) = &stu.stop_id {
+                                                    if let Some(train_and_stop_scax) =
+                                                        train_data.get(stop_id)
+                                                    {
+                                                        track_resp = Some(
+                                                            train_and_stop_scax
+                                                                .formatted_track_designation
+                                                                .clone()
+                                                                .replace("Platform ", "")
+                                                                .into(),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        track_resp
+                                    }
+                                    "amtrak" => {
+                                        let mut track_resp: Option<EcoString> = None;
+
+                                        if let TrackData::Amtrak(amtrak_track_multisource) =
+                                            &fetched_track_data
+                                        {
+                                            if let Some(track_data_scax) =
+                                                &amtrak_track_multisource.metrolink
+                                            {
+                                                let mut metrolink_code = String::from("A");
 
                                                 if let Some(compressed_trip) = compressed_trip {
                                                     if let Some(trip_short_name) =
@@ -1181,79 +1219,39 @@ pub async fn new_rt_data(
                                                     }
                                                 }
                                             }
-
-                                            track_resp
                                         }
-                                        "amtrak" => {
-                                            let mut track_resp: Option<EcoString> = None;
 
-                                            if let TrackData::Amtrak(amtrak_track_multisource) =
-                                                &fetched_track_data
-                                            {
-                                                if let Some(track_data_scax) =
-                                                    &amtrak_track_multisource.metrolink
-                                                {
-                                                    let mut metrolink_code = String::from("A");
-
-                                                    if let Some(compressed_trip) = compressed_trip {
-                                                        if let Some(trip_short_name) =
-                                                            compressed_trip.trip_short_name.as_ref()
-                                                        {
-                                                            metrolink_code
-                                                                .push_str(trip_short_name);
-                                                        }
-                                                    }
-
-                                                    if let Some(train_data) = track_data_scax
-                                                        .track_lookup
-                                                        .get(&metrolink_code)
-                                                    {
-                                                        if let Some(stop_id) = &stu.stop_id {
-                                                            if let Some(train_and_stop_scax) =
-                                                                train_data.get(stop_id)
-                                                            {
-                                                                track_resp = Some(
-                                                                    train_and_stop_scax
-                                                                        .formatted_track_designation
-                                                                        .clone()
-                                                                        .replace("Platform ", "")
-                                                                        .into(),
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            track_resp
-                                        }
-                                        _ => None,
-                                    },
-                                    schedule_relationship:
-                                        option_i32_to_stop_time_schedule_relationship(
-                                            &stu.schedule_relationship,
-                                        ),
-                                    departure_occupancy_status: option_i32_to_occupancy_status(
-                                        &stu.departure_occupancy_status,
+                                        track_resp
+                                    }
+                                    _ => None,
+                                },
+                                schedule_relationship:
+                                    option_i32_to_stop_time_schedule_relationship(
+                                        &stu.schedule_relationship,
                                     ),
-                                    stop_time_properties: stu
-                                        .stop_time_properties
-                                        .clone()
-                                        .map(|x| x.into()),
-                                })
-                                .collect();
+                                departure_occupancy_status: option_i32_to_occupancy_status(
+                                    &stu.departure_occupancy_status,
+                                ),
+                                stop_time_properties: stu
+                                    .stop_time_properties
+                                    .clone()
+                                    .map(|x| x.into()),
+                            })
+                            .collect();
 
-                        let new_stop_ids = stop_time_update.iter().map(|stu| stu.stop_id.clone())
-                        .flatten()
-                        .collect::<BTreeSet<EcoString>>();
+                        let new_stop_ids = stop_time_update
+                            .iter()
+                            .map(|stu| stu.stop_id.clone())
+                            .flatten()
+                            .collect::<BTreeSet<EcoString>>();
 
                         //merge with old data
 
-                        let old_data_to_add_to_start: Option<Vec<AspenisedStopTimeUpdate>> = match &trip_id {
-                            Some(trip_id) => {
-                                match &previous_authoritative_data_store {
-                            Some(previous_authoritative_data_store) => {
-                                let previous_trip_update_id = match previous_authoritative_data_store.trip_updates_lookup_by_trip_id_to_trip_update_ids.get(trip_id.as_str()) {
+                        let old_data_to_add_to_start: Option<Vec<AspenisedStopTimeUpdate>> =
+                            match &trip_id {
+                                Some(trip_id) => match &previous_authoritative_data_store {
+                                    Some(previous_authoritative_data_store) => {
+                                        let previous_trip_update_id = match previous_authoritative_data_store.trip_updates_lookup_by_trip_id_to_trip_update_ids.get(trip_id.as_str()) {
                                     Some(trip_updates_lookup_by_trip_id_to_trip_update_ids) => {
                                         match trip_updates_lookup_by_trip_id_to_trip_update_ids.len() {
                                             0 => None,
@@ -1265,51 +1263,57 @@ pub async fn new_rt_data(
                                     None => None
                                 };
 
-                                match previous_trip_update_id {
-                                    Some(previous_trip_update_id) => {
-                                        
-                                        let trip_update = previous_authoritative_data_store.trip_updates.get(&previous_trip_update_id);
-                                        
-                                        match trip_update {
-                                            Some(trip_update) => {
-                                                let mut old_stop_time_update = trip_update.stop_time_update.clone().into_iter().filter(|old_stu| 
-                                                
-                                                    match &old_stu.stop_id {
-                                                        Some(old_stu_stop_id) => {
-                                                            !new_stop_ids.contains(old_stu_stop_id.as_str())
-                                                        },
-                                                        None => false
-                                                    }
+                                        match previous_trip_update_id {
+                                            Some(previous_trip_update_id) => {
+                                                let trip_update = previous_authoritative_data_store
+                                                    .trip_updates
+                                                    .get(&previous_trip_update_id);
 
-                                                )
-                                                .map(|old_stu| {
-                                                    let mut old_stu = old_stu.clone();
-                                                    old_stu.old_rt_data = true;
-                                                    old_stu
-                                                })
-                                                .collect::<Vec<_>>();
-                                                Some(old_stop_time_update)
-                                            },
-                                            None => None
+                                                match trip_update {
+                                                    Some(trip_update) => {
+                                                        let mut old_stop_time_update = trip_update
+                                                            .stop_time_update
+                                                            .iter()
+                                                            .filter(|old_stu| {
+                                                                match &old_stu.stop_id {
+                                                                    Some(old_stu_stop_id) => {
+                                                                        !new_stop_ids.contains(
+                                                                            old_stu_stop_id
+                                                                                .as_str(),
+                                                                        )
+                                                                    }
+                                                                    None => false,
+                                                                }
+                                                            })
+                                                            .cloned()
+                                                            .map(|old_stu| {
+                                                                let mut old_stu = old_stu.clone();
+                                                                old_stu.old_rt_data = true;
+                                                                old_stu
+                                                            })
+                                                            .collect::<Vec<_>>();
+                                                        Some(old_stop_time_update)
+                                                    }
+                                                    None => None,
+                                                }
+                                            }
+                                            None => None,
                                         }
-                                    },
-                                    None => None
-                                }
-                            },
-                            None => {
-                                None
-                            }
-                        
-                        }},
-                            None => None
-                        };
+                                    }
+                                    None => None,
+                                },
+                                None => None,
+                            };
 
                         let stop_time_update = match old_data_to_add_to_start {
                             Some(old_data_to_add_to_start) => {
-                                let new_vec = old_data_to_add_to_start.into_iter().chain(stop_time_update.into_iter()).collect::<Vec<_>>();
+                                let new_vec = old_data_to_add_to_start
+                                    .into_iter()
+                                    .chain(stop_time_update.into_iter())
+                                    .collect::<Vec<_>>();
                                 new_vec
-                            },
-                            None => stop_time_update
+                            }
+                            None => stop_time_update,
                         };
 
                         let trip_update = AspenisedTripUpdate {
