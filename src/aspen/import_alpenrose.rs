@@ -1255,7 +1255,6 @@ pub async fn new_rt_data(
                                     Some(trip_updates_lookup_by_trip_id_to_trip_update_ids) => {
                                         match trip_updates_lookup_by_trip_id_to_trip_update_ids.len() {
                                             0 => None,
-                                        
                                             1 => Some(trip_updates_lookup_by_trip_id_to_trip_update_ids[0].clone()),
                                             _ => None
                                         }
@@ -1271,7 +1270,7 @@ pub async fn new_rt_data(
 
                                                 match trip_update {
                                                     Some(trip_update) => {
-                                                        let mut old_stop_time_update = trip_update
+                                                        let old_stop_time_update = trip_update
                                                             .stop_time_update
                                                             .iter()
                                                             .filter(|old_stu| {
