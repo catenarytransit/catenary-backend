@@ -74,7 +74,7 @@ pub const METROLINK_STOP_LIST: [(&str, &str); 68] = [
 ];
 
 //amtrak stop id gtfs -> ptc
-pub const METROLINK_PTC_TO_AMTRAK_STOP_LIST: [(&str, &str); 21] = [
+pub const AMTRAK_STOP_TO_SCAX_PTC_LIST: [(&str, &str); 21] = [
     //oceanside
     ("OSD", "OCEANSIDE"),
     //san juan capistrano
