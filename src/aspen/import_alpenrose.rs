@@ -1624,8 +1624,14 @@ pub async fn new_rt_data(
     vehicle_routes_cache.shrink_to_fit();
     trip_updates.shrink_to_fit();
 
-    trip_updates_lookup_by_trip_id_to_trip_update_ids.sort();
-    trip_updates_lookup_by_trip_id_to_trip_update_ids.dedup();
+    trip_updates_lookup_by_trip_id_to_trip_update_ids.iter_mut(|(_, x)|
+        {
+            if x.len() > 1 {
+                x.sort();
+                x.dedup();
+            }
+        }
+    );
 
     trip_updates_lookup_by_trip_id_to_trip_update_ids.shrink_to_fit();
     alerts.shrink_to_fit();
