@@ -184,7 +184,7 @@ impl Advisories {
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetrolinkTranslatedString {
-    #[serde(rename = "translation")]
+    #[serde(rename = "Translation")]
     pub translation: Vec<MetrolinkTranslation>,
 }
 
@@ -198,9 +198,9 @@ impl Into<gtfs_realtime::TranslatedString> for MetrolinkTranslatedString {
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetrolinkTranslation {
-    #[serde(rename = "text")]
+    #[serde(rename = "Text")]
     pub text: String,
-    #[serde(rename = "language")]
+    #[serde(rename = "Language")]
     pub language: Option<String>,
 }
 
