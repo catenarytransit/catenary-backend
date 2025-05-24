@@ -12,7 +12,7 @@ use std::io::ErrorKind;
 
 pub type RawMetrolinkAlerts = Vec<RawMetrolinkEachRoute>;
 
-pub const METROLINK_ALERTS_URL: &str = "https://metrolinktrains.com/advisories/getadvisories?lines=AV&lines=IEOC&lines=OC&lines=RIV&lines=SB&lines=VC&lines=91/PV";
+pub const METROLINK_ALERTS_URL: &str = "https://metrolinktrains.com/advisories/getadvisories";
 
 pub const GREETING: &str = "Good morning! We'll be posting your train status updates from 4:00 a.m. to 12:30 a.m. Be safe and have a great day!";
 pub const GREETING_WEEKEND: &str = "Good morning! We'll be posting your train status updates from 6:00 a.m. to 11:00 p.m. Be safe and have a great day!";
@@ -74,7 +74,7 @@ pub struct ServiceAdvisory {
 #[derive(Clone, Debug)]
 pub struct RawAlertDetailsPage {
     header: String,
-    description: String,
+    description: Option<String>,
     start_date: Option<chrono::NaiveDate>,
     end_date: Option<chrono::NaiveDate>,
     route_ids: Vec<String>,
@@ -138,18 +138,20 @@ pub async fn fetch_alert_page_data(
     let description = document
         .select(&description_selector)
         .next()
-        .ok_or_else(|| std::io::Error::new(ErrorKind::NotFound, "Description not found"))?
-        .text()
-        .collect::<String>()
-        .replace(
-            " For real-time updates, follow us on Facebook and Twitter (X).",
-            "",
-        )
-        .replace(REMOVE_DELUSION, "")
-        .replace(REMOVE_YAP, "")
-        .replace("METROLINK ALERTS DETAIL", "")
-        .trim()
-        .to_string();
+        .map(|description| {
+            description
+                .text()
+                .collect::<String>()
+                .replace(
+                    " For real-time updates, follow us on Facebook and Twitter (X).",
+                    "",
+                )
+                .replace(REMOVE_DELUSION, "")
+                .replace(REMOVE_YAP, "")
+                .replace("METROLINK ALERTS DETAIL", "")
+                .trim()
+                .to_string()
+        });
 
     let start_date_selector = scraper::Selector::parse(".alertsDetail__date--start").unwrap();
     //pick first optionally
@@ -242,7 +244,7 @@ pub async fn fetch_alerts_from_root_metrolink(
     Ok(alert_details)
 }
 
-pub fn determine_cause(header: &str, desc: &str) -> i32 {
+pub fn determine_cause(header: &str, desc: Option<&str>) -> i32 {
     let header_lower = header.to_lowercase();
 
     if header_lower.contains("construction") {
@@ -253,16 +255,19 @@ pub fn determine_cause(header: &str, desc: &str) -> i32 {
         return 12;
     }
 
-    if desc.to_lowercase().contains("medical") {
-        return 12;
+    if let Some(desc) = desc {
+        if desc.to_lowercase().contains("medical") {
+            return 12;
+        }
     }
 
     if header_lower.contains("police") {
         return 11;
     }
-
-    if desc.to_lowercase().contains("police") {
-        return 11;
+    if let Some(desc) = desc {
+        if desc.to_lowercase().contains("police") {
+            return 11;
+        }
     }
 
     if header_lower.contains("maintenance") {
@@ -272,7 +277,7 @@ pub fn determine_cause(header: &str, desc: &str) -> i32 {
     return 2;
 }
 
-pub fn determine_effect(header: &str, desc: &str) -> i32 {
+pub fn determine_effect(header: &str, desc: Option<&str>) -> i32 {
     if header.to_lowercase().contains("no train service")
         || header.to_lowercase().contains("no service")
     {
@@ -300,8 +305,8 @@ pub fn make_en_translated_string(text: String) -> gtfs_realtime::TranslatedStrin
 }
 
 fn page_to_gtfs_rt_alerts(page: RawAlertDetailsPage) -> gtfs_realtime::FeedEntity {
-    let cause = determine_cause(&page.header, &page.description);
-    let effect = determine_effect(&page.header, &page.description);
+    let cause = determine_cause(&page.header, page.description.as_ref().map(|x| x.as_str()));
+    let effect = determine_effect(&page.header, page.description.as_ref().map(|x| x.as_str()));
 
     let mut route_ids = vec![];
 
@@ -340,7 +345,10 @@ fn page_to_gtfs_rt_alerts(page: RawAlertDetailsPage) -> gtfs_realtime::FeedEntit
             effect: Some(effect),
             url: Some(make_en_translated_string(page.url)),
             header_text: Some(make_en_translated_string(page.header)),
-            description_text: Some(make_en_translated_string(page.description)),
+            description_text: page
+                .description
+                .as_ref()
+                .map(|x| make_en_translated_string(x.to_string())),
             active_period: vec![gtfs_realtime::TimeRange {
                 start: start_timestamp,
                 end: end_timestamp,
@@ -363,7 +371,15 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
 ) -> Result<Vec<gtfs_realtime::FeedEntity>, Box<dyn Error + Send + Sync>> {
     let mut entities = vec![];
 
-    let raw_from_homepage = fetch_alerts_from_root_metrolink(client).await?;
+    let raw_from_homepage = fetch_alerts_from_root_metrolink(client).await;
+
+    if let Err(raw_from_homepage) = raw_from_homepage {
+        eprintln!("Raw from homepage failed");
+
+        return Err(raw_from_homepage);
+    }
+
+    let raw_from_homepage = raw_from_homepage.unwrap();
 
     //conversion to gtfs rt
     let mut finished_id_list = raw_from_homepage.iter().map(|x| x.id.clone()).collect_vec();
@@ -384,7 +400,7 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
 
     //individual advisories
 
-    let raw_data: RawMetrolinkAlerts = serde_json::from_str(&body_of_alerts)?;
+    /*let raw_data: RawMetrolinkAlerts = serde_json::from_str(&body_of_alerts)?;
 
     let raw_data = raw_data
         .into_iter()
@@ -491,7 +507,7 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
         .flatten()
         .collect::<Vec<gtfs_realtime::FeedEntity>>();
 
-    entities.extend(gtfs_rt_entities_from_advisories_page);
+    entities.extend(gtfs_rt_entities_from_advisories_page);*/
 
     //println!("{:#?}", raw_data);
 
@@ -513,10 +529,14 @@ mod tests {
 
         let reqwest_client = reqwest::Client::new();
 
+        let test_one_url = fetch_alert_page_data("https://metrolinktrains.com/news/alert-details-page/?alertId=75abe001-9e70-4173-aaef-df8f5ac87ec0", &reqwest_client).await;
+
+        println!("{:#?}", test_one_url);
+
         let test = gtfs_rt_alerts_from_metrolink_website(&reqwest_client).await;
 
-        assert!(test.is_ok());
+        println!("{:#?}", test);
 
-        println!("{:#?}", test.unwrap());
+        assert!(test.is_ok());
     }
 }
