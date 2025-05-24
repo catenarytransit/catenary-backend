@@ -71,6 +71,224 @@ pub struct ServiceAdvisory {
     pub date_range_output: String,
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewAlert {
+    #[serde(rename = "Id")]
+    pub id: String,
+    #[serde(rename = "Alert")]
+    pub alert: NewAlertInner
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewAlertInner {
+    #[serde(rename = "ActivePeriod")]
+    pub active_period: Vec<NewAlertActivePeriod>,
+    #[serde(rename = "InformedEntity")]
+    pub informed_entity: Vec<NewAlertInformedEntitySelector>,
+    #[serde(rename = "Cause")]
+    pub cause: Option<i32>,
+    #[serde(rename = "Effect")]
+    pub effect: Option<i32>,
+    #[serde(rename = "HeaderText")]
+    pub header_text: Option<MetrolinkTranslatedString>,
+    #[serde(rename = "DescriptionText")]
+    pub description_text: Option<MetrolinkTranslatedString>,
+    #[serde(rename = "TtsHeaderText")]
+    pub tts_header_text: Option<MetrolinkTranslatedString>,
+    #[serde(rename = "TtsDescriptionText")]
+    pub tts_description_text: Option<MetrolinkTranslatedString>,
+    #[serde(rename = "Url")]
+    pub url: Option<MetrolinkTranslatedString>,
+    #[serde(rename = "SeverityLevel")]
+    pub severity_level: Option<i32>,
+    #[serde(rename = "CauseDetail")]
+    pub cause_detail: Option<MetrolinkTranslatedString>,
+    #[serde(rename = "EffectDetail")]
+    pub effect_detail: Option<MetrolinkTranslatedString>,
+}
+
+impl Into<gtfs_realtime::Alert> for NewAlertInner {
+    fn into(self) -> gtfs_realtime::Alert {
+        gtfs_realtime::Alert {
+            active_period: self.active_period.into_iter().map(|x| x.into()).collect(),
+            informed_entity: self.informed_entity.into_iter().map(|x| x.into()).collect(),
+            cause: self.cause,
+            effect: self.effect,
+            header_text: self.header_text.map(|x| x.into()),
+            description_text: self.description_text.map(|x| x.into()),
+            tts_header_text: self.tts_header_text.map(|x| x.into()),
+            tts_description_text: self.tts_description_text.map(|x| x.into()),
+            url: self.url.map(|x| x.into()),
+            severity_level: self.severity_level,
+            cause_detail: self.cause_detail.map(|x| x.into()),
+            effect_detail: self.effect_detail.map(|x| x.into()),
+            image: None,
+            image_alternative_text: None,
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Advisories {
+    #[serde(rename = "Alerts")]
+    alerts: NewAlerts
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct NewAlerts {
+    #[serde(rename = "PlannedAlerts")]
+    planned_alerts: Vec<NewAlert>,
+    #[serde(rename = "ServiceAlerts")]
+    service_alerts: Vec<NewAlert>,
+    #[serde(rename = "BannerAlerts")]
+    banner_alerts: Vec<NewAlert>,
+}
+
+impl Advisories {
+    fn into_gtfs_entity_list(self) -> Vec<gtfs_realtime::FeedEntity> {
+        let mut entities = vec![];
+
+        for alert in self.alerts.planned_alerts {
+            let entity = gtfs_realtime::FeedEntity {
+                id: format!("alert-{}", alert.id),
+                is_deleted: None,
+                alert: Some(alert.alert.into()),
+                ..Default::default()
+            };
+            entities.push(entity);
+        }
+
+        for alert in self.alerts.service_alerts {
+            let entity = gtfs_realtime::FeedEntity {
+                id: format!("alert-{}", alert.id),
+                is_deleted: None,
+                alert: Some(alert.alert.into()),
+                ..Default::default()
+            };
+            entities.push(entity);
+        }
+
+        for alert in self.alerts.banner_alerts {
+            let entity = gtfs_realtime::FeedEntity {
+                id: format!("alert-{}", alert.id),
+                is_deleted: None,
+                alert: Some(alert.alert.into()),
+                ..Default::default()
+            };
+            entities.push(entity);
+        }
+
+        entities
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetrolinkTranslatedString {
+    #[serde(rename = "translation")]
+    pub translation: Vec<MetrolinkTranslation>,
+}
+
+impl Into<gtfs_realtime::TranslatedString> for MetrolinkTranslatedString {
+    fn into(self) -> gtfs_realtime::TranslatedString {
+        gtfs_realtime::TranslatedString {
+            translation: self.translation.into_iter().map(|x| x.into()).collect(),
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetrolinkTranslation {
+    #[serde(rename = "text")]
+    pub text: String,
+    #[serde(rename = "language")]
+    pub language: Option<String>,
+}
+
+impl Into<gtfs_realtime::translated_string::Translation> for MetrolinkTranslation {
+    fn into(self) -> gtfs_realtime::translated_string::Translation {
+        gtfs_realtime::translated_string::Translation {
+            text: self.text,
+            language: self.language,
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewAlertActivePeriod {
+    #[serde(rename = "Start")]
+    pub start: Option<u64>,
+    #[serde(rename = "End")]
+    pub end: Option<u64>,
+}
+
+impl Into<gtfs_realtime::TimeRange> for NewAlertActivePeriod {
+    fn into(self) -> gtfs_realtime::TimeRange {
+        gtfs_realtime::TimeRange {
+            start: self.start,
+            end: self.end,
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewAlertInformedEntitySelector {
+    #[serde(rename = "AgencyId")]
+    pub agency_id: Option<String>,
+    #[serde(rename = "RouteId")]
+    pub route_id: Option<String>,
+    #[serde(rename = "Trip")]
+    pub trip: Option<NewAlertTrip>,
+    #[serde(rename = "StopId")]
+    pub stop_id: Option<String>,
+    #[serde(rename = "RouteType")]
+    pub route_type: Option<i32>,
+    #[serde(rename = " DirectionId")]
+    pub direction_id: Option<u32>,
+}
+
+impl Into<gtfs_realtime::EntitySelector> for NewAlertInformedEntitySelector {
+    fn into(self) -> gtfs_realtime::EntitySelector {
+        gtfs_realtime::EntitySelector {
+            agency_id: self.agency_id,
+            route_id: self.route_id,
+            trip: self.trip.map(|x| x.into()),
+            stop_id: self.stop_id,
+            route_type: self.route_type,
+            direction_id: self.direction_id,
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewAlertTrip {
+    #[serde(rename = "RouteId")]
+    pub route_id: Option<String>,
+    #[serde(rename = "TripId")]
+    pub trip_id: Option<String>,
+    #[serde(rename = "DirectionId")]
+    pub direction_id: Option<u32>,
+    #[serde(rename = "StartTime")]
+    pub start_time: Option<String>,
+    #[serde(rename = "StartDate")]
+    pub start_date: Option<String>,
+    #[serde(rename = "ScheduleRelationship")]
+    pub schedule_relationship: Option<String>,
+}
+
+impl Into<gtfs_realtime::TripDescriptor> for NewAlertTrip {
+    fn into(self) -> gtfs_realtime::TripDescriptor {
+        gtfs_realtime::TripDescriptor {
+            route_id: self.route_id,
+            trip_id: self.trip_id,
+            direction_id: self.direction_id,
+            start_time: self.start_time,
+            start_date: self.start_date,
+            schedule_relationship: self.schedule_relationship.map(|x| gtfs_realtime::trip_descriptor::ScheduleRelationship::from_str_name(&x).map(|sr| sr as i32)).flatten(),
+            modified_trip: None
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RawAlertDetailsPage {
     header: String,
@@ -397,6 +615,12 @@ pub async fn gtfs_rt_alerts_from_metrolink_website(
         .await?
         .text()
         .await?;
+
+    let raw_advisories_data = serde_json::from_str::<Advisories>(&body_of_alerts)?;
+
+    let advisories = raw_advisories_data.into_gtfs_entity_list();
+
+    entities.extend(advisories);
 
     //individual advisories
 
