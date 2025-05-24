@@ -76,7 +76,7 @@ pub struct NewAlert {
     #[serde(rename = "Id")]
     pub id: String,
     #[serde(rename = "Alert")]
-    pub alert: NewAlertInner
+    pub alert: NewAlertInner,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,7 +131,7 @@ impl Into<gtfs_realtime::Alert> for NewAlertInner {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Advisories {
     #[serde(rename = "Alerts")]
-    alerts: NewAlerts
+    alerts: NewAlerts,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -283,8 +283,14 @@ impl Into<gtfs_realtime::TripDescriptor> for NewAlertTrip {
             direction_id: self.direction_id,
             start_time: self.start_time,
             start_date: self.start_date,
-            schedule_relationship: self.schedule_relationship.map(|x| gtfs_realtime::trip_descriptor::ScheduleRelationship::from_str_name(&x).map(|sr| sr as i32)).flatten(),
-            modified_trip: None
+            schedule_relationship: self
+                .schedule_relationship
+                .map(|x| {
+                    gtfs_realtime::trip_descriptor::ScheduleRelationship::from_str_name(&x)
+                        .map(|sr| sr as i32)
+                })
+                .flatten(),
+            modified_trip: None,
         }
     }
 }
