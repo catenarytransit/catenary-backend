@@ -96,7 +96,7 @@ struct StopInfoResponse {
 }
 
 #[derive(Serialize, Clone, Debug)]
-struct StopEvents {
+struct StopEvent {
     scheduled_arrival: Option<u64>,
     scheduled_departure: Option<u64>,
     realtime_arrival: Option<u64>,
@@ -112,11 +112,14 @@ struct StopEvents {
     uses_primary_stop: bool,
     unscheduled_trip: bool,
     moved_info: Option<MovedStopData>,
+    platform_string_realtime: Option<String>,
+    level_id: Option<String>,
+    platform_code: Option<String>
 }
 
 #[derive(Serialize, Clone, Debug)]
 pub struct MovedStopData {
-    stop: StopInfoResponse,
+    stop_id: String,
     scheduled_arrival: Option<u64>,
     scheduled_departure: Option<u64>,
     realtime_arrival: Option<u64>,
@@ -128,7 +131,7 @@ struct NearbyFromStopsResponse {
     primary: StopInfoResponse,
     parent: Option<StopInfoResponse>,
     children_and_related: Vec<StopInfoResponse>,
-    events: Vec<StopEvents>,
+    events: Vec<StopEvent>,
     // chateau_id -> route_id -> Route info
     routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>,
 }
@@ -525,6 +528,9 @@ pub async fn departures_at_stop(
 
     // 2. fetch all the trips needed
 
+    let mut events: Vec<StopEvent> = vec![];
+
+
     for (chateau_id, trips_compressed_data) in &trip_compressed_btreemap_by_chateau {
           let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
                     Some(chateau_metadata_for_c) => {
@@ -567,6 +573,8 @@ pub async fn departures_at_stop(
     //look through gtfs-rt times and hydrate the itineraries
 
     //get a default timezone for the stop using the timezone of the direction if it doesnt exist
+
+    //also need a method to accom multiple stop_directions inside a single itinerary/direction
 
     let response = NearbyFromStopsResponse {
         primary: StopInfoResponse {
