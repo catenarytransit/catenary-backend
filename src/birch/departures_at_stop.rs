@@ -11,11 +11,13 @@ use actix_web::Responder;
 use actix_web::web;
 use actix_web::web::Query;
 use amtrak_gtfs_rt::asm::Stop;
+use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::make_calendar_structure_from_pg;
 use catenary::make_degree_length_as_distance_from_point;
 use catenary::models::ItineraryPatternMeta;
 use catenary::models::ItineraryPatternRow;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::EtcdConnectionIps;
 use chrono::Datelike;
 use chrono::NaiveDate;
 use compact_str::CompactString;
@@ -31,6 +33,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,7 +139,17 @@ pub async fn departures_at_stop(
     query: Query<NearbyFromStops>,
 
     pool: web::Data<Arc<CatenaryPostgresPool>>,
+
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
 ) -> impl Responder {
+    let mut etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await
+    .unwrap();
+
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
@@ -228,6 +241,7 @@ pub async fn departures_at_stop(
 
     //get all children ids
 
+    //chateau_id -> [stop_id]
     let mut stops_to_search: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     stops_to_search.insert(stop.chateau.clone(), vec![stop.gtfs_id.clone()]);
@@ -450,9 +464,10 @@ pub async fn departures_at_stop(
 
     let greater_than_date_time = greater_than_time_utc.with_timezone(&stop_tz);
 
-    let greater_than_date_time_minus_seek_back = greater_than_date_time
-        - chrono::Duration::seconds(24 * 24 * 60 * 10)
-        - chrono::Duration::seconds(86400);
+    //seek back a minimum of 8 days
+
+    let greater_than_date_time_minus_seek_back =
+        greater_than_date_time - chrono::Duration::seconds(86400 * 8);
 
     let less_than_time_utc = chrono::DateTime::from_timestamp(less_than_time as i64, 0).unwrap();
     let less_than_date_time = less_than_time_utc.with_timezone(&stop_tz);
@@ -484,6 +499,68 @@ pub async fn departures_at_stop(
     }
 
     //fetch data from realtime server
+
+    //1. get all the relevant etcd endpoitns
+
+    let mut chateau_metadata = HashMap::new();
+
+    for chateau_id in stops_to_search.keys() {
+        let etcd_data = etcd
+            .get(
+                format!("/aspen_assigned_chateaux/{}", chateau_id.clone()).as_str(),
+                None,
+            )
+            .await;
+
+        if let Ok(etcd_data) = etcd_data {
+            if let Some(first_value) = etcd_data.kvs().first() {
+                let this_chateau_metadata =
+                    catenary::bincode_deserialize::<ChateauMetadataEtcd>(first_value.value())
+                        .unwrap();
+
+                chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
+            }
+        }
+    }
+
+    // 2. fetch all the trips needed
+
+    for (chateau_id, trips_compressed_data) in &trip_compressed_btreemap_by_chateau {
+          let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
+                    Some(chateau_metadata_for_c) => {
+                        let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(
+                            &chateau_metadata_for_c.socket,
+                        )
+                        .await;
+
+                        match aspen_client {
+                            Ok(aspen_client) => {
+                                let gtfs_trip_aspenised = aspen_client
+                                    .get_all_trips_with_ids(
+                                        tarpc::context::current(),
+                                        chateau_id.clone(),
+                                        trips_compressed_data.keys().cloned().collect::<Vec<String>>(),
+                                    )
+                                    .await;
+
+                                match gtfs_trip_aspenised {
+                                    Ok(gtfs_trip_aspenised) => Some(gtfs_trip_aspenised),
+                                    Err(err) => {
+                                        eprintln!(
+                                            "Error getting trip updates inside departures at stop: {:?}",
+                                            err
+                                        );
+                                        None
+                                    }
+                                }
+                            }
+                            Err(err) => None,
+                        }
+                    }
+                    None => None,
+                }
+                .flatten();
+    }
 
     //look through time compressed and decompress the itineraries, using timezones and calendar calcs
 
