@@ -108,6 +108,16 @@ struct StopEvents {
     stop_id: String,
     uses_primary_stop: bool,
     unscheduled_trip: bool,
+    moved_info: Option<MovedStopData>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MovedStopData {
+    stop: StopInfoResponse,
+    scheduled_arrival: Option<u64>,
+    scheduled_departure: Option<u64>,
+    realtime_arrival: Option<u64>,
+    realtime_departure: Option<u64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
