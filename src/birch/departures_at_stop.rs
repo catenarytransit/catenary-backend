@@ -126,6 +126,7 @@ struct NearbyFromStopsResponse {
     parent: Option<StopInfoResponse>,
     children_and_related: Vec<StopInfoResponse>,
     events: Vec<StopEvents>,
+    // chateau_id -> route_id -> Route info
     routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>,
 }
 
