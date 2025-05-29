@@ -444,6 +444,8 @@ pub async fn nearby_from_coords(
         }
     }
 
+    let mut directions_with_headsign_to_closest_stop: HashMap<(String, u64, i16), (CompactString, u32)> = HashMap::new();
+
     //write some join, select * from itinerary patterns
 
     //chateau, direction id, stop sequence
