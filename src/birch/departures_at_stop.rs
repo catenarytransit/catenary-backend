@@ -11,13 +11,13 @@ use actix_web::Responder;
 use actix_web::web;
 use actix_web::web::Query;
 use amtrak_gtfs_rt::asm::Stop;
+use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::make_calendar_structure_from_pg;
 use catenary::make_degree_length_as_distance_from_point;
 use catenary::models::ItineraryPatternMeta;
 use catenary::models::ItineraryPatternRow;
 use catenary::postgres_tools::CatenaryPostgresPool;
-use catenary::EtcdConnectionIps;
 use chrono::Datelike;
 use chrono::NaiveDate;
 use compact_str::CompactString;
@@ -114,7 +114,7 @@ struct StopEvent {
     moved_info: Option<MovedStopData>,
     platform_string_realtime: Option<String>,
     level_id: Option<String>,
-    platform_code: Option<String>
+    platform_code: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -530,42 +530,44 @@ pub async fn departures_at_stop(
 
     let mut events: Vec<StopEvent> = vec![];
 
-
     for (chateau_id, trips_compressed_data) in &trip_compressed_btreemap_by_chateau {
-          let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
-                    Some(chateau_metadata_for_c) => {
-                        let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(
-                            &chateau_metadata_for_c.socket,
-                        )
-                        .await;
+        let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
+            Some(chateau_metadata_for_c) => {
+                let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(
+                    &chateau_metadata_for_c.socket,
+                )
+                .await;
 
-                        match aspen_client {
-                            Ok(aspen_client) => {
-                                let gtfs_trip_aspenised = aspen_client
-                                    .get_all_trips_with_ids(
-                                        tarpc::context::current(),
-                                        chateau_id.clone(),
-                                        trips_compressed_data.keys().cloned().collect::<Vec<String>>(),
-                                    )
-                                    .await;
+                match aspen_client {
+                    Ok(aspen_client) => {
+                        let gtfs_trip_aspenised = aspen_client
+                            .get_all_trips_with_ids(
+                                tarpc::context::current(),
+                                chateau_id.clone(),
+                                trips_compressed_data
+                                    .keys()
+                                    .cloned()
+                                    .collect::<Vec<String>>(),
+                            )
+                            .await;
 
-                                match gtfs_trip_aspenised {
-                                    Ok(gtfs_trip_aspenised) => Some(gtfs_trip_aspenised),
-                                    Err(err) => {
-                                        eprintln!(
-                                            "Error getting trip updates inside departures at stop: {:?}",
-                                            err
-                                        );
-                                        None
-                                    }
-                                }
+                        match gtfs_trip_aspenised {
+                            Ok(gtfs_trip_aspenised) => Some(gtfs_trip_aspenised),
+                            Err(err) => {
+                                eprintln!(
+                                    "Error getting trip updates inside departures at stop: {:?}",
+                                    err
+                                );
+                                None
                             }
-                            Err(err) => None,
                         }
                     }
-                    None => None,
+                    Err(err) => None,
                 }
-                .flatten();
+            }
+            None => None,
+        }
+        .flatten();
     }
 
     //look through time compressed and decompress the itineraries, using timezones and calendar calcs

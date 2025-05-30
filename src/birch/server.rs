@@ -71,12 +71,12 @@ mod get_agencies;
 mod get_vehicle_trip_information;
 mod gtfs_rt_api;
 mod nearby_departures;
+mod nearby_departuresv2;
 mod route_info;
 use rand::Rng;
 mod terrain_tiles_proxy;
 use terrain_tiles_proxy::proxy_for_maptiler_terrain_tiles;
 mod block_api;
-mod nearby_departuresv2;
 mod openrailwaymap_proxy;
 mod stop_preview;
 mod vehicle_api;
@@ -710,6 +710,7 @@ async fn main() -> std::io::Result<()> {
             .service(aspenised_data_over_https::bulk_realtime_fetch_v1)
             .service(chicago_proxy::ttarrivals_proxy)
             .service(nearby_departures::nearby_from_coords)
+            .service(nearby_departuresv2::nearby_from_coords_v2)
             .service(departures_at_stop::departures_at_stop)
             .service(get_vehicle_trip_information::get_trip_init)
             .service(get_vehicle_trip_information::get_trip_init_v2)
