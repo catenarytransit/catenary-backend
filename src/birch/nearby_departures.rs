@@ -391,6 +391,9 @@ pub async fn nearby_from_coords(
     //store the direction id and the index
     let mut stops_to_directions: HashMap<(String, CompactString), Vec<(u64, u32)>> = HashMap::new();
 
+    //(chateau, stop_id) -> (direction_id, headsign_idx, stop_sequence)
+    let mut stops_to_directions_and_headsigns: HashMap<(String, CompactString), Vec<(u64, Option<i16>, u32)>> = HashMap::new();
+
     for d in directions_rows {
         let id = d.direction_pattern_id.parse::<u64>().unwrap();
 
@@ -402,6 +405,17 @@ pub async fn nearby_from_coords(
             }
             Entry::Vacant(mut ve) => {
                 ve.insert(vec![(id, d.stop_sequence)]);
+            }
+        }
+
+        match stops_to_directions_and_headsigns.entry((d.chateau.clone(), d.stop_id.clone())) {
+            Entry::Occupied(mut oe) => {
+                let array = oe.get_mut();
+
+                array.push((id, d.stop_headsign_idx, d.stop_sequence));
+            },
+            Entry::Vacant(mut ve) => {
+                ve.insert(vec![(id, d.stop_headsign_idx, d.stop_sequence)]);
             }
         }
     }
@@ -444,7 +458,22 @@ pub async fn nearby_from_coords(
         }
     }
 
-    let mut directions_with_headsign_to_closest_stop: HashMap<(String, u64, i16), (CompactString, u32)> = HashMap::new();
+    let mut directions_with_headsign_to_closest_stop: HashMap<(String, u64, Option<i16>), (CompactString, u32)> = HashMap::new();
+
+    for ((chateau, stop_id), distance_m) in sorted_order_stops.iter() {
+        let direction_at_this_stop = stops_to_directions_and_headsigns.get(&(chateau.clone(), stop_id.into()));
+
+        if let Some(direction_at_this_stop) = direction_at_this_stop {
+            for (direction_id, headsign_idx, stop_sequence) in direction_at_this_stop {
+                match directions_with_headsign_to_closest_stop.entry((chateau.clone(), *direction_id, *headsign_idx)) {
+                    Entry::Vacant(ve) => {
+                        ve.insert((stop_id.into(), *stop_sequence));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 
     //write some join, select * from itinerary patterns
 
