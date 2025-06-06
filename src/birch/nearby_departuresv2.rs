@@ -1318,10 +1318,6 @@ pub async fn nearby_from_coords_v2(
                                                 }
                                             }
                                         }
-
-                                            // add to used list
-                                            already_used_trip_update_id
-                                                .insert(trip_update_id.clone());
                                         }
                                     }
                                 }
