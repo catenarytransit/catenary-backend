@@ -939,12 +939,15 @@ pub async fn departures_at_stop(
 
                         //add to stop event list
 
+                        let midnight_of_service_date_unix_time = valid_trip.reference_start_of_service_date.timestamp();
+
+
                         
 
                         events.push(
                             StopEvent {
-                                scheduled_arrival: itin_option.arrival_time_since_start.map(|x| x as u64),
-                                scheduled_departure: itin_option.departure_time_since_start.map(|x| x as u64),
+                                scheduled_arrival:  midnight_of_service_date_unix_time + itin_option.arrival_time_since_start.map(|x| x as u64),
+                                scheduled_departure:  midnight_of_service_date_unix_time + itin_option.departure_time_since_start.map(|x| x as u64),
                                 chateau: chateau_id.clone(),
                                 trip_id: valid_trip.trip_id.clone().to_string(),
                                 stop_id: itin_option.stop_id.clone().to_string(),
