@@ -393,23 +393,24 @@ pub async fn departures_at_stop(
             .map(|x| x.route_id.clone())
             .collect::<Vec<CompactString>>();
 
-            let routes_ret: diesel::prelude::QueryResult<Vec<catenary::models::Route>> =
-                catenary::schema::gtfs::routes::dsl::routes
-                    .filter(catenary::schema::gtfs::routes::chateau.eq(chateau_id_to_search.clone()))
-                    .filter(catenary::schema::gtfs::routes::route_id.eq_any(&route_ids))
-                    .select(catenary::models::Route::as_select())
-                    .load::<catenary::models::Route>(conn)
-                    .await;
+        let routes_ret: diesel::prelude::QueryResult<Vec<catenary::models::Route>> =
+            catenary::schema::gtfs::routes::dsl::routes
+                .filter(catenary::schema::gtfs::routes::chateau.eq(chateau_id_to_search.clone()))
+                .filter(catenary::schema::gtfs::routes::route_id.eq_any(&route_ids))
+                .select(catenary::models::Route::as_select())
+                .load::<catenary::models::Route>(conn)
+                .await;
 
-            let routes_ret = routes_ret.unwrap();
+        let routes_ret = routes_ret.unwrap();
 
-            let mut routes_btreemap = BTreeMap::<String, catenary::models::Route>::new();
-            for route in routes_ret.iter() {
-                routes_btreemap.entry(route.route_id.clone().into()).or_insert(route.clone());
-            }
+        let mut routes_btreemap = BTreeMap::<String, catenary::models::Route>::new();
+        for route in routes_ret.iter() {
+            routes_btreemap
+                .entry(route.route_id.clone().into())
+                .or_insert(route.clone());
+        }
 
-            routes.insert(chateau_id_to_search.clone(), routes_btreemap);
-
+        routes.insert(chateau_id_to_search.clone(), routes_btreemap);
 
         let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
             .filter(
@@ -632,7 +633,13 @@ pub async fn departures_at_stop(
             let direction_meta = direction_meta_btreemap_by_chateau
                 .get(chateau_id)
                 .unwrap()
-                .get(itin_for_this_trip.direction_pattern_id.as_ref().unwrap().as_str())
+                .get(
+                    itin_for_this_trip
+                        .direction_pattern_id
+                        .as_ref()
+                        .unwrap()
+                        .as_str(),
+                )
                 .unwrap();
 
             let itin_ref = itinerary_rows.last().unwrap();
@@ -674,10 +681,15 @@ pub async fn departures_at_stop(
                 );
 
                 if !dates.is_empty() {
-                    println!("trip: {}, route_id{}, itin_rows {:#?}, Adding dates {:?}", trip_id.clone(), trip_compressed.route_id.clone(), itinerary_rows, dates);
+                    println!(
+                        "trip: {}, route_id{}, itin_rows {:#?}, Adding dates {:?}",
+                        trip_id.clone(),
+                        trip_compressed.route_id.clone(),
+                        itinerary_rows,
+                        dates
+                    );
 
                     for date in dates {
-
                         let t = ValidTripSet {
                             chateau_id: chateau_id.clone(),
                             trip_id: (&trip_compressed.trip_id).into(),
@@ -696,10 +708,11 @@ pub async fn departures_at_stop(
                                     stop_id: itin_row.stop_id.clone(),
                                     gtfs_stop_sequence: itin_row.gtfs_stop_sequence,
                                     trip_headsign: match &itin_row.stop_headsign_idx {
-                                        Some(idx) => {
-                                            direction_meta.stop_headsigns_unique_list.as_ref().unwrap()[*idx as usize]
-                                                .clone()
-                                        },      
+                                        Some(idx) => direction_meta
+                                            .stop_headsigns_unique_list
+                                            .as_ref()
+                                            .unwrap()[*idx as usize]
+                                            .clone(),
                                         None => None,
                                     },
                                     trip_headsign_translations: None,
@@ -942,34 +955,53 @@ pub async fn departures_at_stop(
 
                         //add to stop event list
 
-                        let midnight_of_service_date_unix_time = valid_trip.reference_start_of_service_date.timestamp() as u64;
+                        let midnight_of_service_date_unix_time =
+                            valid_trip.reference_start_of_service_date.timestamp() as u64;
 
-                        events.push(
-                            StopEvent {
-                                scheduled_arrival:  itin_option.arrival_time_since_start.map(|x| x as u64).map(|x| x + midnight_of_service_date_unix_time),
-                                scheduled_departure:  itin_option.departure_time_since_start.map(|x| x as u64).map(|x| x + midnight_of_service_date_unix_time),
-                                chateau: chateau_id.clone(),
-                                trip_id: valid_trip.trip_id.clone().to_string(),
-                                stop_id: itin_option.stop_id.clone().to_string(),
-                                stop_cancelled: false,
-                                trip_cancelled: false,
-                                trip_modified: false,
-                                realtime_arrival: arrival_time_rt,
-                                realtime_departure: departure_time_rt,
-                                platform_code: None,
-                                headsign: match &itin_option.trip_headsign {
-                                    Some(headsign) => Some(headsign.to_string()),
-                                    None => Some(direction_meta_btreemap_by_chateau.get(chateau_id.as_str()).unwrap().get(&valid_trip.direction_pattern_id).unwrap().headsign_or_destination.clone()),
-                                },
-                                route_id: valid_trip.route_id.clone().to_string(),
-                                vehicle_number: vehicle_num,
-                                level_id: None,
-                                uses_primary_stop: true,
-                                unscheduled_trip: false,
-                                moved_info: None,
-                                platform_string_realtime: platform,
-                            }
-                        )
+                        events.push(StopEvent {
+                            scheduled_arrival: itin_option
+                                .arrival_time_since_start
+                                .map(|x| x as u64)
+                                .map(|x| {
+                                    x + midnight_of_service_date_unix_time
+                                        + valid_trip.trip_start_time as u64
+                                }),
+                            scheduled_departure: itin_option
+                                .departure_time_since_start
+                                .map(|x| x as u64)
+                                .map(|x| {
+                                    x + midnight_of_service_date_unix_time
+                                        + valid_trip.trip_start_time as u64
+                                }),
+                            chateau: chateau_id.clone(),
+                            trip_id: valid_trip.trip_id.clone().to_string(),
+                            stop_id: itin_option.stop_id.clone().to_string(),
+                            stop_cancelled: false,
+                            trip_cancelled: false,
+                            trip_modified: false,
+                            realtime_arrival: arrival_time_rt,
+                            realtime_departure: departure_time_rt,
+                            platform_code: None,
+                            headsign: match &itin_option.trip_headsign {
+                                Some(headsign) => Some(headsign.to_string()),
+                                None => Some(
+                                    direction_meta_btreemap_by_chateau
+                                        .get(chateau_id.as_str())
+                                        .unwrap()
+                                        .get(&valid_trip.direction_pattern_id)
+                                        .unwrap()
+                                        .headsign_or_destination
+                                        .clone(),
+                                ),
+                            },
+                            route_id: valid_trip.route_id.clone().to_string(),
+                            vehicle_number: vehicle_num,
+                            level_id: None,
+                            uses_primary_stop: true,
+                            unscheduled_trip: false,
+                            moved_info: None,
+                            platform_string_realtime: platform,
+                        })
                     }
                 }
             }
@@ -983,7 +1015,14 @@ pub async fn departures_at_stop(
 
     //sort the event list
 
-    events.sort_by_key(|x| x.realtime_departure.unwrap_or(x.realtime_arrival.unwrap_or(x.scheduled_departure.unwrap_or(x.scheduled_arrival.unwrap()))));
+    events.sort_by_key(|x| {
+        x.realtime_departure.unwrap_or(
+            x.realtime_arrival.unwrap_or(
+                x.scheduled_departure
+                    .unwrap_or(x.scheduled_arrival.unwrap()),
+            ),
+        )
+    });
 
     let response = NearbyFromStopsResponse {
         primary: StopInfoResponse {
