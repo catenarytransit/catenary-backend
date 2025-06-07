@@ -981,6 +981,10 @@ pub async fn departures_at_stop(
 
     //also need a method to accom multiple stop_directions inside a single itinerary/direction
 
+    //sort the event list
+
+    events.sort_by_key(|x| x.realtime_departure.unwrap_or(x.realtime_arrival.unwrap_or(x.scheduled_departure.unwrap_or(x.scheduled_arrival.unwrap()))));
+
     let response = NearbyFromStopsResponse {
         primary: StopInfoResponse {
             chateau: stop.chateau,
