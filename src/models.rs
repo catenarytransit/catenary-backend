@@ -10,7 +10,7 @@ use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;
 
-#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize, QueryableByName)]
+#[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize, QueryableByName, Debug)]
 #[diesel(table_name = crate::schema::gtfs::itinerary_pattern)]
 pub struct ItineraryPatternRow {
     pub onestop_feed_id: String,

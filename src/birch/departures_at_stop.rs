@@ -674,6 +674,8 @@ pub async fn departures_at_stop(
                 );
 
                 if !dates.is_empty() {
+                    println!("trip: {}, route_id{}, itin_rows {:#?}, Adding dates {:?}", trip_id.clone(), trip_compressed.route_id.clone(), itinerary_rows, dates);
+
                     for date in dates {
 
                         let t = ValidTripSet {
@@ -683,6 +685,7 @@ pub async fn departures_at_stop(
                                 .ok(),
                             frequencies: freq_converted.clone(),
                             trip_service_date: date.0,
+                            //TODO, fix eventually, cannot be all the itin rows
                             itinerary_options: itinerary_rows
                                 .iter()
                                 .map(|itin_row| ItinOption {
@@ -940,9 +943,6 @@ pub async fn departures_at_stop(
                         //add to stop event list
 
                         let midnight_of_service_date_unix_time = valid_trip.reference_start_of_service_date.timestamp() as u64;
-
-
-                        
 
                         events.push(
                             StopEvent {
