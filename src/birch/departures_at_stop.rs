@@ -941,6 +941,10 @@ pub async fn departures_at_stop(
                                                     if let Some(label) = &trip_vehicle.label {
                                                         
                                                         vehicle_num = Some(label.to_string());
+                                                    } else {
+                                                        if let Some(id) = &trip_vehicle.id {
+                                                            vehicle_num = Some(id.to_string());
+                                                        }
                                                     }
                                                 }
                                             }
