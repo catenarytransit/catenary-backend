@@ -116,6 +116,7 @@ struct StopEvent {
     level_id: Option<String>,
     platform_code: Option<String>,
     vehicle_number: Option<String>,
+    trip_short_name: Option<CompactString>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -997,6 +998,7 @@ pub async fn departures_at_stop(
                             unscheduled_trip: false,
                             moved_info: None,
                             platform_string_realtime: platform,
+                            trip_short_name: valid_trip.trip_short_name.clone(),
                         })
                     }
                 }
