@@ -259,17 +259,13 @@ pub async fn departures_at_stop(
         .collect::<Vec<String>>();
 
     for child in children_of_stop.iter() {
-        stops_to_search
+        let mut children_entry = stops_to_search
             .entry(stop.chateau.clone())
-            .or_insert(vec![])
-            .push(
-                stops_nearby
-                    .iter()
-                    .find(|s| s.gtfs_id == *child)
-                    .unwrap()
-                    .gtfs_id
-                    .clone(),
-            );
+            .or_insert(vec![]);
+
+        if let Some(c) = stops_nearby.iter().find(|s| s.gtfs_id == *child) {
+            children_entry.push(c.gtfs_id.clone());
+        }
     }
 
     for nearby_stop in stops_nearby
