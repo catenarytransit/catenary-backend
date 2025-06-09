@@ -33,6 +33,7 @@ use diesel::query_dsl::methods::SelectDsl;
 use diesel::sql_types::Bool;
 use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
+use ecow::EcoString;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -137,6 +138,9 @@ struct NearbyFromStopsResponse {
     events: Vec<StopEvent>,
     // chateau_id -> route_id -> Route info
     routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>,
+    // chateau_id -> route_id -> Shape
+   // pub shapes: BTreeMap<EcoString, BTreeMap<EcoString, CompactString>>,
+    // alerts
 }
 
 #[actix_web::get("/departures_at_stop")]
