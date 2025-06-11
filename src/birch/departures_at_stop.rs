@@ -683,13 +683,13 @@ pub async fn departures_at_stop(
                 );
 
                 if !dates.is_empty() {
-                    println!(
-                        "trip: {}, route_id{}, itin_rows {:#?}, Adding dates {:?}",
-                        trip_id.clone(),
-                        trip_compressed.route_id.clone(),
-                        itinerary_rows,
-                        dates
-                    );
+                    //println!(
+                    //    "trip: {}, route_id{}, itin_rows {:#?}, Adding dates {:?}",
+                    //    trip_id.clone(),
+                    //    trip_compressed.route_id.clone(),
+                    //    itinerary_rows,
+                    //    dates
+                    //);
 
                     for date in dates {
                         let t = ValidTripSet {
