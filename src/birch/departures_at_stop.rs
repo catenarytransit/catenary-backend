@@ -139,7 +139,7 @@ struct NearbyFromStopsResponse {
     // chateau_id -> route_id -> Route info
     routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>,
     // chateau_id -> route_id -> Shape
-   // pub shapes: BTreeMap<EcoString, BTreeMap<EcoString, CompactString>>,
+    // pub shapes: BTreeMap<EcoString, BTreeMap<EcoString, CompactString>>,
     // alerts
 }
 
