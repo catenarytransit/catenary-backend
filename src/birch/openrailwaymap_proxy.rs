@@ -11,6 +11,10 @@ pub async fn openrailwaymap_proxy(path: actix_web::web::Path<String>) -> impl Re
     let client = reqwest::Client::new();
     let response = client.get(&url).send().await.unwrap();
 
+    if response.status().is_server_error() {
+        return HttpResponse::InternalServerError().finish();
+    }
+
     // Check if the response is a tilejson
     if response.headers().get("Content-Type").unwrap() == "application/json" {
         let mut json: serde_json::Value = response.json().await.unwrap();
