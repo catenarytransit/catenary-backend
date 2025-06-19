@@ -51,6 +51,8 @@ Rationale:
         - The advertising and use of AI models has caused a significant harm to employees and reduction of service quality.
         - LLMs have been empowering all kinds of spam and scam efforts.
 
+Taken from https://wiki.gentoo.org/wiki/Project:Council/AI_policy
+
 ### Installation of Postgres
 
 See https://www.postgresql.org/download
