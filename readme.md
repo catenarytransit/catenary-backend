@@ -39,7 +39,7 @@ CREATE EXTENSION postgis;
 
 Good commit messages are required to contribute to this project.
 
-Using Generative AI to work on this project is not allowed.
+Using Generative AI to write the code is somewhat discouraged, but still permitted. Having the Generative AI model write the entire code may make us run into copyright issues.
 
 ### Installation of Postgres
 
