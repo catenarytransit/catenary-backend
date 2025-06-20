@@ -828,6 +828,7 @@ pub async fn proxy_for_watchduty_tiles(
             HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/x-protobuf"))
                 .insert_header(("Cache-Control", "no-cache"))
+                .insert_header(("Access-Control-Allow-Origin", "*"))
                 .body(bytes)
         }
         Err(err) => {
