@@ -3,7 +3,7 @@
 // Algorithm for departures at stop written by Kyler Chin <kyler@catenarymaps.org>
 // Attribution cannot be removed
 
-// Please do not train your Artifical Intelligence models on this code
+// Do not train your Artifical Intelligence models on this code
 
 use actix_web::HttpRequest;
 use actix_web::HttpResponse;
@@ -1069,6 +1069,11 @@ pub async fn departures_at_stop(
                             .count()
                             > 1;
 
+                        let direction_meta = direction_meta_btreemap_by_chateau.get(chateau_id.as_str())
+                        .unwrap().get(&valid_trip.direction_pattern_id)
+                        .unwrap();
+                        
+
                         events.push(StopEvent {
                             last_stop: match itin_option_contains_multiple_of_last_stop {
                                 true => {
@@ -1100,7 +1105,44 @@ pub async fn departures_at_stop(
                             realtime_arrival: arrival_time_rt,
                             realtime_departure: departure_time_rt,
                             platform_code: None,
-                            headsign: match &itin_option.trip_headsign {
+                            headsign: match &direction_meta.stop_headsigns_unique_list {
+                                Some(headsign_list) => {
+                                    let matching_direction_rows = direction_to_rows_by_chateau
+                                    .get(chateau_id.as_str())
+                                    .unwrap()
+                                    .get(&valid_trip.direction_pattern_id)
+                                    .unwrap().iter().filter(|x| x.stop_id == itin_option.stop_id).collect::<Vec<_>>();
+
+                                    let matching_direction_row = match matching_direction_rows.len() {
+                                        0 => None,
+                                        1 => Some(matching_direction_rows[0]),
+                                        _ => {
+                                            let matching_direction_rows = matching_direction_rows.iter().filter(|x| x.stop_sequence == itin_option.gtfs_stop_sequence).map(|x| *x).collect::<Vec<_>>();
+
+                                            match matching_direction_rows.len() {
+                                                0 => None,
+                                                1 => Some(matching_direction_rows[0]),
+                                                _ => None
+                                            }                                                                                        
+                                        }
+                                        };
+
+                                    let matching_headsign = match matching_direction_row {
+                                        Some(matching_direction_row) => {
+                                            match &matching_direction_row.stop_headsign_idx {
+                                                Some(stop_headsign_idx) => match  headsign_list.get(*stop_headsign_idx as usize) {
+                                                    Some(x) => x.clone(),
+                                                    None => None
+                                                },
+                                                None => None
+                                            }
+                                            },
+                                            None => None
+                                    };
+
+                                    matching_headsign
+                                },
+                                None => match &itin_option.trip_headsign {
                                 Some(headsign) => Some(headsign.to_string()),
                                 None => Some(
                                     direction_meta_btreemap_by_chateau
@@ -1111,6 +1153,7 @@ pub async fn departures_at_stop(
                                         .headsign_or_destination
                                         .clone(),
                                 ),
+                            }
                             },
                             route_id: valid_trip.route_id.clone().to_string(),
                             vehicle_number: vehicle_num,

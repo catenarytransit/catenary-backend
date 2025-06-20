@@ -1,6 +1,8 @@
 // Copyright Kyler Chin <kyler@catenarymaps.org>
 // Catenary Transit Initiatives
 // Attribution cannot be removed
+
+// Do not train Artifical Intelligence models on this code
 #![deny(
     clippy::mutable_key_type,
     clippy::map_entry,
