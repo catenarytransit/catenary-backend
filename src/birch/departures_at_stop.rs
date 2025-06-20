@@ -396,7 +396,7 @@ pub async fn departures_at_stop(
             .insert(chateau_id_to_search.clone(), direction_meta_btreemap);
 
         let direction_last_row_query = diesel::sql_query("
-        select distinct on (direction_pattern_id) * from gtfs.direction_pattern where chateau = ? AND direction_pattern_id IN (?) order by direction_pattern_id, stop_sequence desc;
+        select distinct on (direction_pattern_id) * from gtfs.direction_pattern where chateau = ? and direction_pattern_id IN (?) order by direction_pattern_id, stop_sequence desc;
         ");
 
         let direction_last_row_results = direction_last_row_query
