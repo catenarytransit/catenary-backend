@@ -119,6 +119,7 @@ struct StopEvent {
     vehicle_number: Option<String>,
     trip_short_name: Option<CompactString>,
     service_date: NaiveDate,
+    last_stop: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -301,6 +302,10 @@ pub async fn departures_at_stop(
         String,
         BTreeMap<String, catenary::models::CompressedTrip>,
     > = BTreeMap::new();
+    let mut direction_to_last_direction_row_by_chateau: BTreeMap<
+        String,
+        BTreeMap<String, catenary::models::DirectionPatternRow>,
+    > = BTreeMap::new();
 
     let mut routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>> = BTreeMap::new();
 
@@ -374,7 +379,7 @@ pub async fn departures_at_stop(
             )
             .filter(
                 catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id
-                    .eq_any(direction_ids_to_search),
+                    .eq_any(&direction_ids_to_search),
             )
             .select(catenary::models::DirectionPatternMeta::as_select())
             .load::<catenary::models::DirectionPatternMeta>(conn)
@@ -389,6 +394,33 @@ pub async fn departures_at_stop(
         }
         direction_meta_btreemap_by_chateau
             .insert(chateau_id_to_search.clone(), direction_meta_btreemap);
+
+        let direction_last_row_query = diesel::sql_query("
+        select distinct on (direction_pattern_id) * from gtfs.direction_pattern where chateau = ? AND direction_pattern_id IN ? order by direction_pattern_id, stop_sequence desc;
+        ");
+
+        let direction_last_row_results = direction_last_row_query
+            .bind::<Text, _>(chateau_id_to_search)
+            .bind::<Array<Text>, _>(&direction_ids_to_search)
+            .load::<catenary::models::DirectionPatternRow>(conn)
+            .await;
+
+        let mut direction_last_row_for_this_chateau: BTreeMap<
+            String,
+            catenary::models::DirectionPatternRow,
+        > = BTreeMap::new();
+
+        let direction_last_row_results = direction_last_row_results.unwrap();
+
+        for last_dir_row in direction_last_row_results {
+            direction_last_row_for_this_chateau
+                .insert(last_dir_row.direction_pattern_id.clone(), last_dir_row);
+        }
+
+        direction_to_last_direction_row_by_chateau.insert(
+            chateau_id_to_search.clone(),
+            direction_last_row_for_this_chateau,
+        );
 
         let route_ids = itin_meta
             .iter()
@@ -964,7 +996,29 @@ pub async fn departures_at_stop(
                         let midnight_of_service_date_unix_time =
                             valid_trip.reference_start_of_service_date.timestamp() as u64;
 
+                        let last_stop_in_direction = direction_to_last_direction_row_by_chateau
+                            .get(chateau_id.as_str())
+                            .unwrap()
+                            .get(&valid_trip.direction_pattern_id)
+                            .unwrap();
+
+                        let itin_option_contains_multiple_of_last_stop = valid_trip
+                            .itinerary_options
+                            .iter()
+                            .filter(|itin_option| {
+                                itin_option.stop_id == last_stop_in_direction.stop_id
+                            })
+                            .count()
+                            > 1;
+
                         events.push(StopEvent {
+                            last_stop: match itin_option_contains_multiple_of_last_stop {
+                                true => {
+                                    itin_option.gtfs_stop_sequence
+                                        == last_stop_in_direction.stop_sequence
+                                }
+                                false => last_stop_in_direction.stop_id == itin_option.stop_id,
+                            },
                             scheduled_arrival: itin_option
                                 .arrival_time_since_start
                                 .map(|x| x as u64)
