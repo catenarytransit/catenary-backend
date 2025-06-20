@@ -302,10 +302,11 @@ pub async fn departures_at_stop(
         String,
         BTreeMap<String, catenary::models::CompressedTrip>,
     > = BTreeMap::new();
-    let mut direction_to_last_direction_row_by_chateau: BTreeMap<
-        String,
-        BTreeMap<String, catenary::models::DirectionPatternRow>,
-    > = BTreeMap::new();
+
+    let mut direction_to_rows_by_chateau: BTreeMap<
+    String,
+    BTreeMap<String, Vec<catenary::models::DirectionPatternRow>>,
+> = BTreeMap::new();
 
     let mut routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>> = BTreeMap::new();
 
@@ -395,32 +396,40 @@ pub async fn departures_at_stop(
         direction_meta_btreemap_by_chateau
             .insert(chateau_id_to_search.clone(), direction_meta_btreemap);
 
-        let direction_last_row_query = diesel::sql_query("
-        select distinct on (direction_pattern_id) * from gtfs.direction_pattern where chateau = ? and direction_pattern_id = ANY(?) order by direction_pattern_id, stop_sequence desc;
-        ");
+       let mut direction_rows_for_chateau: BTreeMap<String, Vec<catenary::models::DirectionPatternRow>> = BTreeMap::new();
 
-        let direction_last_row_results = direction_last_row_query
-            .bind::<Text, _>(chateau_id_to_search)
-            .bind::<Array<Text>, _>(&direction_ids_to_search)
-            .load::<catenary::models::DirectionPatternRow>(conn)
-            .await;
 
-        let mut direction_last_row_for_this_chateau: BTreeMap<
-            String,
-            catenary::models::DirectionPatternRow,
-        > = BTreeMap::new();
+       let direction_row_query: diesel::prelude::QueryResult<
+       Vec<catenary::models::DirectionPatternRow>,
+   > = catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+       .filter(
+           catenary::schema::gtfs::direction_pattern::chateau
+               .eq(chateau_id_to_search.clone()),
+       )
+       .filter(
+           catenary::schema::gtfs::direction_pattern::direction_pattern_id
+               .eq_any(&direction_ids_to_search),
+       )
+       .select(catenary::models::DirectionPatternRow::as_select())
+       .load::<catenary::models::DirectionPatternRow>(conn)
+       .await;
 
-        let direction_last_row_results = direction_last_row_results.unwrap();
+       let direction_row_query = direction_row_query.unwrap();
 
-        for last_dir_row in direction_last_row_results {
-            direction_last_row_for_this_chateau
-                .insert(last_dir_row.direction_pattern_id.clone(), last_dir_row);
+       for direction_row in direction_row_query {
+       match  direction_rows_for_chateau.entry(direction_row.direction_pattern_id.clone()) {
+        std::collections::btree_map::Entry::Occupied(mut oe) => {
+            oe.get_mut().push(direction_row);
+
+            oe.get_mut().sort_by_key(|x| x.stop_sequence);
+        },
+        std::collections::btree_map::Entry::Vacant(mut ve) => {
+            ve.insert(vec![direction_row]);
         }
+       }
+       }
 
-        direction_to_last_direction_row_by_chateau.insert(
-            chateau_id_to_search.clone(),
-            direction_last_row_for_this_chateau,
-        );
+       direction_to_rows_by_chateau.insert(chateau_id_to_search.clone(), direction_rows_for_chateau );
 
         let route_ids = itin_meta
             .iter()
@@ -996,11 +1005,11 @@ pub async fn departures_at_stop(
                         let midnight_of_service_date_unix_time =
                             valid_trip.reference_start_of_service_date.timestamp() as u64;
 
-                        let last_stop_in_direction = direction_to_last_direction_row_by_chateau
+                        let last_stop_in_direction = direction_to_rows_by_chateau
                             .get(chateau_id.as_str())
                             .unwrap()
                             .get(&valid_trip.direction_pattern_id)
-                            .unwrap();
+                            .unwrap().last().unwrap();
 
                         let itin_option_contains_multiple_of_last_stop = valid_trip
                             .itinerary_options
