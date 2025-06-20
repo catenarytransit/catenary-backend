@@ -1252,58 +1252,75 @@ pub async fn new_rt_data(
 
                         let old_data_to_add_to_start: Option<Vec<AspenisedStopTimeUpdate>> =
                             match &trip_id {
-                                Some(trip_id) => match &previous_authoritative_data_store {
-                                    Some(previous_authoritative_data_store) => {
-                                        let previous_trip_update_id = match previous_authoritative_data_store.trip_updates_lookup_by_trip_id_to_trip_update_ids.get(trip_id.as_str()) {
+                                Some(trip_id) => {
+                                    match &previous_authoritative_data_store {
+                                        Some(previous_authoritative_data_store) => {
+                                            let previous_trip_update_id = match previous_authoritative_data_store.trip_updates_lookup_by_trip_id_to_trip_update_ids.get(trip_id.as_str()) {
                                     Some(trip_updates_lookup_by_trip_id_to_trip_update_ids) => {
-                                        match trip_updates_lookup_by_trip_id_to_trip_update_ids.len() {
+
+                                        let filter_matching_trip_update_key = trip_updates_lookup_by_trip_id_to_trip_update_ids.into_iter().filter(
+                                            |possible_match_trip_id| 
+                                                match previous_authoritative_data_store
+                                                    .trip_updates
+                                                    .get(possible_match_trip_id.as_str()) {
+                                                        Some(possible_old_trip) => {
+                                                            possible_old_trip.trip == trip_descriptor
+                                                        },
+                                                        None => false
+                                                    }
+                                        ).collect::<Vec<_>>();
+
+                                        match filter_matching_trip_update_key.len() {
                                             0 => None,
-                                            1 => Some(trip_updates_lookup_by_trip_id_to_trip_update_ids[0].clone()),
+                                            1 => Some(filter_matching_trip_update_key[0].clone()),
                                             _ => None
                                         }
                                     },
                                     None => None
                                 };
 
-                                        match previous_trip_update_id {
-                                            Some(previous_trip_update_id) => {
-                                                let trip_update = previous_authoritative_data_store
-                                                    .trip_updates
-                                                    .get(&previous_trip_update_id);
+                                            match previous_trip_update_id {
+                                                Some(previous_trip_update_id) => {
+                                                    let trip_update =
+                                                        previous_authoritative_data_store
+                                                            .trip_updates
+                                                            .get(&previous_trip_update_id);
 
-                                                match trip_update {
-                                                    Some(trip_update) => {
-                                                        let old_stop_time_update = trip_update
-                                                            .stop_time_update
-                                                            .iter()
-                                                            .filter(|old_stu| {
-                                                                match &old_stu.stop_id {
-                                                                    Some(old_stu_stop_id) => {
-                                                                        !new_stop_ids.contains(
-                                                                            old_stu_stop_id
-                                                                                .as_str(),
-                                                                        )
+                                                    match trip_update {
+                                                        Some(trip_update) => {
+                                                            let old_stop_time_update = trip_update
+                                                                .stop_time_update
+                                                                .iter()
+                                                                .filter(|old_stu| {
+                                                                    match &old_stu.stop_id {
+                                                                        Some(old_stu_stop_id) => {
+                                                                            !new_stop_ids.contains(
+                                                                                old_stu_stop_id
+                                                                                    .as_str(),
+                                                                            )
+                                                                        }
+                                                                        None => false,
                                                                     }
-                                                                    None => false,
-                                                                }
-                                                            })
-                                                            .cloned()
-                                                            .map(|old_stu| {
-                                                                let mut old_stu = old_stu.clone();
-                                                                old_stu.old_rt_data = true;
-                                                                old_stu
-                                                            })
-                                                            .collect::<Vec<_>>();
-                                                        Some(old_stop_time_update)
+                                                                })
+                                                                .cloned()
+                                                                .map(|old_stu| {
+                                                                    let mut old_stu =
+                                                                        old_stu.clone();
+                                                                    old_stu.old_rt_data = true;
+                                                                    old_stu
+                                                                })
+                                                                .collect::<Vec<_>>();
+                                                            Some(old_stop_time_update)
+                                                        }
+                                                        None => None,
                                                     }
-                                                    None => None,
                                                 }
+                                                None => None,
                                             }
-                                            None => None,
                                         }
+                                        None => None,
                                     }
-                                    None => None,
-                                },
+                                }
                                 None => None,
                             };
 
