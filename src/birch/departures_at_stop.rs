@@ -18,7 +18,6 @@ use catenary::aspen_dataset::AspenisedTripUpdate;
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
 use catenary::make_calendar_structure_from_pg;
 use catenary::make_degree_length_as_distance_from_point;
-use geo::coord;
 use catenary::models::ItineraryPatternMeta;
 use catenary::models::ItineraryPatternRow;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -35,6 +34,7 @@ use diesel::sql_types::Bool;
 use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
 use ecow::EcoString;
+use geo::coord;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -306,9 +306,9 @@ pub async fn departures_at_stop(
     > = BTreeMap::new();
 
     let mut direction_to_rows_by_chateau: BTreeMap<
-    String,
-    BTreeMap<String, Vec<catenary::models::DirectionPatternRow>>,
-> = BTreeMap::new();
+        String,
+        BTreeMap<String, Vec<catenary::models::DirectionPatternRow>>,
+    > = BTreeMap::new();
 
     let mut routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>> = BTreeMap::new();
 
@@ -393,11 +393,9 @@ pub async fn departures_at_stop(
         let mut direction_meta_btreemap =
             BTreeMap::<String, catenary::models::DirectionPatternMeta>::new();
 
-            
         let mut shape_ids_to_fetch_for_this_chateau = BTreeSet::new();
 
         for direction in direction_meta.iter() {
-
             if let Some(shape_id) = &direction.gtfs_shape_id {
                 shape_ids_to_fetch_for_this_chateau.insert(shape_id.clone());
             }
@@ -409,12 +407,17 @@ pub async fn departures_at_stop(
         direction_meta_btreemap_by_chateau
             .insert(chateau_id_to_search.clone(), direction_meta_btreemap);
 
-
-       let mut direction_rows_for_chateau: BTreeMap<String, Vec<catenary::models::DirectionPatternRow>> = BTreeMap::new();
+        let mut direction_rows_for_chateau: BTreeMap<
+            String,
+            Vec<catenary::models::DirectionPatternRow>,
+        > = BTreeMap::new();
 
         let shapes_query = catenary::schema::gtfs::shapes::dsl::shapes
             .filter(catenary::schema::gtfs::shapes::chateau.eq(chateau_id_to_search.clone()))
-            .filter(catenary::schema::gtfs::shapes::shape_id.eq_any(&shape_ids_to_fetch_for_this_chateau))
+            .filter(
+                catenary::schema::gtfs::shapes::shape_id
+                    .eq_any(&shape_ids_to_fetch_for_this_chateau),
+            )
             .load::<catenary::models::Shape>(conn)
             .await;
 
@@ -423,62 +426,63 @@ pub async fn departures_at_stop(
         let shapes_result = shapes_query.unwrap();
 
         for db_shape in shapes_result {
-
-            
-        let mut shape_polyline = polyline::encode_coordinates(
-            geo::LineString::new(
-                db_shape
-                    .linestring
-                    .points
-                    .iter()
-                    .map(|point| {
-                        coord! {
-                            x: point.x,
-                            y: point.y
-                        }
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-            5,
-        )
-        .unwrap();
+            let mut shape_polyline = polyline::encode_coordinates(
+                geo::LineString::new(
+                    db_shape
+                        .linestring
+                        .points
+                        .iter()
+                        .map(|point| {
+                            coord! {
+                                x: point.x,
+                                y: point.y
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                5,
+            )
+            .unwrap();
 
             shape_polyline_for_chateau.insert(db_shape.shape_id.clone().into(), shape_polyline);
         }
 
-        shapes.insert(chateau_id_to_search.clone().into(), shape_polyline_for_chateau);
+        shapes.insert(
+            chateau_id_to_search.clone().into(),
+            shape_polyline_for_chateau,
+        );
 
-       let direction_row_query: diesel::prelude::QueryResult<
-       Vec<catenary::models::DirectionPatternRow>,
-   > = catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
-       .filter(
-           catenary::schema::gtfs::direction_pattern::chateau
-               .eq(chateau_id_to_search.clone()),
-       )
-       .filter(
-           catenary::schema::gtfs::direction_pattern::direction_pattern_id
-               .eq_any(&direction_ids_to_search),
-       )
-       .select(catenary::models::DirectionPatternRow::as_select())
-       .load::<catenary::models::DirectionPatternRow>(conn)
-       .await;
+        let direction_row_query: diesel::prelude::QueryResult<
+            Vec<catenary::models::DirectionPatternRow>,
+        > = catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+            .filter(
+                catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_id_to_search.clone()),
+            )
+            .filter(
+                catenary::schema::gtfs::direction_pattern::direction_pattern_id
+                    .eq_any(&direction_ids_to_search),
+            )
+            .select(catenary::models::DirectionPatternRow::as_select())
+            .load::<catenary::models::DirectionPatternRow>(conn)
+            .await;
 
-       let direction_row_query = direction_row_query.unwrap();
+        let direction_row_query = direction_row_query.unwrap();
 
-       for direction_row in direction_row_query {
-       match  direction_rows_for_chateau.entry(direction_row.direction_pattern_id.clone()) {
-        std::collections::btree_map::Entry::Occupied(mut oe) => {
-            oe.get_mut().push(direction_row);
+        for direction_row in direction_row_query {
+            match direction_rows_for_chateau.entry(direction_row.direction_pattern_id.clone()) {
+                std::collections::btree_map::Entry::Occupied(mut oe) => {
+                    oe.get_mut().push(direction_row);
 
-            oe.get_mut().sort_by_key(|x| x.stop_sequence);
-        },
-        std::collections::btree_map::Entry::Vacant(mut ve) => {
-            ve.insert(vec![direction_row]);
+                    oe.get_mut().sort_by_key(|x| x.stop_sequence);
+                }
+                std::collections::btree_map::Entry::Vacant(mut ve) => {
+                    ve.insert(vec![direction_row]);
+                }
+            }
         }
-       }
-       }
 
-       direction_to_rows_by_chateau.insert(chateau_id_to_search.clone(), direction_rows_for_chateau );
+        direction_to_rows_by_chateau
+            .insert(chateau_id_to_search.clone(), direction_rows_for_chateau);
 
         let route_ids = itin_meta
             .iter()
@@ -1058,7 +1062,9 @@ pub async fn departures_at_stop(
                             .get(chateau_id.as_str())
                             .unwrap()
                             .get(&valid_trip.direction_pattern_id)
-                            .unwrap().last().unwrap();
+                            .unwrap()
+                            .last()
+                            .unwrap();
 
                         let itin_option_contains_multiple_of_last_stop = valid_trip
                             .itinerary_options
@@ -1069,10 +1075,11 @@ pub async fn departures_at_stop(
                             .count()
                             > 1;
 
-                        let direction_meta = direction_meta_btreemap_by_chateau.get(chateau_id.as_str())
-                        .unwrap().get(&valid_trip.direction_pattern_id)
-                        .unwrap();
-                        
+                        let direction_meta = direction_meta_btreemap_by_chateau
+                            .get(chateau_id.as_str())
+                            .unwrap()
+                            .get(&valid_trip.direction_pattern_id)
+                            .unwrap();
 
                         events.push(StopEvent {
                             last_stop: match itin_option_contains_multiple_of_last_stop {
@@ -1108,52 +1115,65 @@ pub async fn departures_at_stop(
                             headsign: match &direction_meta.stop_headsigns_unique_list {
                                 Some(headsign_list) => {
                                     let matching_direction_rows = direction_to_rows_by_chateau
-                                    .get(chateau_id.as_str())
-                                    .unwrap()
-                                    .get(&valid_trip.direction_pattern_id)
-                                    .unwrap().iter().filter(|x| x.stop_id == itin_option.stop_id).collect::<Vec<_>>();
-
-                                    let matching_direction_row = match matching_direction_rows.len() {
-                                        0 => None,
-                                        1 => Some(matching_direction_rows[0]),
-                                        _ => {
-                                            let matching_direction_rows = matching_direction_rows.iter().filter(|x| x.stop_sequence == itin_option.gtfs_stop_sequence).map(|x| *x).collect::<Vec<_>>();
-
-                                            match matching_direction_rows.len() {
-                                                0 => None,
-                                                1 => Some(matching_direction_rows[0]),
-                                                _ => None
-                                            }                                                                                        
-                                        }
-                                        };
-
-                                    let matching_headsign = match matching_direction_row {
-                                        Some(matching_direction_row) => {
-                                            match &matching_direction_row.stop_headsign_idx {
-                                                Some(stop_headsign_idx) => match  headsign_list.get(*stop_headsign_idx as usize) {
-                                                    Some(x) => x.clone(),
-                                                    None => None
-                                                },
-                                                None => None
-                                            }
-                                            },
-                                            None => None
-                                    };
-
-                                    matching_headsign
-                                },
-                                None => match &itin_option.trip_headsign {
-                                Some(headsign) => Some(headsign.to_string()),
-                                None => Some(
-                                    direction_meta_btreemap_by_chateau
                                         .get(chateau_id.as_str())
                                         .unwrap()
                                         .get(&valid_trip.direction_pattern_id)
                                         .unwrap()
-                                        .headsign_or_destination
-                                        .clone(),
-                                ),
-                            }
+                                        .iter()
+                                        .filter(|x| x.stop_id == itin_option.stop_id)
+                                        .collect::<Vec<_>>();
+
+                                    let matching_direction_row = match matching_direction_rows.len()
+                                    {
+                                        0 => None,
+                                        1 => Some(matching_direction_rows[0]),
+                                        _ => {
+                                            let matching_direction_rows = matching_direction_rows
+                                                .iter()
+                                                .filter(|x| {
+                                                    x.stop_sequence
+                                                        == itin_option.gtfs_stop_sequence
+                                                })
+                                                .map(|x| *x)
+                                                .collect::<Vec<_>>();
+
+                                            match matching_direction_rows.len() {
+                                                0 => None,
+                                                1 => Some(matching_direction_rows[0]),
+                                                _ => None,
+                                            }
+                                        }
+                                    };
+
+                                    let matching_headsign = match matching_direction_row {
+                                        Some(matching_direction_row) => {
+                                            match &matching_direction_row.stop_headsign_idx {
+                                                Some(stop_headsign_idx) => match headsign_list
+                                                    .get(*stop_headsign_idx as usize)
+                                                {
+                                                    Some(x) => x.clone(),
+                                                    None => None,
+                                                },
+                                                None => None,
+                                            }
+                                        }
+                                        None => None,
+                                    };
+
+                                    matching_headsign
+                                }
+                                None => match &itin_option.trip_headsign {
+                                    Some(headsign) => Some(headsign.to_string()),
+                                    None => Some(
+                                        direction_meta_btreemap_by_chateau
+                                            .get(chateau_id.as_str())
+                                            .unwrap()
+                                            .get(&valid_trip.direction_pattern_id)
+                                            .unwrap()
+                                            .headsign_or_destination
+                                            .clone(),
+                                    ),
+                                },
                             },
                             route_id: valid_trip.route_id.clone().to_string(),
                             vehicle_number: vehicle_num,
@@ -1164,7 +1184,13 @@ pub async fn departures_at_stop(
                             platform_string_realtime: platform,
                             trip_short_name: valid_trip.trip_short_name.clone(),
                             service_date: valid_trip.trip_service_date.clone(),
-                            scheduled_trip_shape_id: direction_meta_btreemap_by_chateau.get(chateau_id.as_str()).unwrap().get(&valid_trip.direction_pattern_id).map(|d| d.gtfs_shape_id.clone()).flatten().map(|x| x.into())
+                            scheduled_trip_shape_id: direction_meta_btreemap_by_chateau
+                                .get(chateau_id.as_str())
+                                .unwrap()
+                                .get(&valid_trip.direction_pattern_id)
+                                .map(|d| d.gtfs_shape_id.clone())
+                                .flatten()
+                                .map(|x| x.into()),
                         })
                     }
                 }
@@ -1221,7 +1247,7 @@ pub async fn departures_at_stop(
         children_and_related: vec![],
         events: events,
         routes: routes,
-        shapes: shapes
+        shapes: shapes,
     };
 
     HttpResponse::Ok().json(response)

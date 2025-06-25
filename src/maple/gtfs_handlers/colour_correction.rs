@@ -42,6 +42,10 @@ pub fn fix_background_colour_rgb_feed_route(
             "CE:ACETrain" => RGB::new(195, 22, 204),
             _ => fix_background_colour_rgb(background),
         },
+        "f-alhambra~ca~us" => match route.id.as_str() {
+            "GreenLine" => RGB::new(88, 140, 50),
+            _ => fix_background_colour_rgb(background),
+        },
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
             match &route.short_name {
                 Some(short_name) => match &route.desc.as_deref() {
