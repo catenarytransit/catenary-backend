@@ -249,6 +249,10 @@ pub async fn gtfs_process_feed(
                 agency
             })
             .collect();
+
+        gtfs.routes.remove("400");
+        gtfs.routes.remove("401");
+        gtfs.routes.remove("403");
     }
 
     if feed_id == "f-9q5-metro~losangeles" {
