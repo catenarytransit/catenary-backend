@@ -253,6 +253,21 @@ pub async fn gtfs_process_feed(
         gtfs.routes.remove("400");
         gtfs.routes.remove("401");
         gtfs.routes.remove("403");
+
+        let mut trips_to_remove: Vec<String> = vec![];
+
+        for (trip_id, trip) in gtfs.trips {
+            if trip.route_id.as_str() == "401"
+                || trip.route_id.as_str() == "400"
+                || trip.route_id.as_str() == "403"
+            {
+                trips_to_remove.push(trip_id.clone());
+            }
+        }
+
+        for trip_to_remove in trips_to_remove {
+            gtfs.trips.remove(&trip_to_remove);
+        }
     }
 
     if feed_id == "f-9q5-metro~losangeles" {
