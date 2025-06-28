@@ -256,7 +256,7 @@ pub async fn gtfs_process_feed(
 
         let mut trips_to_remove: Vec<String> = vec![];
 
-        for (trip_id, trip) in gtfs.trips {
+        for (trip_id, trip) in gtfs.trips.iter() {
             if trip.route_id.as_str() == "401"
                 || trip.route_id.as_str() == "400"
                 || trip.route_id.as_str() == "403"
