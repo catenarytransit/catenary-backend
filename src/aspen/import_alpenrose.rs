@@ -964,7 +964,44 @@ pub async fn new_rt_data(
                                         }
                                         None => None,
                                     },
-                                    start_time: trip.start_time.clone(),
+                                    start_time: match realtime_feed_id.as_str() {
+                                        //fix passio not assigning start times cuz they are complete loser connards
+                                        "f-irvine~ca~us~rt" => {
+                                             let trip_updates_gtfs_rt_data = authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates));
+
+
+                                            match trip_updates_gtfs_rt_data {
+                                                Some(trip_updates_gtfs_rt_data) => {
+                                                    let trip_updates_gtfs_rt_data = trip_updates_gtfs_rt_data.get();
+
+                                                    let find_matching_vehicle_in_trip_feed = trip_updates_gtfs_rt_data.entity.iter().find(|x| {
+
+                                                        match &x.trip_update {
+                                                            Some(trip_update) => {
+                                                                match &trip_update.vehicle {
+                                                                    Some(vehicle_iden_from_matching_trip) => {
+                                                                        vehicle_iden_from_matching_trip.id == vehicle_pos.vehicle.as_ref().unwrap().id
+                                                                    },
+                                                                    None => false
+                                                                }
+                                                            },
+                                                            None => false
+                                                        }
+                                                    });
+
+                                                    match find_matching_vehicle_in_trip_feed {
+                                                        Some(matching_trip_entity) => {
+                                                            matching_trip_entity.trip_update.as_ref().map(|x| x.trip.start_time.clone()).flatten()
+                                                        },
+                                                        None => None
+                                                    }
+                                                },
+                                                 _ => None
+                                            }
+                                        },
+                                        //regular start time
+                                        _ => trip.start_time.clone()
+                                    },
                                     schedule_relationship: option_i32_to_schedule_relationship(
                                         &trip.schedule_relationship,
                                     ),
