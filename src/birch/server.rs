@@ -713,7 +713,6 @@ async fn main() -> std::io::Result<()> {
             .service(nearby_departuresv2::nearby_from_coords_v2)
             .service(departures_at_stop::departures_at_stop)
             .service(get_vehicle_trip_information::get_trip_init)
-            .service(get_vehicle_trip_information::get_trip_init_v2)
             .service(get_vehicle_trip_information::get_trip_rt_update)
             .service(get_vehicle_trip_information::get_vehicle_information)
             .service(get_vehicle_trip_information::get_vehicle_information_from_label)
