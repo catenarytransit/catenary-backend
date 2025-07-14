@@ -95,7 +95,7 @@ fn remove_0x_from_colours(gtfs_uncompressed_temp_storage: &str, feed_id: &str) -
 
     let data_of_file = fs::read_to_string(&target_path_of_routes_file).unwrap();
 
-    let new_data = data_of_file.replace("0x", "#");
+    let new_data = data_of_file.replace("0x", "");
 
     let mut f = std::fs::OpenOptions::new()
         .write(true)
