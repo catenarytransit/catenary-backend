@@ -89,6 +89,21 @@ pub fn remove_transloc_prefix(gtfs_uncompressed_temp_storage: &str, feed_id: &st
     }
 }
 
+fn remove_0x_from_colours(gtfs_uncompressed_temp_storage: &str, feed_id: &str) -> () {
+    let target_path_of_routes_file =
+        format!("{}/{}/routes.txt", gtfs_uncompressed_temp_storage, feed_id);
+
+    let data_of_file = fs::read_to_string(&target_path_of_routes_file).unwrap();
+
+    let new_data = data_of_file.replace("0x", "#");
+
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&target_path_of_routes_file).unwrap();
+    f.write_all(new_data.as_bytes()).unwrap();
+    f.flush().unwrap();
+}
+
 fn flatten_if_single_subfolder(folder_path: &Path) -> Result<(), io::Error> {
     let entries = fs::read_dir(folder_path)?;
     let mut subfolders = Vec::new();
@@ -154,6 +169,10 @@ pub fn flatten_feed(
         || feed_id == "f-los~angeles~international~airport~shuttle"
     {
         //   remove_transloc_prefix(gtfs_uncompressed_temp_storage, feed_id);
+    }
+
+    if feed_id == "f-9qh-omnitrans" {
+        remove_0x_from_colours(gtfs_uncompressed_temp_storage, feed_id);
     }
 
     // go into folder and unnest folders
