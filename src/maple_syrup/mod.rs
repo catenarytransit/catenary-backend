@@ -143,6 +143,8 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
         stop_diffs.sort_by(|a, b| a.gtfs_stop_sequence.cmp(&b.gtfs_stop_sequence));
 
+        stop_diffs.dedup();
+
         let stated_timezone = match gtfs.agencies.len() {
             0 => None,
             1 => Some(gtfs.agencies[0].timezone.clone()),
