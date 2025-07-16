@@ -151,6 +151,7 @@ async-recursion = "1.1.1"
 path-clean = "1.0.1"
 tokio-stream = { version = "0.1.17", features = ["full"] }
 thiserror = "2.0.12"
+elasticsearch = "9.0.0-alpha.1"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

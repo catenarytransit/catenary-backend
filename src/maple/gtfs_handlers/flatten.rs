@@ -100,7 +100,8 @@ fn remove_0x_from_colours(gtfs_uncompressed_temp_storage: &str, feed_id: &str) -
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .truncate(true)
-        .open(&target_path_of_routes_file).unwrap();
+        .open(&target_path_of_routes_file)
+        .unwrap();
     f.write_all(new_data.as_bytes()).unwrap();
     f.flush().unwrap();
 }

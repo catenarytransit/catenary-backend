@@ -56,6 +56,7 @@ pub mod schema;
 pub mod validate_gtfs_rt;
 use crate::aspen::lib::RealtimeFeedMetadataEtcd;
 pub mod custom_alerts;
+pub mod elasticutils;
 pub mod hashfolder;
 pub mod shape_fetcher;
 use ahash::AHasher;
