@@ -14,16 +14,13 @@ use std::error::Error;
 pub fn single_elastic_connect(
     server_url: &str,
 ) -> Result<Elasticsearch, Box<dyn Error + Sync + Send>> {
-    let url = Url::parse(server_url)?;
-    let conn_pool = SingleNodeConnectionPool::new(url);
-    let transport = TransportBuilder::new(conn_pool).disable_proxy().build()?;
+    let transport = elasticsearch::http::transport::Transport::single_node(server_url)?;
     let client = Elasticsearch::new(transport);
 
     Ok(client)
 }
 
 pub async fn make_index_and_mappings(client: &Elasticsearch) -> Result<(), Box<dyn Error + Sync + Send>> {
-
     let index_list = [
         (
             "osm",
