@@ -23,7 +23,6 @@ pub fn single_elastic_connect(
 }
 
 pub async fn make_index_and_mappings(client: &Elasticsearch) -> Result<(), Box<dyn Error + Sync + Send>> {
-    unimplemented!();
 
     let index_list = [
         (

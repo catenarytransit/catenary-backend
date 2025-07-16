@@ -92,6 +92,10 @@ fn get_threads_gtfs() -> usize {
 }
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+    let elasticclient = catenary::elasticutils::single_elastic_connect("https://localhost:9200")?;
+
+    catenary::elasticutils::make_index_and_mappings(&elasticclient).await?;
+
     let args = Args::parse();
 
     let delete_everything_in_feed_before_ingest = match std::env::var("DELETE_BEFORE_INGEST") {
