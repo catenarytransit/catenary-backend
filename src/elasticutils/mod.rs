@@ -6,7 +6,7 @@ use elasticsearch::{
         Url,
         transport::{SingleNodeConnectionPool, TransportBuilder},
     },
-    indices::{IndicesCreateParts, IndicesPutMappingParts},
+    indices::{IndicesCreateParts, IndicesPutMappingParts, IndicesPutSettingsParts},
 };
 use serde_json::{Value, json};
 use std::error::Error;
