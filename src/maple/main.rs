@@ -92,7 +92,6 @@ fn get_threads_gtfs() -> usize {
 }
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
-
     let elastic_url = std::env::var("ELASTICSEARCH_URL").unwrap();
 
     let elasticclient = catenary::elasticutils::single_elastic_connect(elastic_url.as_str())?;

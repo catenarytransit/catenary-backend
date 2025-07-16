@@ -32,6 +32,7 @@
     clippy::useless_vec,
     clippy::module_inception
 )]
+#![recursion_limit = "4096"]
 
 #[macro_use]
 extern crate diesel_derive_newtype;
