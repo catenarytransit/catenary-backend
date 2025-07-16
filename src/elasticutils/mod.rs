@@ -22,7 +22,7 @@ pub fn single_elastic_connect(
     Ok(client)
 }
 
-pub fn make_index_and_mappings(client: &Elasticsearch) -> Result<(), Box<dyn Error + Sync + Send>> {
+pub async fn make_index_and_mappings(client: &Elasticsearch) -> Result<(), Box<dyn Error + Sync + Send>> {
     unimplemented!();
 
     let index_list = [
@@ -388,6 +388,63 @@ pub fn make_index_and_mappings(client: &Elasticsearch) -> Result<(), Box<dyn Err
             }),
         ),
     ];
+
+    for (index_name, mapping_json) in index_list {
+        let create_response = client
+    .indices()
+    .create(IndicesCreateParts::Index(index_name))
+    .send()
+    .await;
+
+    match create_response {
+        Ok(response) => {
+            if response.status_code().is_success() {
+                let response_body = response.json::<Value>().await?;
+                println!("Index created successfully: {:?}", response_body);
+            } else {
+                let status = response.status_code();
+                let body = response.text().await?;
+                println!(
+                    "Received non-success status [{}]: {}",
+                    status,
+                    body.trim()
+                );
+                if !body.contains("resource_already_exists_exception") {
+                     return Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Failed to create index with status {}: {}", status, body)
+                    )));
+                }
+                 println!("Index '{}' already exists. Proceeding to update mapping.", index_name);
+            }
+        }
+        Err(e) => {
+            eprintln!("Error creating index: {:?}", e);
+            return Err(Box::new(e));
+        }
+    }
+
+    let put_mapping_response = client
+        .indices()
+        .put_mapping(IndicesPutMappingParts::Index(&[index_name]))
+        .body(mapping_json)
+        .send()
+        .await?;
+
+        if put_mapping_response.status_code().is_success() {
+            let response_body = put_mapping_response.json::<Value>().await?;
+            println!("Mapping updated successfully: {:?}", response_body);
+        } else {
+            let status = put_mapping_response.status_code();
+            let error_body = put_mapping_response.text().await?;
+            eprintln!("Error updating mapping. Status: {}. Body: {}", status, error_body);
+            // Create a custom error to return
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to put mapping with status {}: {}", status, error_body)
+            )));
+        }
+    }
 
     Ok(())
 }
