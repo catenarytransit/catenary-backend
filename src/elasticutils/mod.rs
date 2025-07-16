@@ -793,10 +793,16 @@ pub async fn make_index_and_mappings(
             }
         }
 
+        let put_settings_response = client.indicies()
+        .put_settings(IndicesPutMappingParts::Index(&[index_name]))
+        .body(mapping_json.get("settings").unwrap())
+        .send()
+        .await?;
+
         let put_mapping_response = client
             .indices()
             .put_mapping(IndicesPutMappingParts::Index(&[index_name]))
-            .body(mapping_json)
+            .body(mapping_json.get("mappings").unwrap())
             .send()
             .await?;
 
