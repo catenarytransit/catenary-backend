@@ -14,7 +14,11 @@ use std::error::Error;
 pub fn single_elastic_connect(
     server_url: &str,
 ) -> Result<Elasticsearch, Box<dyn Error + Sync + Send>> {
-    let transport = elasticsearch::http::transport::Transport::single_node(server_url)?;
+    let url = Url::parse(server_url)?;
+    let conn_pool = SingleNodeConnectionPool::new(url);
+    let transport = TransportBuilder::new(conn_pool)
+    .cert_validation(elasticsearch::cert::CertificateValidation::None)
+    .build()?;
     let client = Elasticsearch::new(transport);
 
     Ok(client)
