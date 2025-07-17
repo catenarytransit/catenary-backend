@@ -799,6 +799,27 @@ pub async fn make_index_and_mappings(
         .send()
         .await?;
 
+        if put_settings_response.status_code().is_success() {
+            let response_body = put_settings_response.json::<Value>().await?;
+            println!("Settings updated successfully: {:?}", response_body);
+        } else {
+            let status = put_settings_response.status_code();
+            let error_body = put_settings_response.text().await?;
+            eprintln!(
+                "Error updating settings. Status: {}. Body: {}",
+                status, error_body
+            );
+            // Create a custom error to return
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!(
+                    "Failed to put settings with status {}: {}",
+                    status, error_body
+                ),
+            )));
+        }
+    
+
         let put_mapping_response = client
             .indices()
             .put_mapping(IndicesPutMappingParts::Index(&[index_name]))
