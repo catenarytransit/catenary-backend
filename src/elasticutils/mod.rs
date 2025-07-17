@@ -32,6 +32,34 @@ pub async fn make_index_and_mappings(
             "osm",
             json!({
                     "settings": {
+                        "tokenizer": {
+        "my_korean_analyzer_user_dict": {
+          "type": "my_korean_analyzer_tokenizer",
+          "decompound_mode": "mixed",
+          "user_dictionary": "user_dict_ko.txt"
+        },
+    },
+          "analyzer": {
+        "my_korean_analyzer": {
+          "tokenizer": "my_korean_analyzer_user_dict",
+          "filter": [
+            "my_korean_analyzer_part_of_speech",
+            "my_korean_analyzer_readingform",
+            "lowercase"
+          ]
+        }
+      },
+      "filter": {
+        "my_korean_analyzer_part_of_speech": {
+          "type": "my_korean_analyzer_part_of_speech",
+          "stoptags": [
+            "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
+            "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
+            "UNA", "NA", "VSV"
+          ]
+        }
+      },
+    
                         "analysis": {
                           "filter": {
                             "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
@@ -193,7 +221,7 @@ pub async fn make_index_and_mappings(
               "hr": { "type": "text", "analyzer": "standard", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "hr_collation" }}},
               "it": { "type": "text", "analyzer": "italian", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "it_collation" }}},
               "ja": { "type": "text", "analyzer": "kuromoji", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ja_collation" }}},
-              "ko": { "type": "text", "analyzer": "nori", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
+              "ko": { "type": "text", "analyzer": "my_korean_analyzer", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
               "nl": { "type": "text", "analyzer": "dutch", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "nl_collation" }}},
               "no": { "type": "text", "analyzer": "norwegian", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "no_collation" }}},
               "pl": { "type": "text", "analyzer": "standard", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "pl_collation" }}},
@@ -224,6 +252,33 @@ pub async fn make_index_and_mappings(
             "stops",
             json!({
                         "settings": {
+                            "tokenizer": {
+                                "my_korean_analyzer_user_dict": {
+                                  "type": "my_korean_analyzer_tokenizer",
+                                  "decompound_mode": "mixed",
+                                  "user_dictionary": "user_dict_ko.txt"
+                                },
+                            },
+                                  "analyzer": {
+                                "my_korean_analyzer": {
+                                  "tokenizer": "my_korean_analyzer_user_dict",
+                                  "filter": [
+                                    "my_korean_analyzer_part_of_speech",
+                                    "my_korean_analyzer_readingform",
+                                    "lowercase"
+                                  ]
+                                }
+                              },
+                              "filter": {
+                                "my_korean_analyzer_part_of_speech": {
+                                  "type": "my_korean_analyzer_part_of_speech",
+                                  "stoptags": [
+                                    "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
+                                    "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
+                                    "UNA", "NA", "VSV"
+                                  ]
+                                }
+                              },
                             "analysis": {
                               "filter": {
                                 "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
@@ -372,7 +427,7 @@ pub async fn make_index_and_mappings(
               "hr": { "type": "text", "analyzer": "standard", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "hr_collation" }}},
               "it": { "type": "text", "analyzer": "italian", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "it_collation" }}},
               "ja": { "type": "text", "analyzer": "kuromoji", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ja_collation" }}},
-              "ko": { "type": "text", "analyzer": "nori", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
+              "ko": { "type": "text", "analyzer": "my_korean_analyzer", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
               "nl": { "type": "text", "analyzer": "dutch", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "nl_collation" }}},
               "no": { "type": "text", "analyzer": "norwegian", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "no_collation" }}},
               "pl": { "type": "text", "analyzer": "standard", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "pl_collation" }}},
@@ -397,7 +452,35 @@ pub async fn make_index_and_mappings(
         ),
         (
             "routes",
+            
             json!({                "settings": {
+                "tokenizer": {
+                    "my_korean_analyzer_user_dict": {
+                      "type": "my_korean_analyzer_tokenizer",
+                      "decompound_mode": "mixed",
+                      "user_dictionary": "user_dict_ko.txt"
+                    },
+                },
+                      "analyzer": {
+                    "my_korean_analyzer": {
+                      "tokenizer": "my_korean_analyzer_user_dict",
+                      "filter": [
+                        "my_korean_analyzer_part_of_speech",
+                        "my_korean_analyzer_readingform",
+                        "lowercase"
+                      ]
+                    }
+                  },
+                  "filter": {
+                    "my_korean_analyzer_part_of_speech": {
+                      "type": "my_korean_analyzer_part_of_speech",
+                      "stoptags": [
+                        "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
+                        "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
+                        "UNA", "NA", "VSV"
+                      ]
+                    }
+                  },
                         "analysis": {
                           "filter": {
                             "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
@@ -484,7 +567,7 @@ pub async fn make_index_and_mappings(
               "hr": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "hr_collation" }}},
               "it": { "type": "text", "analyzer": "italian", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "it_collation" }}},
               "ja": { "type": "text", "analyzer": "kuromoji", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ja_collation" }}},
-              "ko": { "type": "text", "analyzer": "nori", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
+              "ko": { "type": "text", "analyzer": "my_korean_analyzer", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
               "nl": { "type": "text", "analyzer": "dutch", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "nl_collation" }}},
               "no": { "type": "text", "analyzer": "norwegian", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "no_collation" }}},
               "pl": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "pl_collation" }}},
@@ -584,7 +667,7 @@ pub async fn make_index_and_mappings(
               "hr": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "hr_collation" }}},
               "it": { "type": "text", "analyzer": "italian", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "it_collation" }}},
               "ja": { "type": "text", "analyzer": "kuromoji", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ja_collation" }}},
-              "ko": { "type": "text", "analyzer": "nori", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
+              "ko": { "type": "text", "analyzer": "my_korean_analyzer", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
               "nl": { "type": "text", "analyzer": "dutch", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "nl_collation" }}},
               "no": { "type": "text", "analyzer": "norwegian", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "no_collation" }}},
               "pl": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "pl_collation" }}},
@@ -607,6 +690,33 @@ pub async fn make_index_and_mappings(
             "agencies",
             json!({
                             "settings": {
+                                  "tokenizer": {
+        "my_korean_analyzer_user_dict": {
+          "type": "my_korean_analyzer_tokenizer",
+          "decompound_mode": "mixed",
+          "user_dictionary": "user_dict_ko.txt"
+        },
+    },
+          "analyzer": {
+        "my_korean_analyzer": {
+          "tokenizer": "my_korean_analyzer_user_dict",
+          "filter": [
+            "my_korean_analyzer_part_of_speech",
+            "my_korean_analyzer_readingform",
+            "lowercase"
+          ]
+        }
+      },
+      "filter": {
+        "my_korean_analyzer_part_of_speech": {
+          "type": "my_korean_analyzer_part_of_speech",
+          "stoptags": [
+            "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
+            "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
+            "UNA", "NA", "VSV"
+          ]
+        }
+      },
                         "analysis": {
                           "filter": {
                             "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
@@ -737,7 +847,7 @@ pub async fn make_index_and_mappings(
               "hr": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "hr_collation" }}},
               "it": { "type": "text", "analyzer": "italian", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "it_collation" }}},
               "ja": { "type": "text", "analyzer": "kuromoji", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ja_collation" }}},
-              "ko": { "type": "text", "analyzer": "nori", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
+              "ko": { "type": "text", "analyzer": "my_korean_analyzer", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
               "nl": { "type": "text", "analyzer": "dutch", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "nl_collation" }}},
               "no": { "type": "text", "analyzer": "norwegian", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "no_collation" }}},
               "pl": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "pl_collation" }}},
