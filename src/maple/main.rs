@@ -96,6 +96,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
     let elasticclient = catenary::elasticutils::single_elastic_connect(elastic_url.as_str())?;
 
+    catenary::elasticutils::wipe_db(&elasticclient).await?;
+
     catenary::elasticutils::make_index_and_mappings(&elasticclient).await?;
 
     let args = Args::parse();
