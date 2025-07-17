@@ -353,6 +353,16 @@ pub async fn make_index_and_mappings(
                           },
                         "mappings": {
                             "dynamic": "strict",
+                            "dynamic_templates": [
+                                {
+                                    "copy_to_stop_name_search": {
+                                    "path_match": "stop_name.*",
+                                    "mapping": {
+                                        "copy_to": "stop_name_search"
+                                    }
+                                    }
+                                }
+                            ],
                         "properties": {
                             "stop_id": {
                                 "type": "text",
@@ -419,16 +429,6 @@ pub async fn make_index_and_mappings(
                             "stop_name": {
                                 "type": "object",
                                 "dynamic": true,
-                                "dynamic_templates": [
-                                {
-                                    "copy_to_stop_name_search": {
-                                    "path_match": "name.*",
-                                    "mapping": {
-                                        "copy_to": "stop_name_search"
-                                    }
-                                    }
-                                }
-                                ],
                                 "properties": {
               "ar": { "type": "text", "analyzer": "arabic", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ar_collation" }}},
               "ca": { "type": "text", "analyzer": "catalan", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ca_collation" }}},
@@ -556,7 +556,7 @@ pub async fn make_index_and_mappings(
                                  "dynamic_templates": [
                                      {
                                          "copy_to_route_name_search": {
-                                         "path_match": "name.*",
+                                         "path_match": "route_name.*",
                                          "mapping": {
                                              "copy_to": "route_name_search"
                                          }
@@ -564,7 +564,7 @@ pub async fn make_index_and_mappings(
                                      },
                                      {
                                          "copy_to_agency_name_search": {
-                                         "path_match": "name.*",
+                                         "path_match": "agency_name.*",
                                          "mapping": {
                                              "copy_to": "agency_name_search"
                                          }
@@ -787,10 +787,10 @@ pub async fn make_index_and_mappings(
                             "dynamic": "strict",
                             "dynamic_templates": [
                                 {
-                                    "copy_to_route_name_search": {
-                                    "path_match": "name.*",
+                                    "copy_to_agency_name_search": {
+                                    "path_match": "agency_name.*",
                                     "mapping": {
-                                        "copy_to": "route_name_search"
+                                        "copy_to": "agency_name_search"
                                     }
                                     }
                                 }
