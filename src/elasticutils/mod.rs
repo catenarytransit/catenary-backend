@@ -121,6 +121,16 @@ pub async fn make_index_and_mappings(
                       },
                     "mappings": {
                         "dynamic": "strict",
+                        "dynamic_templates": [
+                            {
+                                "copy_to_name_search": {
+                                "path_match": "name.*",
+                                "mapping": {
+                                    "copy_to": "name_search"
+                                }
+                                }
+                            }
+                            ],
                     "properties": {
                         "origin_file_name": {
                             "type": "text",
@@ -200,16 +210,6 @@ pub async fn make_index_and_mappings(
                           "name": {
                                 "type": "object",
                                 "dynamic": true,
-                                "dynamic_templates": [
-                                {
-                                    "copy_to_name_search": {
-                                    "path_match": "name.*",
-                                    "mapping": {
-                                        "copy_to": "name_search"
-                                    }
-                                    }
-                                }
-                                ],
                                 "properties": {
               "ar": { "type": "text", "analyzer": "arabic", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ar_collation" }}},
               "ca": { "type": "text", "analyzer": "catalan", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ca_collation" }}},
@@ -544,11 +544,7 @@ pub async fn make_index_and_mappings(
                       },
                         "mappings": {
                             "dynamic": "strict",
-                        "properties": {
-                           "route_name": {
-                                "type": "object",
-                                "dynamic": true,
-                                "dynamic_templates": [
+                            "dynamic_templates": [
                                 {
                                     "copy_to_route_name_search": {
                                     "path_match": "name.*",
@@ -556,8 +552,20 @@ pub async fn make_index_and_mappings(
                                         "copy_to": "route_name_search"
                                     }
                                     }
+                                },
+                                {
+                                    "copy_to_agency_name_search": {
+                                    "path_match": "name.*",
+                                    "mapping": {
+                                        "copy_to": "agency_name_search"
+                                    }
+                                    }
                                 }
                                 ],
+                        "properties": {
+                           "route_name": {
+                                "type": "object",
+                                "dynamic": true,
                                 "properties": {
               "ar": { "type": "text", "analyzer": "arabic", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ar_collation" }}},
               "ca": { "type": "text", "analyzer": "catalan", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ca_collation" }}},
@@ -648,16 +656,6 @@ pub async fn make_index_and_mappings(
                             "agency_name": {
                                 "type": "object",
                                 "dynamic": true,
-                                "dynamic_templates": [
-                                {
-                                    "copy_to_agency_name_search": {
-                                    "path_match": "name.*",
-                                    "mapping": {
-                                        "copy_to": "agency_name_search"
-                                    }
-                                    }
-                                }
-                                ],
                                 "properties": {
               "ar": { "type": "text", "analyzer": "arabic", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ar_collation" }}},
               "ca": { "type": "text", "analyzer": "catalan", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ca_collation" }}},
@@ -780,6 +778,16 @@ pub async fn make_index_and_mappings(
                       },
                         "mappings": {
                             "dynamic": "strict",
+                            "dynamic_templates": [
+                                {
+                                    "copy_to_route_name_search": {
+                                    "path_match": "name.*",
+                                    "mapping": {
+                                        "copy_to": "route_name_search"
+                                    }
+                                    }
+                                }
+                                ],
                         "properties": {
                             "chateau": {
 
@@ -828,16 +836,6 @@ pub async fn make_index_and_mappings(
                             "agency_name": {
                                 "type": "object",
                                 "dynamic": true,
-                                "dynamic_templates": [
-                                {
-                                    "copy_to_agency_name_search": {
-                                    "path_match": "name.*",
-                                    "mapping": {
-                                        "copy_to": "agency_name_search"
-                                    }
-                                    }
-                                }
-                                ],
                                 "properties": {
               "ar": { "type": "text", "analyzer": "arabic", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ar_collation" }}},
               "ca": { "type": "text", "analyzer": "catalan", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ca_collation" }}},
