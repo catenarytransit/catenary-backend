@@ -44,6 +44,7 @@ pub async fn make_index_and_mappings(
     },
           "analyzer": {
         "my_korean_analyzer": {
+            "type": "custom",
           "tokenizer": "my_korean_analyzer_user_dict",
           "filter": [
             "my_korean_analyzer_part_of_speech",
@@ -233,8 +234,8 @@ pub async fn make_index_and_mappings(
               "sr": { "type": "text", "analyzer": "standard", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sr_collation" }}},
               "sv": { "type": "text", "analyzer": "swedish", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sv_collation" }}},
               "th": { "type": "text", "analyzer": "thai", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "th_collation" }}},
-              "zh_simplified": { "type": "text", "analyzer": "smartcn", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
-              "zh_traditional": { "type": "text", "analyzer": "icu_analyzer", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
+              "zh_simplified": { "type": "text", "analyzer": "standard", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
+              "zh_traditional": { "type": "text", "analyzer": "standard", "copy_to": "name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
             }
                             },
                             "name_search": {
@@ -440,8 +441,8 @@ pub async fn make_index_and_mappings(
               "sr": { "type": "text", "analyzer": "standard", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sr_collation" }}},
               "sv": { "type": "text", "analyzer": "swedish", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sv_collation" }}},
               "th": { "type": "text", "analyzer": "thai", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "th_collation" }}},
-              "zh_simplified": { "type": "text", "analyzer": "smartcn", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
-              "zh_traditional": { "type": "text", "analyzer": "icu_analyzer", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
+              "zh_simplified": { "type": "text", "analyzer": "standard", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
+              "zh_traditional": { "type": "text", "analyzer": "standard", "copy_to": "stop_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
             }
                             },
                             "route_name_search": {
@@ -581,8 +582,8 @@ pub async fn make_index_and_mappings(
               "sr": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sr_collation" }}},
               "sv": { "type": "text", "analyzer": "swedish", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sv_collation" }}},
               "th": { "type": "text", "analyzer": "thai", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "th_collation" }}},
-              "zh_simplified": { "type": "text", "analyzer": "smartcn", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
-              "zh_traditional": { "type": "text", "analyzer": "icu_analyzer", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
+              "zh_simplified": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
+              "zh_traditional": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
             }
                             },
                             "route_name_search": {
@@ -681,8 +682,8 @@ pub async fn make_index_and_mappings(
               "sr": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sr_collation" }}},
               "sv": { "type": "text", "analyzer": "swedish", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sv_collation" }}},
               "th": { "type": "text", "analyzer": "thai", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "th_collation" }}},
-              "zh_simplified": { "type": "text", "analyzer": "smartcn", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
-              "zh_traditional": { "type": "text", "analyzer": "icu_analyzer", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
+              "zh_simplified": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
+              "zh_traditional": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
             }
                             },
                         }
@@ -861,8 +862,8 @@ pub async fn make_index_and_mappings(
               "sr": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sr_collation" }}},
               "sv": { "type": "text", "analyzer": "swedish", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sv_collation" }}},
               "th": { "type": "text", "analyzer": "thai", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "th_collation" }}},
-              "zh_simplified": { "type": "text", "analyzer": "smartcn", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
-              "zh_traditional": { "type": "text", "analyzer": "icu_analyzer", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
+              "zh_simplified": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
+              "zh_traditional": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
             }
                             },
 
