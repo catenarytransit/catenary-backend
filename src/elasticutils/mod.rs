@@ -587,8 +587,8 @@ pub async fn make_index_and_mappings(
                    "fr": { "type": "text", "analyzer": "french", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "fr_collation" }}},
                    "hr": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "hr_collation" }}},
                    "it": { "type": "text", "analyzer": "italian", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "it_collation" }}},
-                   "ja": { "type": "text", "analyzer": "kuromoji", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ja_collation" }}},
-                   "ko": { "type": "text", "analyzer":  "standard", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
+                   "ja": { "type": "text", "analyzer": "cjk", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ja_collation" }}},
+                   "ko": { "type": "text", "analyzer":  "cjk", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "ko_collation" }}},
                    "nl": { "type": "text", "analyzer": "dutch", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "nl_collation" }}},
                    "no": { "type": "text", "analyzer": "norwegian", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "no_collation" }}},
                    "pl": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "pl_collation" }}},
@@ -599,8 +599,8 @@ pub async fn make_index_and_mappings(
                    "sr": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sr_collation" }}},
                    "sv": { "type": "text", "analyzer": "swedish", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "sv_collation" }}},
                    "th": { "type": "text", "analyzer": "thai", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "th_collation" }}},
-                   "zh_simplified": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
-                   "zh_traditional": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
+                   "zh_simplified": { "type": "text", "analyzer": "cjk", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_cn_collation" }}},
+                   "zh_traditional": { "type": "text", "analyzer": "cjk", "copy_to": "route_name_search", "fields": { "sort": { "type": "keyword", "normalizer": "zh_tw_collation" }}}
                  }
                                  },
                                  "route_name_search": {
