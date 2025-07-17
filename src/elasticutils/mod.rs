@@ -53,17 +53,16 @@ pub async fn make_index_and_mappings(
           ]
         }
       },
-      "filter": {
-        "my_korean_analyzer_part_of_speech": {
-          "type": "my_korean_analyzer_part_of_speech",
-          "stoptags": [
-            "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
-            "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
-            "UNA", "NA", "VSV"
-          ]
-        }
-      },
                           "filter": {
+                            
+        "my_korean_analyzer_part_of_speech": {
+            "type": "my_korean_analyzer_part_of_speech",
+            "stoptags": [
+              "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
+              "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
+              "UNA", "NA", "VSV"
+            ]
+          },
                             "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
                             "icu_collation_ca": { "type": "icu_collation", "language": "ca" },
                             "icu_collation_cs": { "type": "icu_collation", "language": "cs" },
@@ -281,9 +280,7 @@ pub async fn make_index_and_mappings(
                                     "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
                                     "UNA", "NA", "VSV"
                                   ]
-                                }
-                              },
-                              "filter": {
+                                },
                                 "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
                                 "icu_collation_ca": { "type": "icu_collation", "language": "ca" },
                                 "icu_collation_cs": { "type": "icu_collation", "language": "cs" },
@@ -476,17 +473,15 @@ pub async fn make_index_and_mappings(
                       ]
                     }
                   },
-                  "filter": {
-                    "my_korean_analyzer_part_of_speech": {
-                      "type": "my_korean_analyzer_part_of_speech",
-                      "stoptags": [
-                        "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
-                        "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
-                        "UNA", "NA", "VSV"
-                      ]
-                    }
-                  },
                           "filter": {
+                            "my_korean_analyzer_part_of_speech": {
+                                "type": "my_korean_analyzer_part_of_speech",
+                                "stoptags": [
+                                  "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
+                                  "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
+                                  "UNA", "NA", "VSV"
+                                ]
+                              },
                             "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
                             "icu_collation_ca": { "type": "icu_collation", "language": "ca" },
                             "icu_collation_cs": { "type": "icu_collation", "language": "cs" },
@@ -712,15 +707,13 @@ pub async fn make_index_and_mappings(
                           },
                           "filter": {
                             "my_korean_analyzer_part_of_speech": {
-                              "type": "my_korean_analyzer_part_of_speech",
-                              "stoptags": [
-                                "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
-                                "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
-                                "UNA", "NA", "VSV"
-                              ]
-                            }
-                          },
-                          "filter": {
+                                "type": "my_korean_analyzer_part_of_speech",
+                                "stoptags": [
+                                  "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
+                                  "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
+                                  "UNA", "NA", "VSV"
+                                ]
+                              },
                             "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
                             "icu_collation_ca": { "type": "icu_collation", "language": "ca" },
                             "icu_collation_cs": { "type": "icu_collation", "language": "cs" },
