@@ -36,7 +36,7 @@ pub async fn make_index_and_mappings(
         "my_korean_analyzer_user_dict": {
           "type": "my_korean_analyzer_tokenizer",
           "decompound_mode": "mixed",
-          "user_dictionary": "user_dict_ko.txt"
+     //     "user_dictionary": "user_dict_ko.txt"
         },
     },
           "analyzer": {
@@ -256,7 +256,7 @@ pub async fn make_index_and_mappings(
                                 "my_korean_analyzer_user_dict": {
                                   "type": "my_korean_analyzer_tokenizer",
                                   "decompound_mode": "mixed",
-                                  "user_dictionary": "user_dict_ko.txt"
+                                //  "user_dictionary": "user_dict_ko.txt"
                                 },
                             },
                                   "analyzer": {
@@ -458,7 +458,7 @@ pub async fn make_index_and_mappings(
                     "my_korean_analyzer_user_dict": {
                       "type": "my_korean_analyzer_tokenizer",
                       "decompound_mode": "mixed",
-                      "user_dictionary": "user_dict_ko.txt"
+       //               "user_dictionary": "user_dict_ko.txt"
                     },
                 },
                       "analyzer": {
@@ -694,7 +694,7 @@ pub async fn make_index_and_mappings(
         "my_korean_analyzer_user_dict": {
           "type": "my_korean_analyzer_tokenizer",
           "decompound_mode": "mixed",
-          "user_dictionary": "user_dict_ko.txt"
+//          "user_dictionary": "user_dict_ko.txt"
         },
     },
           "analyzer": {
