@@ -32,7 +32,10 @@ pub async fn make_index_and_mappings(
             "osm",
             json!({
                     "settings": {
-                        "tokenizer": {
+                      
+    
+                        "analysis": {
+                              "tokenizer": {
         "my_korean_analyzer_user_dict": {
           "type": "my_korean_analyzer_tokenizer",
           "decompound_mode": "mixed",
@@ -59,8 +62,6 @@ pub async fn make_index_and_mappings(
           ]
         }
       },
-    
-                        "analysis": {
                           "filter": {
                             "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
                             "icu_collation_ca": { "type": "icu_collation", "language": "ca" },
@@ -252,7 +253,9 @@ pub async fn make_index_and_mappings(
             "stops",
             json!({
                         "settings": {
-                            "tokenizer": {
+                            
+                            "analysis": {
+                                "tokenizer": {
                                 "my_korean_analyzer_user_dict": {
                                   "type": "my_korean_analyzer_tokenizer",
                                   "decompound_mode": "mixed",
@@ -279,7 +282,6 @@ pub async fn make_index_and_mappings(
                                   ]
                                 }
                               },
-                            "analysis": {
                               "filter": {
                                 "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
                                 "icu_collation_ca": { "type": "icu_collation", "language": "ca" },
@@ -454,7 +456,9 @@ pub async fn make_index_and_mappings(
             "routes",
             
             json!({                "settings": {
-                "tokenizer": {
+                
+                        "analysis": {
+                            "tokenizer": {
                     "my_korean_analyzer_user_dict": {
                       "type": "my_korean_analyzer_tokenizer",
                       "decompound_mode": "mixed",
@@ -481,7 +485,6 @@ pub async fn make_index_and_mappings(
                       ]
                     }
                   },
-                        "analysis": {
                           "filter": {
                             "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
                             "icu_collation_ca": { "type": "icu_collation", "language": "ca" },
@@ -690,34 +693,34 @@ pub async fn make_index_and_mappings(
             "agencies",
             json!({
                             "settings": {
-                                  "tokenizer": {
-        "my_korean_analyzer_user_dict": {
-          "type": "my_korean_analyzer_tokenizer",
-          "decompound_mode": "mixed",
-//          "user_dictionary": "user_dict_ko.txt"
-        },
-    },
-          "analyzer": {
-        "my_korean_analyzer": {
-          "tokenizer": "my_korean_analyzer_user_dict",
-          "filter": [
-            "my_korean_analyzer_part_of_speech",
-            "my_korean_analyzer_readingform",
-            "lowercase"
-          ]
-        }
-      },
-      "filter": {
-        "my_korean_analyzer_part_of_speech": {
-          "type": "my_korean_analyzer_part_of_speech",
-          "stoptags": [
-            "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
-            "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
-            "UNA", "NA", "VSV"
-          ]
-        }
-      },
-                        "analysis": {
+                              
+                        "analysis": {    "tokenizer": {
+                            "my_korean_analyzer_user_dict": {
+                              "type": "my_korean_analyzer_tokenizer",
+                              "decompound_mode": "mixed",
+                    //          "user_dictionary": "user_dict_ko.txt"
+                            },
+                        },
+                              "analyzer": {
+                            "my_korean_analyzer": {
+                              "tokenizer": "my_korean_analyzer_user_dict",
+                              "filter": [
+                                "my_korean_analyzer_part_of_speech",
+                                "my_korean_analyzer_readingform",
+                                "lowercase"
+                              ]
+                            }
+                          },
+                          "filter": {
+                            "my_korean_analyzer_part_of_speech": {
+                              "type": "my_korean_analyzer_part_of_speech",
+                              "stoptags": [
+                                "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
+                                "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
+                                "UNA", "NA", "VSV"
+                              ]
+                            }
+                          },
                           "filter": {
                             "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
                             "icu_collation_ca": { "type": "icu_collation", "language": "ca" },
