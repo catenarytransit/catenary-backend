@@ -190,6 +190,9 @@ pub async fn make_index_and_mappings(
                                 "shape": {
                                     "type": "geo_shape"
                                 },
+                                "bbox": {
+                                    "type": "geo_shape"
+                                },
                                 "address_parts": {
                                     "type": "object",
                                     "dynamic": "strict",
@@ -618,6 +621,9 @@ pub async fn make_index_and_mappings(
                                  "centroid": {
                                      "type": "geo_point"
                                  },
+                                "bbox": {
+                                    "type": "geo_shape"
+                                },
                                  "attempt_id": {
 
                                      "type": "text",
@@ -811,6 +817,9 @@ pub async fn make_index_and_mappings(
                             "agency_name_search": {
                                 "type": "text",
                                 "analyzer": "standard"
+                            },
+                            "bbox": {
+                                "type": "geo_shape"
                             },
                             "admin_level_2_names": {
                                 "type": "text",
