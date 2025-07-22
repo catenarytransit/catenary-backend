@@ -95,6 +95,7 @@ struct StopInfoResponse {
     parent_station: Option<String>,
     children_ids: Vec<String>,
     timezone: String,
+    stop_name_translations: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1227,6 +1228,9 @@ pub async fn departures_at_stop(
             parent_station: stop.parent_station,
             children_ids: vec![],
             timezone: stop_tz_txt.clone(),
+            stop_name_translations: catenary::serde_value_to_translated_hashmap(
+                &stop.name_translations,
+            ),
         },
         parent: match parent {
             Some(parent) => Some(StopInfoResponse {
@@ -1241,6 +1245,9 @@ pub async fn departures_at_stop(
                 parent_station: parent.parent_station,
                 children_ids: vec![],
                 timezone: stop_tz_txt.clone(),
+                stop_name_translations: catenary::serde_value_to_translated_hashmap(
+                    &stop.name_translations,
+                ),
             }),
             None => None,
         },

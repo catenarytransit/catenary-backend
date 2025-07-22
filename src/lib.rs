@@ -960,3 +960,19 @@ pub fn make_calendar_structure_from_pg(
 
     Ok(calendar_structures)
 }
+
+pub fn serde_value_to_translated_hashmap(
+    input: &Option<serde_json::value::Value>,
+) -> Option<std::collections::HashMap<String, String>> {
+    match input {
+        Some(input) => match input.as_object() {
+            Some(obj) => Some(
+                obj.iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            ),
+            None => None,
+        },
+        None => None,
+    }
+}

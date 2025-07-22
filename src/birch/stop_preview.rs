@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Deserialize)]
@@ -33,6 +34,7 @@ pub struct StopDeserialised {
     pub children_route_types: Vec<i16>,
     pub station_feature: bool,
     pub wheelchair_boarding: i16,
+    pub name_translations: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize)]
@@ -131,6 +133,9 @@ pub async fn query_stops_preview(
                                 .collect(),
                             station_feature: stop.station_feature,
                             wheelchair_boarding: stop.wheelchair_boarding,
+                            name_translations: catenary::serde_value_to_translated_hashmap(
+                                &stop.name_translations,
+                            ),
                         },
                     );
                 }
@@ -241,6 +246,9 @@ pub async fn query_stops_preview(
                             .collect(),
                         station_feature: stop.station_feature,
                         wheelchair_boarding: stop.wheelchair_boarding,
+                        name_translations: catenary::serde_value_to_translated_hashmap(
+                            &stop.name_translations,
+                        ),
                     };
 
                     //add route ids to parent stop
