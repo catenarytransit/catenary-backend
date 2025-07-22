@@ -50,7 +50,7 @@ pub async fn stops_into_postgres_and_elastic(
             .collect::<HashSet<LanguageTag>>()
     });
 
-    for chunk in &gtfs.stops.iter().chunks(128) {
+    for chunk in &gtfs.stops.iter().chunks(256) {
         let mut insertable_stops = Vec::new();
         let mut insertable_elastic: Vec<JsonBody<_>> = Vec::new();
 
@@ -258,6 +258,8 @@ pub async fn stops_into_postgres_and_elastic(
             };
 
             insertable_stops.push(stop_pg);
+
+            insertable_elastic.push(json!({"index": {"_index": "stops"}}).into());
 
             insertable_elastic.push(json!({
                 "stop_id": stop_id.clone(),
