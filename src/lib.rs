@@ -410,6 +410,7 @@ pub fn make_feed_from_entity_vec(entities: Vec<FeedEntity>) -> FeedMessage {
             gtfs_realtime_version: "2.0".to_string(),
             incrementality: Some(gtfs_realtime::feed_header::Incrementality::FullDataset as i32),
             timestamp: Some(duration_since_unix_epoch().as_secs() as u64),
+            feed_version: None,
         },
         entity: entities,
     }

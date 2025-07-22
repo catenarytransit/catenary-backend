@@ -347,11 +347,17 @@ pub async fn gtfs_process_feed(
         },
         Err(_) => None,
     };
+
+    let default_lang = match gtfs.feed_info.len() {
+        0 => Some(String::from("en")),
+        _ => gtfs.feed_info[0].default_lang.clone(),
+    };
+
     let mut gtfs_summary = GtfsSummary {
         feed_start_date: None,
         feed_end_date: None,
         languages_avaliable: HashSet::new(),
-        default_lang: None,
+        default_lang: default_lang,
         general_timezone: match gtfs.agencies.len() {
             0 => String::from("Etc/UTC"),
             _ => gtfs.agencies[0].timezone.clone(),
@@ -508,6 +514,7 @@ pub async fn gtfs_process_feed(
         &stop_ids_to_route_ids,
         &stop_id_to_children_ids,
         &stop_ids_to_children_route_types,
+        gtfs_translations.as_ref(),
     )
     .await?;
 

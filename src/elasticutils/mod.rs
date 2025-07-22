@@ -25,18 +25,19 @@ pub fn single_elastic_connect(
 }
 
 pub async fn wipe_db(client: &Elasticsearch) -> Result<(), Box<dyn Error + Sync + Send>> {
-
     let idx_list = ["osm", "stops", "routes", "agencies"];
 
-   for index_name in idx_list {
-    let delete_response = client
-    .indices()
-    .delete(elasticsearch::indices::IndicesDeleteParts::Index(&[index_name]))
-    .send()
-    .await;
-   }
+    for index_name in idx_list {
+        let delete_response = client
+            .indices()
+            .delete(elasticsearch::indices::IndicesDeleteParts::Index(&[
+                index_name,
+            ]))
+            .send()
+            .await;
+    }
 
-   Ok(())
+    Ok(())
 }
 
 pub async fn make_index_and_mappings(

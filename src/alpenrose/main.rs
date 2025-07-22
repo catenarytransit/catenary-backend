@@ -171,9 +171,13 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     println!("etcd registered lease {}", etcd_lease_id);
 
-    let chicago_gtfs = "https://www.transitchicago.com/downloads/sch_data/google_transit.zip";
+    let chicago_gtfs_url = "https://www.transitchicago.com/downloads/sch_data/google_transit.zip";
 
-    let schedule_response = client.get(chicago_gtfs).send().await;
+    let schedule_response = client.get(chicago_gtfs_url).send().await;
+
+    let chicago_gtfs = gtfs_structures::Gtfs::from_url(chicago_gtfs_url);
+
+    let chicago_gtfs = Arc::new(chicago_gtfs.ok());
 
     let chicago_trips_str = Arc::new(match schedule_response {
         Ok(schedule_resp) => {
@@ -389,6 +393,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&last_fetch_per_feed),
                 Arc::clone(&amtrak_gtfs),
                 Arc::clone(&chicago_trips_str),
+                Arc::clone(&chicago_gtfs),
                 Arc::clone(&rtc_quebec_gtfs),
                 etcd_urls.clone(),
                 etcd_connection_options.clone(),

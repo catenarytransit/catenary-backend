@@ -7,6 +7,8 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::stops::dsl::stops as stops_table;
 use crossbeam;
 use diesel_async::RunQueryDsl;
+use gtfs_translations::TranslationResult;
+use gtfs_translations::translation_csv_text_to_translations;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -22,6 +24,7 @@ pub async fn stops_into_postgres(
     stop_ids_to_route_ids: &HashMap<String, HashSet<String>>,
     stop_id_to_children_ids: &HashMap<String, HashSet<String>>,
     stop_id_to_children_route: &HashMap<String, HashSet<i16>>,
+    gtfs_translations: Option<&TranslationResult>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;

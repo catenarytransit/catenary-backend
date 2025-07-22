@@ -7,15 +7,20 @@ pub async fn fetch_chicago_data(
     feed_id: &str,
     client: &reqwest::Client,
     trips_content: &str,
+    chicago_gtfs: &gtfs_structures::Gtfs,
 ) {
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 
     if let Some(worker_metadata) = fetch_assigned_node_meta {
         let worker_id = worker_metadata.worker_id;
 
-        let chicago_rt_data =
-            chicago_gtfs_rt::train_feed(client, "13f685e4b9054545b19470556103ec73", &trips_content)
-                .await;
+        let chicago_rt_data = chicago_gtfs_rt::train_feed(
+            client,
+            "13f685e4b9054545b19470556103ec73",
+            &trips_content,
+            chicago_gtfs,
+        )
+        .await;
 
         match chicago_rt_data {
             Ok(chicago_rt_data) => {

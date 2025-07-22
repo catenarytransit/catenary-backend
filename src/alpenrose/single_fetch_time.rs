@@ -81,6 +81,7 @@ pub async fn single_fetch_time(
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
     amtrak_gtfs: Arc<gtfs_structures::Gtfs>, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
     chicago_text_str: Arc<Option<String>>,
+    chicago_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
     rtcquebec_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
     etcd_urls: Arc<Vec<String>>,
     etcd_connection_options: Option<etcd_client::ConnectOptions>,
@@ -113,6 +114,7 @@ pub async fn single_fetch_time(
                 let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
                 let rtcquebec_gtfs = rtcquebec_gtfs.clone();
                 let chicago_text_str = chicago_text_str.clone();
+                let chicago_gtfs = chicago_gtfs.clone();
 
                 let mut kv_client = etcd.kv_client();
                 let mut lease_client = etcd.lease_client();
@@ -433,13 +435,16 @@ pub async fn single_fetch_time(
                             }
                             "f-dp3-cta~rt" => match chicago_text_str.as_ref() {
                                 Some(chicago_text_str) => {
-                                    custom_rt_feeds::chicagotransit::fetch_chicago_data(
-                                        &mut kv_client,
-                                        &feed_id,
-                                        &client,
-                                        chicago_text_str.as_str(),
-                                    )
-                                    .await;
+                                    if let Some(chicago_gtfs) = chicago_gtfs.as_ref() {
+                                        custom_rt_feeds::chicagotransit::fetch_chicago_data(
+                                            &mut kv_client,
+                                            &feed_id,
+                                            &client,
+                                            chicago_text_str.as_str(),
+                                            chicago_gtfs,
+                                        )
+                                        .await;
+                                    }
                                 }
                                 None => {}
                             },

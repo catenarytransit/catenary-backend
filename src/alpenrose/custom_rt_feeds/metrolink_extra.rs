@@ -25,6 +25,7 @@ pub async fn fetch_data(etcd: &mut etcd_client::KvClient, feed_id: &str, client:
                         incrementality: Some(
                             gtfs_realtime::feed_header::Incrementality::FullDataset.into(),
                         ),
+                        feed_version: None,
                         timestamp: Some(duration_since_unix_epoch().as_secs() as u64),
                     },
                     entity: metrolink_extra_gtfs_rt_data,
