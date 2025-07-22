@@ -53,12 +53,12 @@ use std::io;
 use zip::ZipArchive;
 mod single_fetch_time;
 use crate::single_fetch_time::UrlType;
+use bytes::Buf;
 use catenary::bincode_deserialize;
 use catenary::bincode_serialize;
 use get_feed_metadata::RealtimeFeedFetch;
 use scc::HashMap as SccHashMap;
 use std::io::prelude::*;
-use bytes::Buf;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -186,9 +186,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     }
 
     let chicago_bytes: Option<bytes::Bytes> = match schedule_response {
-        Ok(schedule_resp) => {
-            Some(schedule_resp.bytes().await?)
-        }
+        Ok(schedule_resp) => Some(schedule_resp.bytes().await?),
         Err(e) => {
             eprintln!("{:#?}", e);
             None
