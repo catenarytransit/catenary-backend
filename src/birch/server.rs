@@ -79,6 +79,7 @@ use terrain_tiles_proxy::proxy_for_maptiler_terrain_tiles;
 mod block_api;
 mod openrailwaymap_proxy;
 mod stop_preview;
+mod text_search;
 mod vehicle_api;
 
 #[derive(Clone, Debug)]
@@ -661,6 +662,8 @@ async fn main() -> std::io::Result<()> {
 
     let etcd_password = std::env::var("ETCD_PASSWORD");
 
+    let elastic_url = std::env::var("ELASTICSEARCH_URL").unwrap();
+
     let etcd_connection_options: Option<etcd_client::ConnectOptions> =
         match (etcd_username, etcd_password) {
             (Ok(username), Ok(password)) => {
@@ -676,6 +679,11 @@ async fn main() -> std::io::Result<()> {
 
     println!("Using {} workers", worker_amount);
     println!("ETCD config: {:#?}", etcd_connection_options);
+
+    let elasticclient =
+        catenary::elasticutils::single_elastic_connect(elastic_url.as_str()).unwrap();
+
+    let elasticclient = Arc::new(elasticclient);
 
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
@@ -699,6 +707,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(middleware::Compress::default())
             .app_data(actix_web::web::Data::new(Arc::clone(&sqlx_pool)))
             .app_data(actix_web::web::Data::new(Arc::clone(&pool)))
+            .app_data(actix_web::web::Data::new(Arc::clone(&elasticclient)))
             .app_data(actix_web::web::Data::new(Arc::new(RwLock::new(
                 None::<ChateauCache>,
             ))))
@@ -758,6 +767,7 @@ async fn main() -> std::io::Result<()> {
             .service(size_bbox_zoom_birch)
             .service(stop_preview::query_stops_preview)
             .service(openrailwaymap_proxy::openrailwaymap_proxy)
+            .service(text_search::text_search_v1)
             //   .service(nearby_departuresv2::nearby_from_coords_v2)
             //we do some trolling
             .service(web::redirect(

@@ -708,7 +708,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                         eprintln!("Failed to delete whole feed {}", feed.onestop_feed_id);
                     }
 
-                    let delete_feed_from_elasticsearch = delete_feed_elasticsearch(&feed.onestop_feed_id, &elasticclient).await;
+                    let delete_feed_from_elasticsearch =
+                        delete_feed_elasticsearch(&feed.onestop_feed_id, &elasticclient).await;
                 }
             }
 

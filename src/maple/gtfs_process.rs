@@ -61,7 +61,7 @@ pub async fn gtfs_process_feed(
     chateau_id: &str,
     attempt_id: &str,
     this_download_data: &DownloadedFeedsInformation,
-    elasticclient: &elasticsearch::Elasticsearch
+    elasticclient: &elasticsearch::Elasticsearch,
 ) -> Result<GtfsSummary, Box<dyn Error + Send + Sync>> {
     println!("Begin feed {} processing", feed_id);
     let start = Instant::now();
@@ -520,7 +520,7 @@ pub async fn gtfs_process_feed(
         &stop_ids_to_children_route_types,
         gtfs_translations.as_ref(),
         &default_lang,
-        &elasticclient
+        &elasticclient,
     )
     .await?;
 
