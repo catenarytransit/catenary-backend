@@ -17,8 +17,10 @@ use language_tags::LanguageTag;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use titlecase::titlecase;
+use serde_json::json;
+use elasticsearch::http::request::JsonBody;
 
-pub async fn stops_into_postgres(
+pub async fn stops_into_postgres_and_elastic(
     gtfs: &gtfs_structures::Gtfs,
     feed_id: &str,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
@@ -30,12 +32,15 @@ pub async fn stops_into_postgres(
     stop_id_to_children_route: &HashMap<String, HashSet<i16>>,
     gtfs_translations: Option<&TranslationResult>,
     default_lang: &Option<String>,
+    elasticclient: &elasticsearch::Elasticsearch,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
     let mut stops_finished_chunks_array = Vec::new();
+
+    let mut stops_finished_chunks_arrays_array_elasticsearch : Vec<Vec<JsonBody<_>>> = Vec::new();
 
     let avaliable_langs_to_check = gtfs_translations.map(|translations_export| {
         translations_export
@@ -47,6 +52,7 @@ pub async fn stops_into_postgres(
 
     for chunk in &gtfs.stops.iter().chunks(128) {
         let mut insertable_stops = Vec::new();
+        let mut insertable_elastic: Vec<JsonBody<_>> = Vec::new();
 
         for (stop_id, stop) in chunk {
             let name: Option<String> = titlecase_process_new(stop.name.as_ref()).map(|x| {
@@ -163,6 +169,24 @@ pub async fn stops_into_postgres(
 
             let jsonified_translations = serde_json::to_value(&name_translations).unwrap();
 
+            let route_names_for_elastic: Vec<String> = vec![];
+
+            match stop_ids_to_route_ids.get(&stop.id) {
+                Some(route_ids) => {
+                    for route_id in route_ids {
+                        if let Some(route) = gtfs.routes().get(route_id) {
+                            if let Some(long_name) = &route.long_name {
+                                route_names_for_elastic.push(long_name.clone());
+                            }
+                            if let Some(short_name) = &route.short_name {
+                                route_names_for_elastic.push(short_name.clone());
+                            }
+                        }
+                    }
+                },
+                None => {}
+            }
+
             let stop_pg = catenary::models::Stop {
                 onestop_feed_id: feed_id.to_string(),
                 chateau: chateau_id.to_string(),
@@ -234,9 +258,23 @@ pub async fn stops_into_postgres(
             };
 
             insertable_stops.push(stop_pg);
+
+            insertable_elastic.push(json!({
+                "stop_id": stop_id.clone(),
+                "chateau": chateau_id.to_string(),
+                "attempt_id": attempt_id.to_string(),
+                "onestop_feed_id": feed_id.to_string(),
+                "stop_name": name_translations.clone(),
+                "point": {
+                    "lat": point.as_ref().unwrap().y,
+                    "lon": point.as_ref().unwrap().x,
+                },
+                route_name_search: route_names_for_elastic
+            }).into());
         }
 
         stops_finished_chunks_array.push(insertable_stops);
+        stops_finished_chunks_arrays_array_elasticsearch.push(insertable_elastic);
     }
 
     conn.build_transaction()
@@ -253,6 +291,17 @@ pub async fn stops_into_postgres(
             })
         })
         .await?;
+
+    for chunk in stops_finished_chunks_arrays_array_elasticsearch {
+                let response = elasticclient
+            .bulk(elasticsearch::BulkParts::Index("stops"))
+            .body(chunk)
+            .send()
+            .await?;
+
+        let response_body = response.json::<serde_json::Value>().await?;
+        let successful = response_body["errors"].as_bool().unwrap() == false;
+    }
 
     Ok(())
 }

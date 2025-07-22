@@ -388,9 +388,6 @@ pub async fn make_index_and_mappings(
                                 "type": "text",
                                 "analyzer": "standard"
                             },
-                            "centroid": {
-                                "type": "geo_point"
-                            },
                             "agency_names_search": {
                                 "type": "text",
                                 "analyzer": "standard"

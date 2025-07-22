@@ -31,6 +31,8 @@
     clippy::op_ref
 )]
 
+use cleanup::delete_attempt_objects_elasticsearch;
+use cleanup::delete_feed_elasticsearch;
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 
@@ -99,6 +101,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     //catenary::elasticutils::wipe_db(&elasticclient).await?;
 
     catenary::elasticutils::make_index_and_mappings(&elasticclient).await?;
+
+    let elasticclient = Arc::new(elasticclient);
 
     let args = Args::parse();
 
@@ -479,6 +483,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                             let arc_conn_pool = Arc::clone(&arc_conn_pool);
                             let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
                             let ingest_progress = Arc::clone(&ingest_progress);
+                            let elasticclient = Arc::clone(&elasticclient);
                             async move {
                                 //connect to postgres
                                 let conn_pool = arc_conn_pool.as_ref();
@@ -540,6 +545,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         &chateau_id,
                                         &attempt_id,
                                         this_download_data,
+                                        &elasticclient
                                     )
                                     .await;
 
@@ -636,6 +642,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                             .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
                                         .execute(conn).await;
                                         }
+
+                                        let delete_from_elastic_search = delete_attempt_objects_elasticsearch(&feed_id, &attempt_id, &elasticclient).await;
                                         }
                                     }
                                 } else {
@@ -699,6 +707,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                     } else {
                         eprintln!("Failed to delete whole feed {}", feed.onestop_feed_id);
                     }
+
+                    let delete_feed_from_elasticsearch = delete_feed_elasticsearch(&feed.onestop_feed_id, &elasticclient).await;
                 }
             }
 

@@ -7,8 +7,95 @@ use diesel::BoolExpressionMethods;
 use diesel::ExpressionMethods;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel_async::RunQueryDsl;
+use elasticsearch::DeleteByQueryParts;
+use elasticsearch::Elasticsearch;
 use std::error::Error;
 use std::sync::Arc;
+use serde_json::json;
+
+pub async fn delete_attempt_objects_elasticsearch(feed_id: &str, attempt_id: &str, elasticsearch: &Elasticsearch) -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+
+        let delete_from_stops = elasticsearch.delete_by_query(
+            DeleteByQueryParts::Index(&["stops"])
+        ).body(json!({
+            "query": {
+              "match": {
+                "attempt_id": attempt_id
+              }
+            }
+          }))
+          .send()
+          .await?;
+
+          let delete_from_agencies = elasticsearch.delete_by_query(
+            DeleteByQueryParts::Index(&["agencies"])
+        ).body(json!({
+            "query": {
+              "match": {
+                "attempt_id": attempt_id
+              }
+            }
+          }))
+          .send()
+          .await?;
+
+        let delete_from_routes = elasticsearch.delete_by_query(
+            DeleteByQueryParts::Index(&["routes"])
+        ).body(json!({
+            "query": {
+              "match": {
+                "attempt_id": attempt_id
+              }
+            }
+          }))
+          .send()
+          .await?;
+
+
+          Ok(())
+}
+
+pub async fn delete_feed_elasticsearch(feed_id: &str, elasticsearch: &Elasticsearch) -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+
+        let delete_from_stops = elasticsearch.delete_by_query(
+            DeleteByQueryParts::Index(&["stops"])
+        ).body(json!({
+            "query": {
+              "match": {
+                "onestop_feed_id": feed_id
+              }
+            }
+          }))
+          .send()
+          .await?;
+
+          let delete_from_agencies = elasticsearch.delete_by_query(
+            DeleteByQueryParts::Index(&["agencies"])
+        ).body(json!({
+            "query": {
+              "match": {
+                "onestop_feed_id": feed_id
+              }
+            }
+          }))
+          .send()
+          .await?;
+
+        let delete_from_routes = elasticsearch.delete_by_query(
+            DeleteByQueryParts::Index(&["routes"])
+        ).body(json!({
+            "query": {
+              "match": {
+                "onestop_feed_id": feed_id
+              }
+            }
+          }))
+          .send()
+          .await?;
+
+
+          Ok(())
+}
 
 pub async fn delete_attempt_objects(
     feed_id: &str,

@@ -13,7 +13,7 @@ use crate::gtfs_handlers::stops_associated_items::*;
 use crate::gtfs_ingestion_sequence::calendar_into_postgres::calendar_into_postgres;
 use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::insert_stop_to_stop_geometry;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
-use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres;
+use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres_and_elastic;
 use catenary::enum_to_int::*;
 use catenary::gtfs_schedule_protobuf::frequencies_to_protobuf;
 use catenary::maple_syrup;
@@ -61,6 +61,7 @@ pub async fn gtfs_process_feed(
     chateau_id: &str,
     attempt_id: &str,
     this_download_data: &DownloadedFeedsInformation,
+    elasticclient: &elasticsearch::Elasticsearch
 ) -> Result<GtfsSummary, Box<dyn Error + Send + Sync>> {
     println!("Begin feed {} processing", feed_id);
     let start = Instant::now();
@@ -507,7 +508,7 @@ pub async fn gtfs_process_feed(
     println!("Inserting stops for {}", feed_id);
 
     //insert stops
-    stops_into_postgres(
+    stops_into_postgres_and_elastic(
         &gtfs,
         feed_id,
         Arc::clone(&arc_conn_pool),
@@ -519,6 +520,7 @@ pub async fn gtfs_process_feed(
         &stop_ids_to_children_route_types,
         gtfs_translations.as_ref(),
         &default_lang,
+        &elasticclient
     )
     .await?;
 
