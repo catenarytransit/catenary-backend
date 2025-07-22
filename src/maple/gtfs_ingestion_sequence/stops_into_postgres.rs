@@ -7,9 +7,13 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::stops::dsl::stops as stops_table;
 use crossbeam;
 use diesel_async::RunQueryDsl;
+use gtfs_translations::TranslatableField;
+use gtfs_translations::TranslationKey;
+use gtfs_translations::TranslationLookup;
 use gtfs_translations::TranslationResult;
 use gtfs_translations::translation_csv_text_to_translations;
 use itertools::Itertools;
+use language_tags::LanguageTag;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use titlecase::titlecase;
@@ -25,12 +29,21 @@ pub async fn stops_into_postgres(
     stop_id_to_children_ids: &HashMap<String, HashSet<String>>,
     stop_id_to_children_route: &HashMap<String, HashSet<i16>>,
     gtfs_translations: Option<&TranslationResult>,
+    default_lang: &Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
     let mut stops_finished_chunks_array = Vec::new();
+
+    let avaliable_langs_to_check = gtfs_translations.map(|translations_export| {
+        translations_export
+            .possible_translations
+            .iter()
+            .map(|x| x.1.clone())
+            .collect::<HashSet<LanguageTag>>()
+    });
 
     for chunk in &gtfs.stops.iter().chunks(128) {
         let mut insertable_stops = Vec::new();
@@ -105,13 +118,61 @@ pub async fn stops_into_postgres(
                 None => tz_search::lookup(point.as_ref().unwrap().y, point.as_ref().unwrap().x),
             };
 
+            let mut name_translations: HashMap<String, String> = HashMap::new();
+
+            if let Some(avaliable_langs_to_check) = &avaliable_langs_to_check {
+                for lang in avaliable_langs_to_check {
+                    if let Some(gtfs_translations) = &gtfs_translations {
+                        let translated_result_by_record_id =
+                            gtfs_translations.translations.get(&TranslationLookup {
+                                language: lang.clone(),
+                                field: TranslatableField::Stops(
+                                    gtfs_translations::StopFields::Name,
+                                ),
+                                key: TranslationKey::Record(stop_id.clone()),
+                            });
+
+                        if let Some(translated_result) = translated_result_by_record_id {
+                            name_translations.insert(lang.to_string(), translated_result.clone());
+                        }
+
+                        if let Some(gtfs_name) = &stop.name {
+                            let translated_result_by_value_lookup =
+                                gtfs_translations.translations.get(&TranslationLookup {
+                                    language: lang.clone(),
+                                    field: TranslatableField::Stops(
+                                        gtfs_translations::StopFields::Name,
+                                    ),
+                                    key: TranslationKey::Value(gtfs_name.clone()),
+                                });
+
+                            if let Some(translated_result) = translated_result_by_value_lookup {
+                                name_translations
+                                    .insert(lang.to_string(), translated_result.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(default_lang) = &default_lang {
+                if let Some(name) = &name {
+                    name_translations.insert(default_lang.clone(), name.clone());
+                }
+            }
+
+            let jsonified_translations = serde_json::to_value(&name_translations).unwrap();
+
             let stop_pg = catenary::models::Stop {
                 onestop_feed_id: feed_id.to_string(),
                 chateau: chateau_id.to_string(),
                 attempt_id: attempt_id.to_string(),
                 gtfs_id: stop_id.clone(),
                 name,
-                name_translations: None,
+                name_translations: match name_translations.len() {
+                    0 => None,
+                    _ => Some(jsonified_translations),
+                },
                 displayname: display_name,
                 code: match feed_id {
                     "f-amtrak~sanjoaquin" => Some(stop_id.clone()),

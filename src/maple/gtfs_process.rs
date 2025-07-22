@@ -357,7 +357,7 @@ pub async fn gtfs_process_feed(
         feed_start_date: None,
         feed_end_date: None,
         languages_avaliable: HashSet::new(),
-        default_lang: default_lang,
+        default_lang: default_lang.clone(),
         general_timezone: match gtfs.agencies.len() {
             0 => String::from("Etc/UTC"),
             _ => gtfs.agencies[0].timezone.clone(),
@@ -515,6 +515,7 @@ pub async fn gtfs_process_feed(
         &stop_id_to_children_ids,
         &stop_ids_to_children_route_types,
         gtfs_translations.as_ref(),
+        &default_lang,
     )
     .await?;
 

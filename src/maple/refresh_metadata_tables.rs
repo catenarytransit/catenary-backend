@@ -76,8 +76,10 @@ pub async fn refresh_metadata_assignments(
 
                 for static_id in v.static_feeds.iter() {
                     if let Some(static_feed) = existing_static_feeds_map.get(static_id) {
-                        languages_avaliable.insert(default_lang);
-                        
+                        if let Some(default_lang) = static_feed.default_lang.clone() {
+                            languages_avaliable_pg.insert(default_lang);
+                        }
+
                         languages_avaliable_pg.extend(
                             static_feed
                                 .languages_avaliable
