@@ -165,6 +165,10 @@ pub async fn stops_into_postgres_and_elastic(
                 if let Some(name) = &name {
                     name_translations.insert(default_lang.clone(), name.clone());
                 }
+            } else {
+                if let Some(name) = &name {
+                    name_translations.insert("en".to_string(), name.clone());
+                }
             }
 
             let jsonified_translations = serde_json::to_value(&name_translations).unwrap();
