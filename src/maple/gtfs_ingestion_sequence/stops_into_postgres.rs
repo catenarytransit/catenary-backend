@@ -169,12 +169,12 @@ pub async fn stops_into_postgres_and_elastic(
 
             let jsonified_translations = serde_json::to_value(&name_translations).unwrap();
 
-            let route_names_for_elastic: Vec<String> = vec![];
+            let mut route_names_for_elastic: Vec<String> = vec![];
 
             match stop_ids_to_route_ids.get(&stop.id) {
                 Some(route_ids) => {
                     for route_id in route_ids {
-                        if let Some(route) = gtfs.routes().get(route_id) {
+                        if let Some(route) = gtfs.routes.get(route_id) {
                             if let Some(long_name) = &route.long_name {
                                 route_names_for_elastic.push(long_name.clone());
                             }
@@ -269,7 +269,7 @@ pub async fn stops_into_postgres_and_elastic(
                     "lat": point.as_ref().unwrap().y,
                     "lon": point.as_ref().unwrap().x,
                 },
-                route_name_search: route_names_for_elastic
+                "route_name_search": route_names_for_elastic
             }).into());
         }
 
