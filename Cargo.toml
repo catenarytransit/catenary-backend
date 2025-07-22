@@ -123,7 +123,7 @@ chicago-gtfs-rt = "0.3.0"
 etcd-client = "0.16.1"
 ipnet = { version = "2.9.0", features = ["serde"] }
 tar = "0.4.41"
-bytes = "1.10"
+bytes = { version = "1.10", features = ["serde", "std"] }
 polyline = "0.11.0"
 simple-server-timing-header = "0.1.1"
 osmpbfreader = { version = "0.19.1", features = ["serde"] }

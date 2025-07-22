@@ -57,6 +57,8 @@ use catenary::bincode_deserialize;
 use catenary::bincode_serialize;
 use get_feed_metadata::RealtimeFeedFetch;
 use scc::HashMap as SccHashMap;
+use std::io::prelude::*;
+use bytes::Buf;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -171,52 +173,57 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     println!("etcd registered lease {}", etcd_lease_id);
 
+    println!("Downloading chicago gtfs zip file");
+
     let chicago_gtfs_url = "https://www.transitchicago.com/downloads/sch_data/google_transit.zip";
 
     let schedule_response = client.get(chicago_gtfs_url).send().await;
 
-    let chicago_gtfs = gtfs_structures::Gtfs::from_url(chicago_gtfs_url);
+    println!("Downloaded chicago gtfs!");
 
-    if let Err(chicago_gtfs_err) = &chicago_gtfs {
-        eprintln!("Error downloading chicago gtfs, {:?}", chicago_gtfs_err);
+    if let Err(e) = &schedule_response {
+        eprintln!("chicago fetch failed {:#?}", e);
     }
 
-    let chicago_gtfs = Arc::new(chicago_gtfs.ok());
-
-    let chicago_trips_str = Arc::new(match schedule_response {
+    let chicago_bytes: Option<bytes::Bytes> = match schedule_response {
         Ok(schedule_resp) => {
-            // Create a ZIP archive from the bytes
-            let schedule_bytes = schedule_resp.bytes().await;
-
-            match schedule_bytes {
-                Ok(schedule_bytes) => {
-                    let mut archive = ZipArchive::new(io::Cursor::new(schedule_bytes));
-
-                    match archive {
-                        Ok(mut archive) => {
-                            // Find and open the desired file
-                            let mut trips_file = archive
-                                .by_name("trips.txt")
-                                .expect("trips.txt doesn't exist");
-                            let mut buffer = Vec::new();
-                            io::copy(&mut trips_file, &mut buffer).unwrap();
-
-                            // Convert the buffer to a string
-                            let trips_content = String::from_utf8(buffer).unwrap();
-
-                            Some(trips_content)
-                        }
-                        Err(_) => None,
-                    }
-                }
-                Err(e) => {
-                    eprintln!("{:#?}", e);
-                    None
-                }
-            }
+            Some(schedule_resp.bytes().await?)
         }
         Err(e) => {
             eprintln!("{:#?}", e);
+            None
+        }
+    };
+
+    let chicago_gtfs = chicago_bytes.as_ref().map(|chicago_bytes| {
+        gtfs_structures::Gtfs::from_reader(io::Cursor::new(chicago_bytes)).unwrap()
+    });
+
+    let chicago_gtfs = Arc::new(chicago_gtfs);
+
+    let chicago_trips_str = Arc::new(match chicago_bytes.as_ref() {
+        Some(schedule_bytes) => {
+            let mut archive = ZipArchive::new(io::Cursor::new(schedule_bytes));
+
+            match archive {
+                Ok(mut archive) => {
+                    // Find and open the desired file
+                    let mut trips_file = archive
+                        .by_name("trips.txt")
+                        .expect("trips.txt doesn't exist");
+                    let mut buffer = Vec::new();
+                    io::copy(&mut trips_file, &mut buffer).unwrap();
+
+                    // Convert the buffer to a string
+                    let trips_content = String::from_utf8(buffer).unwrap();
+
+                    Some(trips_content)
+                }
+                Err(_) => None,
+            }
+        }
+        None => {
+            eprintln!("No data found for chicago trips schedule");
             None
         }
     });
