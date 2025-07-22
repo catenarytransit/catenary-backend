@@ -508,6 +508,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                 let matching_hash_rows = ingested_static
                                     .filter(catenary::schema::gtfs::ingested_static::dsl::hash_of_file_contents.eq(hash_of_file_contents_string.clone()))
                                     .filter(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(false))
+                                    .filter(catenary::schema::gtfs::ingested_static::dsl::ingestion_version.eq(MAPLE_INGESTION_VERSION))
                                     .select(catenary::models::IngestedStatic::as_select())
                                     .load::<catenary::models::IngestedStatic>(conn)
                                     .await
