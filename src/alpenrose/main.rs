@@ -177,6 +177,10 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let chicago_gtfs = gtfs_structures::Gtfs::from_url(chicago_gtfs_url);
 
+    if let Err(chicago_gtfs_err) = &chicago_gtfs {
+        eprintln!("Error downloading chicago gtfs, {:?}", chicago_gtfs_err);
+    }
+
     let chicago_gtfs = Arc::new(chicago_gtfs.ok());
 
     let chicago_trips_str = Arc::new(match schedule_response {
