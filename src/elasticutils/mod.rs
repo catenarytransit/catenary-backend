@@ -252,8 +252,8 @@ pub async fn make_index_and_mappings(
                       "sr": { "type": "text", "analyzer": "standard", "copy_to": "name_search"},
                       "sv": { "type": "text", "analyzer": "swedish", "copy_to": "name_search"},
                       "th": { "type": "text", "analyzer": "thai", "copy_to": "name_search"},
-                      "zh_simplified": { "type": "text", "analyzer": "cjk", "copy_to": "name_search"},
-                      "zh_traditional": { "type": "text", "analyzer": "cjk", "copy_to": "name_search"}
+                      "zh_hans": { "type": "text", "analyzer": "cjk", "copy_to": "name_search"},
+                      "zh_hant": { "type": "text", "analyzer": "cjk", "copy_to": "name_search"}
                     }
                                     },
                                     "name_search": {
@@ -457,8 +457,8 @@ pub async fn make_index_and_mappings(
               "sr": { "type": "text", "analyzer": "standard", "copy_to": "stop_name_search"},
               "sv": { "type": "text", "analyzer": "swedish", "copy_to": "stop_name_search"},
               "th": { "type": "text", "analyzer": "thai", "copy_to": "stop_name_search"},
-              "zh_simplified": { "type": "text", "analyzer": "cjk", "copy_to": "stop_name_search"},
-              "zh_traditional": { "type": "text", "analyzer": "cjk", "copy_to": "stop_name_search"}
+              "zh_hans": { "type": "text", "analyzer": "cjk", "copy_to": "stop_name_search"},
+              "zh_hant": { "type": "text", "analyzer": "cjk", "copy_to": "stop_name_search"}
             }
                             },
                             "route_name_search": {
@@ -603,8 +603,8 @@ pub async fn make_index_and_mappings(
                    "sr": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search"},
                    "sv": { "type": "text", "analyzer": "swedish", "copy_to": "route_name_search"},
                    "th": { "type": "text", "analyzer": "thai", "copy_to": "route_name_search"},
-                   "zh_simplified": { "type": "text", "analyzer": "cjk", "copy_to": "route_name_search"},
-                   "zh_traditional": { "type": "text", "analyzer": "cjk", "copy_to": "route_name_search"}
+                   "zh_hans": { "type": "text", "analyzer": "cjk", "copy_to": "route_name_search"},
+                   "zh_hant": { "type": "text", "analyzer": "cjk", "copy_to": "route_name_search"}
                  }
                                  },
                                  "route_name_search": {
@@ -696,8 +696,8 @@ pub async fn make_index_and_mappings(
                    "sr": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
                    "sv": { "type": "text", "analyzer": "swedish", "copy_to": "agency_name_search"},
                    "th": { "type": "text", "analyzer": "thai", "copy_to": "agency_name_search"},
-                   "zh_simplified": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"},
-                   "zh_traditional": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"}
+                   "zh_hans": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"},
+                   "zh_hant": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"}
                  }
                                  },
                              }
@@ -877,8 +877,8 @@ pub async fn make_index_and_mappings(
               "sr": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
               "sv": { "type": "text", "analyzer": "swedish", "copy_to": "agency_name_search"},
               "th": { "type": "text", "analyzer": "thai", "copy_to": "agency_name_search"},
-              "zh_simplified": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"},
-              "zh_traditional": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"}
+              "zh_hans": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"},
+              "zh_hant": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"}
             }
                             },
 
