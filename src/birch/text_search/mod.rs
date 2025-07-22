@@ -40,7 +40,7 @@ pub async fn text_search_v1(
         .as_ref()
         .search(SearchParts::Index(&["stops"]))
         .from(0)
-        .size(10)
+        .size(30)
         .body(json!({
             "query": {
                 "multi_match" : {
