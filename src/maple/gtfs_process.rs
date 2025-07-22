@@ -349,7 +349,10 @@ pub async fn gtfs_process_feed(
     };
 
     let default_lang = match gtfs.feed_info.len() {
-        0 => Some(String::from("en")),
+        0 => match gtfs.agencies.len() {
+            0 => String::from("en"),
+            _ => gtfs.agencies[0].lang.clone(),
+        },
         _ => gtfs.feed_info[0].default_lang.clone(),
     };
 
