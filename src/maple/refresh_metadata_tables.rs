@@ -73,8 +73,11 @@ pub async fn refresh_metadata_assignments(
         .map(|(k, v)| {
             let languages_avaliable_pg: HashSet<String> = {
                 let mut languages_avaliable_pg = HashSet::new();
+
                 for static_id in v.static_feeds.iter() {
                     if let Some(static_feed) = existing_static_feeds_map.get(static_id) {
+                        languages_avaliable.insert(default_lang);
+                        
                         languages_avaliable_pg.extend(
                             static_feed
                                 .languages_avaliable
