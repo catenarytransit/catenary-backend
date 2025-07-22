@@ -259,7 +259,9 @@ pub async fn stops_into_postgres_and_elastic(
 
             insertable_stops.push(stop_pg);
 
-            insertable_elastic.push(json!({"index": {"_index": "stops"}}).into());
+            let elastic_id = format!("{}_{}_{}", feed_id, attempt_id, stop_id);
+
+            insertable_elastic.push(json!({"index": {"_index": "stops", "_id": elastic_id}}).into());
 
             insertable_elastic.push(
                 json!({
