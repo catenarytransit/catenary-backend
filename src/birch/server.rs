@@ -307,6 +307,7 @@ struct ChateauToSend {
     hull: geo::MultiPolygon,
     realtime_feeds: Vec<String>,
     schedule_feeds: Vec<String>,
+    languages_avaliable: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -314,6 +315,7 @@ struct ChateauToSendNoGeom {
     chateau: String,
     realtime_feeds: Vec<String>,
     schedule_feeds: Vec<String>,
+    languages_avaliable: Vec<String>,
 }
 
 fn truncate_f64(f: f64, n: usize) -> f64 {
@@ -391,6 +393,11 @@ async fn chateaus(
                 diesel_multi_polygon_to_geo(pg_chateau.hull.unwrap()),
                 7,
             ),
+            languages_avaliable: pg_chateau
+                .languages_avaliable
+                .into_iter()
+                .flatten()
+                .collect(),
         })
         .collect::<Vec<ChateauToSend>>();
 
@@ -425,6 +432,17 @@ async fn chateaus(
                 serde_json::Value::Array(
                     chateau
                         .schedule_feeds
+                        .clone()
+                        .into_iter()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+            properties.insert(
+                String::from("languages_avaliable"),
+                serde_json::Value::Array(
+                    chateau
+                        .languages_avaliable
                         .clone()
                         .into_iter()
                         .map(serde_json::Value::String)
@@ -500,6 +518,11 @@ async fn chateaus_no_geom(
             chateau: pg_chateau.chateau,
             realtime_feeds: pg_chateau.realtime_feeds.into_iter().flatten().collect(),
             schedule_feeds: pg_chateau.static_feeds.into_iter().flatten().collect(),
+            languages_avaliable: pg_chateau
+                .languages_avaliable
+                .into_iter()
+                .flatten()
+                .collect(),
         })
         .collect::<Vec<ChateauToSendNoGeom>>();
 
