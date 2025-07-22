@@ -301,7 +301,7 @@ pub async fn stops_into_postgres_and_elastic(
 
         let response_body = response.json::<serde_json::Value>().await?;
 
-        println!("elastic stop response: {:?}");
+        println!("elastic stop response: {:?}", response_body);
     }
 
     Ok(())
