@@ -45,7 +45,7 @@ pub async fn text_search_v1(
             "query": {
                 "multi_match" : {
                     "query":  query.text.clone(),
-                    "fields": [ "stop_name_search^5", "route_name_search" ]
+                    "fields": [ "stop_name*", "route_name_search" ]
                   }
             }
         }))
