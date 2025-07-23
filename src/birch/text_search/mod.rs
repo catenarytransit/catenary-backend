@@ -23,6 +23,9 @@ use elasticsearch::SearchParts;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
+use std::collections::HashMap;
+use serde::Serialize;
+use std::collections::BTreeMap;
 
 #[derive(Deserialize, Clone)]
 struct TextSearchQuery {
@@ -32,6 +35,43 @@ struct TextSearchQuery {
     map_lat: Option<f32>,
     map_lon: Option<f32>,
     map_z: Option<u8>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct StopDeserialised {
+    pub gtfs_id: String,
+    pub name: Option<String>,
+    pub url: Option<String>,
+    pub timezone: Option<String>,
+    pub point: Option<geo::Point<f64>>,
+    pub level_id: Option<String>,
+    pub primary_route_type: Option<i16>,
+    pub platform_code: Option<String>,
+    pub routes: Vec<String>,
+    pub route_types: Vec<i16>,
+    pub children_ids: Vec<String>,
+    pub children_route_types: Vec<i16>,
+    pub station_feature: bool,
+    pub wheelchair_boarding: i16,
+    pub name_translations: Option<HashMap<String, String>>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct StopRankingInfo {
+    pub gtfs_id: String,
+    pub score: f32,
+    pub chateau: String,
+    pub onestop_feed_id: String
+}
+
+pub struct TextSearchResponseStopsSection {
+    stops: BTreeMap<String, BTreeMap<String, StopDeserialised>>,
+    routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>,
+    ranking: Vec<StopRankingInfo>
+}
+
+pub struct TextSearchResponse {
+    pub stops_section: TextSearchResponseStopsSection
 }
 
 #[actix_web::get("/text_search_v1")]

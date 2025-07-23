@@ -18,7 +18,7 @@ struct StopPreviewParams {
     chateaus: BTreeMap<String, Vec<String>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct StopDeserialised {
     pub gtfs_id: String,
     pub name: Option<String>,
@@ -37,7 +37,7 @@ pub struct StopDeserialised {
     pub name_translations: Option<HashMap<String, String>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct StopPreviewResponse {
     stops: BTreeMap<String, BTreeMap<String, StopDeserialised>>,
     routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>,
