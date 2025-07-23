@@ -462,6 +462,10 @@ pub async fn make_index_and_mappings(
                                 "type": "text",
                                 "analyzer": "standard"
                             },
+                            "agency_name_search": {
+                                "type": "text",
+                                "analyzer": "standard"
+                            },
                         }
                         }
                     }),

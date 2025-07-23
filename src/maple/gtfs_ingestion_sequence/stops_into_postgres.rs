@@ -266,8 +266,42 @@ pub async fn stops_into_postgres_and_elastic(
 
             let elastic_id = format!("{}_{}_{}", feed_id, attempt_id, stop_id);
 
-            if stop.location_type != LocationType::StationEntrance && stop.location_type != LocationType::GenericNode {
-                insertable_elastic.push(json!({"index": {"_index": "stops", "_id": elastic_id}}).into());
+            if stop.location_type != LocationType::StationEntrance
+                && stop.location_type != LocationType::GenericNode
+            {
+                insertable_elastic
+                    .push(json!({"index": {"_index": "stops", "_id": elastic_id}}).into());
+
+                let mut agency_names: Vec<String> = vec![];
+
+                match gtfs.agencies.len() {
+                    0 => {}
+                    1 => {
+                        agency_names.push(gtfs.agencies[0].name.clone());
+                    }
+                    _ => {
+                        let mut agency_ids_for_this_stop: HashSet<String> = HashSet::new();
+
+                        match stop_ids_to_route_ids.get(&stop.id) {
+                            Some(route_ids) => {
+                                for route_id in route_ids {
+                                    if let Some(route) = gtfs.routes.get(route_id) {
+                                        if let Some(agency_id) = &route.agency_id {
+                                            agency_ids_for_this_stop.insert(agency_id.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            None => {}
+                        }
+
+                        for agency_id in agency_ids_for_this_stop {
+                            if let Some(agency) = gtfs.agencies.iter().find(|x| x.id.as_ref() == Some(&agency_id)) {
+                                agency_names.push(agency.name.clone());
+                            }
+                        }
+                    }
+                }
 
                 insertable_elastic.push(
                     json!({
@@ -280,7 +314,8 @@ pub async fn stops_into_postgres_and_elastic(
                             "lat": point.as_ref().unwrap().y,
                             "lon": point.as_ref().unwrap().x,
                         },
-                        "route_name_search": route_names_for_elastic
+                        "route_name_search": route_names_for_elastic,
+                        "agency_name_search": agency_names,
                     })
                     .into(),
                 );

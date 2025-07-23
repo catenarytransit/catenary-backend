@@ -43,7 +43,7 @@ pub async fn text_search_v1(
 ) -> impl Responder {
     let map_pos_exists = match (query.map_lat, query.map_lon, query.map_z) {
         (Some(map_lat), Some(map_lon), Some(map_z)) => true,
-        _ => false
+        _ => false,
     };
 
     let stops_query = match (query.user_lat, query.user_lon) {
@@ -77,10 +77,10 @@ pub async fn text_search_v1(
             "query": {
                 "multi_match" : {
                     "query":  query.text.clone(),
-                    "fields": [ "stop_name*^2", "route_name_search" ]
+                    "fields": [ "stop_name*^3", "route_name_search", "agency_name_search" ]
                   }
             }
-        })
+        }),
     };
 
     let stops_response = elasticclient
