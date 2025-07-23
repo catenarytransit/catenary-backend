@@ -1,6 +1,7 @@
 use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id_kvclient;
 use prost::Message;
+use rand::Rng;
 
 pub async fn fetch_chicago_data(
     etcd: &mut etcd_client::KvClient,
@@ -9,6 +10,10 @@ pub async fn fetch_chicago_data(
     trips_content: &str,
     chicago_gtfs: &gtfs_structures::Gtfs,
 ) {
+    let api_keys = ["ae8e2a26183d45438e85a8dd5ff4aac7", "13f685e4b9054545b19470556103ec73"];
+
+    let randomly_picked_api_key = rand::random_range(0..api_keys.len());
+
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 
     if let Some(worker_metadata) = fetch_assigned_node_meta {
@@ -16,7 +21,7 @@ pub async fn fetch_chicago_data(
 
         let chicago_rt_data = chicago_gtfs_rt::train_feed(
             client,
-            "13f685e4b9054545b19470556103ec73",
+            api_keys[randomly_picked_api_key],
             &trips_content,
             chicago_gtfs,
         )
