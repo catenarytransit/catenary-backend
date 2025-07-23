@@ -10,7 +10,10 @@ pub async fn fetch_chicago_data(
     trips_content: &str,
     chicago_gtfs: &gtfs_structures::Gtfs,
 ) {
-    let api_keys = ["ae8e2a26183d45438e85a8dd5ff4aac7", "13f685e4b9054545b19470556103ec73"];
+    let api_keys = [
+        "ae8e2a26183d45438e85a8dd5ff4aac7",
+        "13f685e4b9054545b19470556103ec73",
+    ];
 
     let randomly_picked_api_key = rand::random_range(0..api_keys.len());
 

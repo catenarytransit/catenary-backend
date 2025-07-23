@@ -296,7 +296,11 @@ pub async fn stops_into_postgres_and_elastic(
                         }
 
                         for agency_id in agency_ids_for_this_stop {
-                            if let Some(agency) = gtfs.agencies.iter().find(|x| x.id.as_ref() == Some(&agency_id)) {
+                            if let Some(agency) = gtfs
+                                .agencies
+                                .iter()
+                                .find(|x| x.id.as_ref() == Some(&agency_id))
+                            {
                                 agency_names.push(agency.name.clone());
                             }
                         }

@@ -21,11 +21,11 @@ use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
 use elasticsearch::SearchParts;
 use serde::Deserialize;
-use serde_json::json;
-use std::sync::Arc;
-use std::collections::HashMap;
 use serde::Serialize;
+use serde_json::json;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Deserialize, Clone)]
 struct TextSearchQuery {
@@ -61,17 +61,17 @@ pub struct StopRankingInfo {
     pub gtfs_id: String,
     pub score: f32,
     pub chateau: String,
-    pub onestop_feed_id: String
+    pub onestop_feed_id: String,
 }
 
 pub struct TextSearchResponseStopsSection {
     stops: BTreeMap<String, BTreeMap<String, StopDeserialised>>,
     routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>,
-    ranking: Vec<StopRankingInfo>
+    ranking: Vec<StopRankingInfo>,
 }
 
 pub struct TextSearchResponse {
-    pub stops_section: TextSearchResponseStopsSection
+    pub stops_section: TextSearchResponseStopsSection,
 }
 
 #[actix_web::get("/text_search_v1")]
