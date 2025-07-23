@@ -105,7 +105,7 @@ pub async fn text_search_v1(
                             "scale": "100km" // Score decays significantly beyond 100 km
                           }
                         },
-                        "weight": 2 // Optional: Give more importance to location
+                        "weight": 1
                       }
                     ],
                     "score_mode": "sum", // How to combine scores from multiple functions
