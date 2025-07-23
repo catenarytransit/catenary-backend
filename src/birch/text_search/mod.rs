@@ -93,7 +93,7 @@ pub async fn text_search_v1(
                     "query": {
                       "multi_match" : {
                         "query":  query.text.clone(),
-                        "fields": [ "stop_name*^2", "route_name_search", "agency_name_search" ]
+                        "fields": [ "stop_name*^3", "route_name_search", "agency_name_search" ]
                      }
                     },
                     "functions": [
