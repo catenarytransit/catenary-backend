@@ -265,23 +265,25 @@ pub async fn stops_into_postgres_and_elastic(
 
             let elastic_id = format!("{}_{}_{}", feed_id, attempt_id, stop_id);
 
-            insertable_elastic.push(json!({"index": {"_index": "stops", "_id": elastic_id}}).into());
+            if stop.location_type != LocationType::StationEntrance && stop.location_type != LocationType::GenericNode {
+                insertable_elastic.push(json!({"index": {"_index": "stops", "_id": elastic_id}}).into());
 
-            insertable_elastic.push(
-                json!({
-                    "stop_id": stop_id.clone(),
-                    "chateau": chateau_id.to_string(),
-                    "attempt_id": attempt_id.to_string(),
-                    "onestop_feed_id": feed_id.to_string(),
-                    "stop_name": name_translations.clone(),
-                    "point": {
-                        "lat": point.as_ref().unwrap().y,
-                        "lon": point.as_ref().unwrap().x,
-                    },
-                    "route_name_search": route_names_for_elastic
-                })
-                .into(),
-            );
+                insertable_elastic.push(
+                    json!({
+                        "stop_id": stop_id.clone(),
+                        "chateau": chateau_id.to_string(),
+                        "attempt_id": attempt_id.to_string(),
+                        "onestop_feed_id": feed_id.to_string(),
+                        "stop_name": name_translations.clone(),
+                        "point": {
+                            "lat": point.as_ref().unwrap().y,
+                            "lon": point.as_ref().unwrap().x,
+                        },
+                        "route_name_search": route_names_for_elastic
+                    })
+                    .into(),
+                );
+            }
         }
 
         stops_finished_chunks_array.push(insertable_stops);
