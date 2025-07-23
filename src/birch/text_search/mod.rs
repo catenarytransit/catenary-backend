@@ -31,7 +31,7 @@ struct TextSearchQuery {
     user_lon: Option<f32>,
     map_lat: Option<f32>,
     map_lon: Option<f32>,
-    map_z: Option<f32>,
+    map_z: Option<u8>,
 }
 
 #[actix_web::get("/text_search_v1")]
