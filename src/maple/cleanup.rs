@@ -22,7 +22,7 @@ pub async fn delete_attempt_objects_elasticsearch(
         .delete_by_query(DeleteByQueryParts::Index(&["stops"]))
         .body(json!({
           "query": {
-            "match": {
+            "term": {
               "attempt_id": attempt_id
             }
           }
@@ -34,7 +34,7 @@ pub async fn delete_attempt_objects_elasticsearch(
         .delete_by_query(DeleteByQueryParts::Index(&["agencies"]))
         .body(json!({
           "query": {
-            "match": {
+            "term": {
               "attempt_id": attempt_id
             }
           }
@@ -46,7 +46,7 @@ pub async fn delete_attempt_objects_elasticsearch(
         .delete_by_query(DeleteByQueryParts::Index(&["routes"]))
         .body(json!({
           "query": {
-            "match": {
+            "term": {
               "attempt_id": attempt_id
             }
           }
@@ -65,7 +65,7 @@ pub async fn delete_feed_elasticsearch(
         .delete_by_query(DeleteByQueryParts::Index(&["stops"]))
         .body(json!({
           "query": {
-            "match": {
+            "term": {
               "onestop_feed_id": feed_id
             }
           }
@@ -77,7 +77,7 @@ pub async fn delete_feed_elasticsearch(
         .delete_by_query(DeleteByQueryParts::Index(&["agencies"]))
         .body(json!({
           "query": {
-            "match": {
+            "term": {
               "onestop_feed_id": feed_id
             }
           }
@@ -89,7 +89,7 @@ pub async fn delete_feed_elasticsearch(
         .delete_by_query(DeleteByQueryParts::Index(&["routes"]))
         .body(json!({
           "query": {
-            "match": {
+            "term": {
               "onestop_feed_id": feed_id
             }
           }
