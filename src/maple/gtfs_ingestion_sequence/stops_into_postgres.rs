@@ -8,6 +8,7 @@ use catenary::schema::gtfs::stops::dsl::stops as stops_table;
 use crossbeam;
 use diesel_async::RunQueryDsl;
 use elasticsearch::http::request::JsonBody;
+use gtfs_structures::LocationType;
 use gtfs_translations::TranslatableField;
 use gtfs_translations::TranslationKey;
 use gtfs_translations::TranslationLookup;
