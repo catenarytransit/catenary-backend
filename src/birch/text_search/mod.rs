@@ -27,6 +27,11 @@ use std::sync::Arc;
 #[derive(Deserialize, Clone)]
 struct TextSearchQuery {
     text: String,
+    user_lat: Option<f32>,
+    user_lon: Option<f32>,
+    map_lat: Option<f32>,
+    map_lon: Option<f32>,
+    map_z: Option<f32>,
 }
 
 #[actix_web::get("/text_search_v1")]
@@ -36,19 +41,54 @@ pub async fn text_search_v1(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     elasticclient: web::Data<Arc<elasticsearch::Elasticsearch>>,
 ) -> impl Responder {
-    let stops_response = elasticclient
-        .as_ref()
-        .search(SearchParts::Index(&["stops"]))
-        .from(0)
-        .size(30)
-        .body(json!({
+    let map_pos_exists = match (query.map_lat, query.map_lon, query.map_z) {
+        (Some(map_lat), Some(map_lon), Some(map_z)) => true,
+        _ => false
+    };
+
+    let stops_query = match (query.user_lat, query.user_lon) {
+        (Some(user_lat), Some(user_lon)) => json!({
+            "query": {
+                "function_score": {
+                    "query": {
+                      "multi_match" : {
+                        "query":  query.text.clone(),
+                        "fields": [ "stop_name*^2", "route_name_search" ]
+                     }
+                    },
+                    "functions": [
+                      {
+                        "gauss": {
+                          "location": {
+                            "origin": { "lat": user_lat, "lon": user_lon }, // User's location
+                            "offset": "5km", // Full score within 5000 metres
+                            "scale": "100km" // Score decays significantly beyond 100 km
+                          }
+                        },
+                        "weight": 2 // Optional: Give more importance to location
+                      }
+                    ],
+                    "score_mode": "sum", // How to combine scores from multiple functions
+                    "boost_mode": "multiply" // How to combine the function score with the query score
+                  }
+            }
+        }),
+        _ => json!({
             "query": {
                 "multi_match" : {
                     "query":  query.text.clone(),
                     "fields": [ "stop_name*^2", "route_name_search" ]
                   }
             }
-        }))
+        })
+    };
+
+    let stops_response = elasticclient
+        .as_ref()
+        .search(SearchParts::Index(&["stops"]))
+        .from(0)
+        .size(50)
+        .body(stops_query)
         .send()
         .await
         .unwrap();
