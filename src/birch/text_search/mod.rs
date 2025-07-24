@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 struct TextSearchQuery {
     text: String,
     user_lat: Option<f32>,
@@ -37,7 +37,7 @@ struct TextSearchQuery {
     map_z: Option<u8>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct StopDeserialised {
     pub gtfs_id: String,
     pub name: Option<String>,
@@ -56,20 +56,21 @@ pub struct StopDeserialised {
     pub name_translations: Option<HashMap<String, String>>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct StopRankingInfo {
     pub gtfs_id: String,
-    pub score: f32,
+    pub score: f64,
     pub chateau: String,
-    pub onestop_feed_id: String,
 }
 
+#[derive(Clone, Debug)]
 pub struct TextSearchResponseStopsSection {
     stops: BTreeMap<String, BTreeMap<String, StopDeserialised>>,
     routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>,
     ranking: Vec<StopRankingInfo>,
 }
 
+#[derive(Clone, Debug)]
 pub struct TextSearchResponse {
     pub stops_section: TextSearchResponseStopsSection,
 }
@@ -135,7 +136,41 @@ pub async fn text_search_v1(
 
     let response_body = stops_response.json::<serde_json::Value>().await.unwrap();
 
+    let hits_list_stops = response_body.get("hits").map(|x| x.get("hits")).flatten().map(|x| x.as_array()).flatten();
+
+    let mut hit_rankings_for_stops: Vec<StopRankingInfo> = vec![];
+
+    if let Some(hits_list_stops) = hits_list_stops {
+        for hit in hits_list_stops {
+            if let Some(hit) = hit.as_object() {
+                match (hit.get("_score"), hit.get("_source")) {
+                    (Some(score), Some(source)) => {
+                        match (score.as_f64(), source.as_object()) {
+                            (Some(score), Some(source)) => {
+                                if let Some(chateau) = source.get("chateau").map(|x| x.as_str()).flatten() {
+                                    if let Some(stop_id) = source.get("stop_id").map(|x| x.as_str()).flatten() {
+                                        hit_rankings_for_stops.push(StopRankingInfo {
+                                            chateau: chateau.to_string(),
+                                            gtfs_id: stop_id.to_string(),
+                                            score: score
+                                        });
+                                    }
+                                }
+                            },
+                            _ => {
+
+                            }
+                        }
+                    },
+                    _ => {}
+                }
+            }
+        }
+    }
+
     println!("response body {:?}", response_body);
 
+    println!("hit_rankings_for_stops {:?}", hit_rankings_for_stops);
+ 
     HttpResponse::Ok().json(response_body)
 }
