@@ -175,7 +175,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     println!("Downloading chicago gtfs zip file");
 
-    let chicago_gtfs_url = "https://www.transitchicago.com/downloads/sch_data/google_transit.zip";
+    let chicago_gtfs_url = "https://github.com/catenarytransit/pfaedled-gtfs-actions/releases/download/latest/cta_gtfs_railonly.zip";
 
     let schedule_response = client.get(chicago_gtfs_url).send().await;
 
