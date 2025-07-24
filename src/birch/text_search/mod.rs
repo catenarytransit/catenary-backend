@@ -128,7 +128,7 @@ pub async fn text_search_v1(
         .as_ref()
         .search(SearchParts::Index(&["stops"]))
         .from(0)
-        .size(50)
+        .size(30)
         .body(stops_query)
         .send()
         .await
