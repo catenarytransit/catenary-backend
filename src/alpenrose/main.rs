@@ -420,6 +420,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Err(e)?;
             }
         } else {
+            println!("Not connected to the internet!");
+
             //revoke the lease
 
             let _ = etcd.lease_revoke(etcd_lease_id).await?;
