@@ -185,6 +185,11 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         eprintln!("chicago fetch failed {:#?}", e);
     }
 
+    
+    //renew the etcd lease
+
+    let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
+
     let chicago_bytes: Option<bytes::Bytes> = match schedule_response {
         Ok(schedule_resp) => Some(schedule_resp.bytes().await?),
         Err(e) => {
@@ -193,9 +198,13 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         }
     };
 
+    let chicago_gtfs_timer = Instant::now();
+
     let chicago_gtfs = chicago_bytes.as_ref().map(|chicago_bytes| {
         gtfs_structures::Gtfs::from_reader(io::Cursor::new(chicago_bytes)).unwrap()
     });
+
+    println!("parsed chicago gtfs in {:?}", chicago_gtfs_timer.elapsed());
 
     let chicago_gtfs = Arc::new(chicago_gtfs);
 
@@ -229,11 +238,11 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     //create parent node for workers
 
     loop {
-       // let is_online = online::tokio::check(Some(10)).await.is_ok();
+       let is_online = online::tokio::check(Some(10)).await.is_ok();
 
         let mut etcd = etcd.clone();
 
-        if true {
+        if is_online {
             //renew the etcd lease
 
             let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
