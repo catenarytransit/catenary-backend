@@ -229,11 +229,11 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     //create parent node for workers
 
     loop {
-        let is_online = online::tokio::check(Some(10)).await.is_ok();
+       // let is_online = online::tokio::check(Some(10)).await.is_ok();
 
         let mut etcd = etcd.clone();
 
-        if is_online {
+        if true {
             //renew the etcd lease
 
             let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
