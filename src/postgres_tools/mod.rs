@@ -33,7 +33,10 @@ pub async fn make_async_pool() -> Result<
             database_url_for_env(),
             custom_conf,
         );
-    let pool = Pool::builder().build(config).await?;
+    let pool = Pool::builder()
+    .max_size(64)
+    .min_idle(Some(8))
+    .build(config).await?;
 
     Ok(pool)
 }
