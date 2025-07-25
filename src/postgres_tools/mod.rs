@@ -34,9 +34,10 @@ pub async fn make_async_pool() -> Result<
             custom_conf,
         );
     let pool = Pool::builder()
-    .max_size(32)
-    .min_idle(Some(8))
-    .build(config).await?;
+        .max_size(32)
+        .min_idle(Some(8))
+        .build(config)
+        .await?;
 
     Ok(pool)
 }
