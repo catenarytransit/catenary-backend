@@ -86,8 +86,8 @@ pub async fn text_search_v1(
 ) -> impl Responder {
     let conn_pool = arc_conn_pool.clone();
 
-        let conn_pre = conn_pool.get().await;
-                let conn = &mut conn_pre.unwrap();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre.unwrap();
 
     let map_pos_exists = match (query.map_lat, query.map_lon, query.map_z) {
         (Some(map_lat), Some(map_lon), Some(map_z)) => true,
@@ -232,7 +232,7 @@ pub async fn text_search_v1(
         .collect::<Vec<_>>()
         .await;
 
-        let mut all_stops_chateau_groups: BTreeMap<String, BTreeMap<String, StopDeserialised>> =
+    let mut all_stops_chateau_groups: BTreeMap<String, BTreeMap<String, StopDeserialised>> =
         BTreeMap::new();
 
     let mut routes_to_query_by_chateau: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -481,9 +481,7 @@ pub async fn text_search_v1(
         routes: all_routes_chateau_groups,
     };
 
-    let response_struct = TextSearchResponse {
-        stops_section
-    };
+    let response_struct = TextSearchResponse { stops_section };
 
     HttpResponse::Ok().json(response_struct)
 }
