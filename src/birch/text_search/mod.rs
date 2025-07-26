@@ -27,6 +27,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Deserialize, Clone, Debug)]
@@ -151,6 +152,7 @@ pub async fn text_search_v1(
         .flatten();
 
     let mut hit_rankings_for_stops: Vec<StopRankingInfo> = vec![];
+    let mut existing_hits: HashSet<(String, String)> = HashSet::new();
 
     if let Some(hits_list_stops) = hits_list_stops {
         for hit in hits_list_stops {
@@ -164,11 +166,17 @@ pub async fn text_search_v1(
                                 if let Some(stop_id) =
                                     source.get("stop_id").map(|x| x.as_str()).flatten()
                                 {
-                                    hit_rankings_for_stops.push(StopRankingInfo {
-                                        chateau: chateau.to_string(),
-                                        gtfs_id: stop_id.to_string(),
-                                        score: score,
-                                    });
+                                    let existing_key = (chateau.to_string(), stop_id.to_string());
+
+                                    if !existing_hits.contains(&existing_key) {
+                                        existing_hits.insert(existing_key);
+
+                                        hit_rankings_for_stops.push(StopRankingInfo {
+                                            chateau: chateau.to_string(),
+                                            gtfs_id: stop_id.to_string(),
+                                            score: score,
+                                        });
+                                    }
                                 }
                             }
                         }
