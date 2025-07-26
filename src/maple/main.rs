@@ -644,6 +644,18 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         }
 
                                         let delete_from_elastic_search = delete_attempt_objects_elasticsearch(&feed_id, &attempt_id, &elasticclient).await;
+
+                                        if let Err(delete_from_elastic_search) = delete_from_elastic_search.as_ref() {
+                                            eprintln!("delete from elastic failed {:?}", delete_from_elastic_search);
+                                        }
+
+                                        if delete_attempt.is_ok() && delete_from_elastic_search.is_ok() {
+                                            use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
+
+                                            let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
+                                            .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
+                                        .execute(conn).await;
+                                        }
                                         }
                                     }
                                 } else {
