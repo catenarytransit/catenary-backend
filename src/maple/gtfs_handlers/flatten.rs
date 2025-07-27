@@ -1,7 +1,13 @@
+use csv::ReaderBuilder;
+use csv::WriterBuilder;
+use dmfr::Feed;
+use dmfr_dataset_reader::ReturnDmfrAnalysis;
 use std::error::Error;
 use std::fs::File;
 use std::fs::{read_dir, remove_file};
 use std::io::BufRead;
+use std::io::BufReader;
+use std::io::BufWriter;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
@@ -11,8 +17,65 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dmfr::Feed;
-use dmfr_dataset_reader::ReturnDmfrAnalysis;
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct RawRiderCategoryRecord {
+    pub id: String,
+    pub name: String,
+    pub is_default_fare_category: Option<u8>,
+    pub eligibility_url: Option<String>,
+}
+
+fn fix_rider_categories(
+    gtfs_uncompressed_temp_storage: &str,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let rider_categories_path = format!("{}/rider_categories.txt", gtfs_uncompressed_temp_storage);
+
+    if PathBuf::from(&rider_categories_path).exists() {
+        let rider_categories_file = File::open(&rider_categories_path)?;
+
+        let file_reader = BufReader::new(rider_categories_file);
+
+        let mut csv_reader = ReaderBuilder::new().from_reader(file_reader);
+
+        let mut cleaned_categories: Vec<RawRiderCategoryRecord> = vec![];
+
+        for result in csv_reader.deserialize::<RawRiderCategoryRecord>() {
+            match result {
+                Ok(record) => {
+                    let mut record = record;
+                    if record.is_default_fare_category.is_none() {
+                        record.is_default_fare_category = Some(1);
+                    }
+                    cleaned_categories.push(record);
+                }
+                Err(e) => {
+                    eprintln!("failed to read a category line {}", e);
+                }
+            }
+        }
+
+        let output_file_path = format!(
+            "{}/rider_categories_new.txt",
+            gtfs_uncompressed_temp_storage
+        );
+
+        let output_file = File::create(&output_file_path)?;
+
+        let mut writer = WriterBuilder::new().from_writer(BufWriter::new(output_file));
+
+        // Write the filtered records
+        for transfer in cleaned_categories {
+            writer.serialize(transfer)?;
+        }
+
+        // Ensure all buffered data is written to the file
+        writer.flush()?;
+
+        fs::rename(&output_file_path, &rider_categories_path)?;
+    }
+
+    Ok(())
+}
 
 fn delete_zip_files(dir_path: &str) -> std::io::Result<()> {
     for entry in read_dir(dir_path)? {
@@ -254,6 +317,9 @@ pub fn flatten_feed(
         //rename stop_times_temp.txt to stop_times.txt
         fs::rename(&stop_times_temp_path, &stop_times_path)?;
     }*/
+
+    // fix rider_categories.txt
+    let _ = fix_rider_categories(&gtfs_uncompressed_temp_storage);
 
     //fix transfers txt
 

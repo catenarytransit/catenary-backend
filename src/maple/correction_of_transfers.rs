@@ -1,13 +1,12 @@
+use csv::ReaderBuilder;
+use csv::WriterBuilder;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs::File;
 use std::io::BufReader;
-use std::path::Path;
-
-use csv::ReaderBuilder;
-use csv::WriterBuilder;
-use serde::{Deserialize, Serialize};
 use std::io::BufWriter;
+use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 struct Stop {
