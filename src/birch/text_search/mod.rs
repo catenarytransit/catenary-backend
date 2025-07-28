@@ -21,9 +21,11 @@ use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
 use elasticsearch::SearchParts;
 use futures::StreamExt;
+use ordered_float::OrderedFloat;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -483,7 +485,7 @@ pub async fn text_search_v1(
         }
     }
 
-    let reranking_stops = hit_rankings_for_stops
+    let mut reranking_stops = hit_rankings_for_stops
         .into_iter()
         .map(|hit| {
             let mut hit = hit;
@@ -513,6 +515,8 @@ pub async fn text_search_v1(
             hit
         })
         .collect::<Vec<_>>();
+
+    reranking_stops.sort_by_key(|k| Reverse(OrderedFloat(k.score)));
 
     let stops_section = TextSearchResponseStopsSection {
         ranking: reranking_stops,

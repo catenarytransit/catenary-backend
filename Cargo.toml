@@ -65,7 +65,7 @@ actix = "0.13.5"
 actix-web-actors = "4.3.0"
 amtk = "0.1.0"
 travelling_salesman = "1.1.22"
-ordered-float = "5.0.0"
+ordered-float = { version = "5.0.0", features = ["serde"] }
 dotenvy = "0.15.7"
 seahash = "4.1.0"
 dmfr = "0.2"
