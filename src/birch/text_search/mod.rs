@@ -116,10 +116,10 @@ pub async fn text_search_v1(
                             "scale": "100km" // Score decays significantly beyond 100 km
                           }
                         },
-                        "weight": 0.8
+                        "weight": 0.2
                       }
                     ],
-                    "score_mode": "sum", // How to combine scores from multiple functions
+                    "score_mode": "multiply", // How to combine scores from multiple functions
                     "boost_mode": "multiply" // How to combine the function score with the query score
                   }
             }
