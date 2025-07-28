@@ -506,6 +506,7 @@ pub async fn text_search_v1(
         }
     }
 
+    /*
     let mut reranking_stops = hit_rankings_for_stops
         .into_iter()
         .map(|hit| {
@@ -535,12 +536,12 @@ pub async fn text_search_v1(
 
             hit
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>();*/
 
-    reranking_stops.sort_by_key(|k| Reverse(OrderedFloat(k.score)));
+    //reranking_stops.sort_by_key(|k| Reverse(OrderedFloat(k.score)));
 
     let stops_section = TextSearchResponseStopsSection {
-        ranking: reranking_stops,
+        ranking: hit_rankings_for_stops,
         stops: all_stops_chateau_groups,
         routes: all_routes_chateau_groups,
     };
