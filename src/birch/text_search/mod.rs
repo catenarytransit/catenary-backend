@@ -119,26 +119,47 @@ pub async fn text_search_v1(
                      }
                     },
                     "functions": [
-                      {
-                        "function_score": {
-                          "functions": [
-                            {
-                              "exp": {
-                                "point": {
-                                  "origin": { "lat": user_lat, "lon": user_lon },
-                                  "offset": "5km",
-                                  "scale": "200km"
+                        {
+                            "script_score": {
+                              "script": {
+                                "source": "
+                                  double offset = params.offset_in_km;
+                                  double scale = params.scale_in_km;
+                                  double decay = params.decay_at_scale;
+                                  double floor = params.min_score_floor;
+                  
+                                  double distance = doc['point'].arcDistance(params.user_lat, params.user_lon) / 1000.0;
+                                  
+                                  if (distance <= offset) {
+                                    return 1.0;
+                                  }
+                                  
+                                  // decay constant 'k'
+                                  // decay = exp(-k * (scale - offset)^2)
+                                  double scale_minus_offset = scale - offset;
+                                  if (scale_minus_offset <= 0) {
+                                    return floor; // Avoid division by zero if scale is within offset
+                                  }
+                                  double k = -Math.log(decay) / Math.pow(scale_minus_offset, 2);
+                                  
+                                  // scoring
+                                  double effective_distance = distance - offset;
+                                  double decay_score = Math.exp(-k * Math.pow(effective_distance, 2));
+                                  
+                                  return Math.max(decay_score, floor);
+                                ",
+                                "params": {
+                                  "user_lat": user_lat,
+                                  "user_lon": user_lon,
+                                  "offset_in_km": 5.0,
+                                  "scale_in_km": 150.0,
+                                  "decay_at_scale": 0.5,
+                                  "min_score_floor": 0.35
                                 }
                               }
                             },
-                            {
-                              "weight": 0.1
-                            }
-                          ],
-                          "score_mode": "max",
-                          "weight": 0.1
-                        }
-                      },
+                            "weight": 0.05
+                          },
                       {
                         "script_score": {
                           "script": {
