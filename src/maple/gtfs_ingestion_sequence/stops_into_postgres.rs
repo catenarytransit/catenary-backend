@@ -328,6 +328,7 @@ pub async fn stops_into_postgres_and_elastic(
                             "lat": point.as_ref().unwrap().y,
                             "lon": point.as_ref().unwrap().x,
                         },
+                        "route_types": stop_ids_to_route_types.get(&stop.id),
                         "route_name_search": route_names_for_elastic,
                         "agency_name_search": agency_names,
                     })

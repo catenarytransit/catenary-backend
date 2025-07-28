@@ -426,6 +426,9 @@ pub async fn make_index_and_mappings(
                             "point": {
                                 "type": "geo_point"
                             },
+                            "route_types": {
+                                "type": "byte"
+                            },
                             "stop_name": {
                                 "type": "object",
                                 "dynamic": true,
