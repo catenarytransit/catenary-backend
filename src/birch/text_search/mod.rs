@@ -158,7 +158,7 @@ pub async fn text_search_v1(
                                 }
                               }
                             },
-                            "weight": 0.05
+                            "weight": 0.03
                           },
                       {
                         "script_score": {
