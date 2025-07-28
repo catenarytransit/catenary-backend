@@ -117,6 +117,27 @@ pub async fn text_search_v1(
                           }
                         },
                         "weight": 0.2
+                      },
+                      {
+                        "script_score": {
+                          "script": {
+                            "source": "
+                              if (doc['route_type'].empty) {
+                                return 1;
+                              }
+                              if (doc['route_type'].contains(2)) {
+                                return 3.0;
+                              }
+                              if (doc['route_type'].contains(1)) {
+                                return 2.0;
+                              }
+                              if (doc['route_type'].contains(0)) {
+                                return 1.5;
+                              }
+                              return 1.0;
+                            "
+                          }
+                        }
                       }
                     ],
                     "score_mode": "multiply", // How to combine scores from multiple functions
