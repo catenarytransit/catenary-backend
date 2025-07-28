@@ -230,7 +230,17 @@ pub async fn stops_into_postgres_and_elastic(
                 primary_route_type: match stop_ids_to_route_types.get(&stop.id) {
                     Some(route_types) => {
                         let route_types = route_types.iter().copied().collect::<Vec<i16>>();
-                        Some(route_types[0])
+
+                        match route_types.contains(&2) {
+                            true => Some(2),
+                            false => match route_types.contains(&1) {
+                                true => Some(1),
+                                false => match route_types.contains(&0) {
+                                    true => Some(0),
+                                    false => Some(route_types[0]),
+                                },
+                            },
+                        }
                     }
                     None => None,
                 },

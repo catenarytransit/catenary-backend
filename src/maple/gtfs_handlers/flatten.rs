@@ -26,10 +26,16 @@ struct RawRiderCategoryRecord {
     pub eligibility_url: Option<String>,
 }
 
-fn fix_fares(gtfs_uncompressed_temp_storage: &str, feed_id: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
+fn fix_fares(
+    gtfs_uncompressed_temp_storage: &str,
+    feed_id: &str,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut valid_rider_categories = true;
 
-    let rider_categories_path = format!("{}/{}/rider_categories.txt", gtfs_uncompressed_temp_storage, feed_id);
+    let rider_categories_path = format!(
+        "{}/{}/rider_categories.txt",
+        gtfs_uncompressed_temp_storage, feed_id
+    );
 
     let rider_categories_file = fs::File::open(&rider_categories_path);
 

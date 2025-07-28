@@ -381,7 +381,6 @@ pub async fn make_index_and_mappings(
                                 "type": "text",
                             },
                             "attempt_id": {
-
                                 "type": "text",
                             },
                             "stop_name_search": {

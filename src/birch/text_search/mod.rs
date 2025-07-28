@@ -136,7 +136,7 @@ pub async fn text_search_v1(
         .as_ref()
         .search(SearchParts::Index(&["stops"]))
         .from(0)
-        .size(30)
+        .size(60)
         .body(stops_query)
         .send()
         .await
@@ -483,8 +483,39 @@ pub async fn text_search_v1(
         }
     }
 
+    let reranking_stops = hit_rankings_for_stops
+        .into_iter()
+        .map(|hit| {
+            let mut hit = hit;
+
+            if let Some(stop) = all_stops_chateau_groups
+                .get(&hit.chateau)
+                .map(|c| c.get(&hit.gtfs_id))
+                .flatten()
+            {
+                match &stop.primary_route_type {
+                    //rail
+                    Some(2) => {
+                        hit.score = hit.score * 1.3;
+                    }
+                    //tram
+                    Some(0) => {
+                        hit.score = hit.score * 1.2;
+                    }
+                    //metro
+                    Some(1) => {
+                        hit.score = hit.score * 1.1;
+                    }
+                    _ => {}
+                }
+            }
+
+            hit
+        })
+        .collect::<Vec<_>>();
+
     let stops_section = TextSearchResponseStopsSection {
-        ranking: hit_rankings_for_stops,
+        ranking: reranking_stops,
         stops: all_stops_chateau_groups,
         routes: all_routes_chateau_groups,
     };
