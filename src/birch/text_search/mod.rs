@@ -39,7 +39,7 @@ struct TextSearchQuery {
     user_lon: Option<f32>,
     map_lat: Option<f32>,
     map_lon: Option<f32>,
-    map_z: Option<u8>,
+    map_z: Option<f32>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -97,6 +97,17 @@ pub async fn text_search_v1(
         _ => false,
     };
 
+    let (offset_map_gauss, scale_map_gauss, map_weight) = match query.map_z {
+        Some(z) => match z > 12. {
+            true => ("20km", "150km", 0.1),
+            false => match z > 10. {
+                true => ("50km", "300km", 0.05),
+                false => ("500km", "1000km", 0.01),
+            },
+        },
+        _ => ("10km", "10km", 0.1),
+    };
+
     let stops_query = match (query.user_lat, query.user_lon) {
         (Some(user_lat), Some(user_lon)) => json!({
             "query": {
@@ -145,21 +156,99 @@ pub async fn text_search_v1(
                   }
             }
         }),
-        _ => json!({
-            "query": {
-                "multi_match" : {
-                    "query":  query.text.clone(),
-                    "fields": [ "stop_name*^3", "route_name_search", "agency_name_search" ]
-                  }
-            }
-        }),
+        _ => match map_pos_exists {
+            true => json!({
+                "query": {
+                    "function_score": {
+                        "query": {
+                          "multi_match" : {
+                            "query":  query.text.clone(),
+                            "fields": [ "stop_name*^3", "route_name_search", "agency_name_search" ]
+                         }
+                        },
+                        "functions": [
+                            {
+                        "gauss": {
+                          "point": {
+                            "origin": { "lat": query.map_lat.unwrap(), "lon": query.map_lon.unwrap() }, // User's map centre
+                            "offset": offset_map_gauss, // Full score within 5000 metres
+                            "scale": scale_map_gauss // Score decays significantly beyond 100 km
+                          }
+                        },
+                        "weight": map_weight
+                      },
+                          {
+                            "script_score": {
+                              "script": {
+                                "source": "
+                                  if (!doc.containsKey('route_type') || doc['route_type'].empty) {
+                                    return 1.0;
+                                  }
+                                  if (doc['route_type'].contains(2)) {
+                                    return 3.0;
+                                  }
+                                  if (doc['route_type'].contains(1)) {
+                                    return 2.0;
+                                  }
+                                  if (doc['route_type'].contains(0)) {
+                                    return 1.5;
+                                  }
+                                  return 1.0;
+                                "
+                              }
+                            }
+                          }
+                        ],
+                        "score_mode": "multiply", // How to combine scores from multiple functions
+                        "boost_mode": "multiply" // How to combine the function score with the query score
+                      }
+                }
+            }),
+            false => json!({
+                "query": {
+                    "function_score": {
+                        "query": {
+                          "multi_match" : {
+                            "query":  query.text.clone(),
+                            "fields": [ "stop_name*^3", "route_name_search", "agency_name_search" ]
+                         }
+                        },
+                        "functions": [
+                          {
+                            "script_score": {
+                              "script": {
+                                "source": "
+                              if (!doc.containsKey('route_type') || doc['route_type'].empty) {
+                                return 1.0;
+                              }
+                              if (doc['route_type'].contains(2)) {
+                                return 3.0;
+                              }
+                              if (doc['route_type'].contains(1)) {
+                                return 2.0;
+                              }
+                              if (doc['route_type'].contains(0)) {
+                                return 1.5;
+                              }
+                              return 1.0;
+                            "
+                              }
+                            }
+                          }
+                        ],
+                        "score_mode": "multiply", // How to combine scores from multiple functions
+                        "boost_mode": "multiply" // How to combine the function score with the query score
+                      }
+                }
+            }),
+        },
     };
 
     let stops_response = elasticclient
         .as_ref()
         .search(SearchParts::Index(&["stops"]))
         .from(0)
-        .size(60)
+        .size(30)
         .body(stops_query)
         .send()
         .await
