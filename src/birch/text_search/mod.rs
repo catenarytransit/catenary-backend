@@ -120,7 +120,7 @@ pub async fn text_search_v1(
                     },
                     "functions": [
                       {
-                        "gauss": {
+                        "exp": {
                           "point": {
                             "origin": { "lat": user_lat, "lon": user_lon }, // User's location
                             "offset": "5km", // Full score within 5000 metres
@@ -168,7 +168,7 @@ pub async fn text_search_v1(
                         },
                         "functions": [
                             {
-                        "gauss": {
+                        "exp": {
                           "point": {
                             "origin": { "lat": query.map_lat.unwrap(), "lon": query.map_lon.unwrap() }, // User's map centre
                             "offset": offset_map_gauss, // Full score within 5000 metres
