@@ -124,7 +124,7 @@ pub async fn text_search_v1(
                           "point": {
                             "origin": { "lat": user_lat, "lon": user_lon }, // User's location
                             "offset": "5km", // Full score within 5000 metres
-                            "scale": "100km" // Score decays significantly beyond 100 km
+                            "scale": "200km" // Score decays significantly beyond 200 km
                           }
                         },
                         "weight": 0.1
