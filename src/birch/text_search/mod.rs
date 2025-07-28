@@ -99,9 +99,9 @@ pub async fn text_search_v1(
 
     let (offset_map_gauss, scale_map_gauss, map_weight) = match query.map_z {
         Some(z) => match z > 12. {
-            true => ("20km", "150km", 0.1),
+            true => ("20km", "150km", 0.05),
             false => match z > 10. {
-                true => ("50km", "300km", 0.05),
+                true => ("50km", "300km", 0.02),
                 false => ("500km", "1000km", 0.01),
             },
         },
@@ -127,7 +127,7 @@ pub async fn text_search_v1(
                             "scale": "100km" // Score decays significantly beyond 100 km
                           }
                         },
-                        "weight": 0.2
+                        "weight": 0.1
                       },
                       {
                         "script_score": {
