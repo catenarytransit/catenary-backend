@@ -209,6 +209,8 @@ pub async fn text_search_v1(
                 }
             }
         }
+    } else {
+        eprintln!("No hits found: {:#?}", response_body);
     }
 
     // println!("response body {:?}", response_body);
