@@ -212,16 +212,16 @@ pub async fn text_search_v1(
                             "script_score": {
                               "script": {
                                 "source": "
-                                  if (!doc.containsKey('route_type') || doc['route_type'].empty) {
+                                  if (!doc.containsKey('route_types') || doc['route_types'].empty) {
                                     return 1.0;
                                   }
-                                  if (doc['route_type'].contains(2)) {
+                                  if (doc['route_types'].contains(2)) {
                                     return 3.0;
                                   }
-                                  if (doc['route_type'].contains(1)) {
+                                  if (doc['route_types'].contains(1)) {
                                     return 2.0;
                                   }
-                                  if (doc['route_type'].contains(0)) {
+                                  if (doc['route_types'].contains(0)) {
                                     return 1.5;
                                   }
                                   return 1.0;
@@ -249,16 +249,16 @@ pub async fn text_search_v1(
                             "script_score": {
                               "script": {
                                 "source": "
-                              if (!doc.containsKey('route_type') || doc['route_type'].empty) {
+                              if (!doc.containsKey('route_types') || doc['route_types'].empty) {
                                 return 1.0;
                               }
-                              if (doc['route_type'].contains(2)) {
+                              if (doc['route_types'].contains(2)) {
                                 return 3.0;
                               }
-                              if (doc['route_type'].contains(1)) {
+                              if (doc['route_types'].contains(1)) {
                                 return 2.0;
                               }
-                              if (doc['route_type'].contains(0)) {
+                              if (doc['route_types'].contains(0)) {
                                 return 1.5;
                               }
                               return 1.0;
