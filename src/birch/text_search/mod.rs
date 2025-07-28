@@ -116,7 +116,7 @@ pub async fn text_search_v1(
                             "scale": "100km" // Score decays significantly beyond 100 km
                           }
                         },
-                        "weight": 1
+                        "weight": 0.8
                       }
                     ],
                     "score_mode": "sum", // How to combine scores from multiple functions
@@ -498,15 +498,15 @@ pub async fn text_search_v1(
                 match &stop.primary_route_type {
                     //rail
                     Some(2) => {
-                        hit.score = hit.score * 1.3;
+                        hit.score = hit.score * 1.6;
                     }
                     //tram
                     Some(0) => {
-                        hit.score = hit.score * 1.2;
+                        hit.score = hit.score * 1.4;
                     }
                     //metro
                     Some(1) => {
-                        hit.score = hit.score * 1.1;
+                        hit.score = hit.score * 1.5;
                     }
                     _ => {}
                 }
