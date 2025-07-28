@@ -120,14 +120,24 @@ pub async fn text_search_v1(
                     },
                     "functions": [
                       {
-                        "exp": {
-                          "point": {
-                            "origin": { "lat": user_lat, "lon": user_lon }, // User's location
-                            "offset": "5km", // Full score within 5000 metres
-                            "scale": "200km" // Score decays significantly beyond 200 km
-                          }
-                        },
-                        "weight": 0.1
+                        "function_score": {
+                          "functions": [
+                            {
+                              "exp": {
+                                "point": {
+                                  "origin": { "lat": user_lat, "lon": user_lon },
+                                  "offset": "5km",
+                                  "scale": "200km"
+                                }
+                              }
+                            },
+                            {
+                              "weight": 0.1
+                            }
+                          ],
+                          "score_mode": "max",
+                          "weight": 0.1
+                        }
                       },
                       {
                         "script_score": {
