@@ -229,38 +229,8 @@ pub async fn make_index_and_mappings(
                                   "name": {
                                         "type": "object",
                                         "dynamic": true,
-                                        "properties": {
-                      "ar": { "type": "text", "analyzer": "arabic", "copy_to": "name_search"},
-                      "ca": { "type": "text", "analyzer": "catalan", "copy_to": "name_search"},
-                      "cs": { "type": "text", "analyzer": "czech", "copy_to": "name_search"},
-                      "de": { "type": "text", "analyzer": "german", "copy_to": "name_search"},
-                      "en": { "type": "text", "analyzer": "english", "copy_to": "name_search"},
-                      "es": { "type": "text", "analyzer": "spanish", "copy_to": "name_search"},
-                      "et": { "type": "text", "analyzer": "standard", "copy_to": "name_search"},
-                      "fi": { "type": "text", "analyzer": "finnish", "copy_to": "name_search"},
-                      "fr": { "type": "text", "analyzer": "french", "copy_to": "name_search"},
-                      "hr": { "type": "text", "analyzer": "standard", "copy_to": "name_search"},
-                      "it": { "type": "text", "analyzer": "italian", "copy_to": "name_search"},
-                      "ja": { "type": "text", "analyzer": "cjk", "copy_to": "name_search"},
-                      "ko": { "type": "text", "analyzer":  "cjk", "copy_to": "name_search"},
-                      "nl": { "type": "text", "analyzer": "dutch", "copy_to": "name_search"},
-                      "no": { "type": "text", "analyzer": "norwegian", "copy_to": "name_search"},
-                      "pl": { "type": "text", "analyzer": "standard", "copy_to": "name_search"},
-                      "pt": { "type": "text", "analyzer": "portuguese", "copy_to": "name_search"},
-                      "ro": { "type": "text", "analyzer": "romanian", "copy_to": "name_search"},
-                      "ru": { "type": "text", "analyzer": "russian", "copy_to": "name_search"},
-                      "sk": { "type": "text", "analyzer": "standard", "copy_to": "name_search"},
-                      "sr": { "type": "text", "analyzer": "standard", "copy_to": "name_search"},
-                      "sv": { "type": "text", "analyzer": "swedish", "copy_to": "name_search"},
-                      "th": { "type": "text", "analyzer": "thai", "copy_to": "name_search"},
-                      "zh_hans": { "type": "text", "analyzer": "cjk", "copy_to": "name_search"},
-                      "zh_hant": { "type": "text", "analyzer": "cjk", "copy_to": "name_search"}
-                    }
+                                        "properties": generate_language_properties()
                                     },
-                                    "name_search": {
-                                    "type": "text",
-                                    "analyzer": "standard"
-                                },
                                 "category": {
                                     "type": "text",
                                     "analyzer": "standard"
