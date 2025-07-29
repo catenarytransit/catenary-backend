@@ -10,6 +10,7 @@ use elasticsearch::{
 };
 use serde_json::{Value, json};
 use std::error::Error;
+use std::collections::HashMap;
 
 pub fn single_elastic_connect(
     server_url: &str,
@@ -432,33 +433,7 @@ pub async fn make_index_and_mappings(
                             "stop_name": {
                                 "type": "object",
                                 "dynamic": true,
-                                "properties": {
-              "ar": { "type": "text", "analyzer": "arabic", "copy_to": "stop_name_search"},
-              "ca": { "type": "text", "analyzer": "catalan", "copy_to": "stop_name_search"},
-              "cs": { "type": "text", "analyzer": "czech", "copy_to": "stop_name_search"},
-              "de": { "type": "text", "analyzer": "german", "copy_to": "stop_name_search"},
-              "en": { "type": "text", "analyzer": "english", "copy_to": "stop_name_search"},
-              "es": { "type": "text", "analyzer": "spanish", "copy_to": "stop_name_search"},
-              "et": { "type": "text", "analyzer": "standard", "copy_to": "stop_name_search"},
-              "fi": { "type": "text", "analyzer": "finnish", "copy_to": "stop_name_search"},
-              "fr": { "type": "text", "analyzer": "french", "copy_to": "stop_name_search"},
-              "hr": { "type": "text", "analyzer": "standard", "copy_to": "stop_name_search"},
-              "it": { "type": "text", "analyzer": "italian", "copy_to": "stop_name_search"},
-              "ja": { "type": "text", "analyzer": "cjk", "copy_to": "stop_name_search"},
-              "ko": { "type": "text", "analyzer":  "cjk", "copy_to": "stop_name_search"},
-              "nl": { "type": "text", "analyzer": "dutch", "copy_to": "stop_name_search"},
-              "no": { "type": "text", "analyzer": "norwegian", "copy_to": "stop_name_search"},
-              "pl": { "type": "text", "analyzer": "standard", "copy_to": "stop_name_search"},
-              "pt": { "type": "text", "analyzer": "portuguese", "copy_to": "stop_name_search"},
-              "ro": { "type": "text", "analyzer": "romanian", "copy_to": "stop_name_search"},
-              "ru": { "type": "text", "analyzer": "russian", "copy_to": "stop_name_search"},
-              "sk": { "type": "text", "analyzer": "standard", "copy_to": "stop_name_search"},
-              "sr": { "type": "text", "analyzer": "standard", "copy_to": "stop_name_search"},
-              "sv": { "type": "text", "analyzer": "swedish", "copy_to": "stop_name_search"},
-              "th": { "type": "text", "analyzer": "thai", "copy_to": "stop_name_search"},
-              "zh_hans": { "type": "text", "analyzer": "cjk", "copy_to": "stop_name_search"},
-              "zh_hant": { "type": "text", "analyzer": "cjk", "copy_to": "stop_name_search"}
-            }
+                                "properties": generate_language_properties()
                             },
                             "route_name_search": {
                                 "type": "text",
@@ -582,33 +557,7 @@ pub async fn make_index_and_mappings(
                                 "route_name": {
                                      "type": "object",
                                      "dynamic": true,
-                                     "properties": {
-                   "ar": { "type": "text", "analyzer": "arabic", "copy_to": "route_name_search"},
-                   "ca": { "type": "text", "analyzer": "catalan", "copy_to": "route_name_search"},
-                   "cs": { "type": "text", "analyzer": "czech", "copy_to": "route_name_search"},
-                   "de": { "type": "text", "analyzer": "german", "copy_to": "route_name_search"},
-                   "en": { "type": "text", "analyzer": "english", "copy_to": "route_name_search"},
-                   "es": { "type": "text", "analyzer": "spanish", "copy_to": "route_name_search"},
-                   "et": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search"},
-                   "fi": { "type": "text", "analyzer": "finnish", "copy_to": "route_name_search"},
-                   "fr": { "type": "text", "analyzer": "french", "copy_to": "route_name_search"},
-                   "hr": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search"},
-                   "it": { "type": "text", "analyzer": "italian", "copy_to": "route_name_search"},
-                   "ja": { "type": "text", "analyzer": "cjk", "copy_to": "route_name_search"},
-                   "ko": { "type": "text", "analyzer":  "cjk", "copy_to": "route_name_search"},
-                   "nl": { "type": "text", "analyzer": "dutch", "copy_to": "route_name_search"},
-                   "no": { "type": "text", "analyzer": "norwegian", "copy_to": "route_name_search"},
-                   "pl": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search"},
-                   "pt": { "type": "text", "analyzer": "portuguese", "copy_to": "route_name_search"},
-                   "ro": { "type": "text", "analyzer": "romanian", "copy_to": "route_name_search"},
-                   "ru": { "type": "text", "analyzer": "russian", "copy_to": "route_name_search"},
-                   "sk": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search"},
-                   "sr": { "type": "text", "analyzer": "standard", "copy_to": "route_name_search"},
-                   "sv": { "type": "text", "analyzer": "swedish", "copy_to": "route_name_search"},
-                   "th": { "type": "text", "analyzer": "thai", "copy_to": "route_name_search"},
-                   "zh_hans": { "type": "text", "analyzer": "cjk", "copy_to": "route_name_search"},
-                   "zh_hant": { "type": "text", "analyzer": "cjk", "copy_to": "route_name_search"}
-                 }
+                                     "properties": generate_language_properties()
                                  },
                                  "route_name_search": {
                                      "type": "text",
@@ -675,33 +624,7 @@ pub async fn make_index_and_mappings(
                                  "agency_name": {
                                      "type": "object",
                                      "dynamic": true,
-                                     "properties": {
-                   "ar": { "type": "text", "analyzer": "arabic", "copy_to": "agency_name_search"},
-                   "ca": { "type": "text", "analyzer": "catalan", "copy_to": "agency_name_search"},
-                   "cs": { "type": "text", "analyzer": "czech", "copy_to": "agency_name_search"},
-                   "de": { "type": "text", "analyzer": "german", "copy_to": "agency_name_search"},
-                   "en": { "type": "text", "analyzer": "english", "copy_to": "agency_name_search"},
-                   "es": { "type": "text", "analyzer": "spanish", "copy_to": "agency_name_search"},
-                   "et": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
-                   "fi": { "type": "text", "analyzer": "finnish", "copy_to": "agency_name_search"},
-                   "fr": { "type": "text", "analyzer": "french", "copy_to": "agency_name_search"},
-                   "hr": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
-                   "it": { "type": "text", "analyzer": "italian", "copy_to": "agency_name_search"},
-                   "ja": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"},
-                   "ko": { "type": "text", "analyzer":  "cjk", "copy_to": "agency_name_search"},
-                   "nl": { "type": "text", "analyzer": "dutch", "copy_to": "agency_name_search"},
-                   "no": { "type": "text", "analyzer": "norwegian", "copy_to": "agency_name_search"},
-                   "pl": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
-                   "pt": { "type": "text", "analyzer": "portuguese", "copy_to": "agency_name_search"},
-                   "ro": { "type": "text", "analyzer": "romanian", "copy_to": "agency_name_search"},
-                   "ru": { "type": "text", "analyzer": "russian", "copy_to": "agency_name_search"},
-                   "sk": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
-                   "sr": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
-                   "sv": { "type": "text", "analyzer": "swedish", "copy_to": "agency_name_search"},
-                   "th": { "type": "text", "analyzer": "thai", "copy_to": "agency_name_search"},
-                   "zh_hans": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"},
-                   "zh_hant": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"}
-                 }
+                                     "properties": generate_language_properties()
                                  },
                              }
                              }
@@ -856,33 +779,7 @@ pub async fn make_index_and_mappings(
                             "agency_name": {
                                 "type": "object",
                                 "dynamic": true,
-                                "properties": {
-              "ar": { "type": "text", "analyzer": "arabic", "copy_to": "agency_name_search"},
-              "ca": { "type": "text", "analyzer": "catalan", "copy_to": "agency_name_search"},
-              "cs": { "type": "text", "analyzer": "czech", "copy_to": "agency_name_search"},
-              "de": { "type": "text", "analyzer": "german", "copy_to": "agency_name_search"},
-              "en": { "type": "text", "analyzer": "english", "copy_to": "agency_name_search"},
-              "es": { "type": "text", "analyzer": "spanish", "copy_to": "agency_name_search"},
-              "et": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
-              "fi": { "type": "text", "analyzer": "finnish", "copy_to": "agency_name_search"},
-              "fr": { "type": "text", "analyzer": "french", "copy_to": "agency_name_search"},
-              "hr": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
-              "it": { "type": "text", "analyzer": "italian", "copy_to": "agency_name_search"},
-              "ja": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"},
-              "ko": { "type": "text", "analyzer":  "cjk", "copy_to": "agency_name_search"},
-              "nl": { "type": "text", "analyzer": "dutch", "copy_to": "agency_name_search"},
-              "no": { "type": "text", "analyzer": "norwegian", "copy_to": "agency_name_search"},
-              "pl": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
-              "pt": { "type": "text", "analyzer": "portuguese", "copy_to": "agency_name_search"},
-              "ro": { "type": "text", "analyzer": "romanian", "copy_to": "agency_name_search"},
-              "ru": { "type": "text", "analyzer": "russian", "copy_to": "agency_name_search"},
-              "sk": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
-              "sr": { "type": "text", "analyzer": "standard", "copy_to": "agency_name_search"},
-              "sv": { "type": "text", "analyzer": "swedish", "copy_to": "agency_name_search"},
-              "th": { "type": "text", "analyzer": "thai", "copy_to": "agency_name_search"},
-              "zh_hans": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"},
-              "zh_hant": { "type": "text", "analyzer": "cjk", "copy_to": "agency_name_search"}
-            }
+                                "properties": generate_language_properties()
                             },
 
                         }
@@ -982,4 +879,53 @@ pub async fn make_index_and_mappings(
     }
 
     Ok(())
+}
+
+pub fn generate_language_properties() -> HashMap<String, HashMap<String, String>> {
+    let languages = [
+        ("ar", "arabic"),
+        ("ca", "catalan"),
+        ("cs", "czech"),
+        ("de", "german"),
+        ("en", "english"),
+        ("es", "spanish"),
+        ("et", "standard"),
+        ("fi", "finnish"),
+        ("fr", "french"),
+        ("hr", "standard"),
+        ("it", "italian"),
+        ("ja", "cjk"),
+        ("ja-hrkt", "cjk"),
+        ("ko", "cjk"),
+        ("nl", "dutch"),
+        ("no", "norwegian"),
+        ("pl", "standard"),
+        ("pt", "portuguese"),
+        ("ro", "romanian"),
+        ("ru", "russian"),
+        ("sk", "standard"),
+        ("sr", "standard"),
+        ("sv", "swedish"),
+        ("th", "thai"),
+        ("zh", "cjk"),
+        ("zh_hans", "cjk"),
+        ("zh_hant", "cjk"),
+        ("zh_cn", "cjk"),
+        ("zh_tw", "cjk"),
+        ("zh_hant_hk", "cjk"),
+        ("zh_hans_hk", "cjk")
+    ];
+
+    let mut map = HashMap::new();
+
+    for (lang_code, analyser) in languages {
+        let mut obj: HashMap<String, String> = HashMap::new();
+
+        obj.insert("type".to_string(), "text".to_string());
+        obj.insert("analyzer".to_string(), analyser.to_string());
+
+        map.insert(lang_code.to_string(), obj);
+    }
+
+    map
 }

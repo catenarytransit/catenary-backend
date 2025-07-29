@@ -126,6 +126,7 @@ pub async fn stops_into_postgres_and_elastic(
             };
 
             let mut name_translations: HashMap<String, String> = HashMap::new();
+            let mut name_translations_shortened_locales_elastic: HashMap<String, String> = HashMap::new();
 
             if let Some(avaliable_langs_to_check) = &avaliable_langs_to_check {
                 for lang in avaliable_langs_to_check {
@@ -141,6 +142,12 @@ pub async fn stops_into_postgres_and_elastic(
 
                         if let Some(translated_result) = translated_result_by_record_id {
                             name_translations.insert(lang.to_string(), translated_result.clone());
+
+                            name_shortening_hash_insert_elastic(
+                                        &mut name_translations_shortened_locales_elastic,
+                                        &lang,
+                                        translated_result.as_str()
+                                    );
                         }
 
                         if let Some(gtfs_name) = &stop.name {
@@ -156,6 +163,13 @@ pub async fn stops_into_postgres_and_elastic(
                             if let Some(translated_result) = translated_result_by_value_lookup {
                                 name_translations
                                     .insert(lang.to_string(), translated_result.clone());
+
+                                    name_shortening_hash_insert_elastic(
+                                        &mut name_translations_shortened_locales_elastic,
+                                        &lang,
+                                        translated_result.as_str()
+                                    );
+                                    
                             }
                         }
                     }
@@ -165,14 +179,22 @@ pub async fn stops_into_postgres_and_elastic(
             if let Some(default_lang) = &default_lang {
                 if let Some(name) = &name {
                     name_translations.insert(default_lang.clone(), name.clone());
+
+                    name_shortening_hash_insert_elastic(
+                                        &mut name_translations_shortened_locales_elastic,
+                                        &LanguageTag::parse(default_lang.as_str()).unwrap(),
+                                        name.as_str()
+                                    );
                 }
             } else {
                 if let Some(name) = &name {
                     name_translations.insert("en".to_string(), name.clone());
                 }
             }
+            
 
             let jsonified_translations = serde_json::to_value(&name_translations).unwrap();
+            let jsonified_translations_for_elastic = serde_json::to_value(&name_translations_shortened_locales_elastic).unwrap();
 
             let mut route_names_for_elastic: Vec<String> = vec![];
 
@@ -323,7 +345,7 @@ pub async fn stops_into_postgres_and_elastic(
                         "chateau": chateau_id.to_string(),
                         "attempt_id": attempt_id.to_string(),
                         "onestop_feed_id": feed_id.to_string(),
-                        "stop_name": name_translations.clone(),
+                        "stop_name": jsonified_translations_for_elastic,
                         "point": {
                             "lat": point.as_ref().unwrap().y,
                             "lon": point.as_ref().unwrap().x,
@@ -387,4 +409,19 @@ pub fn titlecase_process_new_nooption(input: &String) -> String {
 
 pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
     input.map(titlecase_process_new_nooption)
+}
+
+pub fn name_shortening_hash_insert_elastic(h: &mut HashMap<String, String>, lang: &LanguageTag, translated_result: &str) {
+    if lang.primary_language() != "zh" || lang.primary_language() != "ja"  {
+        h.insert(
+            lang.primary_language().to_lowercase().to_string(),
+            translated_result.to_string()
+        );
+    } else {
+        let lang_tag = lang.to_string().replace("-","_").to_lowercase().to_string();
+
+        h.insert(
+            lang_tag, translated_result.to_string()
+        );
+    }
 }
