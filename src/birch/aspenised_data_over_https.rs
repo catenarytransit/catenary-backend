@@ -28,6 +28,7 @@ pub struct AspenisedVehicleTripInfoOutput {
     pub start_time: Option<String>,
     pub start_date: Option<String>,
     pub schedule_relationship: Option<u8>,
+    pub delay: Option<i32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,6 +57,7 @@ fn convert_to_output(input: &AspenisedVehiclePosition) -> AspenisedVehiclePositi
             start_time: trip.start_time.clone(),
             start_date: trip.start_date.map(|x| x.format("%Y%m%d").to_string()),
             schedule_relationship: trip.schedule_relationship.as_ref().map(|x| x.into()),
+            delay: trip.delay
         }),
         None => None,
     };
