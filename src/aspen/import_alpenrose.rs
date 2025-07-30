@@ -9,6 +9,7 @@ use catenary::aspen_dataset::option_i32_to_occupancy_status;
 use catenary::aspen_dataset::option_i32_to_schedule_relationship;
 use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use chrono::TimeZone;
 use chrono_tz::Africa::Sao_Tome;
 use compact_str::CompactString;
 use diesel::prelude::*;
@@ -22,10 +23,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
-use std::str::FromStr;
-use chrono::TimeZone;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct MetrolinkTrackData {
@@ -944,25 +944,24 @@ pub async fn new_rt_data(
                         });
 
                         let start_date = vehicle_pos
-                        .trip
-                        .as_ref()
-                        .map(|trip| {
-                            match &trip.start_date {
-                            Some(start_date) => {
-                                match catenary::throw_away_start_dates.contains(&chateau_id) {
-                                    true => None,
-                                    false => match chrono::NaiveDate::parse_from_str(
-                                        &start_date,
-                                        "%Y%m%d",
-                                    ) {
-                                        Ok(start_date) => Some(start_date),
-                                        Err(_) => None,
-                                    },
+                            .trip
+                            .as_ref()
+                            .map(|trip| match &trip.start_date {
+                                Some(start_date) => {
+                                    match catenary::throw_away_start_dates.contains(&chateau_id) {
+                                        true => None,
+                                        false => match chrono::NaiveDate::parse_from_str(
+                                            &start_date,
+                                            "%Y%m%d",
+                                        ) {
+                                            Ok(start_date) => Some(start_date),
+                                            Err(_) => None,
+                                        },
+                                    }
                                 }
-                            }
-                            None => None,
-                        }
-                        }).flatten();
+                                None => None,
+                            })
+                            .flatten();
 
                         let pos_aspenised = AspenisedVehiclePosition {
                             trip: vehicle_pos
@@ -1126,8 +1125,6 @@ pub async fn new_rt_data(
                             None => None,
                         };
 
-                        
-
                         let itinerary_rows = compressed_trip
                             .map(|compressed_trip| {
                                 itinerary_pattern_id_to_itinerary_pattern_rows
@@ -1143,10 +1140,10 @@ pub async fn new_rt_data(
                             .flatten();
 
                         let timezone = itinerary_meta
-                        .map(|itinerary_meta| {
-                            chrono_tz::Tz::from_str(itinerary_meta.timezone.as_str()).ok()
-                        })
-                        .flatten();
+                            .map(|itinerary_meta| {
+                                chrono_tz::Tz::from_str(itinerary_meta.timezone.as_str()).ok()
+                            })
+                            .flatten();
 
                         let scheduled_stop_ids_hashset = itinerary_rows.map(|itinerary_rows| {
                             itinerary_rows
@@ -1429,13 +1426,10 @@ pub async fn new_rt_data(
                                             .filter(|stu| {
                                                 stu.arrival.is_some() || stu.departure.is_some()
                                             })
-                                            .filter(|stu| {
-                                                match stu.stop_id {
-                                                    Some(stop_id) => {
-                                                         scheduled_stop_ids_hashset.contains(stop_id.as_str())
-                                                    },
-                                                    None => false
-                                                }
+                                            .filter(|stu| match &stu.stop_id {
+                                                Some(stop_id) => scheduled_stop_ids_hashset
+                                                    .contains(stop_id.as_str()),
+                                                None => false,
                                             })
                                             .collect::<Vec<AspenisedStopTimeUpdate>>();
 
@@ -1445,14 +1439,14 @@ pub async fn new_rt_data(
                                             .filter(|stu| {
                                                 let mut single_number = None;
 
-                                                if let Some(departure) = stu.departure {
+                                                if let Some(departure) = &stu.departure {
                                                     if let Some(time) = departure.time {
                                                         single_number = Some(time);
                                                     }
                                                 }
 
                                                 if single_number.is_none() {
-                                                    if let Some(arrival) = stu.arrival {
+                                                    if let Some(arrival) = &stu.arrival {
                                                         if let Some(time) = arrival.time {
                                                             single_number = Some(time);
                                                         }
@@ -1471,18 +1465,16 @@ pub async fn new_rt_data(
 
                                         match filtered_stu_after_now.len() > 0 {
                                             true => {
-                                                let stu = filtered_stu_after_now[0];
+                                                let stu = &filtered_stu_after_now[0];
 
                                                 let relevant_stop_rows = itinerary_rows
                                                     .iter()
-                                                    .filter(|itinerary_row| {
-                                                        match stu.stop_id {
-                                                            Some(stu_stop_id) => {
-                                                                itinerary_row.stop_id == stu_stop_id.as_str()
-                                                            },
-                                                            _ => false
+                                                    .filter(|itinerary_row| match &stu.stop_id {
+                                                        Some(stu_stop_id) => {
+                                                            itinerary_row.stop_id
+                                                                == stu_stop_id.as_str()
                                                         }
-                                                        
+                                                        _ => false,
                                                     })
                                                     .collect::<Vec<&_>>();
 
@@ -1499,19 +1491,26 @@ pub async fn new_rt_data(
                                                                             as u16,
                                                                     )
                                                             })
-                                                            .collect::<Vec<_>>().get(0).map(|v| &***v),
+                                                            .collect::<Vec<_>>()
+                                                            .get(0)
+                                                            .map(|v| &***v),
                                                     };
 
                                                 match itinerary_stop_row {
                                                     Some(itinerary_stop_row) => {
                                                         match compressed_trip {
                                                             Some(compressed_trip) => {
-                                                                match trip_update.trip.start_date {
+                                                                match &trip_update.trip.start_date {
                                                                     None => None,
                                                                     Some(start_date) => {
                                                                         let reference_time_noon = chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap();
 
-                                                                        let noon_on_start_date = chrono::NaiveDateTime::new(start_date, reference_time_noon);
+                                                                        let chrono_start_date = chrono::NaiveDate::parse_from_str(
+                                                                            &start_date,
+                                                                            "%Y%m%d",
+                                                                        ).unwrap();
+
+                                                                        let noon_on_start_date = chrono::NaiveDateTime::new(chrono_start_date, reference_time_noon);
 
                                                                         let noon_on_start_date_with_tz =
                                                                         timezone.unwrap().from_local_datetime(&noon_on_start_date).unwrap();
@@ -1535,7 +1534,7 @@ pub async fn new_rt_data(
                                                                             start_time + chrono::Duration::seconds(interpolated_time_since_start.into())
                                                                         );
 
-                                                                        let delay_arrival = stu.arrival.map(|arrival| arrival.time.map(|arrival_time| 
+                                                                        let delay_arrival = stu.arrival.as_ref().map(|arrival| arrival.time.map(|arrival_time| 
                                                                             {
                                                                                 let mut delay_arrival = None;
 
@@ -1551,7 +1550,7 @@ pub async fn new_rt_data(
                                                                             }
                                                                         )).flatten().flatten();
 
-                                                                        let delay_departure = stu.departure.map(|departure| departure.time.map(|departure_time| 
+                                                                        let delay_departure = stu.departure.as_ref().map(|departure| departure.time.map(|departure_time| 
                                                                             {
                                                                                 let mut delay_departure = None;
 
@@ -1892,11 +1891,50 @@ pub async fn new_rt_data(
     }
 
     //go back after and relookup all the trip delays
-    aspenised_vehicle_positions.iter_mut().map(|(k,v)|
+    for (k, v) in aspenised_vehicle_positions.iter_mut() {
         {
+            let trip = v.trip.as_mut();
 
+            if let Some(trip) = trip {
+                //lookup trip update now
+
+                if let Some(trip_id) = &trip.trip_id {
+                    let trip_update_ids =
+                        trip_updates_lookup_by_trip_id_to_trip_update_ids.get(trip_id.as_str());
+
+                    if let Some(trip_update_ids) = trip_update_ids {
+                        let possible_trip_updates = trip_update_ids
+                            .iter()
+                            .map(|update_id| trip_updates.get(update_id))
+                            .filter(|x| x.is_some())
+                            .map(|x| x.unwrap())
+                            .collect::<Vec<_>>();
+
+                        if possible_trip_updates.len() > 0 {
+                            let trip_update = match possible_trip_updates.len() {
+                                1 => Some(possible_trip_updates[0]),
+                                _ => possible_trip_updates
+                                    .iter()
+                                    .filter(|possible_match| {
+                                        possible_match.trip.start_date == trip.start_date.clone()
+                                            && possible_match.trip.start_time
+                                                == trip.start_time.clone()
+                                    })
+                                    .next()
+                                    .map(|v| &**v),
+                            };
+
+                            if let Some(trip_update) = trip_update {
+                                if let Some(delay) = trip_update.delay {
+                                    trip.delay = Some(delay);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
-    );
+    }
     //shrink the hashmaps
 
     aspenised_vehicle_positions.shrink_to_fit();
