@@ -691,6 +691,7 @@ pub struct AspenisedVehicleTripInfo {
     pub start_time: Option<String>,
     pub start_date: Option<chrono::NaiveDate>,
     pub schedule_relationship: Option<AspenisedTripScheduleRelationship>,
+    pub delay: Option<i32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
