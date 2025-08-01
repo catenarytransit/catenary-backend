@@ -1034,12 +1034,12 @@ pub async fn new_rt_data(
                             vehicle: vehicle_pos.vehicle.as_ref().map(|vehicle| {
                                 AspenisedVehicleDescriptor {
                                     id: match realtime_feed_id.as_str() {
-                                        "f-c28-bctransit~victoriaregionaltransitsystem~rt" =>  vehicle.id.clone().replace("313135".to_string(), "").clone(),
+                                        "f-c28-bctransit~victoriaregionaltransitsystem~rt" =>  vehicle.id.map(|x| x.as_str().replace("313135", "").to_string()),
                                         _ => vehicle.id.clone(),
                                     },
                                     label: match realtime_feed_id.as_str() {
                                         "f-trimet~rt" => vehicle.id.clone(),
-                                        "f-c28-bctransit~victoriaregionaltransitsystem~rt" =>  vehicle.label.clone().replace("313135".to_string(), "").clone(),
+                                        "f-c28-bctransit~victoriaregionaltransitsystem~rt" =>  vehicle.label.map(|x| x.as_str().replace("313135", "").to_string()),
                                         _ => vehicle.label.clone(),
                                     },
                                     license_plate: vehicle.license_plate.clone(),
