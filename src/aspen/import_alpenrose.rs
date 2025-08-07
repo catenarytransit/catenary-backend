@@ -1561,7 +1561,7 @@ pub async fn new_rt_data(
 
                                                                                 let few_days_before = naive_date_now - chrono::Days::new(5);
 
-                                                                                for d in few_days_before.iter_days().take(5) {
+                                                                                for d in few_days_before.iter_days().take(10) {
 
                                                                                     let midnight_tz = timezone.unwrap().with_ymd_and_hms(d.year(), d.month(), d.day(), 12, 0, 0).unwrap() - chrono::Duration::hours(12);
 
