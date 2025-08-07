@@ -1565,7 +1565,7 @@ pub async fn new_rt_data(
 
                                                                                     let midnight_tz = timezone.unwrap().with_ymd_and_hms(d.year(), d.month(), d.day(), 12, 0, 0).unwrap() - chrono::Duration::hours(12);
 
-                                                                                    let schedules = midnight_tz + chrono::Duration::seconds(timescheduled as i64);
+                                                                                    let schedules = midnight_tz + chrono::Duration::seconds(timescheduled as i64) + chrono::Duration::seconds(compressed_trip.start_time as i64);
 
                                                                                     let service = calendar_structure.get(compressed_trip.service_id.as_str());
 
