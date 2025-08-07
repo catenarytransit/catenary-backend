@@ -10,6 +10,7 @@ use catenary::aspen_dataset::option_i32_to_schedule_relationship;
 use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use chrono::TimeZone;
+use chrono::Utc;
 use chrono_tz::Africa::Sao_Tome;
 use compact_str::CompactString;
 use diesel::prelude::*;
@@ -1500,8 +1501,68 @@ pub async fn new_rt_data(
                                                     Some(itinerary_stop_row) => {
                                                         match compressed_trip {
                                                             Some(compressed_trip) => {
-                                                                match &trip_update.trip.start_date {
-                                                                    None => None,
+                                                                let start_date = match &trip_update
+                                                                    .trip
+                                                                    .start_date
+                                                                {
+                                                                    None => {
+                                                                        let timeschedule_number_since_midnight = match itinerary_stop_row.arrival_time_since_start {
+                                                                            Some(x) => Some(x),
+                                                                            None => match itinerary_stop_row.arrival_time_since_start {
+                                                                                Some(x) => Some(x),
+                                                                                None => None
+                                                                            }
+                                                                        };
+
+                                                                        match timeschedule_number_since_midnight {
+                                                                            Some(timescheduled) => {
+                                                                                
+                                                                        let mut guesses_date_times = vec![];
+
+                                                                                let now = Utc::now();
+
+                                                                                let now_in_tz = now.with_timezone(&timezone.unwrap());
+
+                                                                                let naive_date_now = now_in_tz.date_naive();
+
+                                                                                let few_days_before = naive_date_now - chrono::Days::new(5);
+
+                                                                                for d in few_days_before.iter_days().take(5) {
+                                                                                    let midnight = d.and_hms_opt(12, 0, 0).unwrap() - chrono::Duration::hours(12);
+
+                                                                                    let schedules = midnight + chrono::Duration::seconds(timescheduled as i64);
+
+                                                                                    guesses_date_times.push((d, schedules.and_utc().timestamp()));
+                                                                                }
+
+                                                                                let mut chosen_rt_comparison_number = None;
+
+                                                                                if let Some(arrival) = &stu.arrival {
+                                                                                    if let Some(a_time) = arrival.time {
+                                                                                        chosen_rt_comparison_number = Some(a_time);
+                                                                                    }
+                                                                                }
+
+                                                                                if chosen_rt_comparison_number.is_none() {
+                                                                                    if let Some(departure) = &stu.departure {
+                                                                                        if let Some(d_time) = departure.time {
+                                                                                            chosen_rt_comparison_number = Some(d_time);
+                                                                                        }
+                                                                                    }
+                                                                                }
+
+                                                                                match chosen_rt_comparison_number {
+                                                                                    None => None,
+                                                                                    Some(chosen_rt_comparison_number) => {
+                                                                                        guesses_date_times.sort_by_key(|x| (x.1 - chosen_rt_comparison_number).abs());
+
+                                                                                        guesses_date_times.get(0).map(|x| x.0)
+                                                                                    }
+                                                                                }
+                                                                            },
+                                                                            None => None
+                                                                        }
+                                                                    }
                                                                     Some(start_date) => {
                                                                         let reference_time_noon = chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap();
 
@@ -1510,7 +1571,16 @@ pub async fn new_rt_data(
                                                                             "%Y%m%d",
                                                                         ).unwrap();
 
-                                                                        let noon_on_start_date = chrono::NaiveDateTime::new(chrono_start_date, reference_time_noon);
+                                                                        Some(chrono_start_date)
+                                                                    }
+                                                                };
+
+                                                                match &start_date {
+                                                                    None => None,
+                                                                    Some(start_date) => {
+                                                                        let reference_time_noon = chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+
+                                                                        let noon_on_start_date = chrono::NaiveDateTime::new(*start_date, reference_time_noon);
 
                                                                         let noon_on_start_date_with_tz =
                                                                         timezone.unwrap().from_local_datetime(&noon_on_start_date).unwrap();
