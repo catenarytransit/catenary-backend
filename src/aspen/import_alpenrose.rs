@@ -1542,7 +1542,7 @@ pub async fn new_rt_data(
                                                                     None => {
                                                                         let timeschedule_number_since_midnight = match itinerary_stop_row.arrival_time_since_start {
                                                                             Some(x) => Some(x),
-                                                                            None => match itinerary_stop_row.arrival_time_since_start {
+                                                                            None => match itinerary_stop_row.departure_time_since_start {
                                                                                 Some(x) => Some(x),
                                                                                 None => None
                                                                             }
@@ -1570,12 +1570,10 @@ pub async fn new_rt_data(
                                                                                     let service = calendar_structure.get(compressed_trip.service_id.as_str());
 
                                                                                     if let Some(service) = service {
+                                                                                        if catenary::datetime_in_service(&service, d) {
                                                                                         
-
-                                                                                    if catenary::datetime_in_service(&service, d) {
-                                                                                        
-                                                                                    guesses_date_times.push((d, schedules.timestamp()));
-                                                                                    }
+                                                                                        guesses_date_times.push((d, schedules.timestamp()));
+                                                                                     }
 
                                                                                     }
                                                                                 }
@@ -1609,8 +1607,6 @@ pub async fn new_rt_data(
                                                                         }
                                                                     }
                                                                     Some(start_date) => {
-                                                                        let reference_time_noon = chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap();
-
                                                                         let chrono_start_date = chrono::NaiveDate::parse_from_str(
                                                                             &start_date,
                                                                             "%Y%m%d",
