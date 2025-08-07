@@ -9,6 +9,7 @@ use catenary::aspen_dataset::option_i32_to_occupancy_status;
 use catenary::aspen_dataset::option_i32_to_schedule_relationship;
 use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use chrono::Datelike;
 use chrono::TimeZone;
 use chrono::Utc;
 use chrono_tz::Africa::Sao_Tome;
@@ -27,7 +28,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
-use chrono::Datelike;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct MetrolinkTrackData {
@@ -470,31 +470,33 @@ pub async fn new_rt_data(
 
         let trip_id_to_trip = trip_id_to_trip;
 
-        let service_ids_to_lookup = trip_id_to_trip.iter().map(|x| x.1.service_id.clone())
-        .collect::<AHashSet<CompactString>>().into_iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        let service_ids_to_lookup = trip_id_to_trip
+            .iter()
+            .map(|x| x.1.service_id.clone())
+            .collect::<AHashSet<CompactString>>()
+            .into_iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<String>>();
 
         let calendar = catenary::schema::gtfs::calendar::dsl::calendar
-        .filter(
-            catenary::schema::gtfs::calendar::dsl::chateau.eq(&chateau_id),
-        )
-        .filter(
-            catenary::schema::gtfs::calendar::dsl::service_id.eq_any(&service_ids_to_lookup)
-        )
-        .load::<catenary::models::Calendar>(conn).await?;
+            .filter(catenary::schema::gtfs::calendar::dsl::chateau.eq(&chateau_id))
+            .filter(
+                catenary::schema::gtfs::calendar::dsl::service_id.eq_any(&service_ids_to_lookup),
+            )
+            .load::<catenary::models::Calendar>(conn)
+            .await?;
 
-    let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
-        .filter(
-            catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(&chateau_id),
-        )
-        .filter(
-            catenary::schema::gtfs::calendar_dates::dsl::service_id.eq_any(&service_ids_to_lookup)
-        )
-        .load::<catenary::models::CalendarDate>(conn).await?;
+        let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+            .filter(catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(&chateau_id))
+            .filter(
+                catenary::schema::gtfs::calendar_dates::dsl::service_id
+                    .eq_any(&service_ids_to_lookup),
+            )
+            .load::<catenary::models::CalendarDate>(conn)
+            .await?;
 
-        let calendar_structure = catenary::make_calendar_structure_from_pg_single_chateau(
-            calendar,
-            calendar_dates
-        );
+        let calendar_structure =
+            catenary::make_calendar_structure_from_pg_single_chateau(calendar, calendar_dates);
 
         let missing_trip_ids = trip_ids_to_lookup
             .iter()
