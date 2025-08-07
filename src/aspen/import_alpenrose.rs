@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
+use chrono::Datelike;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct MetrolinkTrackData {
@@ -462,11 +463,38 @@ pub async fn new_rt_data(
             trip_id_to_trip.insert(trip.trip_id.clone(), trip);
         }
 
+        //fill in the data from the cache
         for (trip_id, trips_in_cache) in compressed_trip_internal_cache.compressed_trips {
             trip_id_to_trip.insert(trip_id.clone(), trips_in_cache.clone());
         }
 
         let trip_id_to_trip = trip_id_to_trip;
+
+        let service_ids_to_lookup = trip_id_to_trip.iter().map(|x| x.1.service_id.clone())
+        .collect::<AHashSet<CompactString>>().into_iter().map(|x| x.to_string()).collect::<Vec<String>>();
+
+        let calendar = catenary::schema::gtfs::calendar::dsl::calendar
+        .filter(
+            catenary::schema::gtfs::calendar::dsl::chateau.eq(&chateau_id),
+        )
+        .filter(
+            catenary::schema::gtfs::calendar::dsl::service_id.eq_any(&service_ids_to_lookup)
+        )
+        .load::<catenary::models::Calendar>(conn).await?;
+
+    let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+        .filter(
+            catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(&chateau_id),
+        )
+        .filter(
+            catenary::schema::gtfs::calendar_dates::dsl::service_id.eq_any(&service_ids_to_lookup)
+        )
+        .load::<catenary::models::CalendarDate>(conn).await?;
+
+        let calendar_structure = catenary::make_calendar_structure_from_pg_single_chateau(
+            calendar,
+            calendar_dates
+        );
 
         let missing_trip_ids = trip_ids_to_lookup
             .iter()
@@ -1532,11 +1560,22 @@ pub async fn new_rt_data(
                                                                                 let few_days_before = naive_date_now - chrono::Days::new(5);
 
                                                                                 for d in few_days_before.iter_days().take(5) {
-                                                                                    let midnight = d.and_hms_opt(12, 0, 0).unwrap() - chrono::Duration::hours(12);
 
-                                                                                    let schedules = midnight + chrono::Duration::seconds(timescheduled as i64);
+                                                                                    let midnight_tz = timezone.unwrap().with_ymd_and_hms(d.year(), d.month(), d.day(), 12, 0, 0).unwrap() - chrono::Duration::hours(12);
 
-                                                                                    guesses_date_times.push((d, schedules.and_utc().timestamp()));
+                                                                                    let schedules = midnight_tz + chrono::Duration::seconds(timescheduled as i64);
+
+                                                                                    let service = calendar_structure.get(compressed_trip.service_id.as_str());
+
+                                                                                    if let Some(service) = service {
+                                                                                        
+
+                                                                                    if catenary::datetime_in_service(&service, d) {
+                                                                                        
+                                                                                    guesses_date_times.push((d, schedules.timestamp()));
+                                                                                    }
+
+                                                                                    }
                                                                                 }
 
                                                                                 let mut chosen_rt_comparison_number = None;
@@ -1558,7 +1597,7 @@ pub async fn new_rt_data(
                                                                                 match chosen_rt_comparison_number {
                                                                                     None => None,
                                                                                     Some(chosen_rt_comparison_number) => {
-                                                                                        guesses_date_times.sort_by_key(|x| (x.1 - chosen_rt_comparison_number).abs());
+                                                                                        guesses_date_times.sort_by_key(|x| (chosen_rt_comparison_number - x.1).abs());
 
                                                                                         guesses_date_times.get(0).map(|x| x.0)
                                                                                     }

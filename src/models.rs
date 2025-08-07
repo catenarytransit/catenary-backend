@@ -291,10 +291,12 @@ pub struct Stop {
     pub allowed_spatial_query: bool,
 }
 
+#[diesel(check_for_backend(Pg))]
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
 #[diesel(table_name = crate::schema::gtfs::calendar)]
 pub struct Calendar {
     pub onestop_feed_id: String,
+    pub attempt_id: String,
     pub service_id: String,
     pub monday: bool,
     pub tuesday: bool,
@@ -306,9 +308,9 @@ pub struct Calendar {
     pub gtfs_start_date: chrono::NaiveDate,
     pub gtfs_end_date: chrono::NaiveDate,
     pub chateau: String,
-    pub attempt_id: String,
 }
 
+#[diesel(check_for_backend(Pg))]
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
 #[diesel(table_name = crate::schema::gtfs::calendar_dates)]
 pub struct CalendarDate {
