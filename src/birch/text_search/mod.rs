@@ -168,7 +168,7 @@ pub async fn text_search_v1(
                                 return 1.0;
                               }
                               if (doc['route_types'].contains(2)) {
-                                return 3.0;
+                                return 4.0;
                               }
                               if (doc['route_types'].contains(1)) {
                                 return 2.0;
