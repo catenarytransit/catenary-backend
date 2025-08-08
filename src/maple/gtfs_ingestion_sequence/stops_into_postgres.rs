@@ -190,7 +190,7 @@ pub async fn stops_into_postgres_and_elastic(
                 }
             } else {
                 if let Some(name) = &name {
-                    name_translations.insert("en".to_string(), name.clone());
+                    name_translations_shortened_locales_elastic.insert("en".to_string(), name.clone());
                 }
             }
 
