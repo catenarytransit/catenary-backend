@@ -21,69 +21,69 @@ pub async fn delete_attempt_objects_elasticsearch(
     let delete_from_stops = elasticsearch
         .delete_by_query(DeleteByQueryParts::Index(&["stops"]))
         .body(json!({
-            "query": {
-                "bool": {
-                "filter": [
-                    {
-                    "term": {
-                        "attempt_id": attempt_id,
-                    }
-                    },
-                    {
-                    "term": {
-                        "onestop_feed_id": feed_id
-                    }
-                    }
-                ]
+        "query": {
+            "bool": {
+            "filter": [
+                {
+                "term": {
+                    "attempt_id": attempt_id,
                 }
+                },
+                {
+                "term": {
+                    "onestop_feed_id": feed_id
+                }
+                }
+            ]
             }
-            }))
+        }
+        }))
         .send()
         .await?;
 
     let delete_from_agencies = elasticsearch
         .delete_by_query(DeleteByQueryParts::Index(&["agencies"]))
         .body(json!({
-            "query": {
-                "bool": {
-                "filter": [
-                    {
-                    "term": {
-                        "attempt_id": attempt_id,
-                    }
-                    },
-                    {
-                    "term": {
-                        "onestop_feed_id": feed_id
-                    }
-                    }
-                ]
+        "query": {
+            "bool": {
+            "filter": [
+                {
+                "term": {
+                    "attempt_id": attempt_id,
                 }
+                },
+                {
+                "term": {
+                    "onestop_feed_id": feed_id
+                }
+                }
+            ]
             }
-            }))
+        }
+        }))
         .send()
         .await?;
 
     let delete_from_routes = elasticsearch
         .delete_by_query(DeleteByQueryParts::Index(&["routes"]))
         .body(json!({
-            "query": {
-                "bool": {
-                "filter": [
-                    {
-                    "term": {
-                        "attempt_id": attempt_id,
-                    }
-                    },
-                    {
-                    "term": {
-                        "onestop_feed_id": feed_id
-                    }
-                    }
-                ]
+        "query": {
+            "bool": {
+            "filter": [
+                {
+                "term": {
+                    "attempt_id": attempt_id,
                 }
+                },
+                {
+                "term": {
+                    "onestop_feed_id": feed_id
+                }
+                }
+            ]
             }
-            }))
+        }
+        }))
         .send()
         .await?;
 

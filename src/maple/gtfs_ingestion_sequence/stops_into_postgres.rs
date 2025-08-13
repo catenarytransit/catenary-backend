@@ -3,6 +3,7 @@
 // Attribution cannot be removed
 
 use catenary::enum_to_int::*;
+use catenary::name_shortening_hash_insert_elastic;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::stops::dsl::stops as stops_table;
 use crossbeam;
@@ -190,7 +191,8 @@ pub async fn stops_into_postgres_and_elastic(
                 }
             } else {
                 if let Some(name) = &name {
-                    name_translations_shortened_locales_elastic.insert("en".to_string(), name.clone());
+                    name_translations_shortened_locales_elastic
+                        .insert("en".to_string(), name.clone());
                 }
             }
 
@@ -395,7 +397,7 @@ pub async fn stops_into_postgres_and_elastic(
             print_err = false;
         }
 
-        if print_err {  
+        if print_err {
             println!("elastic stop response: {:#?}", response_body);
         }
     }
@@ -419,25 +421,4 @@ pub fn titlecase_process_new_nooption(input: &String) -> String {
 
 pub fn titlecase_process_new(input: Option<&String>) -> Option<String> {
     input.map(titlecase_process_new_nooption)
-}
-
-pub fn name_shortening_hash_insert_elastic(
-    h: &mut HashMap<String, String>,
-    lang: &LanguageTag,
-    translated_result: &str,
-) {
-    if lang.primary_language() != "zh" || lang.primary_language() != "ja" {
-        h.insert(
-            lang.primary_language().to_lowercase().to_string(),
-            translated_result.to_string(),
-        );
-    } else {
-        let lang_tag = lang
-            .to_string()
-            .replace("-", "_")
-            .to_lowercase()
-            .to_string();
-
-        h.insert(lang_tag, translated_result.to_string());
-    }
 }

@@ -976,3 +976,24 @@ pub fn serde_value_to_translated_hashmap(
         None => None,
     }
 }
+
+pub fn name_shortening_hash_insert_elastic(
+    h: &mut std::collections::HashMap<String, String>,
+    lang: &language_tags::LanguageTag,
+    translated_result: &str,
+) {
+    if lang.primary_language() != "zh" || lang.primary_language() != "ja" {
+        h.insert(
+            lang.primary_language().to_lowercase().to_string(),
+            translated_result.to_string(),
+        );
+    } else {
+        let lang_tag = lang
+            .to_string()
+            .replace("-", "_")
+            .to_lowercase()
+            .to_string();
+
+        h.insert(lang_tag, translated_result.to_string());
+    }
+}
