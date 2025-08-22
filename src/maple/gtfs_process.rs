@@ -65,7 +65,10 @@ pub async fn gtfs_process_feed(
     this_download_data: &DownloadedFeedsInformation,
     elasticclient: &elasticsearch::Elasticsearch,
 ) -> Result<GtfsSummary, Box<dyn Error + Send + Sync>> {
-    let regex_train_starting = Regex::new(r"^(train)").case_insensitive(true).unwrap();
+    let regex_train_starting = regex::RegexBuilder::new(r"^(train)")
+        .case_insensitive(true)
+        .build()
+        .unwrap();
 
     println!("Begin feed {} processing", feed_id);
     let start = Instant::now();
