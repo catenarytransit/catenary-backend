@@ -26,6 +26,7 @@ use catenary::route_id_transform;
 use catenary::schedule_filtering::include_only_route_types;
 use catenary::schedule_filtering::minimum_day_filter;
 use chrono::NaiveDate;
+use compact_str::CompactString;
 use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
 use geo::BoundingRect;
@@ -36,6 +37,7 @@ use gtfs_translations::TranslationResult;
 use gtfs_translations::translation_csv_text_to_translations;
 use itertools::Itertools;
 use prost::Message;
+use regex::Regex;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -63,6 +65,8 @@ pub async fn gtfs_process_feed(
     this_download_data: &DownloadedFeedsInformation,
     elasticclient: &elasticsearch::Elasticsearch,
 ) -> Result<GtfsSummary, Box<dyn Error + Send + Sync>> {
+    let regex_train_starting = Regex::new(r"^(train)").case_insensitive(true).unwrap();
+
     println!("Begin feed {} processing", feed_id);
     let start = Instant::now();
     let conn_pool = arc_conn_pool.as_ref();
@@ -848,7 +852,11 @@ pub async fn gtfs_process_feed(
                         .unwrap()
                         .direction_id,
                     start_time: compressed_trip_raw.start_time,
-                    trip_short_name: compressed_trip_raw.trip_short_name.clone(),
+                    trip_short_name: compressed_trip_raw.trip_short_name.clone().map(|x| {
+                        CompactString::from(
+                            regex_train_starting.replace(x.as_str(), "").to_string(),
+                        )
+                    }),
                     block_id: compressed_trip_raw.block_id.clone(),
                     wheelchair_accessible: compressed_trip_raw.wheelchair_accessible,
                     bikes_allowed: compressed_trip_raw.bikes_allowed,
