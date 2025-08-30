@@ -578,7 +578,15 @@ pub async fn departures_at_stop(
     let stop_tz_txt = match &stop.timezone {
         Some(tz) => tz.clone(),
         None => {
-            tz_search::lookup(point_raw.y, point_raw.x).unwrap_or_else(|| String::from("Etc/GMT"))
+            match -90.0 <= point_raw.y
+                && point_raw.y <= 90.0
+                && -180.0 <= point_raw.x
+                && point_raw.x <= 180.0
+            {
+                true => tz_search::lookup(point_raw.y, point_raw.x)
+                    .unwrap_or_else(|| String::from("Etc/GMT")),
+                false => String::from("Etc/GMT"),
+            }
         }
     };
 
