@@ -109,10 +109,10 @@ pub async fn stops_into_postgres_and_elastic(
                 continue;
             }
 
-            if point.as_ref().unwrap().x < -180.0
-                || point.as_ref().unwrap().x > 180.0
-                || point.as_ref().unwrap().y < -90.0
-                || point.as_ref().unwrap().y > 90.0
+            if !(point.as_ref().unwrap().x >= -180.0
+                && point.as_ref().unwrap().x <= 180.0
+                && point.as_ref().unwrap().y >= -90.0
+                && point.as_ref().unwrap().y <= 90.0)
             {
                 println!(
                     "Deleted feed id {} stop id {} for being out of bounds",
@@ -123,7 +123,14 @@ pub async fn stops_into_postgres_and_elastic(
 
             let timezone = match &stop.timezone {
                 Some(tz) => stop.timezone.clone(),
-                None => tz_search::lookup(point.as_ref().unwrap().y, point.as_ref().unwrap().x),
+                None => match -90.0 <= point.as_ref().unwrap().y
+                    && point.as_ref().unwrap().y <= 90.0
+                    && -180.0 <= point.as_ref().unwrap().x
+                    && point.as_ref().unwrap().x <= 180.0
+                {
+                    true => tz_search::lookup(point.as_ref().unwrap().y, point.as_ref().unwrap().x),
+                    false => Some(String::from("Etc/GMT")),
+                },
             };
 
             let mut name_translations: HashMap<String, String> = HashMap::new();
