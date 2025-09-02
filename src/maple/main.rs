@@ -54,6 +54,7 @@ use std::sync::Arc;
 pub mod correction_of_transfers;
 use crate::cleanup::delete_attempt_objects;
 use crate::cleanup::wipe_whole_feed;
+use discord_webhook_rs::{Author, Embed, Field, Footer, Webhook};
 
 mod assign_production_tables;
 mod chateau_postprocess;
@@ -94,6 +95,8 @@ fn get_threads_gtfs() -> usize {
 }
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+    let discord_log_env = std::env::var("DISCORD_LOG");
+
     let elastic_url = std::env::var("ELASTICSEARCH_URL").unwrap();
 
     let elasticclient = catenary::elasticutils::single_elastic_connect(elastic_url.as_str())?;
@@ -197,6 +200,25 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
     // The DMFR result dataset looks genuine, with over 200 pieces of data!
     if dmfr_result.feed_hashmap.len() > 200 && dmfr_result.operator_hashmap.len() > 100 {
+        if let Ok(discord_log_env) = &discord_log_env {
+            let hook_result = Webhook::new(discord_log_env.as_str())
+                .username("Catenary Maple")
+                .add_embed(
+                    Embed::new()
+                        .title("Maple Downloads Starting")
+                        .description(format!(
+                            "Downloading {} feeds, start time at {}",
+                            dmfr_result
+                                .feed_hashmap
+                                .values()
+                                .filter(|x| x.spec == dmfr::FeedSpec::Gtfs)
+                                .count(),
+                            chrono::Utc::now().to_rfc3339()
+                        )),
+                )
+                .send();
+        }
+
         let eligible_feeds = transitland_download::download_return_eligible_feeds(
             &gtfs_temp_storage,
             &dmfr_result,
@@ -474,6 +496,20 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             println!("Processing {} feeds", total_feeds_to_process);
 
+            if let Ok(discord_log_env) = &discord_log_env {
+                let hook_result =
+                    Webhook::new(discord_log_env.as_str())
+                        .username("Catenary Maple")
+                        .add_embed(Embed::new().title("Feed processing starting").description(
+                            format!(
+                                "Processing {} feeds, start time at {}",
+                                total_feeds_to_process,
+                                chrono::Utc::now().to_rfc3339()
+                            ),
+                        ))
+                        .send();
+            }
+
             futures::stream::iter(
                 feeds_to_process
                 .into_iter()
@@ -744,6 +780,20 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     }
 
     println!("Maple ingest completed");
+
+    if let Ok(discord_log_env) = &discord_log_env {
+        let hook_result = Webhook::new(discord_log_env.as_str())
+            .username("Catenary Maple")
+            .add_embed(
+                Embed::new()
+                    .title("Ingestion completed")
+                    .description(format!(
+                        "Time of completion: {}",
+                        chrono::Utc::now().to_rfc3339()
+                    )),
+            )
+            .send();
+    }
 
     println!("Deleting temp data");
 
