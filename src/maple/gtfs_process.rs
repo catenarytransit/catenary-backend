@@ -209,6 +209,32 @@ pub async fn gtfs_process_feed(
             gtfs,
             &Vec::from([String::from("Wiener Linien GmbH & Co KG")]),
         ),
+        "f-dr5r-mtasubway" => {
+            //https://www.mta.info/document/134521
+            //Align the GTFS schedule schedule ids for the New York City Subway to the realtime ids by dropping the first underscore
+            let mut gtfs = gtfs;
+
+            let mut new_trips = HashMap::new();
+
+            for (trip_id, trip) in gtfs.trips {
+                let new_trip_id_split = trip_id.split_once('_');
+
+                let matched_new_trip_id = match new_trip_id_split {
+                    None => trip_id,
+                    Some(new_trip_id_split) => new_trip_id_split.1.to_string()
+                };
+
+                let mut trip = trip;
+
+                trip.id = matched_new_trip_id.clone();
+
+                new_trips.insert(matched_new_trip_id, trip);
+            }
+        
+            gtfs.trips = new_trips;
+
+            gtfs
+        },
         _ => gtfs,
     };
 
