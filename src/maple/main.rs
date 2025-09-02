@@ -203,6 +203,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         if let Ok(discord_log_env) = &discord_log_env {
             let hook_result = Webhook::new(discord_log_env.as_str())
                 .username("Catenary Maple")
+                .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
                 .add_embed(
                     Embed::new()
                         .title("Maple Downloads Starting")
@@ -497,17 +498,19 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             println!("Processing {} feeds", total_feeds_to_process);
 
             if let Ok(discord_log_env) = &discord_log_env {
-                let hook_result =
-                    Webhook::new(discord_log_env.as_str())
-                        .username("Catenary Maple")
-                        .add_embed(Embed::new().title("Feed processing starting").description(
-                            format!(
+                let hook_result = Webhook::new(discord_log_env.as_str())
+                    .username("Catenary Maple")
+                    .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
+                    .add_embed(
+                        Embed::new()
+                            .title("Feed processing starting")
+                            .description(format!(
                                 "Processing {} feeds, start time at {}",
                                 total_feeds_to_process,
                                 chrono::Utc::now().to_rfc3339()
-                            ),
-                        ))
-                        .send();
+                            )),
+                    )
+                    .send();
             }
 
             futures::stream::iter(
@@ -784,6 +787,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     if let Ok(discord_log_env) = &discord_log_env {
         let hook_result = Webhook::new(discord_log_env.as_str())
             .username("Catenary Maple")
+            .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
             .add_embed(
                 Embed::new()
                     .title("Ingestion completed")
