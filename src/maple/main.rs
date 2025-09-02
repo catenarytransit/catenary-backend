@@ -204,6 +204,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             let hook_result = Webhook::new(discord_log_env.as_str())
                 .username("Catenary Maple")
                 .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
+                .content("")
                 .add_embed(
                     Embed::new()
                         .title("Maple Downloads Starting")
@@ -501,6 +502,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 let hook_result = Webhook::new(discord_log_env.as_str())
                     .username("Catenary Maple")
                     .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
+                .content("")
                     .add_embed(
                         Embed::new()
                             .title("Feed processing starting")
@@ -788,6 +790,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         let hook_result = Webhook::new(discord_log_env.as_str())
             .username("Catenary Maple")
             .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
+            
+                .content("")
             .add_embed(
                 Embed::new()
                     .title("Ingestion completed")
