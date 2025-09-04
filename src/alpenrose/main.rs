@@ -192,7 +192,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let chicago_bytes: Option<bytes::Bytes> = match schedule_response {
         Ok(schedule_resp) => Some(schedule_resp.bytes().await?),
         Err(e) => {
-            eprintln!("{:#?}", e);
+            eprintln!("Failed to parse chicago bytes: {:#?}", e);
             None
         }
     };
