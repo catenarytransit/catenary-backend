@@ -660,6 +660,17 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         //print output
                                         eprintln!("GTFS process failed for feed {},\n {:?}", feed_id, gtfs_process_result.unwrap_err());
     
+                                        let hook_result = Webhook::new(discord_log_env.as_str())
+                                        .username("Catenary Maple")
+                                        .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
+                                        .content("")
+                                        .add_embed(
+                                            Embed::new()
+                                                .title("GTFS error")
+                                                .description(format!("feed import failed for `{}`,\n {:?}", feed_id, gtfs_process_result.unwrap_err())),
+                                        )
+                                        .send();
+
                                         //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
                                         use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
                                         
