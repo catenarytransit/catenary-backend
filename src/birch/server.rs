@@ -881,7 +881,7 @@ pub async fn nominatim_details(query: web::Query<QueryNominatimDetails>) -> impl
                                                 .with_opt_value("class", query.osm_class.as_ref());
 
                                             let url_to_send_node =
-                                                format!("{}{}", base_url, n_attempt);
+                                                format!("{}{}", base_url, r_attempt);
 
                                             let node_fetch =
                                                 client.get(url_to_send_node).send().await;
