@@ -155,6 +155,7 @@ elasticsearch = "9.0.0-alpha.1"
 language-tags = { version = "0.3.2", features = ["serde"] }
 discord-message = "0.1.0"
 discord-webhook-rs = "1.0.5"
+query-string-builder = "0.6.0"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
