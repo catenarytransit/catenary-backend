@@ -18,6 +18,7 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use tokio::sync::Mutex;
 use url::{ParseError, Url};
 
 #[derive(Clone)]
@@ -258,6 +259,8 @@ pub async fn download_return_eligible_feeds(
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = 128;
 
+    let total_bytes_downloaded: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+
     if !std::path::Path::new(gtfs_temp_storage).exists() {
         fs::create_dir(gtfs_temp_storage)
             .expect("zip directory doesn't exist but could not create it");
@@ -307,6 +310,7 @@ pub async fn download_return_eligible_feeds(
                     let client = client.clone();
                     let download_progress = Arc::clone(&download_progress);
                     let pool = Arc::clone(pool);
+                    let total_bytes_downloaded = Arc::clone(&total_bytes_downloaded);
                     async move {
                             
                             // get hostname
@@ -365,6 +369,13 @@ pub async fn download_return_eligible_feeds(
                                     if let Ok(bytes_result) = bytes_result {
                                         let data = bytes_result.as_ref();
                                         let byte_length = data.len();
+
+                                        let mut total_bytes_downloaded_unlock = total_bytes_downloaded.lock().await;
+
+                                        *total_bytes_downloaded_unlock += byte_length;
+
+                                        drop(total_bytes_downloaded_unlock);
+
                                         // fast hashing algorithm of the bytes
                                         let hash = seahash::hash(data);
             

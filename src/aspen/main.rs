@@ -70,8 +70,8 @@ mod metrolink_california_additions;
 use crate::id_cleanup::gtfs_rt_correct_route_id_string;
 use catenary::parse_gtfs_rt_message;
 use rand::Rng;
-use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 mod alerts_responder;
 mod aspen_assignment;
 use catenary::rt_recent_history::RtCacheEntry;
@@ -1028,8 +1028,8 @@ impl AspenRpc for AspenServer {
                 let fast_hash_of_routes = catenary::fast_hash(
                     &aspenised_data
                         .vehicle_routes_cache
-                        .values()
-                        .collect::<Vec<&AspenisedVehicleRouteCache>>(),
+                        .iter()
+                        .collect::<BTreeMap<_, _>>(),
                 );
 
                 Some(GetVehicleLocationsResponse {
