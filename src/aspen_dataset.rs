@@ -43,6 +43,7 @@ impl CompressedTripInternalCache {
 pub struct AspenisedData {
     pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
     pub vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache>,
+    pub vehicle_routes_cache_hash: u64,
     pub vehicle_label_to_gtfs_id: AHashMap<String, String>,
     //id to trip update
     pub trip_updates: AHashMap<CompactString, AspenisedTripUpdate>,

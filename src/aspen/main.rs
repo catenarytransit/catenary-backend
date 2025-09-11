@@ -1025,12 +1025,7 @@ impl AspenRpc for AspenServer {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
-                let fast_hash_of_routes = catenary::fast_hash(
-                    &aspenised_data
-                        .vehicle_routes_cache
-                        .iter()
-                        .collect::<BTreeMap<_, _>>(),
-                );
+                let fast_hash_of_routes = aspenised_data.vehicle_routes_cache_hash;
 
                 Some(GetVehicleLocationsResponse {
                     vehicle_route_cache: match existing_fasthash_of_routes {

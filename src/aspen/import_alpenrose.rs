@@ -23,6 +23,7 @@ use regex::Regex;
 use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -2074,12 +2075,16 @@ pub async fn new_rt_data(
 
     //Insert data back into process-wide authoritative_data_store
 
+    let fast_hash_of_routes =
+        catenary::fast_hash(&vehicle_routes_cache.iter().collect::<BTreeMap<_, _>>());
+
     match authoritative_data_store.entry(chateau_id.to_string()) {
         scc::hash_map::Entry::Occupied(mut oe) => {
             let mut data = oe.get_mut();
             *data = AspenisedData {
                 vehicle_positions: aspenised_vehicle_positions,
                 vehicle_routes_cache: vehicle_routes_cache,
+                vehicle_routes_cache_hash: fast_hash_of_routes,
                 trip_updates: trip_updates,
                 trip_updates_lookup_by_trip_id_to_trip_update_ids:
                     trip_updates_lookup_by_trip_id_to_trip_update_ids,
@@ -2106,6 +2111,7 @@ pub async fn new_rt_data(
             ve.insert_entry(AspenisedData {
                 vehicle_positions: aspenised_vehicle_positions,
                 vehicle_routes_cache: vehicle_routes_cache,
+                vehicle_routes_cache_hash: fast_hash_of_routes,
                 trip_updates: trip_updates,
                 trip_updates_lookup_by_trip_id_to_trip_update_ids:
                     trip_updates_lookup_by_trip_id_to_trip_update_ids,
