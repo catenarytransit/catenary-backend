@@ -254,6 +254,44 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             Err(_) => None,
         };
 
+        let total_downloaded_bytes = match &eligible_feeds {
+            Ok(eligible_feeds) => Some(
+                eligible_feeds
+                    .iter()
+                    .map(|x| x.byte_size)
+                    .flat_map(|x| x)
+                    .sum::<u64>(),
+            ),
+            _ => None,
+        };
+
+        let total_downloaded_bytes_to_import = match &eligible_feeds {
+            Ok(eligible_feeds) => Some(
+                eligible_feeds
+                    .iter()
+                    .filter(|download_feed_info| download_feed_info.ingest)
+                    .map(|x| x.byte_size)
+                    .flat_map(|x| x)
+                    .sum::<u64>(),
+            ),
+            _ => None,
+        };
+
+        if let Ok(discord_log_env) = &discord_log_env {
+            let hook_result = Webhook::new(discord_log_env.as_str())
+                .username("Catenary Maple")
+                .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
+                .content("")
+                .add_embed(Embed::new().title("Download finished").description(format!(
+                    "{:?} eligible feeds, {:?} bytes, {:?} bytes to import, time `{}`",
+                    counter_of_eligible_feeds,
+                    total_downloaded_bytes,
+                    total_downloaded_bytes_to_import,
+                    chrono::Utc::now().to_rfc3339()
+                )))
+                .send();
+        }
+
         // debug print to output
         match counter_of_eligible_feeds {
             Some(counter_of_eligible_feeds) => {
