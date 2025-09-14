@@ -12,6 +12,7 @@ pub async fn fetch_mta_lirr_data(
     feed_id: &str,
     client: &reqwest::Client,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
+    /*
     let fetch_url =
         "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=LIRR";
 
@@ -20,33 +21,21 @@ pub async fn fetch_mta_lirr_data(
         .header("Accept-Version", "3.0")
         .send()
         .await;
+     */
 
     let gtfs_rt_trips = get_mta_trips(client, LIRR_TRIPS_FEED).await;
 
-    if let Ok(request) = request {
-        if let Ok(gtfs_rt_trips) = gtfs_rt_trips {
-            let body = request.text().await?;
+    if let Ok(gtfs_rt_trips) = gtfs_rt_trips {
+        let lirr_trip_updates_bytes = gtfs_rt_trips.encode_to_vec();
 
-            let import_data = serde_json::from_str::<Vec<MtaTrain>>(body.as_str());
-
-            if let Ok(import_data) = import_data {
-                let converted = convert(&import_data, MtaRailroad::LIRR, &gtfs_rt_trips);
-
-                let lirr_vehicle_position = catenary::make_feed_from_entity_vec(converted);
-
-                let lirr_vehicle_position_bytes = lirr_vehicle_position.encode_to_vec();
-                let lirr_trip_updates_bytes = gtfs_rt_trips.encode_to_vec();
-
-                send_mta_rail_to_aspen(
-                    etcd,
-                    MtaRailroad::LIRR,
-                    lirr_vehicle_position_bytes,
-                    lirr_trip_updates_bytes,
-                    feed_id,
-                )
-                .await;
-            }
-        }
+        send_mta_rail_to_aspen(
+            etcd,
+            MtaRailroad::LIRR,
+            lirr_trip_updates_bytes.clone(),
+            lirr_trip_updates_bytes,
+            feed_id,
+        )
+        .await;
     }
 
     Ok(())
