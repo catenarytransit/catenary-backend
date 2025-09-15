@@ -286,8 +286,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .add_embed(Embed::new().title("Download finished").description(format!(
                     "{:?} eligible feeds, {:?} bytes, {:?} bytes to import, time `{}`",
                     counter_of_eligible_feeds,
-                    total_downloaded_bytes,
-                    total_downloaded_bytes_to_import,
+                    total_downloaded_bytes.map(|x| bytefmt::format(x)),
+                    total_downloaded_bytes_to_import.map(|x| bytefmt::format(x)),
                     chrono::Utc::now().to_rfc3339()
                 )))
                 .send();
