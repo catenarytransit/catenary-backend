@@ -156,6 +156,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             "f-eurostar",
             //duplicated in delfi data
             "f-nvbw",
+            "f-u0z-vgn",
         ]
         .into_iter()
         .map(String::from),
