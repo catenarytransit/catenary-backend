@@ -529,6 +529,9 @@ pub async fn make_index_and_mappings(
                                      "dynamic": true,
                                      "properties": generate_language_properties()
                                  },
+                                "route_type": {
+                                    "type": "short"
+                                },
                                  "route_name_search": {
                                      "type": "text",
                                      "analyzer": "standard"
