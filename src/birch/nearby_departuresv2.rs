@@ -21,6 +21,7 @@ use catenary::make_calendar_structure_from_pg;
 use catenary::make_degree_length_as_distance_from_point;
 use catenary::make_weekdays;
 use catenary::maple_syrup::DirectionPattern;
+use catenary::models::DirectionPatternMeta;
 use catenary::models::DirectionPatternRow;
 use catenary::models::ItineraryPatternMeta;
 use catenary::models::{CompressedTrip, ItineraryPatternRow};
@@ -72,6 +73,7 @@ pub struct ItineraryPatternRowMerge {
     pub trip_headsign_translations: Option<serde_json::Value>,
     pub timezone: String,
     pub route_id: CompactString,
+    pub stop_headsign_idx: Option<i16>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -100,7 +102,7 @@ pub struct DeparturesDebug {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct DepartingTrip {
+pub struct DepartingStopTime {
     pub trip_id: CompactString,
     pub gtfs_frequency_start_time: Option<CompactString>,
     pub gtfs_schedule_start_day: NaiveDate,
@@ -123,7 +125,7 @@ pub struct DepartingTrip {
 pub struct DepartingHeadsignGroup {
     pub headsign: String,
     pub direction_id: String,
-    pub trips: Vec<DepartingTrip>,
+    pub trips: Vec<DepartingStopTime>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -135,7 +137,7 @@ pub struct DepartureRouteGroup {
     pub short_name: Option<CompactString>,
     pub long_name: Option<String>,
     pub route_type: i16,
-    pub directions: HashMap<String, DepartingHeadsignGroup>,
+    pub directions: HashMap<(String, Option<i16>), DepartingHeadsignGroup>,
     pub closest_distance: f64,
 }
 
@@ -398,8 +400,7 @@ pub async fn nearby_from_coords_v2(
 
     let directions_rows = directions_fetch_sql.unwrap();
 
-    //store the direction id and the index
-    let mut stops_to_directions: HashMap<(String, CompactString), Vec<(u64, u32)>> = HashMap::new();
+    let mut direction_ids_to_lookup: HashMap<String, Vec<String>> = HashMap::new();
 
     //(chateau, stop_id) -> (direction_id, headsign_idx, stop_sequence)
     let mut stops_to_directions_and_headsigns: HashMap<
@@ -409,17 +410,6 @@ pub async fn nearby_from_coords_v2(
 
     for d in directions_rows {
         let id = d.direction_pattern_id.parse::<u64>().unwrap();
-
-        match stops_to_directions.entry((d.chateau.clone(), d.stop_id.clone())) {
-            Entry::Occupied(mut oe) => {
-                let array = oe.get_mut();
-
-                array.push((id, d.stop_sequence));
-            }
-            Entry::Vacant(mut ve) => {
-                ve.insert(vec![(id, d.stop_sequence)]);
-            }
-        }
 
         match stops_to_directions_and_headsigns.entry((d.chateau.clone(), d.stop_id.clone())) {
             Entry::Occupied(mut oe) => {
@@ -431,7 +421,20 @@ pub async fn nearby_from_coords_v2(
                 ve.insert(vec![(id, d.stop_headsign_idx, d.stop_sequence)]);
             }
         }
+
+        match direction_ids_to_lookup.entry(d.chateau.clone()) {
+            Entry::Occupied(mut oe) => {
+                let array = oe.get_mut();
+
+                array.push(d.direction_pattern_id.clone());
+            }
+            Entry::Vacant(mut ve) => {
+                ve.insert(vec![d.direction_pattern_id.clone()]);
+            }
+        }
     }
+
+    let direction_ids_to_lookup = direction_ids_to_lookup;
 
     // put the stops in sorted order
 
@@ -452,24 +455,6 @@ pub async fn nearby_from_coords_v2(
     sorted_order_stops.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
     //sorting finished
-
-    let mut directions_to_closest_stop: HashMap<(String, u64), (CompactString, u32)> =
-        HashMap::new();
-
-    for ((chateau, stop_id), distance_m) in sorted_order_stops.iter() {
-        let direction_at_this_stop = stops_to_directions.get(&(chateau.clone(), stop_id.into()));
-
-        if let Some(direction_at_this_stop) = direction_at_this_stop {
-            for (direction_id, sequence) in direction_at_this_stop {
-                match directions_to_closest_stop.entry((chateau.clone(), *direction_id)) {
-                    Entry::Vacant(ve) => {
-                        ve.insert((stop_id.into(), *sequence));
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
 
     let mut directions_with_headsign_to_closest_stop: HashMap<
         (String, u64, Option<i16>),
@@ -499,7 +484,7 @@ pub async fn nearby_from_coords_v2(
     //write some join, select * from itinerary patterns
 
     //chateau, direction id, stop sequence
-    let directions_idx_to_get = directions_to_closest_stop
+    let directions_idx_to_get = directions_with_headsign_to_closest_stop
         .iter()
         .map(|(k, v)| (k.0.clone(), k.1.to_string(), v.1))
         .collect::<Vec<_>>();
@@ -528,6 +513,47 @@ pub async fn nearby_from_coords_v2(
             .collect::<Vec<String>>()
             .join(",")
     );*/
+
+    let directions_meta_search_list = futures::stream::iter(direction_ids_to_lookup.iter().map(
+        |(chateau, set_of_directions)| {
+            catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                .filter(
+                    catenary::schema::gtfs::direction_pattern_meta::dsl::chateau
+                        .eq(chateau.clone()),
+                )
+                .filter(
+                    catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_id
+                        .eq_any(set_of_directions),
+                )
+                .select(catenary::models::DirectionPatternMeta::as_select())
+                .load::<catenary::models::DirectionPatternMeta>(conn)
+        },
+    ))
+    .buffer_unordered(32)
+    .collect::<Vec<diesel::QueryResult<Vec<DirectionPatternMeta>>>>()
+    .await;
+
+    let mut direction_meta_lookup_table: HashMap<String, HashMap<String, DirectionPatternMeta>> =
+        HashMap::new();
+
+    for result in directions_meta_search_list {
+        if let Ok(result) = result {
+            for row in result {
+                match direction_meta_lookup_table.entry(row.chateau.clone()) {
+                    Entry::Occupied(mut oe) => {}
+                    Entry::Vacant(mut ve) => {
+                        ve.insert(HashMap::new());
+                    }
+                }
+
+                let chateau_sub_entry = direction_meta_lookup_table.get_mut(&row.chateau);
+
+                if let Some(chateau_sub_entry) = chateau_sub_entry {
+                    chateau_sub_entry.insert(row.direction_pattern_id.clone(), row);
+                }
+            }
+        }
+    }
 
     println!("Search for matching itinerary ids");
 
@@ -743,6 +769,7 @@ pub async fn nearby_from_coords_v2(
                             .clone(),
                         timezone: itin_meta_ref.timezone.clone(),
                         route_id: itin_meta_ref.route_id.clone(),
+                        stop_headsign_idx: itinerary.stop_headsign_idx,
                     };
 
                     match itinerary_table.entry((
@@ -1113,66 +1140,100 @@ pub async fn nearby_from_coords_v2(
                         .get_mut(&route.route_id)
                         .unwrap();
 
-                    if !route_group
-                        .directions
-                        .contains_key(trip_grouping[0].direction_pattern_id.as_str())
-                    {
-                        route_group.directions.insert(
-                            trip_grouping[0].direction_pattern_id.clone(),
-                            DepartingHeadsignGroup {
-                                headsign: trip_grouping[0].itinerary_options[0]
-                                    .trip_headsign
-                                    .clone()
-                                    .unwrap_or("".to_string()),
-                                direction_id: trip_grouping[0].direction_pattern_id.clone(),
-                                trips: vec![],
-                            },
-                        );
-                    }
-
-                    let headsign_group = route_group
-                        .directions
-                        .get_mut(trip_grouping[0].direction_pattern_id.as_str())
+                    let direction = direction_meta_lookup_table
+                        .get(chateau_id.as_str())
+                        .unwrap()
+                        .get(&trip_grouping[0].direction_pattern_id)
                         .unwrap();
 
                     let mut already_used_trip_update_id: ahash::AHashSet<String> =
                         ahash::AHashSet::new();
 
-                    for trip in trip_grouping {
+                    for trip in &trip_grouping {
                         if trip.frequencies.is_none() {
-                            let mut is_cancelled: bool = false;
-                            let mut deleted: bool = false;
+                            let mut split_by_headsign_idx: BTreeMap<Option<i16>, Vec<&_>> =
+                                BTreeMap::new();
 
-                            let mut departure_time_rt: Option<u64> = None;
-                            let mut platform: Option<String> = None;
+                            for option in &trip.itinerary_options {
+                                match split_by_headsign_idx.entry(option.stop_headsign_idx) {
+                                    std::collections::btree_map::Entry::Occupied(mut oe) => {
+                                        let list_of_options = oe.get_mut();
 
-                            let stop = stops
-                                .iter()
-                                .find(|x| x.gtfs_id == trip.itinerary_options[0].stop_id);
-
-                            if let Some(stop) = stop {
-                                if let Some(platform_code) = &stop.platform_code {
-                                    platform = Some(platform_code.clone());
+                                        list_of_options.push(option);
+                                    }
+                                    std::collections::btree_map::Entry::Vacant(ve) => {
+                                        ve.insert(vec![option]);
+                                    }
                                 }
                             }
 
-                            if let Some(gtfs_trip_aspenised) = gtfs_trips_aspenised.as_ref() {
-                                if let Some(trip_update_ids) = gtfs_trip_aspenised
-                                    .trip_id_to_trip_update_ids
-                                    .get(trip.trip_id.as_str())
-                                {
-                                    if !trip_update_ids.is_empty() {
-                                        // let trip_update_id = trip_rt[0].clone();
+                            for (headsign_idx, itinerary_options) in split_by_headsign_idx {
+                                let departure_key =
+                                    (trip.direction_pattern_id.clone(), headsign_idx.clone());
 
-                                        let does_trip_set_use_dates = gtfs_trip_aspenised
-                                            .trip_updates
-                                            .get(&trip_update_ids[0])
-                                            .unwrap()
-                                            .trip
-                                            .start_date
-                                            .is_some();
+                                if !route_group.directions.contains_key(&departure_key) {
+                                    route_group.directions.insert(
+                                        departure_key.clone(),
+                                        DepartingHeadsignGroup {
+                                            headsign: match headsign_idx {
+                                                Some(idx) => direction
+                                                    .stop_headsigns_unique_list
+                                                    .as_ref()
+                                                    .unwrap()
+                                                    .get(idx as usize)
+                                                    .unwrap()
+                                                    .as_ref()
+                                                    .unwrap()
+                                                    .clone(),
+                                                None => itinerary_options[0]
+                                                    .trip_headsign
+                                                    .clone()
+                                                    .unwrap_or("".to_string()),
+                                            },
+                                            direction_id: trip_grouping[0]
+                                                .direction_pattern_id
+                                                .clone(),
+                                            trips: vec![],
+                                        },
+                                    );
+                                }
 
-                                        let trip_updates: Vec<(&String, &AspenisedTripUpdate)> =
+                                let headsign_group =
+                                    route_group.directions.get_mut(&departure_key).unwrap();
+
+                                let mut is_cancelled: bool = false;
+                                let mut deleted: bool = false;
+
+                                let mut departure_time_rt: Option<u64> = None;
+                                let mut platform: Option<String> = None;
+
+                                let stop = stops
+                                    .iter()
+                                    .find(|x| x.gtfs_id == trip.itinerary_options[0].stop_id);
+
+                                if let Some(stop) = stop {
+                                    if let Some(platform_code) = &stop.platform_code {
+                                        platform = Some(platform_code.clone());
+                                    }
+                                }
+
+                                if let Some(gtfs_trip_aspenised) = gtfs_trips_aspenised.as_ref() {
+                                    if let Some(trip_update_ids) = gtfs_trip_aspenised
+                                        .trip_id_to_trip_update_ids
+                                        .get(trip.trip_id.as_str())
+                                    {
+                                        if !trip_update_ids.is_empty() {
+                                            // let trip_update_id = trip_rt[0].clone();
+
+                                            let does_trip_set_use_dates = gtfs_trip_aspenised
+                                                .trip_updates
+                                                .get(&trip_update_ids[0])
+                                                .unwrap()
+                                                .trip
+                                                .start_date
+                                                .is_some();
+
+                                            let trip_updates: Vec<(&String, &AspenisedTripUpdate)> =
                                         trip_update_ids
                                             .iter()
                                             .map(|x| {
@@ -1197,7 +1258,7 @@ pub async fn nearby_from_coords_v2(
 
                                                         //what is the current trip offset from the reference start of service date
 
-                                                        let trip_offset = trip.itinerary_options[0].departure_time_since_start.unwrap_or(trip.itinerary_options[0].arrival_time_since_start.unwrap_or(trip.itinerary_options[0].interpolated_time_since_start.unwrap_or(0))) as u64;
+                                                        let trip_offset = itinerary_options[0].departure_time_since_start.unwrap_or(itinerary_options[0].arrival_time_since_start.unwrap_or(itinerary_options[0].interpolated_time_since_start.unwrap_or(0))) as u64;
 
                                                         // get current naive date in the timezone from the earliest item in the trip update
 
@@ -1274,11 +1335,11 @@ pub async fn nearby_from_coords_v2(
                                            // })
                                             .collect();
 
-                                        if trip_updates.len() > 0 {
-                                            let trip_update = trip_updates[0].1;
-                                            let trip_update_id = trip_updates[0].0;
+                                            if trip_updates.len() > 0 {
+                                                let trip_update = trip_updates[0].1;
+                                                let trip_update_id = trip_updates[0].0;
 
-                                            if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) {
+                                                if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) {
                                             is_cancelled = true;
                                         } else if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Deleted)
                                         {
@@ -1289,7 +1350,7 @@ pub async fn nearby_from_coords_v2(
                                                     x.stop_id
                                                         .as_ref()
                                                         .map(|compare| compare.as_str())
-                                                        == Some(&trip.itinerary_options[0].stop_id)
+                                                        == Some(&itinerary_options[0].stop_id)
                                                 });
 
                                             if let Some(relevant_stop_time_update) =
@@ -1318,62 +1379,82 @@ pub async fn nearby_from_coords_v2(
                                                 }
                                             }
                                         }
+                                            }
                                         }
                                     }
                                 }
-                            }
 
-                            headsign_group.trips.push(DepartingTrip {
-                                trip_id: trip.trip_id.clone(),
-                                gtfs_schedule_start_day: trip.trip_service_date,
-                                departure_realtime: departure_time_rt,
-                                arrival_schedule: None,
-                                arrival_realtime: None,
-                                stop_id: trip.itinerary_options[0].stop_id.clone(),
-                                trip_short_name: trip.trip_short_name.clone(),
-                                tz: trip.timezone.as_ref().unwrap().name().to_string(),
-                                is_frequency: trip.frequencies.is_some(),
-                                platform: platform,
-                                level_id: None,
-                                departure_schedule: match trip.itinerary_options[0]
-                                    .departure_time_since_start
-                                {
-                                    Some(departure_time_since_start) => Some(
-                                        trip.reference_start_of_service_date.timestamp() as u64
-                                            + trip.trip_start_time as u64
-                                            + departure_time_since_start as u64,
-                                    ),
-                                    None => {
-                                        match trip.itinerary_options[0].arrival_time_since_start {
-                                            Some(arrival) => Some(
-                                                trip.reference_start_of_service_date.timestamp()
-                                                    as u64
-                                                    + trip.trip_start_time as u64
-                                                    + arrival as u64,
-                                            ),
-                                            None => match trip.itinerary_options[0]
-                                                .interpolated_time_since_start
-                                            {
-                                                Some(interpolated) => Some(
+                                headsign_group.trips.push(DepartingStopTime {
+                                    trip_id: trip.trip_id.clone(),
+                                    gtfs_schedule_start_day: trip.trip_service_date,
+                                    departure_realtime: departure_time_rt,
+                                    arrival_schedule: None,
+                                    arrival_realtime: None,
+                                    stop_id: itinerary_options[0].stop_id.clone(),
+                                    trip_short_name: trip.trip_short_name.clone(),
+                                    tz: trip.timezone.as_ref().unwrap().name().to_string(),
+                                    is_frequency: trip.frequencies.is_some(),
+                                    platform: platform,
+                                    level_id: None,
+                                    departure_schedule: match itinerary_options[0]
+                                        .departure_time_since_start
+                                    {
+                                        Some(departure_time_since_start) => Some(
+                                            trip.reference_start_of_service_date.timestamp() as u64
+                                                + trip.trip_start_time as u64
+                                                + departure_time_since_start as u64,
+                                        ),
+                                        None => {
+                                            match itinerary_options[0].arrival_time_since_start {
+                                                Some(arrival) => Some(
                                                     trip.reference_start_of_service_date.timestamp()
                                                         as u64
                                                         + trip.trip_start_time as u64
-                                                        + interpolated as u64,
+                                                        + arrival as u64,
                                                 ),
-                                                None => None,
-                                            },
+                                                None => match itinerary_options[0]
+                                                    .interpolated_time_since_start
+                                                {
+                                                    Some(interpolated) => Some(
+                                                        trip.reference_start_of_service_date
+                                                            .timestamp()
+                                                            as u64
+                                                            + trip.trip_start_time as u64
+                                                            + interpolated as u64,
+                                                    ),
+                                                    None => None,
+                                                },
+                                            }
                                         }
-                                    }
-                                },
-                                is_interpolated: trip.itinerary_options[0]
-                                    .interpolated_time_since_start
-                                    .is_some(),
-                                gtfs_frequency_start_time: None,
-                                cancelled: is_cancelled,
-                                deleted: deleted,
-                            });
+                                    },
+                                    is_interpolated: itinerary_options[0]
+                                        .interpolated_time_since_start
+                                        .is_some(),
+                                    gtfs_frequency_start_time: None,
+                                    cancelled: is_cancelled,
+                                    deleted: deleted,
+                                });
+                            }
                         } else {
                             //duplicate trip based on frequency
+
+                            let temp_key = (trip_grouping[0].direction_pattern_id.clone(), None);
+
+                            if !route_group.directions.contains_key(&temp_key) {
+                                route_group.directions.insert(
+                                    temp_key.clone(),
+                                    DepartingHeadsignGroup {
+                                        headsign: trip_grouping[0].itinerary_options[0]
+                                            .trip_headsign
+                                            .clone()
+                                            .unwrap_or("".to_string()),
+                                        direction_id: trip_grouping[0].direction_pattern_id.clone(),
+                                        trips: vec![],
+                                    },
+                                );
+                            }
+
+                            let headsign_group = route_group.directions.get_mut(&temp_key).unwrap();
 
                             let frequencies = trip.frequencies.as_ref().unwrap();
 
@@ -1598,7 +1679,7 @@ pub async fn nearby_from_coords_v2(
                                     }
                                 }
 
-                                headsign_group.trips.push(DepartingTrip {
+                                headsign_group.trips.push(DepartingStopTime {
                                     trip_id: trip.trip_id.clone(),
                                     gtfs_schedule_start_day: trip.trip_service_date,
                                     departure_realtime: departure_time_rt,
@@ -1658,42 +1739,38 @@ pub async fn nearby_from_coords_v2(
                         }
                     }
 
-                    headsign_group
-                        .trips
-                        .sort_by_key(|x| x.departure_schedule.unwrap_or(0));
+                    for (group_id, group) in route_group.directions.iter_mut() {
+                        group
+                            .trips
+                            .sort_by_key(|x| x.departure_schedule.unwrap_or(0));
 
-                    let stop = stops_table
-                        .get(
-                            &(
-                                chateau_id.clone(),
-                                headsign_group.trips[0].stop_id.to_string(),
-                            )
-                                .clone(),
-                        )
-                        .unwrap();
+                        let stop = stops_table
+                            .get(&(chateau_id.clone(), group.trips[0].stop_id.to_string()).clone())
+                            .unwrap();
 
-                    if !stops_answer.contains_key(chateau_id) {
-                        stops_answer.insert(chateau_id.clone(), AHashMap::new());
-                    }
+                        if !stops_answer.contains_key(chateau_id) {
+                            stops_answer.insert(chateau_id.clone(), AHashMap::new());
+                        }
 
-                    let stop_group = stops_answer.get_mut(chateau_id).unwrap();
+                        let stop_group = stops_answer.get_mut(chateau_id).unwrap();
 
-                    if !stop_group.contains_key(headsign_group.trips[0].stop_id.as_str()) {
-                        stop_group.insert(
-                            headsign_group.trips[0].stop_id.clone(),
-                            StopOutput {
-                                gtfs_id: (&stop.0.gtfs_id).into(),
-                                name: stop.0.name.clone().unwrap_or("".to_string()),
-                                lat: stop.0.point.as_ref().unwrap().x,
-                                lon: stop.0.point.as_ref().unwrap().y,
-                                timezone: stop.0.timezone.clone(),
-                                url: stop.0.url.clone(),
-                            },
-                        );
-                    }
+                        if !stop_group.contains_key(group.trips[0].stop_id.as_str()) {
+                            stop_group.insert(
+                                group.trips[0].stop_id.clone(),
+                                StopOutput {
+                                    gtfs_id: (&stop.0.gtfs_id).into(),
+                                    name: stop.0.name.clone().unwrap_or("".to_string()),
+                                    lat: stop.0.point.as_ref().unwrap().x,
+                                    lon: stop.0.point.as_ref().unwrap().y,
+                                    timezone: stop.0.timezone.clone(),
+                                    url: stop.0.url.clone(),
+                                },
+                            );
+                        }
 
-                    if stop.1 < route_group.closest_distance {
-                        route_group.closest_distance = stop.1;
+                        if stop.1 < route_group.closest_distance {
+                            route_group.closest_distance = stop.1;
+                        }
                     }
                 }
 
