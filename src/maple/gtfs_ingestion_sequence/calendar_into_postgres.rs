@@ -49,7 +49,11 @@ pub async fn calendar_into_postgres(
     let mut vec_of_calendar_dates = Vec::new();
 
     for (service_id, calendar_dates) in &gtfs.calendar_dates {
-        for date in calendar_dates {
+        let mut calendar_dedup = calendar_dates.clone();
+
+        calendar_dedup.dedup();
+
+        for date in calendar_dedup {
             let calendar_date_pg = catenary::models::CalendarDate {
                 onestop_feed_id: feed_id.to_string(),
                 service_id: date.service_id.to_string(),

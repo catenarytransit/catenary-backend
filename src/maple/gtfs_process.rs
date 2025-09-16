@@ -7,6 +7,7 @@ use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
 use crate::DownloadedFeedsInformation;
+use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::shape_colour_calculator::ShapeToColourResponse;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::stops_associated_items::*;
@@ -38,6 +39,7 @@ use gtfs_translations::translation_csv_text_to_translations;
 use itertools::Itertools;
 use prost::Message;
 use regex::Regex;
+use rgb::RGB;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -933,9 +935,20 @@ pub async fn gtfs_process_feed(
         .routes
         .iter()
         .map(|(route_id, route)| {
-            let colour = fix_background_colour_rgb_feed_route(feed_id, route.color, route);
-            let text_colour =
-                fix_foreground_colour_rgb_feed(feed_id, route.color, route.text_color);
+            let colour = fix_background_colour_rgb_feed_route(
+                feed_id,
+                route
+                    .color
+                    .unwrap_or_else(|| colour_correction::DEFAULT_BACKGROUND),
+                route,
+            );
+            let text_colour = fix_foreground_colour_rgb_feed(
+                feed_id,
+                route
+                    .color
+                    .unwrap_or_else(|| colour_correction::DEFAULT_BACKGROUND),
+                route.text_color.unwrap_or_else(|| RGB::new(0, 0, 0)),
+            );
 
             let colour_pg = format!("#{:02x}{:02x}{:02x}", colour.r, colour.g, colour.b);
             let text_colour_pg = format!(

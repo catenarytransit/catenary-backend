@@ -2,9 +2,11 @@ use rgb::RGB;
 
 pub const WHITE_RGB: RGB<u8> = RGB::new(255, 255, 255);
 
+pub const DEFAULT_BACKGROUND: RGB<u8> = RGB::new(14, 165, 233);
+
 pub fn fix_background_colour_rgb(background: RGB<u8>) -> RGB<u8> {
     if background == RGB::new(255, 255, 255) || background == RGB::new(0, 0, 0) {
-        RGB::new(14, 165, 233)
+        DEFAULT_BACKGROUND
     } else {
         background
     }
