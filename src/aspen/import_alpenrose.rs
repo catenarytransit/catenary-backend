@@ -1156,6 +1156,10 @@ pub async fn new_rt_data(
                                     }
                                 }
                             }
+
+                            if pos_aspenised.route_type == 2 {
+                                pos_aspenised.route_type = 0;
+                            }
                         }
 
                         let pos_aspenised = vehicle_pos_supplement(
