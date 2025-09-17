@@ -1112,7 +1112,7 @@ pub async fn new_rt_data(
                                                 let split =
                                                     vehicle_id.split('-').collect::<Vec<&str>>();
 
-                                                let attempted_number = vehicle_id.parse::<u32>();
+                                                let attempted_number = split[0].parse::<u32>();
 
                                                 if let Ok(attempted_number) = attempted_number {
                                                     let new_route_type = match attempted_number {
@@ -1153,35 +1153,6 @@ pub async fn new_rt_data(
                                                     pos_aspenised.route_type = new_route_type;
                                                 }
                                             }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if realtime_feed_id.as_str() == "f-metro~losangeles~bus~rt" {
-                            if let Some(vehicle_info) = vehicle_pos.vehicle.as_ref() {
-                                if let Some(vehicle_id) = &vehicle_info.id {
-                                    if vehicle_id.contains("-") && vehicle_pos.trip.is_none() {
-                                        let split = vehicle_id.split('-').collect::<Vec<&str>>();
-
-                                        let attempted_number = vehicle_id.parse::<u32>();
-
-                                        if let Ok(attempted_number) = attempted_number {
-                                            let new_route_type = match attempted_number {
-                                                //Siemens P2000
-                                                201..=250 => 0,
-                                                301..=302 => 0,
-                                                //AnsaldoBreda P2550
-                                                701..=750 => 0,
-                                                1001..=1235 => 0,
-                                                //Breda A650
-                                                500..=699 => 1,
-                                                4000..=4064 => 1,
-                                                _ => 0,
-                                            };
-
-                                            pos_aspenised.route_type = new_route_type;
                                         }
                                     }
                                 }
