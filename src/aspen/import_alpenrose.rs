@@ -1159,6 +1159,16 @@ pub async fn new_rt_data(
                             }
                         }
 
+                        if realtime_feed_id.as_str() == "northcountytransitdistrict" {
+                            if let Some(vehicle_info) = vehicle_pos.vehicle.as_ref() {
+                                if let Some(vehicle_id) = &vehicle_info.id {
+                                    if vehicle_id.contains("CSTR") {
+                                        pos_aspenised.route_type = 2;
+                                    }
+                                }
+                            }
+                        }
+
                         let pos_aspenised = vehicle_pos_supplement(
                             pos_aspenised,
                             &fetch_supplemental_data_positions_metrolink,
