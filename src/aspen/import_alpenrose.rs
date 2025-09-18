@@ -1159,7 +1159,7 @@ pub async fn new_rt_data(
                             }
                         }
 
-                        if realtime_feed_id.as_str() == "northcountytransitdistrict" {
+                        if realtime_feed_id.as_str() == "f-northcountrytransitdistrict~rt" {
                             if let Some(vehicle_info) = vehicle_pos.vehicle.as_ref() {
                                 if let Some(vehicle_id) = &vehicle_info.id {
                                     if vehicle_id.contains("CSTR") {
