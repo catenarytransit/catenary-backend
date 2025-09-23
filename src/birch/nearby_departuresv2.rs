@@ -258,7 +258,7 @@ impl From<DepartureRouteGroup> for DepartureRouteGroupExport {
 
             let entries_per_direction = new_departures_map.get_mut(direction_id.as_str()).unwrap();
 
-            entries_per_direction.insert(format!("{:?}",direction_sub_name), prev_v);
+            entries_per_direction.insert(format!("{:?}", direction_sub_name), prev_v);
         }
 
         DepartureRouteGroupExport {
