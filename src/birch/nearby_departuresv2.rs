@@ -141,6 +141,19 @@ pub struct DepartureRouteGroup {
     pub closest_distance: f64,
 }
 
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct DepartureRouteGroupExport {
+    pub chateau_id: String,
+    pub route_id: CompactString,
+    pub color: Option<CompactString>,
+    pub text_color: Option<CompactString>,
+    pub short_name: Option<CompactString>,
+    pub long_name: Option<String>,
+    pub route_type: i16,
+    pub directions: AHashMap<String, AHashMap<String, DepartingHeadsignGroup>>,
+    pub closest_distance: f64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ValidTripSet {
     pub chateau_id: String,
@@ -228,9 +241,38 @@ pub struct DepartingTripsDataAnswer {
     pub number_of_stops_searched_through: usize,
     pub bus_limited_metres: f64,
     pub rail_and_other_limited_metres: f64,
-    pub departures: Vec<DepartureRouteGroup>,
+    pub departures: Vec<DepartureRouteGroupExport>,
     pub stop: HashMap<String, AHashMap<CompactString, StopOutput>>,
     pub debug: DeparturesDebug,
+}
+
+impl From<DepartureRouteGroup> for DepartureRouteGroupExport {
+    fn from(prev: DepartureRouteGroup) -> Self {
+        let mut new_departures_map: AHashMap<String, AHashMap<String, DepartingHeadsignGroup>> =
+            AHashMap::new();
+
+        for ((direction_id, direction_sub_name), prev_v) in prev.directions {
+            if !new_departures_map.contains_key(direction_id.as_str()) {
+                new_departures_map.insert(direction_id.clone(), AHashMap::new());
+            }
+
+            let entries_per_direction = new_departures_map.get_mut(direction_id.as_str()).unwrap();
+
+            entries_per_direction.insert(format!("{:?}",direction_sub_name), prev_v);
+        }
+
+        DepartureRouteGroupExport {
+            chateau_id: prev.chateau_id,
+            route_id: prev.route_id,
+            color: prev.color,
+            text_color: prev.text_color,
+            short_name: prev.short_name,
+            long_name: prev.long_name,
+            route_type: prev.route_type,
+            directions: new_departures_map,
+            closest_distance: prev.closest_distance,
+        }
+    }
 }
 
 #[actix_web::get("/nearbydeparturesfromcoordsv2")]
@@ -1793,7 +1835,7 @@ pub async fn nearby_from_coords_v2(
                 number_of_stops_searched_through: stops.len(),
                 bus_limited_metres: bus_distance_limit as f64,
                 rail_and_other_limited_metres: rail_and_other_distance_limit as f64,
-                departures: departures,
+                departures: departures.into_iter().map(|x| x.into()).collect::<Vec<_>>(),
                 stop: stops_answer,
                 debug: DeparturesDebug {
                     stop_lookup_ms: end_stops_duration.as_millis(),
