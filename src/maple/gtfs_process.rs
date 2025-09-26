@@ -93,6 +93,15 @@ pub async fn gtfs_process_feed(
             gtfs.print_stats();
             gtfs
         }
+        "f-amtrak~sanjoaquin" => {
+            let mut gtfs = gtfs;
+
+            for (trip_id, trip) in gtfs.trips.iter_mut() {
+                trip.trip_headsign = None;
+            }
+
+            gtfs
+        }
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
             //there's 8184 school buses in the feed. I'm removing them lmfao.
             let mut gtfs = gtfs;
