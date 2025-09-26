@@ -99,9 +99,7 @@ pub async fn gtfs_process_feed(
             for (trip_id, trip) in gtfs.trips.iter_mut() {
                 let last_stop = trip.stop_times.last().as_ref().unwrap().stop.clone();
 
-                trip.trip_headsign = Some(
-                    last_stop.name.as_ref().unwrap().clone()
-                );
+                trip.trip_headsign = Some(last_stop.name.as_ref().unwrap().clone());
             }
 
             gtfs
