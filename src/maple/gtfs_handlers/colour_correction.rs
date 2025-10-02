@@ -4,17 +4,20 @@ pub const WHITE_RGB: RGB<u8> = RGB::new(255, 255, 255);
 
 pub const DEFAULT_BACKGROUND: RGB<u8> = RGB::new(14, 165, 233);
 
-pub fn fix_background_colour_rgb(background: RGB<u8>) -> RGB<u8> {
-    if background == RGB::new(255, 255, 255) || background == RGB::new(0, 0, 0) {
+pub fn fix_background_colour_rgb(background: Option<RGB<u8>>) -> RGB<u8> {
+    if background.is_none()
+        || background == Some(RGB::new(255, 255, 255))
+        || background == Some(RGB::new(0, 0, 0))
+    {
         DEFAULT_BACKGROUND
     } else {
-        background
+        background.unwrap_or_else(|| DEFAULT_BACKGROUND)
     }
 }
 
 pub fn fix_background_colour_rgb_feed_route(
     feed_id: &str,
-    background: RGB<u8>,
+    background: Option<RGB<u8>>,
     route: &gtfs_structures::Route,
 ) -> RGB<u8> {
     match feed_id {
@@ -193,7 +196,7 @@ pub fn fix_background_colour_rgb_feed_route(
                 _ => fix_background_colour_rgb(background),
             }
         }
-        "f-9q5-metro~losangeles" => match background == WHITE_RGB {
+        "f-9q5-metro~losangeles" => match background == None {
             true => RGB::new(225, 103, 16),
             false => {
                 let metroid = &route.id.split('-').collect::<Vec<&str>>()[0];
@@ -235,18 +238,21 @@ pub fn fix_background_colour_rgb_feed_route(
     }
 }
 
-pub fn fix_foreground_colour_rgb(background: RGB<u8>, foreground: RGB<u8>) -> RGB<u8> {
+pub fn fix_foreground_colour_rgb(
+    background: Option<RGB<u8>>,
+    foreground: Option<RGB<u8>>,
+) -> RGB<u8> {
     if background == foreground {
         RGB::new(0, 0, 0)
     } else {
-        foreground
+        foreground.unwrap_or_else(|| RGB::new(0, 0, 0))
     }
 }
 
 pub fn fix_foreground_colour_rgb_feed(
     feed_id: &str,
-    background: RGB<u8>,
-    foreground: RGB<u8>,
+    background: Option<RGB<u8>>,
+    foreground: Option<RGB<u8>>,
 ) -> RGB<u8> {
     match feed_id {
         "f-9q5b-longbeachtransit" => WHITE_RGB,

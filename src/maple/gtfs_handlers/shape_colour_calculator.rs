@@ -72,9 +72,7 @@ pub fn shape_to_colour(feed_id: &str, gtfs: &gtfs_structures::Gtfs) -> ShapeToCo
 
                     let color = colour_correction::fix_background_colour_rgb_feed_route(
                         feed_id,
-                        route
-                            .color
-                            .unwrap_or_else(|| colour_correction::DEFAULT_BACKGROUND),
+                        route.color,
                         route,
                     );
 
