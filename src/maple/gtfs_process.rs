@@ -104,6 +104,8 @@ pub async fn gtfs_process_feed(
                 }
             }
 
+            gtfs.routes.remove_entry("ACE");
+
             gtfs
         }
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
