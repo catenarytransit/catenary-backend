@@ -949,11 +949,8 @@ pub async fn gtfs_process_feed(
         .iter()
         .map(|(route_id, route)| {
             let colour = fix_background_colour_rgb_feed_route(feed_id, route.color, route);
-            let text_colour = fix_foreground_colour_rgb_feed(
-                feed_id,
-                route.color,
-                route.text_color,
-            );
+            let text_colour =
+                fix_foreground_colour_rgb_feed(feed_id, route.color, route.text_color);
 
             let colour_pg = format!("#{:02x}{:02x}{:02x}", colour.r, colour.g, colour.b);
             let text_colour_pg = format!(

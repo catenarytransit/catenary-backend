@@ -59,7 +59,9 @@ pub async fn shapes_into_postgres(
             let bg_color = match shape_to_color_lookup.get(shape_id) {
                 Some(color) => match route {
                     Some(route) => colour_correction::fix_background_colour_rgb_feed_route(
-                        feed_id, Some(*color), route,
+                        feed_id,
+                        Some(*color),
+                        route,
                     ),
                     None => *color,
                 },
