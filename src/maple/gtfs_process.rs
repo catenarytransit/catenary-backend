@@ -119,17 +119,6 @@ pub async fn gtfs_process_feed(
             gtfs
 
         }
-        "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => {
-            let mut gtfs = gtfs;
-
-            for (shape_id, shape) in gtfs.shapes.iter_mut() {
-                if (shape_id == "174" || shape_id == "384") {
-                    shape.remove(0);
-                }
-            }
-
-            gtfs
-        }
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
             //there's 8184 school buses in the feed. I'm removing them lmfao.
             let mut gtfs = gtfs;
