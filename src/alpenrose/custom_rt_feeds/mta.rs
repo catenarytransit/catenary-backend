@@ -266,7 +266,7 @@ fn mnr_trip_id_fixer(gtfs: &Gtfs, input: gtfs_realtime::FeedMessage) -> gtfs_rea
                         if let Some(vehicle) = &vehicle_data.vehicle {
                             if let Some(vehicle_id) = &vehicle.id {
                                 if let Some(schedule_trip_ids_with_same_name) =
-                                    lookup_tables_made.get(original_trip_id.as_str())
+                                    lookup_tables_made.get(vehicle_id.as_str())
                                 {
                                     match schedule_trip_ids_with_same_name.len() {
                                         0 => {}
