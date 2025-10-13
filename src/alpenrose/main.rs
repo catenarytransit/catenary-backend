@@ -176,20 +176,29 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     println!("Downloading chicago gtfs zip file");
 
     let chicago_gtfs_url = "https://github.com/catenarytransit/pfaedled-gtfs-actions/releases/download/latest/cta_gtfs_railonly.zip";
+    let mnr_gtfs_url = "https://rrgtfsfeeds.s3.amazonaws.com/gtfsmnr.zip";
 
-    let schedule_response = client.get(chicago_gtfs_url).send().await;
+    let chicago_schedule_response = client.get(chicago_gtfs_url).send().await;
 
-    println!("Downloaded chicago gtfs!");
+    println!("Downloaded chicago gtfs");
 
-    if let Err(e) = &schedule_response {
+    if let Err(e) = &chicago_schedule_response {
         eprintln!("chicago fetch failed {:#?}", e);
+    }
+
+    let mnr_schedule_response = client.get(mnr_gtfs_url).send().await;
+
+    println!("Download metro north gtfs");
+
+    if let Err(e) = &mnr_schedule_response {
+        eprintln!("mnr fetch failed {:#?}", e);
     }
 
     //renew the etcd lease
 
     let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
 
-    let chicago_bytes: Option<bytes::Bytes> = match schedule_response {
+    let chicago_bytes: Option<bytes::Bytes> = match chicago_schedule_response {
         Ok(schedule_resp) => Some(schedule_resp.bytes().await?),
         Err(e) => {
             eprintln!("Failed to parse chicago bytes: {:#?}", e);
@@ -206,6 +215,20 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     println!("parsed chicago gtfs in {:?}", chicago_gtfs_timer.elapsed());
 
     let chicago_gtfs = Arc::new(chicago_gtfs);
+
+    let mnr_bytes: Option<bytes::Bytes> = match mnr_schedule_response {
+        Ok(schedule_resp) => Some(schedule_resp.bytes().await?),
+        Err(e) => {
+            eprintln!("Failed to parse mnr bytes: {:#?}", e);
+            None
+        }
+    };
+
+    let mnr_gtfs = mnr_bytes
+        .as_ref()
+        .map(|mnr_bytes| gtfs_structures::Gtfs::from_reader(io::Cursor::new(mnr_bytes)).unwrap());
+
+    let mnr_gtfs = Arc::new(mnr_gtfs);
 
     let chicago_trips_str = Arc::new(match chicago_bytes.as_ref() {
         Some(schedule_bytes) => {
@@ -412,6 +435,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&chicago_trips_str),
                 Arc::clone(&chicago_gtfs),
                 Arc::clone(&rtc_quebec_gtfs),
+                Arc::clone(&mnr_gtfs),
                 etcd_urls.clone(),
                 etcd_connection_options.clone(),
                 etcd_lease_id,

@@ -83,6 +83,7 @@ pub async fn single_fetch_time(
     chicago_text_str: Arc<Option<String>>,
     chicago_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
     rtcquebec_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
+    mnr_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
     etcd_urls: Arc<Vec<String>>,
     etcd_connection_options: Option<etcd_client::ConnectOptions>,
     lease_id: i64,
@@ -115,6 +116,7 @@ pub async fn single_fetch_time(
                 let rtcquebec_gtfs = rtcquebec_gtfs.clone();
                 let chicago_text_str = chicago_text_str.clone();
                 let chicago_gtfs = chicago_gtfs.clone();
+                let mnr_gtfs = mnr_gtfs.clone();
 
                 let mut kv_client = etcd.kv_client();
                 let mut lease_client = etcd.lease_client();
@@ -414,6 +416,7 @@ pub async fn single_fetch_time(
                                     &mut kv_client,
                                     &feed_id,
                                     &client,
+                                    Arc::clone(&mnr_gtfs),
                                 )
                                 .await;
                             }

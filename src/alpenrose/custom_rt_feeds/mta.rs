@@ -1,5 +1,6 @@
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 const LIRR_TRIPS_FEED: &str =
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/lirr%2Fgtfs-lirr";
@@ -45,6 +46,7 @@ pub async fn fetch_mta_metronorth_data(
     etcd: &mut etcd_client::KvClient,
     feed_id: &str,
     client: &reqwest::Client,
+    mnr_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let fetch_url = "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=MNR";
 
@@ -289,7 +291,7 @@ fn convert(
                         match &supporting_gtfs {
                             Some(supporting_gtfs) => {
                                 let mut trip =
-                                    supporting_gtfs.clone().vehicle.unwrap().trip.clone();
+                                    supporting_gtfs.vehicle.as_ref().unwrap().trip.clone();
 
                                 //insert route id
 
@@ -300,12 +302,21 @@ fn convert(
                                         true => {
                                             trip.as_mut().unwrap().route_id.clone_from(
                                                 &supporting_gtfs
-                                                    .clone()
                                                     .trip_update
+                                                    .as_ref()
                                                     .unwrap()
                                                     .trip
                                                     .route_id,
                                             );
+
+                                            trip.as_mut().unwrap().trip_id.clone_from(
+                                                &supporting_gtfs
+                                                    .trip_update
+                                                    .as_ref()
+                                                    .unwrap()
+                                                    .trip
+                                                    .trip_id,
+                                            )
                                         }
                                         false => {
                                             trip.as_mut().unwrap().route_id = None;

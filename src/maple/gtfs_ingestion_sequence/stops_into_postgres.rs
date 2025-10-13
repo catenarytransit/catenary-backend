@@ -121,24 +121,24 @@ pub async fn stops_into_postgres_and_elastic(
                 continue;
             }
 
-            let timezone = 
-            match feed_id {
+            let timezone = match feed_id {
                 "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => {
                     tz_search::lookup(point.as_ref().unwrap().y, point.as_ref().unwrap().x)
                 }
                 _ => match &stop.timezone {
-                Some(tz) => stop.timezone.clone(),
-                None => match -90.0 <= point.as_ref().unwrap().y
-                    && point.as_ref().unwrap().y <= 90.0
-                    && -180.0 <= point.as_ref().unwrap().x
-                    && point.as_ref().unwrap().x <= 180.0
-                {
-                    true => tz_search::lookup(point.as_ref().unwrap().y, point.as_ref().unwrap().x),
-                    false => Some(String::from("Etc/GMT")),
+                    Some(tz) => stop.timezone.clone(),
+                    None => match -90.0 <= point.as_ref().unwrap().y
+                        && point.as_ref().unwrap().y <= 90.0
+                        && -180.0 <= point.as_ref().unwrap().x
+                        && point.as_ref().unwrap().x <= 180.0
+                    {
+                        true => {
+                            tz_search::lookup(point.as_ref().unwrap().y, point.as_ref().unwrap().x)
+                        }
+                        false => Some(String::from("Etc/GMT")),
+                    },
                 },
-            }
             };
-            
 
             let mut name_translations: HashMap<String, String> = HashMap::new();
             let mut name_translations_shortened_locales_elastic: HashMap<String, String> =
