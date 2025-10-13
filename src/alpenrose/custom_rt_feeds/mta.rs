@@ -268,6 +268,7 @@ fn mnr_trip_id_fixer(gtfs: &Gtfs, input: gtfs_realtime::FeedMessage) -> gtfs_rea
                                 if let Some(schedule_trip_ids_with_same_name) =
                                     lookup_tables_made.get(vehicle_id.as_str())
                                 {
+                                    println!("MTA MNR metro north lookup {} found {} trips", vehicle_id, schedule_trip_ids_with_same_name.len());
                                     match schedule_trip_ids_with_same_name.len() {
                                         0 => {}
                                         1 => {
