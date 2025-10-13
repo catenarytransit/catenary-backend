@@ -1,6 +1,9 @@
+use ahash::AHashMap;
+use ecow::EcoString;
+use gtfs_structures::Gtfs;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 const LIRR_TRIPS_FEED: &str =
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/lirr%2Fgtfs-lirr";
@@ -60,26 +63,30 @@ pub async fn fetch_mta_metronorth_data(
 
     if let Ok(request) = request {
         if let Ok(gtfs_rt_trips) = gtfs_rt_trips {
-            let body = request.text().await.unwrap();
+            if let Some(mnr_gtfs) = mnr_gtfs.as_ref() {
+                let mnr_trip_id_fixed = mnr_trip_id_fixer(mnr_gtfs, gtfs_rt_trips);
 
-            let import_data = serde_json::from_str::<Vec<MtaTrain>>(body.as_str());
+                let body = request.text().await.unwrap();
 
-            if let Ok(import_data) = import_data {
-                let converted = convert(&import_data, MtaRailroad::MNR, &gtfs_rt_trips);
+                let import_data = serde_json::from_str::<Vec<MtaTrain>>(body.as_str());
 
-                let mnr_vehicle_position = catenary::make_feed_from_entity_vec(converted);
+                if let Ok(import_data) = import_data {
+                    let converted = convert(&import_data, MtaRailroad::MNR, &mnr_trip_id_fixed);
 
-                let mnr_vehicle_position_bytes = mnr_vehicle_position.encode_to_vec();
-                let mnr_trip_updates_bytes = gtfs_rt_trips.encode_to_vec();
+                    let mnr_vehicle_position = catenary::make_feed_from_entity_vec(converted);
 
-                send_mta_rail_to_aspen(
-                    etcd,
-                    MtaRailroad::MNR,
-                    mnr_vehicle_position_bytes,
-                    mnr_trip_updates_bytes,
-                    feed_id,
-                )
-                .await;
+                    let mnr_vehicle_position_bytes = mnr_vehicle_position.encode_to_vec();
+                    let mnr_trip_updates_bytes = mnr_trip_id_fixed.encode_to_vec();
+
+                    send_mta_rail_to_aspen(
+                        etcd,
+                        MtaRailroad::MNR,
+                        mnr_vehicle_position_bytes,
+                        mnr_trip_updates_bytes,
+                        feed_id,
+                    )
+                    .await;
+                }
             }
         }
     }
@@ -221,6 +228,132 @@ pub struct MtaTrain {
     consist: TrainConsist,
     location: TrainLocation,
     status: TrainStatus,
+}
+
+struct MetroNorthLookupTables {}
+
+fn lookup_tables(gtfs: &Gtfs) -> AHashMap<EcoString, BTreeSet<EcoString>> {
+    let mut trip_name_to_ids: AHashMap<EcoString, BTreeSet<EcoString>> = AHashMap::new();
+
+    for (trip_id, trip) in gtfs.trips.iter() {
+        if let Some(short_name) = &trip.trip_short_name {
+            trip_name_to_ids
+                .entry(short_name.clone().into())
+                .and_modify(|x| {
+                    x.insert(short_name.clone().into());
+                })
+                .or_insert(BTreeSet::from_iter([short_name.clone().into()]));
+        }
+    }
+
+    trip_name_to_ids
+}
+
+fn mnr_trip_id_fixer(gtfs: &Gtfs, input: gtfs_realtime::FeedMessage) -> gtfs_realtime::FeedMessage {
+    let lookup_tables_made = lookup_tables(gtfs);
+
+    let mut input = input;
+
+    for entity in input.entity.iter_mut() {
+        if let Some(trip_update) = &mut entity.trip_update {
+            if let Some(original_trip_id) = &mut trip_update.trip.trip_id {
+                //checks if the trip id given by Metro North is actually invalid
+                if !gtfs.trips.contains_key(original_trip_id) {
+                    //it's invalid.
+
+                    //get the operating trip short name, which is contained in the vehicle id of the gtfs field
+                    if let Some(vehicle_data) = &mut entity.vehicle {
+                        if let Some(vehicle) = &vehicle_data.vehicle {
+                            if let Some(vehicle_id) = &vehicle.id {
+                                if let Some(schedule_trip_ids_with_same_name) =
+                                    lookup_tables_made.get(original_trip_id.as_str())
+                                {
+                                    match schedule_trip_ids_with_same_name.len() {
+                                        0 => {}
+                                        1 => {
+                                            *original_trip_id = schedule_trip_ids_with_same_name
+                                                .iter()
+                                                .nth(0)
+                                                .unwrap()
+                                                .to_string();
+
+                                            if let Some(trip_vehicle_desc) = &mut vehicle_data.trip
+                                            {
+                                                trip_vehicle_desc.trip_id = Some(
+                                                    schedule_trip_ids_with_same_name
+                                                        .iter()
+                                                        .nth(0)
+                                                        .unwrap()
+                                                        .to_string(),
+                                                );
+                                            }
+                                        }
+                                        _ => {
+                                            let naive_date = trip_update
+                                                .trip
+                                                .start_date
+                                                .as_ref()
+                                                .map(|x| {
+                                                    catenary::yyyymmdd_to_naive_date(x.as_str())
+                                                        .ok()
+                                                })
+                                                .flatten();
+
+                                            if let Some(naive_date) = naive_date {
+                                                let trip_id_found =
+                                                    schedule_trip_ids_with_same_name.iter().find(
+                                                        |proposed_trip_id| {
+                                                            if let Some(trip) = gtfs
+                                                                .trips
+                                                                .get(proposed_trip_id.as_str())
+                                                            {
+                                                                if let Some(calendar_dates) = gtfs
+                                                                    .calendar_dates
+                                                                    .get(trip.service_id.as_str())
+                                                                {
+                                                                    let naive_date_list =
+                                                                        calendar_dates
+                                                                            .iter()
+                                                                            .map(|each_cal| {
+                                                                                each_cal.date
+                                                                            })
+                                                                            .collect::<Vec<_>>();
+
+                                                                    if naive_date_list
+                                                                        .contains(&naive_date)
+                                                                    {
+                                                                        return true;
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            false
+                                                        },
+                                                    );
+
+                                                if let Some(trip_id_found) = trip_id_found {
+                                                    *original_trip_id = trip_id_found.to_string();
+
+                                                    if let Some(trip_vehicle_desc) =
+                                                        &mut vehicle_data.trip
+                                                    {
+                                                        trip_vehicle_desc.trip_id =
+                                                            Some(trip_id_found.to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    input
 }
 
 fn convert(

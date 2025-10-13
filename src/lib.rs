@@ -989,3 +989,7 @@ pub fn name_shortening_hash_insert_elastic(
         h.insert(lang_tag, translated_result.to_string());
     }
 }
+
+pub fn yyyymmdd_to_naive_date(date_str: &str) -> Result<NaiveDate, chrono::ParseError> {
+    NaiveDate::parse_from_str(date_str, "%Y%m%d")
+}
