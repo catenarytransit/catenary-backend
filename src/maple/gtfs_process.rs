@@ -106,6 +106,28 @@ pub async fn gtfs_process_feed(
 
             gtfs.routes.remove_entry("ACE");
 
+            gtfs.trips.retain(|trip_id, trip| trip.route_id != "ACE");
+
+            gtfs.routes.retain(|route_id, route| route_id != "ACE");
+
+            for (trip_id, trip) in gtfs.trips.iter_mut() {
+                if trip.trip_short_name.as_deref() == Some("AMSJ") {
+                    trip.trip_short_name = Some(trip_id.to_string());
+                }
+            }
+
+            gtfs
+
+        }
+        "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => {
+            let mut gtfs = gtfs;
+
+            for (shape_id, shape) in gtfs.shapes.iter_mut() {
+                if (shape_id == "174" || shape_id == "384") {
+                    shape.remove(0);
+                }
+            }
+
             gtfs
         }
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
@@ -147,21 +169,6 @@ pub async fn gtfs_process_feed(
 
             println!("Filtered NSW, removed school buses");
             gtfs.print_stats();
-            gtfs
-        }
-        "f-amtrak~sanjoaquin" => {
-            let mut gtfs = gtfs;
-
-            gtfs.trips.retain(|trip_id, trip| trip.route_id != "ACE");
-
-            gtfs.routes.retain(|route_id, route| route_id != "ACE");
-
-            for (trip_id, trip) in gtfs.trips.iter_mut() {
-                if trip.trip_short_name.as_deref() == Some("AMSJ") {
-                    trip.trip_short_name = Some(trip_id.to_string());
-                }
-            }
-
             gtfs
         }
         "f-los~angeles~international~airport~shuttle" => {
