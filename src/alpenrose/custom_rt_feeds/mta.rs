@@ -240,9 +240,9 @@ fn lookup_tables(gtfs: &Gtfs) -> AHashMap<EcoString, BTreeSet<EcoString>> {
             trip_name_to_ids
                 .entry(short_name.clone().into())
                 .and_modify(|x| {
-                    x.insert(short_name.clone().into());
+                    x.insert(trip_id.clone().into());
                 })
-                .or_insert(BTreeSet::from_iter([short_name.clone().into()]));
+                .or_insert(BTreeSet::from_iter([trip_id.clone().into()]));
         }
     }
 
@@ -268,7 +268,7 @@ fn mnr_trip_id_fixer(gtfs: &Gtfs, input: gtfs_realtime::FeedMessage) -> gtfs_rea
                                 if let Some(schedule_trip_ids_with_same_name) =
                                     lookup_tables_made.get(vehicle_id.as_str())
                                 {
-                                    println!("MTA MNR metro north lookup {} found {} trips", vehicle_id, schedule_trip_ids_with_same_name.len());
+                                    //println!("MTA MNR metro north lookup {} found {} trips", vehicle_id, schedule_trip_ids_with_same_name.len());
                                     match schedule_trip_ids_with_same_name.len() {
                                         0 => {}
                                         1 => {
@@ -277,6 +277,12 @@ fn mnr_trip_id_fixer(gtfs: &Gtfs, input: gtfs_realtime::FeedMessage) -> gtfs_rea
                                                 .nth(0)
                                                 .unwrap()
                                                 .to_string();
+
+                                            println!("Changed to {}", schedule_trip_ids_with_same_name
+                                                .iter()
+                                                .nth(0)
+                                                .unwrap()
+                                                .to_string());
 
                                             if let Some(trip_vehicle_desc) = &mut vehicle_data.trip
                                             {
@@ -567,6 +573,29 @@ pub async fn send_mta_rail_to_aspen(
             }
             Err(e) => {
                 eprintln!("{}: Error sending data to {}: {}", feed_id, worker_id, e);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::custom_rt_feeds::mta::MNR_TRIPS_FEED;
+    use super::*;
+
+    #[tokio::test]
+    async fn test_mnr() {
+        let gtfs = gtfs_structures::Gtfs::from_url_async("https://rrgtfsfeeds.s3.amazonaws.com/gtfsmnr.zip").await.unwrap();
+
+        let client = reqwest::Client::new();
+
+        let download_gtfs_rt = get_mta_trips(&client, MNR_TRIPS_FEED).await.unwrap();
+
+        let a = mnr_trip_id_fixer(&gtfs, download_gtfs_rt);
+
+        for entity in a.entity {
+            if let Some(trip) = entity.trip_update {  
+                println!("{:#?}", trip.trip.trip_id);
             }
         }
     }

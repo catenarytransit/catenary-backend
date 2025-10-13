@@ -188,7 +188,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let mnr_schedule_response = client.get(mnr_gtfs_url).send().await;
 
-    println!("Download metro north gtfs");
+    println!("Downloaded metro north gtfs");
 
     if let Err(e) = &mnr_schedule_response {
         eprintln!("mnr fetch failed {:#?}", e);
