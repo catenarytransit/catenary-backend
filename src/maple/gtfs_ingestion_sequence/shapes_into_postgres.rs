@@ -94,14 +94,16 @@ pub async fn shapes_into_postgres(
 
             //Lines are only valid in postgres if they contain 2 or more points
             if preshape.len() >= 2 {
-                for (idx, point) in preshape.iter().enumerate().skip(1) {
-                    if (preshape[idx - 1].longitude - point.longitude).abs()
-                        > threshold_degree_broken
-                        || (preshape[idx - 1].latitude - point.latitude).abs()
+                if feed_id != "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" {
+                    for (idx, point) in preshape.iter().enumerate().skip(1) {
+                        if (preshape[idx - 1].longitude - point.longitude).abs()
                             > threshold_degree_broken
-                    {
-                        is_line_too_stupidly_broken = true;
-                        break;
+                            || (preshape[idx - 1].latitude - point.latitude).abs()
+                                > threshold_degree_broken
+                        {
+                            is_line_too_stupidly_broken = true;
+                            break;
+                        }
                     }
                 }
 
