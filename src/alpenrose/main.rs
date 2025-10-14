@@ -270,8 +270,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
         let is_online = match ping_firefox {
             Err(e) => false,
-            Ok(resp) => match resp.text().await {
-                Ok(data) => data.as_str() == "success",
+            Ok(resp) => match resp.bytes().await {
+                Ok(data) => String::from_utf8(data.as_ref().to_vec()).unwrap() == "success",
                 Err(e) => false,
             },
         };
