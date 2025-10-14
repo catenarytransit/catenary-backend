@@ -82,7 +82,7 @@ pub async fn fetch_santa_cruz_clever_data(
                 let data: SantaCruzRoot = serde_json::from_str(&body)?;
                 Ok::<SantaCruzRoot, Box<dyn Error + Sync + Send>>(data)
             } else {
-                Err(format!("Error: {}", status).into())
+                Err(format!("Santa Cruz Bustime Rt Error: {}", status).into())
             }
         }
     }).collect::<Vec<_>>();
