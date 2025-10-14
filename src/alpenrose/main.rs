@@ -272,7 +272,13 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         let is_online = match ping_firefox {
             Err(e) => false,
             Ok(resp) => match resp.bytes().await {
-                Ok(data) => String::from_utf8(data.as_ref().to_vec()).unwrap() == "success",
+                Ok(data) => {
+                    let string = String::from_utf8(data.as_ref().to_vec()).unwrap();
+
+                    println!("Firefox check internet {}", string);
+
+                    string.contains("success")
+                },
                 Err(e) => false,
             },
         };
