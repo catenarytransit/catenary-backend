@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let amtrak_gtfs = gtfs_structures::GtfsReader::default()
         .read_shapes(false)
-        .read_from_url_async("https://content.amtrak.com/content/gtfs/GTFS.zip")
+        .read_from_url_async("https://github.com/catenarytransit/amtrak-schedule-fixer/releases/download/latest/amtrak-gtfs-fixed.zip")
         .await
         .unwrap();
 
