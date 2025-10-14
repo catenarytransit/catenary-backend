@@ -260,7 +260,17 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     //create parent node for workers
 
     loop {
-        let is_online = online::tokio::check(Some(10)).await.is_ok();
+        //let is_online = online::tokio::check(Some(10)).await.is_ok();
+
+        let ping_firefox = client.get("https://detectportal.firefox.com").timeout(Duration::from_secs(5)).send().await;
+
+        let is_online = match ping_firefox {
+            Err(e) => false,
+            Ok(resp) => match resp.text().await {
+                Ok(data) => data.as_str() == "success",
+                Err(e) => false
+            }
+        };
 
         let mut etcd = etcd.clone();
 
