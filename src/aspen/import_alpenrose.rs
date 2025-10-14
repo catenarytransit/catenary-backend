@@ -171,12 +171,12 @@ pub async fn new_rt_data(
     //either fetch the mutable reference to trip compressed cache or make an empty one
 
     let mut compressed_trip_internal_cache: CompressedTripInternalCache =
-        match authoritative_data_store.get(chateau_id) {
+        match authoritative_data_store.get_sync(chateau_id) {
             Some(data) => data.compressed_trip_internal_cache.clone(),
             None => CompressedTripInternalCache::new(),
         };
 
-    let previous_authoritative_data_store = match authoritative_data_store.get(chateau_id) {
+    let previous_authoritative_data_store = match authoritative_data_store.get_sync(chateau_id) {
         Some(data) => Some(data.clone()),
         None => None,
     };
@@ -364,8 +364,8 @@ pub async fn new_rt_data(
     let mut trip_ids_to_lookup: AHashSet<String> = AHashSet::new();
 
     for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
-        if let Some(vehicle_gtfs_rt_for_feed_id) =
-            authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+        if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
+            .get_sync(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
         {
             let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
 
@@ -382,7 +382,7 @@ pub async fn new_rt_data(
 
         //trips updates trip id lookup
         if let Some(trip_gtfs_rt_for_feed_id) =
-            authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+            authoritative_gtfs_rt.get_sync(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
         {
             let trip_gtfs_rt_for_feed_id = trip_gtfs_rt_for_feed_id.get();
 
@@ -403,7 +403,7 @@ pub async fn new_rt_data(
 
         //now do the same for alerts updates
         if let Some(alert_gtfs_rt_for_feed_id) =
-            authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
+            authoritative_gtfs_rt.get_sync(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
         {
             let alert_gtfs_rt_for_feed_id = alert_gtfs_rt_for_feed_id.get();
 
@@ -519,7 +519,7 @@ pub async fn new_rt_data(
 
         //pass through all the trip ids and get the last stop id that isnt skipped
         if let Some(trip_gtfs_rt_for_feed_id) =
-            authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+            authoritative_gtfs_rt.get_sync(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
         {
             let trip_gtfs_rt_for_feed_id = trip_gtfs_rt_for_feed_id.get();
 
@@ -825,8 +825,8 @@ pub async fn new_rt_data(
         let mut route_ids_to_insert: AHashSet<String> = AHashSet::new();
 
         for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
-            if let Some(vehicle_gtfs_rt_for_feed_id) =
-                authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+            if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
+                .get_sync(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
             {
                 let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
 
@@ -1006,7 +1006,7 @@ pub async fn new_rt_data(
                                     start_time: match realtime_feed_id.as_str() {
                                         //fix passio not assigning start times cuz they are complete loser connards
                                         "f-irvine~ca~us~rt" => {
-                                             let trip_updates_gtfs_rt_data = authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates));
+                                             let trip_updates_gtfs_rt_data = authoritative_gtfs_rt.get_sync(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates));
 
 
                                             match trip_updates_gtfs_rt_data {
@@ -1212,7 +1212,7 @@ pub async fn new_rt_data(
 
             //process trip updates
             if let Some(trip_updates_gtfs_rt_for_feed_id) =
-                authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+                authoritative_gtfs_rt.get_sync(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
             {
                 let trip_updates_gtfs_rt_for_feed_id = trip_updates_gtfs_rt_for_feed_id.get();
 
@@ -1950,7 +1950,7 @@ pub async fn new_rt_data(
             }
 
             if let Some(alert_updates_gtfs_rt) =
-                authoritative_gtfs_rt.get(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
+                authoritative_gtfs_rt.get_sync(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
             {
                 let alert_updates_gtfs_rt = alert_updates_gtfs_rt.get();
 
@@ -2144,7 +2144,7 @@ pub async fn new_rt_data(
     let fast_hash_of_routes =
         catenary::fast_hash(&vehicle_routes_cache.iter().collect::<BTreeMap<_, _>>());
 
-    match authoritative_data_store.entry(chateau_id.to_string()) {
+    match authoritative_data_store.entry_sync(chateau_id.to_string()) {
         scc::hash_map::Entry::Occupied(mut oe) => {
             let mut data = oe.get_mut();
             *data = AspenisedData {

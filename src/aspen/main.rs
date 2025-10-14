@@ -125,7 +125,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         stop_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedStop>> {
-        match self.authoritative_data_store.get(&chateau_id) {
+        match self.authoritative_data_store.as_ref().get_sync(&chateau_id) {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -156,7 +156,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         shape_id: String,
     ) -> Option<String> {
-        match self.authoritative_data_store.get(&chateau_id) {
+        match self.authoritative_data_store.get_sync(&chateau_id) {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -182,7 +182,7 @@ impl AspenRpc for AspenServer {
         trip_id: String,
         service_day: chrono::NaiveDate,
     ) -> Option<AspenisedTripModification> {
-        match self.authoritative_data_store.get(&chateau_id) {
+        match self.authoritative_data_store.get_sync(&chateau_id) {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -234,7 +234,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         modification_id: String,
     ) -> Option<AspenisedTripModification> {
-        match self.authoritative_data_store.get(&chateau_id) {
+        match self.authoritative_data_store.get_sync(&chateau_id) {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -263,7 +263,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         modification_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedTripModification>> {
-        match self.authoritative_data_store.get(&chateau_id) {
+        match self.authoritative_data_store.get_sync(&chateau_id) {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -306,7 +306,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         trip_ids: Vec<String>,
     ) -> Option<TripsSelectionResponse> {
-        match self.authoritative_data_store.get(&chateau_id) {
+        match self.authoritative_data_store.get_sync(&chateau_id) {
             None => None,
             Some(authoritative_data) => {
                 let authoritative_data = authoritative_data.get();
@@ -356,7 +356,8 @@ impl AspenRpc for AspenServer {
     ) -> Option<Vec<u8>> {
         let pair = self
             .authoritative_gtfs_rt_store
-            .get(&(realtime_feed_id, feed_type));
+            .get_async(&(realtime_feed_id, feed_type))
+            .await;
 
         match pair {
             Some(pair) => {
@@ -376,7 +377,8 @@ impl AspenRpc for AspenServer {
     ) -> Option<Vec<u8>> {
         let pair = self
             .authoritative_gtfs_rt_store
-            .get(&(realtime_feed_id, feed_type));
+            .get_async(&(realtime_feed_id, feed_type))
+            .await;
 
         match pair {
             Some(pair) => {
@@ -697,21 +699,21 @@ impl AspenRpc for AspenServer {
             if new_data {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+                        .entry_sync((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
                         .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
                         .or_insert(vehicles_gtfs_rt.clone());
                 }
 
                 if let Some(trip_gtfs_rt) = trips_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+                        .entry_sync((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
                         .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
                         .or_insert(trip_gtfs_rt.clone());
                 }
 
                 if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
+                        .entry_sync((realtime_feed_id.clone(), GtfsRtType::Alerts))
                         .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
                         .or_insert(alerts_gtfs_rt.clone());
                 }
@@ -963,21 +965,21 @@ impl AspenRpc for AspenServer {
             if new_data || chateau_id == "uc~irvine~anteater~express" {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+                        .entry_sync((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
                         .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
                         .or_insert(vehicles_gtfs_rt.clone());
                 }
 
                 if let Some(trip_gtfs_rt) = trips_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+                        .entry_sync((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
                         .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
                         .or_insert(trip_gtfs_rt.clone());
                 }
 
                 if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry((realtime_feed_id.clone(), GtfsRtType::Alerts))
+                        .entry_sync((realtime_feed_id.clone(), GtfsRtType::Alerts))
                         .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
                         .or_insert(alerts_gtfs_rt.clone());
                 }
@@ -1021,7 +1023,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         existing_fasthash_of_routes: Option<u64>,
     ) -> Option<GetVehicleLocationsResponse> {
-        match self.authoritative_data_store.get(&chateau_id) {
+        match self.authoritative_data_store.get_sync(&chateau_id) {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -1052,7 +1054,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         gtfs_id: String,
     ) -> Option<AspenisedVehiclePosition> {
-        match self.authoritative_data_store.get(&chateau_id) {
+        match self.authoritative_data_store.get_sync(&chateau_id) {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -1076,7 +1078,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         vehicle_id: String,
     ) -> Option<AspenisedVehiclePosition> {
-        match self.authoritative_data_store.get(&chateau_id) {
+        match self.authoritative_data_store.get_sync(&chateau_id) {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -1107,7 +1109,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         trip_id: String,
     ) -> Option<Vec<AspenisedTripUpdate>> {
-        match self.authoritative_data_store.get(&chateau_id) {
+        match self.authoritative_data_store.get_sync(&chateau_id) {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -1153,7 +1155,12 @@ impl AspenRpc for AspenServer {
         _: context::Context,
         chateau_id: String,
     ) -> Option<HashMap<String, AspenisedAlert>> {
-        match self.authoritative_data_store.get(&chateau_id) {
+        match self
+            .authoritative_data_store
+            .as_ref()
+            .get_async(&chateau_id)
+            .await
+        {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -1463,7 +1470,7 @@ fn save_timestamps(
         Some(new_timestamp) => {
             server
                 .timestamps_of_gtfs_rt
-                .entry(key.clone())
+                .entry_sync(key.clone())
                 .and_modify(|mut_timestamp| *mut_timestamp = new_timestamp)
                 .or_insert(new_timestamp);
         }
@@ -1486,7 +1493,7 @@ fn contains_new_data(
         Some(0) | None => {
             new_data = true;
         }
-        Some(new_timestamp) => match server.timestamps_of_gtfs_rt.get(&key) {
+        Some(new_timestamp) => match server.timestamps_of_gtfs_rt.get_sync(&key) {
             Some(existing_timestamp) => {
                 if *(existing_timestamp.get()) == new_timestamp {
                 } else {

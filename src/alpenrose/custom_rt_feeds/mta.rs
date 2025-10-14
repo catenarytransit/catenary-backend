@@ -278,11 +278,14 @@ fn mnr_trip_id_fixer(gtfs: &Gtfs, input: gtfs_realtime::FeedMessage) -> gtfs_rea
                                                 .unwrap()
                                                 .to_string();
 
-                                            println!("Changed to {}", schedule_trip_ids_with_same_name
-                                                .iter()
-                                                .nth(0)
-                                                .unwrap()
-                                                .to_string());
+                                            println!(
+                                                "Changed to {}",
+                                                schedule_trip_ids_with_same_name
+                                                    .iter()
+                                                    .nth(0)
+                                                    .unwrap()
+                                                    .to_string()
+                                            );
 
                                             if let Some(trip_vehicle_desc) = &mut vehicle_data.trip
                                             {
@@ -580,12 +583,16 @@ pub async fn send_mta_rail_to_aspen(
 
 #[cfg(test)]
 mod tests {
-    use crate::custom_rt_feeds::mta::MNR_TRIPS_FEED;
     use super::*;
+    use crate::custom_rt_feeds::mta::MNR_TRIPS_FEED;
 
     #[tokio::test]
     async fn test_mnr() {
-        let gtfs = gtfs_structures::Gtfs::from_url_async("https://rrgtfsfeeds.s3.amazonaws.com/gtfsmnr.zip").await.unwrap();
+        let gtfs = gtfs_structures::Gtfs::from_url_async(
+            "https://rrgtfsfeeds.s3.amazonaws.com/gtfsmnr.zip",
+        )
+        .await
+        .unwrap();
 
         let client = reqwest::Client::new();
 
@@ -594,7 +601,7 @@ mod tests {
         let a = mnr_trip_id_fixer(&gtfs, download_gtfs_rt);
 
         for entity in a.entity {
-            if let Some(trip) = entity.trip_update {  
+            if let Some(trip) = entity.trip_update {
                 println!("{:#?}", trip.trip.trip_id);
             }
         }

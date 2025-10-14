@@ -9,7 +9,7 @@ pub fn get_alerts_from_route_id(
     chateau_id: &str,
     route_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
-    match authoritative_data_store.get(chateau_id) {
+    match authoritative_data_store.get_sync(chateau_id) {
         Some(aspenised_data) => {
             let aspenised_data = aspenised_data.get();
 
@@ -49,7 +49,7 @@ pub fn get_alerts_from_stop_id(
     chateau_id: &str,
     stop_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
-    match authoritative_data_store.get(chateau_id) {
+    match authoritative_data_store.get_sync(chateau_id) {
         Some(aspenised_data) => {
             let aspenised_data = aspenised_data.get();
 
@@ -89,7 +89,7 @@ pub fn get_alert_from_trip_id(
     chateau_id: &str,
     trip_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
-    match authoritative_data_store.get(chateau_id) {
+    match authoritative_data_store.get_sync(chateau_id) {
         Some(aspenised_data) => {
             let aspenised_data = aspenised_data.get();
 

@@ -51,7 +51,7 @@ async fn cleanup_response(
 
             let hash = ahash_fast_hash(&bytes);
 
-            match hashes_of_data.get(&(feed_id.to_string(), urltype.clone())) {
+            match hashes_of_data.get_sync(&(feed_id.to_string(), urltype.clone())) {
                 Some(old_hash) => {
                     let old_hash = old_hash.get();
 
@@ -60,7 +60,7 @@ async fn cleanup_response(
                         true => None,
                         false => {
                             hashes_of_data
-                                .entry((feed_id.to_string(), urltype.clone()))
+                                .entry_sync((feed_id.to_string(), urltype.clone()))
                                 .and_modify(|value| *value = hash)
                                 .or_insert(hash);
                             Some(bytes)
@@ -224,7 +224,7 @@ pub async fn single_fetch_time(
 
                                 let mut aspen_client = None;
                                 if let Some(aspen_client_get) =
-                                    hashmap_of_connections.get(&data.socket)
+                                    hashmap_of_connections.get_sync(&data.socket)
                                 {
                                     aspen_client = Some(aspen_client_get.clone());
                                 } else {
@@ -237,13 +237,13 @@ pub async fn single_fetch_time(
                                     match aspen_client_new {
                                         Ok(aspen_client_new) => {
                                             let _ = hashmap_of_connections
-                                                .upsert(data.socket, aspen_client_new.clone());
+                                                .upsert_sync(data.socket, aspen_client_new.clone());
 
                                             aspen_client = Some(aspen_client_new);
                                         }
                                         Err(aspen_connection_error) => {
                                             if let Some(aspen_client_get) =
-                                                hashmap_of_connections.get(&data.socket)
+                                                hashmap_of_connections.get_sync(&data.socket)
                                             {
                                                 aspen_client = Some(aspen_client_get.clone());
                                             } else {
