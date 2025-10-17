@@ -118,6 +118,16 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
+        "f-viarail~traindecharlevoix" => {
+            let mut gtfs = gtfs;
+
+            gtfs.routes.retain(|route_id, route| route_id != "119-120");
+
+            gtfs.trips
+                .retain(|trip_id, trip| trip.route_id != "119-120");
+
+            gtfs
+        }
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
             //there's 8184 school buses in the feed. I'm removing them lmfao.
             let mut gtfs = gtfs;
