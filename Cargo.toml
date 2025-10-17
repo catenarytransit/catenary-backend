@@ -79,9 +79,9 @@ zip-extract = "0.4.1"
 serde_derive = "1.0.197"
 prost = "0.14"
 geozero = "0.14.0"
-diesel = {version = "2.2", features = ["ipnet-address","network-address","extras", "numeric", "r2d2", "chrono"]}
+diesel = {version = "2.3.2", features = ["ipnet-address","network-address","extras", "numeric", "r2d2", "chrono"]}
 postgis_diesel = "3.0"
-diesel-async = { version = "0.6", features = ["postgres", "bb8"] }
+diesel-async = { version = "0.7.3", features = ["postgres", "bb8"] }
 diesel-derive-newtype = "2.1.1"
 async-std = {version = "1.5.3"}
 geo-repair-polygon = "0.1.2"
