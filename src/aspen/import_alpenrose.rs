@@ -171,15 +171,16 @@ pub async fn new_rt_data(
     //either fetch the mutable reference to trip compressed cache or make an empty one
 
     let mut compressed_trip_internal_cache: CompressedTripInternalCache =
-        match authoritative_data_store.get_sync(chateau_id) {
+        match authoritative_data_store.get_async(chateau_id).await {
             Some(data) => data.compressed_trip_internal_cache.clone(),
             None => CompressedTripInternalCache::new(),
         };
 
-    let previous_authoritative_data_store = match authoritative_data_store.get_sync(chateau_id) {
-        Some(data) => Some(data.clone()),
-        None => None,
-    };
+    let previous_authoritative_data_store =
+        match authoritative_data_store.get_async(chateau_id).await {
+            Some(data) => Some(data.clone()),
+            None => None,
+        };
 
     let fetch_supplemental_data_positions_metrolink: Option<AHashMap<CompactString, MetrolinkPos>> =
         match realtime_feed_id {

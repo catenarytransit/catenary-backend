@@ -77,8 +77,6 @@ pub async fn alpenrose_process_threads(
                 if let Err(e) = result {
                     eprintln!("Thread crashed: {:?}", e);
                     tokio::time::sleep(Duration::from_secs(1)).await;
-                } else {
-                    break; // Exit the loop if the thread exits cleanly
                 }
             }
         });
