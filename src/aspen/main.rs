@@ -1431,7 +1431,9 @@ async fn main() -> anyhow::Result<()> {
         handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
     ) -> Result<T, Box<dyn Error + Sync + Send>> {
         match handle.await {
-            Ok(Ok(result)) => panic!("Stopping wasn't supposed to happen!"),
+            Ok(Ok(result)) => {
+                Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "stopping wasnt supposed to happen")))
+            },
             Ok(Err(err)) => {
                 eprintln!("{:#?}", err);
                 Err(err)
