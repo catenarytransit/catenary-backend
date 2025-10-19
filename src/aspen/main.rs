@@ -1262,12 +1262,12 @@ async fn main() -> anyhow::Result<()> {
     let worker_metadata = AspenWorkerMetadataEtcd {
         etcd_lease_id: etcd_lease_id_for_this_worker,
         socket,
-        worker_id: this_worker_id.to_string(),
+        worker_id: this_worker_id.clone().to_string(),
     };
 
     let etcd_this_worker_assignment = etcd
         .put(
-            format!("/aspen_workers/{}", this_worker_id).as_str(),
+            format!("/aspen_workers/{}", &this_worker_id).as_str(),
             catenary::bincode_serialize(&worker_metadata).unwrap(),
             Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id_for_this_worker)),
         )
@@ -1307,12 +1307,13 @@ async fn main() -> anyhow::Result<()> {
         etcd_lease_id_for_this_worker,
     ));
 
+            let this_worker_id_copy = this_worker_id.clone();
+
     let etcd_lease_renewer: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
             let etcd_addresses = etcd_addresses.clone();
             let arc_etcd_connect_options = arc_etcd_connect_options.clone();
-
-            let this_worker_id = this_worker_id.clone();
+            let worker_id_for_this_thread = Arc::clone(&this_worker_id);
 
             let mut etcd = etcd_client::Client::connect(
                 etcd_addresses.clone().as_slice(),
@@ -1331,7 +1332,7 @@ async fn main() -> anyhow::Result<()> {
 
                             let etcd_this_worker_assignment = etcd
                                 .put(
-                                    format!("/aspen_workers/{}", &this_worker_id).as_str(),
+                                    format!("/aspen_workers/{}", &this_worker_id_copy).as_str(),
                                     catenary::bincode_serialize(&worker_metadata).unwrap(),
                                     Some(
                                         etcd_client::PutOptions::new()
@@ -1358,7 +1359,7 @@ async fn main() -> anyhow::Result<()> {
 
                             let etcd_this_worker_assignment = etcd
                                 .put(
-                                    format!("/aspen_workers/{}", this_worker_id).as_str(),
+                                    format!("/aspen_workers/{}", &worker_id_for_this_thread).as_str(),
                                     catenary::bincode_serialize(&worker_metadata).unwrap(),
                                     Some(
                                         etcd_client::PutOptions::new()
@@ -1377,6 +1378,12 @@ async fn main() -> anyhow::Result<()> {
         tokio::task::spawn({
             println!("Listening on port {}", listener.local_addr().port());
 
+            let worker_id_for_this_thread = Arc::clone(&this_worker_id);
+
+            let conn_pool_arced = Arc::clone(&arc_conn_pool);
+
+            let etcd_addresses = Arc::clone(&Arc::clone(&etcd_addresses));
+
             move || async move {
                 listener
                     // Ignore accept errors.
@@ -1385,9 +1392,9 @@ async fn main() -> anyhow::Result<()> {
                     .map(|channel| {
                         let server = AspenServer {
                             addr: channel.transport().peer_addr().unwrap(),
-                            worker_id: Arc::clone(&this_worker_id),
+                            worker_id: worker_id_for_this_thread.clone(),
                             authoritative_data_store: Arc::clone(&authoritative_data_store),
-                            conn_pool: Arc::clone(&arc_conn_pool),
+                            conn_pool: conn_pool_arced.clone(),
                             alpenrose_to_process_queue: Arc::clone(&process_from_alpenrose_queue),
                             authoritative_gtfs_rt_store: Arc::clone(&raw_gtfs),
                             backup_data_store: Arc::clone(&backup_data_store),
@@ -1398,7 +1405,7 @@ async fn main() -> anyhow::Result<()> {
                             rough_hash_of_gtfs_rt: Arc::clone(&rough_hash_of_gtfs_rt),
                             hash_of_raw_gtfs_rt_protobuf: Arc::clone(&hash_of_raw_gtfs_rt_protobuf),
                             worker_etcd_lease_id: etcd_lease_id_for_this_worker,
-                            etcd_addresses: Arc::clone(&etcd_addresses),
+                            etcd_addresses: etcd_addresses.clone(),
                             etcd_connect_options: Arc::clone(&arc_etcd_connect_options),
                             timestamps_of_gtfs_rt: Arc::clone(&timestamps_of_gtfs_rt),
                             authoritative_trip_updates_by_gtfs_feed_history: Arc::new(
@@ -1417,17 +1424,45 @@ async fn main() -> anyhow::Result<()> {
             }
         }());
 
-    async fn flatten<T>(
-        handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
-    ) -> Result<T, Box<dyn Error + Sync + Send>> {
-        match handle.await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(err)) => Err(err),
-            Err(err) => Err(Box::new(err)),
-        }
-    }
+        let feeds_list = chateau_list.clone();
 
-    async fn flatten_stopping_is_err<T>(
+        let arc_etcd_connection_options = Arc::new(etcd_connect_options.clone());
+
+        
+        let this_worker_id_copy = this_worker_id.clone();
+        
+        
+        let lease_id_for_this_worker = etcd_lease_id_for_this_worker;
+
+        let etcd_addresses_copy = etcd_addresses.clone();
+
+    let leader_thread_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>>
+    = tokio::task::spawn({
+
+
+        move || async move {
+            aspen_leader_thread(workers_nodes, feeds_list,  this_worker_id_copy, arc_conn_pool, etcd_addresses_copy,
+                 arc_etcd_connection_options, lease_id_for_this_worker).await
+        }
+
+    }(
+        
+    ));
+        
+    
+
+    let result_series = tokio::try_join!(
+        flatten_stopping_is_err(async_from_alpenrose_processor_handler),
+        flatten_stopping_is_err(tarpc_server),
+        flatten_stopping_is_err(etcd_lease_renewer),
+        flatten_stopping_is_err(leader_thread_server)
+    )
+    .unwrap();
+
+    panic!("IT WASNT SUPPOSED TO END");
+}
+
+async fn flatten_stopping_is_err<T>(
         handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
     ) -> Result<T, Box<dyn Error + Sync + Send>> {
         match handle.await {
@@ -1445,15 +1480,15 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let result_series = tokio::try_join!(
-        flatten_stopping_is_err(async_from_alpenrose_processor_handler),
-        flatten_stopping_is_err(tarpc_server),
-        flatten_stopping_is_err(etcd_lease_renewer)
-    )
-    .unwrap();
-
-    panic!("IT WASNT SUPPOSED TO END");
-}
+async fn flatten<T>(
+        handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
+    ) -> Result<T, Box<dyn Error + Sync + Send>> {
+        match handle.await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(err)) => Err(err),
+            Err(err) => Err(Box::new(err)),
+        }
+    }
 
 enum SaveTimestamp {
     Saved,
