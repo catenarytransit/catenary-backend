@@ -54,8 +54,6 @@ use tarpc::{
 use tokio::sync::Mutex;
 use tokio::time;
 use uuid::Uuid;
-mod leader_thread;
-use leader_thread::aspen_leader_thread;
 mod import_alpenrose;
 use ahash::AHashMap;
 use catenary::aspen_dataset::GtfsRtType;
@@ -1435,27 +1433,12 @@ async fn main() -> anyhow::Result<()> {
         let lease_id_for_this_worker = etcd_lease_id_for_this_worker;
 
         let etcd_addresses_copy = etcd_addresses.clone();
-
-    let leader_thread_server: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>>
-    = tokio::task::spawn({
-
-
-        move || async move {
-            aspen_leader_thread(workers_nodes, feeds_list,  this_worker_id_copy, arc_conn_pool, etcd_addresses_copy,
-                 arc_etcd_connection_options, lease_id_for_this_worker).await
-        }
-
-    }(
-        
-    ));
-        
     
 
     let result_series = tokio::try_join!(
         flatten_stopping_is_err(async_from_alpenrose_processor_handler),
         flatten_stopping_is_err(tarpc_server),
         flatten_stopping_is_err(etcd_lease_renewer),
-        flatten_stopping_is_err(leader_thread_server)
     )
     .unwrap();
 
