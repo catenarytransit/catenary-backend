@@ -1305,7 +1305,7 @@ async fn main() -> anyhow::Result<()> {
         etcd_lease_id_for_this_worker,
     ));
 
-            let this_worker_id_copy = this_worker_id.clone();
+    let this_worker_id_copy = this_worker_id.clone();
 
     let etcd_lease_renewer: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn({
@@ -1357,7 +1357,8 @@ async fn main() -> anyhow::Result<()> {
 
                             let etcd_this_worker_assignment = etcd
                                 .put(
-                                    format!("/aspen_workers/{}", &worker_id_for_this_thread).as_str(),
+                                    format!("/aspen_workers/{}", &worker_id_for_this_thread)
+                                        .as_str(),
                                     catenary::bincode_serialize(&worker_metadata).unwrap(),
                                     Some(
                                         etcd_client::PutOptions::new()
@@ -1422,18 +1423,15 @@ async fn main() -> anyhow::Result<()> {
             }
         }());
 
-        let feeds_list = chateau_list.clone();
+    let feeds_list = chateau_list.clone();
 
-        let arc_etcd_connection_options = Arc::new(etcd_connect_options.clone());
+    let arc_etcd_connection_options = Arc::new(etcd_connect_options.clone());
 
-        
-        let this_worker_id_copy = this_worker_id.clone();
-        
-        
-        let lease_id_for_this_worker = etcd_lease_id_for_this_worker;
+    let this_worker_id_copy = this_worker_id.clone();
 
-        let etcd_addresses_copy = etcd_addresses.clone();
-    
+    let lease_id_for_this_worker = etcd_lease_id_for_this_worker;
+
+    let etcd_addresses_copy = etcd_addresses.clone();
 
     let result_series = tokio::try_join!(
         flatten_stopping_is_err(async_from_alpenrose_processor_handler),
@@ -1446,32 +1444,33 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn flatten_stopping_is_err<T>(
-        handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
-    ) -> Result<T, Box<dyn Error + Sync + Send>> {
-        match handle.await {
-            Ok(Ok(result)) => {
-                Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "stopping wasnt supposed to happen")))
-            },
-            Ok(Err(err)) => {
-                eprintln!("{:#?}", err);
-                Err(err)
-            }
-            Err(err) => {
-                eprintln!("{:#?}", err);
-                Err(Box::new(err))
-            }
+    handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
+) -> Result<T, Box<dyn Error + Sync + Send>> {
+    match handle.await {
+        Ok(Ok(result)) => Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "stopping wasnt supposed to happen",
+        ))),
+        Ok(Err(err)) => {
+            eprintln!("{:#?}", err);
+            Err(err)
+        }
+        Err(err) => {
+            eprintln!("{:#?}", err);
+            Err(Box::new(err))
         }
     }
+}
 
 async fn flatten<T>(
-        handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
-    ) -> Result<T, Box<dyn Error + Sync + Send>> {
-        match handle.await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(err)) => Err(err),
-            Err(err) => Err(Box::new(err)),
-        }
+    handle: tokio::task::JoinHandle<Result<T, Box<dyn Error + Sync + Send>>>,
+) -> Result<T, Box<dyn Error + Sync + Send>> {
+    match handle.await {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(err)) => Err(err),
+        Err(err) => Err(Box::new(err)),
     }
+}
 
 enum SaveTimestamp {
     Saved,
