@@ -37,6 +37,12 @@ pub async fn aspen_leader_thread(
             )
             .await;
 
+        if let Err(make_lease_err) = make_lease {
+            eprintln!("Error connecting to etcd: {:#?}", make_lease_err);
+
+            return Err(Box::new(make_lease_err));
+        }
+
         let mut election_client = etcd.election_client();
 
         let current_leader_election = election_client.leader("/aspen_leader").await;
