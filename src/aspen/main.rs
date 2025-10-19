@@ -1226,7 +1226,15 @@ async fn main() -> anyhow::Result<()> {
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
     println!("Connected to postgres");
 
-    let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), 40427);
+    let port_number: u16 = match std::env::var("PORT") {
+        Ok(port) => port.parse::<u16>().unwrap(),
+        Err(e) => {
+            println!("No port number found, defaulting to 40427");
+            40427u16
+        }
+    };
+
+    let server_addr = (IpAddr::V6(Ipv6Addr::LOCALHOST), port_number);
     let socket = SocketAddr::new(server_addr.0, server_addr.1);
 
     let mut listener = tarpc::serde_transport::tcp::listen(&server_addr, Bincode::default).await?;
