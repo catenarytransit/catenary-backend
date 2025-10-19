@@ -40,7 +40,11 @@ pub async fn aspen_leader_thread(
         if let Err(make_lease_err) = make_lease {
             eprintln!("Error connecting to etcd: {:#?}", make_lease_err);
 
-            return Err(Box::new(make_lease_err));
+            if let etcd_client::Error::GRpcStatus(status) = &make_lease_err {
+                eprintln!("A gRPC error occurred: {}", status.message());
+            } else {
+                return Err(Box::new(make_lease_err));
+            }
         }
 
         let mut election_client = etcd.election_client();
