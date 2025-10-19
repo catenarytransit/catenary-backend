@@ -1165,6 +1165,10 @@ pub async fn new_rt_data(
                                     if vehicle_id.contains("CSTR") {
                                         pos_aspenised.route_type = 2;
                                     }
+
+                                    if vehicle_id.contains("SPR") {
+                                        pos_aspenised.route_type = 0;
+                                    }
                                 }
                             }
                         }
