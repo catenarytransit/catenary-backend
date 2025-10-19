@@ -1337,35 +1337,16 @@ async fn main() -> anyhow::Result<()> {
                                             .with_lease(etcd_lease_id_for_this_worker),
                                     ),
                                 )
-                                .await?;
+                                .await;
+
+                            if let Err(e) = &etcd_this_worker_assignment {
+                                eprintln!("Error inserting worker still active {:#?}", e);
+                            }
+
                             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         }
                         Err(e) => {
-                            println!("Error renewing lease: {:#?}", e);
-
-                            let make_lease = etcd
-                                .lease_grant(
-                                    //10 seconds
-                                    10,
-                                    Some(
-                                        etcd_client::LeaseGrantOptions::new()
-                                            .with_id(etcd_lease_id_for_this_worker),
-                                    ),
-                                )
-                                .await
-                                .expect("Failed to make lease with etcd");
-
-                            let etcd_this_worker_assignment = etcd
-                                .put(
-                                    format!("/aspen_workers/{}", &worker_id_for_this_thread)
-                                        .as_str(),
-                                    catenary::bincode_serialize(&worker_metadata).unwrap(),
-                                    Some(
-                                        etcd_client::PutOptions::new()
-                                            .with_lease(etcd_lease_id_for_this_worker),
-                                    ),
-                                )
-                                .await?;
+                            eprintln!("Error renewing lease: {:#?}", e);
                         }
                     }
                 }
