@@ -1347,6 +1347,23 @@ async fn main() -> anyhow::Result<()> {
                         }
                         Err(e) => {
                             eprintln!("Error renewing lease: {:#?}", e);
+
+                                let make_lease = etcd
+                                .lease_grant(
+                                    //10 seconds
+                                    10,
+                                    Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
+                                )
+                                .await;
+
+                            match make_lease {
+                                Ok(_) => {
+
+                                },
+                                Err(e) => {
+                                    eprintln!("lease regrant failed {e}");
+                                }
+                            }
                         }
                     }
                 }
