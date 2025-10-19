@@ -121,6 +121,6 @@ pub async fn aspen_leader_thread(
             eprintln!("Error renewing lease: {:#?}", lease_renewal);
         }
 
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
