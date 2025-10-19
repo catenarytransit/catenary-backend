@@ -257,7 +257,10 @@ pub async fn download_return_eligible_feeds(
     restrict_to_feed_id: &Option<String>,
     transitland_path: &str,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
-    let threads: usize = 128;
+    let threads: usize = match std::env::var("DOWNLOAD_THREADS") {
+        Ok(ok) => ok.parse::<usize>().unwrap_or_else(|_| 64),
+        Err(_) => 64,
+    };
 
     let total_bytes_downloaded: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
 
