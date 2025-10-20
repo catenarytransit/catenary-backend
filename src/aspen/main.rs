@@ -1401,7 +1401,7 @@ async fn main() -> anyhow::Result<()> {
 
             async move {
                 loop {
-                    //     println!("Renewing lease");
+                    println!("Renewing lease");
                     let x = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await;
 
                     match x {
@@ -1424,7 +1424,9 @@ async fn main() -> anyhow::Result<()> {
                             //    eprintln!("Error inserting worker still active {:#?}", e);
                             //}
 
-                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                            //tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+                            let _ = tokio::task::yield_now().await;
                         }
                         Err(e) => {
                             eprintln!("Error renewing lease: {:#?}", e);
