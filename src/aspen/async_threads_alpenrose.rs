@@ -79,6 +79,7 @@ pub async fn alpenrose_process_threads(
                 )
                 .await;
 
+
                 if let Err(e) = result {
                     eprintln!("Thread crashed: {:?}", e);
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -129,6 +130,8 @@ pub async fn alpenrose_loop_process_thread(
                 if let Err(e) = &rt_processed_status {
                     eprintln!("Error processing RT data: {} {:?}", feed_id, e);
                 }
+
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
             _ => {
                 tokio::time::sleep(Duration::from_millis(5)).await;
