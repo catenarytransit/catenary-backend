@@ -1238,6 +1238,22 @@ async fn main() -> anyhow::Result<()> {
         console_subscriber::init();
     }
 
+    let subscriber = tracing_subscriber::fmt()
+    // Use a more compact, abbreviated log format
+    .compact()
+    // Display source code file paths
+    .with_file(true)
+    // Display source code line numbers
+    .with_line_number(true)
+    // Display the thread ID an event was recorded on
+    .with_thread_ids(true)
+    // Don't display the event's target (module path)
+    .with_target(false)
+    // Build the subscriber
+    .finish();
+    
+    let tracing_result = tracing::subscriber::set_global_default(subscriber);
+
     // Worker Id for this instance of Aspen
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
@@ -1392,6 +1408,7 @@ async fn main() -> anyhow::Result<()> {
                         Ok(_) => {
                             //  println!("Lease renew successful");
 
+                            /*
                             let etcd_this_worker_assignment = etcd
                                 .put(
                                     format!("/aspen_workers/{}", &this_worker_id_copy).as_str(),
@@ -1401,13 +1418,13 @@ async fn main() -> anyhow::Result<()> {
                                             .with_lease(etcd_lease_id_for_this_worker),
                                     ),
                                 )
-                                .await;
+                                .await;*/
 
-                            if let Err(e) = &etcd_this_worker_assignment {
-                                eprintln!("Error inserting worker still active {:#?}", e);
-                            }
+                            //if let Err(e) = &etcd_this_worker_assignment {
+                            //    eprintln!("Error inserting worker still active {:#?}", e);
+                            //}
 
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         }
                         Err(e) => {
                             eprintln!("Error renewing lease: {:#?}", e);
@@ -1419,6 +1436,17 @@ async fn main() -> anyhow::Result<()> {
                                     Some(
                                         etcd_client::LeaseGrantOptions::new()
                                             .with_id(etcd_lease_id_for_this_worker),
+                                    ),
+                                )
+                                .await;
+
+                             let etcd_this_worker_assignment = etcd
+                                .put(
+                                    format!("/aspen_workers/{}", &this_worker_id_copy).as_str(),
+                                    catenary::bincode_serialize(&worker_metadata).unwrap(),
+                                    Some(
+                                        etcd_client::PutOptions::new()
+                                            .with_lease(etcd_lease_id_for_this_worker),
                                     ),
                                 )
                                 .await;
