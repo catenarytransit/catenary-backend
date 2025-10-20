@@ -19,6 +19,7 @@ use diesel_async::RunQueryDsl;
 use ecow::EcoString;
 use gtfs_realtime::FeedMessage;
 use lazy_static::lazy_static;
+use redis::RedisResult;
 use regex::Regex;
 use scc::HashMap as SccHashMap;
 use serde::Deserialize;
@@ -29,7 +30,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
-use redis::{RedisResult};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct MetrolinkTrackData {
@@ -162,7 +162,7 @@ pub async fn new_rt_data(
     trips_response_code: Option<u16>,
     alerts_response_code: Option<u16>,
     pool: Arc<CatenaryPostgresPool>,
-    redis_client: &redis::Client
+    redis_client: &redis::Client,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     println!(
         "Started processing for chateau {} and feed {}",
@@ -178,15 +178,15 @@ pub async fn new_rt_data(
             None => CompressedTripInternalCache::new(),
         };
 
-       // let mut redis_con: redis::Connection = redis_client.get_connection()?;
+    // let mut redis_con: redis::Connection = redis_client.get_connection()?;
 
     let previous_authoritative_data_store =
         match authoritative_data_store.get_async(chateau_id).await {
             Some(data) => Some(data.clone()),
             None => {
-            //    let data_bytes = (format!("authoritative-{}", chateau_id));
+                //    let data_bytes = (format!("authoritative-{}", chateau_id));
                 None
-            },
+            }
         };
 
     let fetch_supplemental_data_positions_metrolink: Option<AHashMap<CompactString, MetrolinkPos>> =
@@ -373,7 +373,8 @@ pub async fn new_rt_data(
 
     for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
         if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
-            .get_async(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions)).await
+            .get_async(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+            .await
         {
             let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
 
@@ -389,8 +390,9 @@ pub async fn new_rt_data(
         }
 
         //trips updates trip id lookup
-        if let Some(trip_gtfs_rt_for_feed_id) =
-            authoritative_gtfs_rt.get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates)).await
+        if let Some(trip_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
+            .get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+            .await
         {
             let trip_gtfs_rt_for_feed_id = trip_gtfs_rt_for_feed_id.get();
 
@@ -410,8 +412,9 @@ pub async fn new_rt_data(
         }
 
         //now do the same for alerts updates
-        if let Some(alert_gtfs_rt_for_feed_id) =
-            authoritative_gtfs_rt.get_async(&(realtime_feed_id.clone(), GtfsRtType::Alerts)).await
+        if let Some(alert_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
+            .get_async(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
+            .await
         {
             let alert_gtfs_rt_for_feed_id = alert_gtfs_rt_for_feed_id.get();
 
@@ -526,8 +529,9 @@ pub async fn new_rt_data(
             .as_secs();
 
         //pass through all the trip ids and get the last stop id that isnt skipped
-        if let Some(trip_gtfs_rt_for_feed_id) =
-            authoritative_gtfs_rt.get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates)).await
+        if let Some(trip_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
+            .get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+            .await
         {
             let trip_gtfs_rt_for_feed_id = trip_gtfs_rt_for_feed_id.get();
 
@@ -834,7 +838,8 @@ pub async fn new_rt_data(
 
         for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
             if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
-                .get_async(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions)).await
+                .get_async(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+                .await
             {
                 let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
 
@@ -1223,8 +1228,9 @@ pub async fn new_rt_data(
             }
 
             //process trip updates
-            if let Some(trip_updates_gtfs_rt_for_feed_id) =
-                authoritative_gtfs_rt.get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates)).await
+            if let Some(trip_updates_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
+                .get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+                .await
             {
                 let trip_updates_gtfs_rt_for_feed_id = trip_updates_gtfs_rt_for_feed_id.get();
 
@@ -1961,8 +1967,9 @@ pub async fn new_rt_data(
                 }
             }
 
-            if let Some(alert_updates_gtfs_rt) =
-                authoritative_gtfs_rt.get_async(&(realtime_feed_id.clone(), GtfsRtType::Alerts)).await
+            if let Some(alert_updates_gtfs_rt) = authoritative_gtfs_rt
+                .get_async(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
+                .await
             {
                 let alert_updates_gtfs_rt = alert_updates_gtfs_rt.get();
 

@@ -123,7 +123,12 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         stop_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedStop>> {
-        match self.authoritative_data_store.as_ref().get_async(&chateau_id).await {
+        match self
+            .authoritative_data_store
+            .as_ref()
+            .get_async(&chateau_id)
+            .await
+        {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -1174,7 +1179,11 @@ impl AspenRpc for AspenServer {
         }
     }
 
-    async fn full_aspen_dataset(self, context: tarpc::context::Context,chateau_id:String) -> Option<AspenisedData> {
+    async fn full_aspen_dataset(
+        self,
+        context: tarpc::context::Context,
+        chateau_id: String,
+    ) -> Option<AspenisedData> {
         match self
             .authoritative_data_store
             .as_ref()
@@ -1185,28 +1194,32 @@ impl AspenRpc for AspenServer {
                 let aspenised_data = aspenised_data.get();
 
                 Some(aspenised_data.clone())
-            },
-            None => None
+            }
+            None => None,
         }
     }
 
-    async fn full_aspen_dataset_backup(self, context: tarpc::context::Context,chateau_id:String) -> Option<AspenisedData> {
-        match self
-            .backup_data_store
-            .as_ref()
-            .get_async(&chateau_id)
-            .await
-        {
+    async fn full_aspen_dataset_backup(
+        self,
+        context: tarpc::context::Context,
+        chateau_id: String,
+    ) -> Option<AspenisedData> {
+        match self.backup_data_store.as_ref().get_async(&chateau_id).await {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
                 Some(aspenised_data.clone())
-            },
-            None => None
+            }
+            None => None,
         }
     }
 
-    async fn insert_backup_aspen_dataset(self,context: tarpc::context::Context, chateau_id:String, data: AspenisedData) -> () {
+    async fn insert_backup_aspen_dataset(
+        self,
+        context: tarpc::context::Context,
+        chateau_id: String,
+        data: AspenisedData,
+    ) -> () {
         let _ = self.backup_data_store.insert_async(chateau_id, data).await;
 
         ()
@@ -1219,7 +1232,7 @@ async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-     let redis_client = redis::Client::open("redis://127.0.0.1/")?;
+    let redis_client = redis::Client::open("redis://127.0.0.1/")?;
 
     //console_subscriber::init();
 
@@ -1349,9 +1362,7 @@ async fn main() -> anyhow::Result<()> {
         b_authoritative_data_store,
         b_conn_pool,
         b_thread_count,
-        
         Arc::clone(&alpenrose_to_process_queue_chateaux),
-        
         etcd_lease_id_for_this_worker,
         redis_client.clone(),
     ));
