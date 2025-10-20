@@ -123,7 +123,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         stop_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedStop>> {
-        match self.authoritative_data_store.as_ref().get_sync(&chateau_id) {
+        match self.authoritative_data_store.as_ref().get_async(&chateau_id).await {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -154,7 +154,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         shape_id: String,
     ) -> Option<String> {
-        match self.authoritative_data_store.get_sync(&chateau_id) {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -180,7 +180,7 @@ impl AspenRpc for AspenServer {
         trip_id: String,
         service_day: chrono::NaiveDate,
     ) -> Option<AspenisedTripModification> {
-        match self.authoritative_data_store.get_sync(&chateau_id) {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -232,7 +232,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         modification_id: String,
     ) -> Option<AspenisedTripModification> {
-        match self.authoritative_data_store.get_sync(&chateau_id) {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -261,7 +261,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         modification_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedTripModification>> {
-        match self.authoritative_data_store.get_sync(&chateau_id) {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -304,7 +304,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         trip_ids: Vec<String>,
     ) -> Option<TripsSelectionResponse> {
-        match self.authoritative_data_store.get_sync(&chateau_id) {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
             None => None,
             Some(authoritative_data) => {
                 let authoritative_data = authoritative_data.get();
@@ -1021,7 +1021,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         existing_fasthash_of_routes: Option<u64>,
     ) -> Option<GetVehicleLocationsResponse> {
-        match self.authoritative_data_store.get_sync(&chateau_id) {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -1052,7 +1052,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         gtfs_id: String,
     ) -> Option<AspenisedVehiclePosition> {
-        match self.authoritative_data_store.get_sync(&chateau_id) {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -1076,7 +1076,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         vehicle_id: String,
     ) -> Option<AspenisedVehiclePosition> {
-        match self.authoritative_data_store.get_sync(&chateau_id) {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -1107,7 +1107,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         trip_id: String,
     ) -> Option<Vec<AspenisedTripUpdate>> {
-        match self.authoritative_data_store.get_sync(&chateau_id) {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
@@ -1173,6 +1173,44 @@ impl AspenRpc for AspenServer {
             None => None,
         }
     }
+
+    async fn full_aspen_dataset(self, context: tarpc::context::Context,chateau_id:String) -> Option<AspenisedData> {
+        match self
+            .authoritative_data_store
+            .as_ref()
+            .get_async(&chateau_id)
+            .await
+        {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                Some(aspenised_data.clone())
+            },
+            None => None
+        }
+    }
+
+    async fn full_aspen_dataset_backup(self, context: tarpc::context::Context,chateau_id:String) -> Option<AspenisedData> {
+        match self
+            .backup_data_store
+            .as_ref()
+            .get_async(&chateau_id)
+            .await
+        {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                Some(aspenised_data.clone())
+            },
+            None => None
+        }
+    }
+
+    async fn insert_backup_aspen_dataset(self,context: tarpc::context::Context, chateau_id:String, data: AspenisedData) -> () {
+        let _ = self.backup_data_store.insert_async(chateau_id, data).await;
+
+        ()
+    }
 }
 
 async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
@@ -1181,6 +1219,8 @@ async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+     let redis_client = redis::Client::open("redis://127.0.0.1/")?;
+
     //console_subscriber::init();
 
     // Worker Id for this instance of Aspen
@@ -1309,8 +1349,11 @@ async fn main() -> anyhow::Result<()> {
         b_authoritative_data_store,
         b_conn_pool,
         b_thread_count,
+        
         Arc::clone(&alpenrose_to_process_queue_chateaux),
+        
         etcd_lease_id_for_this_worker,
+        redis_client.clone(),
     ));
 
     let this_worker_id_copy = this_worker_id.clone();

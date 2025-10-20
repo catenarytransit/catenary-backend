@@ -7,7 +7,7 @@ use gtfs_realtime::FeedEntity;
 use std::hash::Hash;
 use std::sync::Arc;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ItineraryPatternInternalCache {
     pub itinerary_pattern_meta: AHashMap<String, crate::models::ItineraryPatternMeta>,
     pub itinerary_pattern_rows: AHashMap<String, Vec<crate::models::ItineraryPatternRow>>,
@@ -24,7 +24,7 @@ impl ItineraryPatternInternalCache {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct CompressedTripInternalCache {
     pub compressed_trips: AHashMap<String, crate::models::CompressedTrip>,
     pub last_time_full_refreshed: chrono::DateTime<chrono::Utc>,
@@ -39,7 +39,7 @@ impl CompressedTripInternalCache {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct AspenisedData {
     pub vehicle_positions: AHashMap<String, AspenisedVehiclePosition>,
     pub vehicle_routes_cache: AHashMap<String, AspenisedVehicleRouteCache>,

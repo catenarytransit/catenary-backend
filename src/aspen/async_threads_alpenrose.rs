@@ -21,6 +21,7 @@ pub async fn alpenrose_process_threads(
     alpenrosethreadcount: usize,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
     _lease_id_for_this_worker: i64,
+    redis_client: redis::Client
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut set: JoinSet<_> = JoinSet::new();
 
@@ -30,6 +31,7 @@ pub async fn alpenrose_process_threads(
         let authoritative_data_store = Arc::clone(&authoritative_data_store);
         let conn_pool = Arc::clone(&conn_pool);
         let chateau_queue_list = Arc::clone(&chateau_queue_list);
+        let redis_client = redis_client.clone();
 
         set.spawn(async move {
             loop {
@@ -39,6 +41,7 @@ pub async fn alpenrose_process_threads(
                     authoritative_data_store.clone(),
                     conn_pool.clone(),
                     chateau_queue_list.clone(),
+                    redis_client.clone()
                 )
                 .await;
 
@@ -63,6 +66,7 @@ pub async fn alpenrose_process_threads(
         let authoritative_data_store = Arc::clone(&authoritative_data_store);
         let conn_pool = Arc::clone(&conn_pool);
         let chateau_queue_list = Arc::clone(&chateau_queue_list);
+         let redis_client = redis_client.clone();
         set.spawn(async move {
             loop {
                 let result = alpenrose_loop_process_thread(
@@ -71,6 +75,7 @@ pub async fn alpenrose_process_threads(
                     authoritative_data_store.clone(),
                     conn_pool.clone(),
                     chateau_queue_list.clone(),
+                    redis_client.clone()
                 )
                 .await;
 
@@ -91,6 +96,7 @@ pub async fn alpenrose_loop_process_thread(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
+    redis_client: redis::Client
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         // println!("From-Alpenrose process thread");
@@ -110,6 +116,7 @@ pub async fn alpenrose_loop_process_thread(
                     new_ingest_task.trips_response_code,
                     new_ingest_task.alerts_response_code,
                     Arc::clone(&conn_pool),
+                    &redis_client
                 )
                 .await;
 

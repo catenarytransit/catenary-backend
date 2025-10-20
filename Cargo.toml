@@ -157,6 +157,7 @@ discord-message = "0.1.0"
 discord-webhook-rs = "1.0.5"
 query-string-builder = "0.6.0"
 bytefmt = "0.1.7"
+redis = { version = "0.32.7", features = ["aio"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

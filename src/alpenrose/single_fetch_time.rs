@@ -51,7 +51,7 @@ async fn cleanup_response(
 
             let hash = ahash_fast_hash(&bytes);
 
-            match hashes_of_data.get_sync(&(feed_id.to_string(), urltype.clone())) {
+            match hashes_of_data.get_async(&(feed_id.to_string(), urltype.clone())).await {
                 Some(old_hash) => {
                     let old_hash = old_hash.get();
 
