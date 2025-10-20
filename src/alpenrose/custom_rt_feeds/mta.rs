@@ -606,4 +606,15 @@ mod tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn test_lirr() {
+        let client = reqwest::Client::new();
+
+        let gtfs_rt_trips = get_mta_trips(&client, LIRR_TRIPS_FEED).await.unwrap();
+
+        for entity in gtfs_rt_trips.entity.iter() {
+            println!("{:#?}", entity.vehicle);
+        }
+    }
 }

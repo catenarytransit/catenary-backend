@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Write;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
@@ -91,6 +92,7 @@ pub async fn single_fetch_time(
     etcd_connection_options: Option<etcd_client::ConnectOptions>,
     lease_id: i64,
     hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>>,
+    too_many_requests_log: Arc<SccHashMap<String, std::time::Instant>>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let start = Instant::now();
 
@@ -136,6 +138,19 @@ pub async fn single_fetch_time(
 
                         if duration_since_last_fetch < fetch_interval_ms as u128 {
                             //skip because timeout has not been reached
+                            return;
+                        }
+                    }
+
+                    if let Some(fetch_time_of_429) =
+                        too_many_requests_log.get_async(feed_id.as_str()).await
+                    {
+                        let fetch_time_of_429 = fetch_time_of_429.get();
+
+                        let new_now = Instant::now();
+                        if new_now.duration_since(&fetch_time_of_429) < Duration::from_secs(10) {
+                            //dont fetch again if 429 was recent
+
                             return;
                         }
                     }
@@ -207,6 +222,9 @@ pub async fn single_fetch_time(
                             || (alerts_http_status == Some(429))
                         {
                             println!("{}: 429 Rate limited", &feed_id);
+
+                            too_many_requests_log
+                                .insert_async(feed_id.clone(), std::time::Instant::now());
 
                             return;
                         }

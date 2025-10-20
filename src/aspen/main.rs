@@ -702,21 +702,24 @@ impl AspenRpc for AspenServer {
             if new_data {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry_async((realtime_feed_id.clone(), GtfsRtType::VehiclePositions)).await
+                        .entry_async((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+                        .await
                         .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
                         .or_insert(vehicles_gtfs_rt.clone());
                 }
 
                 if let Some(trip_gtfs_rt) = trips_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry_async((realtime_feed_id.clone(), GtfsRtType::TripUpdates)).await
+                        .entry_async((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+                        .await
                         .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
                         .or_insert(trip_gtfs_rt.clone());
                 }
 
                 if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry_async((realtime_feed_id.clone(), GtfsRtType::Alerts)).await
+                        .entry_async((realtime_feed_id.clone(), GtfsRtType::Alerts))
+                        .await
                         .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
                         .or_insert(alerts_gtfs_rt.clone());
                 }
@@ -968,21 +971,24 @@ impl AspenRpc for AspenServer {
             if new_data || chateau_id == "uc~irvine~anteater~express" {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry_async((realtime_feed_id.clone(), GtfsRtType::VehiclePositions)).await
+                        .entry_async((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
+                        .await
                         .and_modify(|gtfs_data| *gtfs_data = vehicles_gtfs_rt.clone())
                         .or_insert(vehicles_gtfs_rt.clone());
                 }
 
                 if let Some(trip_gtfs_rt) = trips_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry_async((realtime_feed_id.clone(), GtfsRtType::TripUpdates)).await
+                        .entry_async((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+                        .await
                         .and_modify(|gtfs_data| *gtfs_data = trip_gtfs_rt.clone())
                         .or_insert(trip_gtfs_rt.clone());
                 }
 
                 if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
                     self.authoritative_gtfs_rt_store
-                        .entry_async((realtime_feed_id.clone(), GtfsRtType::Alerts)).await
+                        .entry_async((realtime_feed_id.clone(), GtfsRtType::Alerts))
+                        .await
                         .and_modify(|gtfs_data| *gtfs_data = alerts_gtfs_rt.clone())
                         .or_insert(alerts_gtfs_rt.clone());
                 }
@@ -1239,19 +1245,19 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let subscriber = tracing_subscriber::fmt()
-    // Use a more compact, abbreviated log format
-    .compact()
-    // Display source code file paths
-    .with_file(true)
-    // Display source code line numbers
-    .with_line_number(true)
-    // Display the thread ID an event was recorded on
-    .with_thread_ids(true)
-    // Don't display the event's target (module path)
-    .with_target(false)
-    // Build the subscriber
-    .finish();
-    
+        // Use a more compact, abbreviated log format
+        .compact()
+        // Display source code file paths
+        .with_file(true)
+        // Display source code line numbers
+        .with_line_number(true)
+        // Display the thread ID an event was recorded on
+        .with_thread_ids(true)
+        // Don't display the event's target (module path)
+        .with_target(false)
+        // Build the subscriber
+        .finish();
+
     let tracing_result = tracing::subscriber::set_global_default(subscriber);
 
     // Worker Id for this instance of Aspen
@@ -1442,7 +1448,7 @@ async fn main() -> anyhow::Result<()> {
                                 )
                                 .await;
 
-                             let etcd_this_worker_assignment = etcd
+                            let etcd_this_worker_assignment = etcd
                                 .put(
                                     format!("/aspen_workers/{}", &this_worker_id_copy).as_str(),
                                     catenary::bincode_serialize(&worker_metadata).unwrap(),
@@ -1512,7 +1518,6 @@ async fn main() -> anyhow::Result<()> {
                     .for_each(|_| async {})
                     .await;
 
-               
                 panic!("Why did the tarpc task end?");
 
                 Ok(())

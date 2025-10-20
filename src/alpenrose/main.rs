@@ -90,6 +90,9 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>> = Arc::new(SccHashMap::new());
 
+    let too_many_requests_log: Arc<SccHashMap<String, std::time::Instant>> =
+        Arc::new(SccHashMap::new());
+
     // if a node drops out, ingestion will be automatically reassigned to the other nodes
 
     //hands off data to aspen to do additional cleanup and processing, Aspen will perform association with the GTFS schedule data + update dynamic graphs for routing and map representation,
@@ -462,6 +465,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 etcd_connection_options.clone(),
                 etcd_lease_id,
                 hashes_of_data.clone(),
+                too_many_requests_log.clone(),
             )
             .await?;
 
