@@ -1234,7 +1234,7 @@ async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
 async fn main() -> anyhow::Result<()> {
     let redis_client = redis::Client::open("redis://127.0.0.1/")?;
 
-    if std::env::var("TOKIOCONSOLE").is_some() {
+    if std::env::var("TOKIOCONSOLE").is_ok() {
         console_subscriber::init();
     }
 
