@@ -1509,6 +1509,8 @@ async fn main() -> anyhow::Result<()> {
                     .buffer_unordered(channel_count)
                     .for_each(|_| async {})
                     .await;
+                
+                panic!("Why did the tarpc task end?");
 
                 Ok(())
             }
