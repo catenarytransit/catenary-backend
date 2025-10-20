@@ -1325,8 +1325,8 @@ async fn main() -> anyhow::Result<()> {
 
     let make_lease = etcd
         .lease_grant(
-            //10 seconds
-            10,
+            //30 seconds
+            30,
             Some(etcd_client::LeaseGrantOptions::new().with_id(etcd_lease_id_for_this_worker)),
         )
         .await
@@ -1424,9 +1424,9 @@ async fn main() -> anyhow::Result<()> {
                             //    eprintln!("Error inserting worker still active {:#?}", e);
                             //}
 
-                            //tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
 
-                            let _ = tokio::task::yield_now().await;
+                            //let _ = tokio::task::yield_now().await;
                         }
                         Err(e) => {
                             eprintln!("Error renewing lease: {:#?}", e);
