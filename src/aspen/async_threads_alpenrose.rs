@@ -131,10 +131,10 @@ pub async fn alpenrose_loop_process_thread(
                     eprintln!("Error processing RT data: {} {:?}", feed_id, e);
                 }
 
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                tokio::task::yield_now().await;
             }
             _ => {
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                tokio::task::yield_now().await;
             }
         }
     }
