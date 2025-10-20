@@ -214,6 +214,26 @@ pub async fn refresh_metadata_assignments(
         })
         .collect::<Vec<catenary::models::RealtimeFeed>>();
 
+    let new_rt_keys = new_realtime_dataset
+        .iter()
+        .map(|x| x.onestop_feed_id.clone())
+        .collect::<HashSet<String>>();
+
+    let rt_feeds_to_delete = existing_realtime_feeds_map
+        .keys()
+        .filter(|existing_feed| !new_rt_keys.contains(existing_feed.as_str()))
+        .map(|x| x.clone())
+        .collect::<Vec<String>>();
+
+    for feed_to_delete in rt_feeds_to_delete {
+        let _ = diesel::delete(
+            gtfs_schema::realtime_feeds::dsl::realtime_feeds
+                .filter(gtfs_schema::realtime_feeds::dsl::onestop_feed_id.eq(feed_to_delete)),
+        )
+        .execute(conn)
+        .await?;
+    }
+
     for new_realtime in new_realtime_dataset {
         let _ = diesel::insert_into(gtfs_schema::realtime_feeds::dsl::realtime_feeds)
             .values(new_realtime.clone())
