@@ -1234,7 +1234,9 @@ async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
 async fn main() -> anyhow::Result<()> {
     let redis_client = redis::Client::open("redis://127.0.0.1/")?;
 
-    //console_subscriber::init();
+    if std::env::var("TOKIOCONSOLE").is_some() {
+        console_subscriber::init();
+    }
 
     // Worker Id for this instance of Aspen
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
