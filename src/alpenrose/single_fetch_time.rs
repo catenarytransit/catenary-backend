@@ -128,6 +128,8 @@ pub async fn single_fetch_time(
 
                 let hashmap_of_connections = hashmap_of_connections.clone();
 
+                let too_many_requests_log = Arc::clone(&too_many_requests_log);
+
                 async move {
                     let start = Instant::now();
 
@@ -148,7 +150,7 @@ pub async fn single_fetch_time(
                         let fetch_time_of_429 = fetch_time_of_429.get();
 
                         let new_now = Instant::now();
-                        if new_now.duration_since(&fetch_time_of_429) < Duration::from_secs(10) {
+                        if new_now.duration_since(*fetch_time_of_429) < Duration::from_secs(10) {
                             //dont fetch again if 429 was recent
 
                             return;
@@ -223,8 +225,9 @@ pub async fn single_fetch_time(
                         {
                             println!("{}: 429 Rate limited", &feed_id);
 
-                            too_many_requests_log
-                                .insert_async(feed_id.clone(), std::time::Instant::now());
+                            let _ = too_many_requests_log
+                                .insert_async(feed_id.clone(), std::time::Instant::now())
+                                .await;
 
                             return;
                         }
