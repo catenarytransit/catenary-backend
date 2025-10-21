@@ -37,6 +37,7 @@ lazy_static! {
         //"f-uc~irvine~anteater~express~rt",
         "f-metrolinktrains~extra~rt",
         "f-rtcquebec~rt",
+        "f-f244-sto~rt",
     ]);
 }
 
@@ -493,6 +494,14 @@ pub async fn single_fetch_time(
                                     )
                                     .await;
                                 }
+                            }
+                            "f-f244-sto~rt" => {
+                                let _ = custom_rt_feeds::sto_ca::recuperer_les_donnees_sto(
+                                    &mut kv_client,
+                                    &client,
+                                    &feed_id,
+                                )
+                                .await;
                             }
                             //    "f-uc~irvine~anteater~express~rt" => {
                             //       custom_rt_feeds::uci::fetch_uci_data(&mut etcd, feed_id).await;

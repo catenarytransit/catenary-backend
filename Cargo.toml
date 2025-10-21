@@ -158,6 +158,8 @@ discord-webhook-rs = "1.0.5"
 query-string-builder = "0.6.0"
 bytefmt = "0.1.7"
 redis = { version = "0.32.7" }
+hex = { version = "0.4.3", features = ["serde"] }
+sha2 = "0.10.9"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
