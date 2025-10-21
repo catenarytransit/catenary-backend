@@ -192,7 +192,7 @@ pub async fn single_fetch_time(
 
                     let use_proxy = match last_429_elapsed {
                         Some(duration) => {
-                            duration <= Duration::from_secs(60) && assignment.passwords.is_none()
+                            duration <= Duration::from_secs(300) && assignment.passwords.is_none()
                         }
                         None => false,
                     };
