@@ -191,7 +191,9 @@ pub async fn single_fetch_time(
                     last_fetch_per_feed.insert(feed_id.clone(), Instant::now());
 
                     let use_proxy = match last_429_elapsed {
-                        Some(duration) => duration <= Duration::from_secs(60) && assignment.passwords.is_none(),
+                        Some(duration) => {
+                            duration <= Duration::from_secs(60) && assignment.passwords.is_none()
+                        }
                         None => false,
                     };
 
