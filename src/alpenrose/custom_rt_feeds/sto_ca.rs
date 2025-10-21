@@ -111,3 +111,35 @@ pub async fn recuperer_les_donnees_sto(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_gtfs_fetching() {
+        let client = reqwest::Client::new();
+
+        let le_cle_publique = "CF6C513F1E672F014212DEE34F14E980";
+        let secret = "FA56F1BC6524315CF452A0BA7BA3B855745E9A8C27CB3C3753271D1EFC4D218E";
+
+        let donnes_vehicle =
+            telecharger_gtfs("vehicule", le_cle_publique, secret, client.clone()).await;
+
+        if let Err(erreur) = &donnes_vehicle {
+            eprintln!("{:?}", erreur);
+        }
+
+        let donnes_voyage = telecharger_gtfs("trip", le_cle_publique, secret, client.clone()).await;
+
+        if let Err(erreur) = &donnes_voyage {
+            eprintln!("{:?}", erreur);
+        }
+
+        let donnes_alert = telecharger_gtfs("alert", le_cle_publique, secret, client.clone()).await;
+
+        if let Err(erreur) = &donnes_alert {
+            eprintln!("{:?}", erreur);
+        }
+    }
+}
