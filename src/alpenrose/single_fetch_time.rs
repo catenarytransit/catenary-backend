@@ -14,6 +14,7 @@ use gtfs_realtime::alert;
 use lazy_static::lazy_static;
 use leapfrog::hashmap;
 use rand::prelude::*;
+use rand::seq::IndexedRandom;
 use rand::seq::SliceRandom;
 use reqwest::Response;
 use scc::HashMap as SccHashMap;
@@ -79,6 +80,16 @@ async fn cleanup_response(
     }
 }
 
+const HTTP_PROXY_ADDRESSES: [&str; 7] = [
+    "47.176.240.250:4228",
+    "74.50.96.247:8888",
+    "107.167.4.130:9998",
+    "35.243.0.245:10051",
+    "142.171.224.165:8080",
+    "142.171.127.232:7890",
+    "35.243.0.217:10007",
+];
+
 pub async fn single_fetch_time(
     request_limit: usize,
     client: reqwest::Client,
@@ -127,6 +138,8 @@ pub async fn single_fetch_time(
                 let mut kv_client = etcd.kv_client();
                 let mut lease_client = etcd.lease_client();
 
+                let mut last_429_elapsed: Option<Duration> = None;
+
                 let hashmap_of_connections = hashmap_of_connections.clone();
 
                 let too_many_requests_log = Arc::clone(&too_many_requests_log);
@@ -151,6 +164,7 @@ pub async fn single_fetch_time(
                         let fetch_time_of_429 = fetch_time_of_429.get();
 
                         let new_now = Instant::now();
+                        last_429_elapsed = Some(new_now.duration_since(*fetch_time_of_429));
                         if new_now.duration_since(*fetch_time_of_429) < Duration::from_secs(10) {
                             //dont fetch again if 429 was recent
 
@@ -176,24 +190,95 @@ pub async fn single_fetch_time(
 
                     last_fetch_per_feed.insert(feed_id.clone(), Instant::now());
 
+                    let use_proxy = match last_429_elapsed {
+                        Some(duration) => duration <= Duration::from_secs(60) && assignment.passwords.is_none(),
+                        None => false,
+                    };
+
+                    let client_for_v_req = match use_proxy {
+                        true => {
+                            let proxy_url = HTTP_PROXY_ADDRESSES.choose(&mut rand::rng()).unwrap();
+
+                            reqwest::ClientBuilder::new()
+                                .proxy(reqwest::Proxy::http(*proxy_url).unwrap())
+                                //timeout queries
+                                .timeout(Duration::from_secs(10))
+                                .connect_timeout(Duration::from_secs(10))
+                                .deflate(true)
+                                .gzip(true)
+                                .brotli(true)
+                                .cookie_store(true)
+                                .danger_accept_invalid_certs(true)
+                                .build()
+                                .unwrap()
+                        }
+                        false => client.clone(),
+                    };
+
                     let vehicle_positions_request = make_reqwest_for_url(
                         UrlType::VehiclePositions,
                         &assignment,
-                        client.clone(),
+                        client_for_v_req.clone(),
                     );
 
-                    let trip_updates_request =
-                        make_reqwest_for_url(UrlType::TripUpdates, &assignment, client.clone());
+                    let client_for_t_req = match use_proxy {
+                        true => {
+                            let proxy_url = HTTP_PROXY_ADDRESSES.choose(&mut rand::rng()).unwrap();
 
-                    let alerts_request =
-                        make_reqwest_for_url(UrlType::Alerts, &assignment, client.clone());
+                            reqwest::ClientBuilder::new()
+                                .proxy(reqwest::Proxy::http(*proxy_url).unwrap())
+                                //timeout queries
+                                .timeout(Duration::from_secs(10))
+                                .connect_timeout(Duration::from_secs(10))
+                                .deflate(true)
+                                .gzip(true)
+                                .brotli(true)
+                                .cookie_store(true)
+                                .danger_accept_invalid_certs(true)
+                                .build()
+                                .unwrap()
+                        }
+                        false => client.clone(),
+                    };
+
+                    let trip_updates_request = make_reqwest_for_url(
+                        UrlType::TripUpdates,
+                        &assignment,
+                        client_for_t_req.clone(),
+                    );
+
+                    let client_for_a_req = match use_proxy {
+                        true => {
+                            let proxy_url = HTTP_PROXY_ADDRESSES.choose(&mut rand::rng()).unwrap();
+
+                            reqwest::ClientBuilder::new()
+                                .proxy(reqwest::Proxy::http(*proxy_url).unwrap())
+                                //timeout queries
+                                .timeout(Duration::from_secs(10))
+                                .connect_timeout(Duration::from_secs(10))
+                                .deflate(true)
+                                .gzip(true)
+                                .brotli(true)
+                                .cookie_store(true)
+                                .danger_accept_invalid_certs(true)
+                                .build()
+                                .unwrap()
+                        }
+                        false => client.clone(),
+                    };
+
+                    let alerts_request = make_reqwest_for_url(
+                        UrlType::Alerts,
+                        &assignment,
+                        client_for_a_req.clone(),
+                    );
 
                     //run all requests concurrently
                     let vehicle_positions_future =
-                        run_optional_req(vehicle_positions_request, client.clone());
+                        run_optional_req(vehicle_positions_request, client_for_v_req.clone());
                     let trip_updates_future =
-                        run_optional_req(trip_updates_request, client.clone());
-                    let alerts_future = run_optional_req(alerts_request, client.clone());
+                        run_optional_req(trip_updates_request, client_for_t_req.clone());
+                    let alerts_future = run_optional_req(alerts_request, client_for_a_req.clone());
 
                     // println!("{}: Fetching data", feed_id);
                     let (vehicle_positions_data, trip_updates_data, alerts_data) = futures::join!(
@@ -229,8 +314,6 @@ pub async fn single_fetch_time(
                             let _ = too_many_requests_log
                                 .insert_async(feed_id.clone(), std::time::Instant::now())
                                 .await;
-
-                            return;
                         }
 
                         //lookup currently assigned realtime dataset in zookeeper
