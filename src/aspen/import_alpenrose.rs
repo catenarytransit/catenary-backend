@@ -2390,6 +2390,14 @@ mod tests {
                         .cloned()
                         .collect::<Vec<String>>()
                 );
+
+                for (k,v) in a_data.metrolink.as_ref().unwrap().track_lookup.iter() {
+                    if k.contains("A") && k.chars().count() == 3 {
+                        println!("{}: {:#?}", k, v);
+                    }
+
+                    
+                }
             }
             _ => panic!("Expected Amtrak data"),
         }
