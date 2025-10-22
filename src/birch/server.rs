@@ -824,7 +824,9 @@ struct QueryNominatimDetails {
 }
 
 #[actix_web::get("nominatim_details")]
-pub async fn nominatim_details(query: web::Query<QueryNominatimDetails>) -> impl Responder {
+pub async fn nominatim_details(query: web::Query<QueryNominatimDetails>,
+
+    client: actix_web::web::Data<Arc<reqwest::Client>>) -> impl Responder {
     use query_string_builder::QueryString;
 
     let query = query.into_inner();
@@ -833,7 +835,7 @@ pub async fn nominatim_details(query: web::Query<QueryNominatimDetails>) -> impl
 
     let error_msg = r#"{"error":{"code":404,"message":"No place with that OSM ID found."}}"#;
 
-    let client = reqwest::Client::new();
+    let client = client.as_ref();
 
     match &query.osm_type {
         None => {
