@@ -685,6 +685,8 @@ async fn main() -> std::io::Result<()> {
 
     let elasticclient = Arc::new(elasticclient);
 
+    let shared_client = Arc::new(reqwest::Client::new());
+
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
         App::new()
@@ -715,6 +717,7 @@ async fn main() -> std::io::Result<()> {
                 etcd_connection_options.clone(),
             )))
             .app_data(actix_web::web::Data::new(Arc::clone(&etcd_connection_ips)))
+            .app_data(actix_web::web::Data::new(Arc::clone(&shared_client)))
             .route("/", web::get().to(index))
             .route("robots.txt", web::get().to(robots))
             .service(amtrakproxy)
