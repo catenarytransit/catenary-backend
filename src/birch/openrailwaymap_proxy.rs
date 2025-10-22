@@ -7,7 +7,7 @@ use actix_web::{HttpResponse, Responder};
 
 #[actix_web::get("/openrailwaymap_proxy/{path:.*}")]
 pub async fn openrailwaymap_proxy(path: actix_web::web::Path<String>) -> impl Responder {
-    let url = format!("https://openrailwaymap.fly.dev/{}", path);
+    let url = format!("https://openrailwaymap.app//{}", path);
     let client = reqwest::Client::new();
     let response = client.get(&url).send().await.unwrap();
 
@@ -23,7 +23,7 @@ pub async fn openrailwaymap_proxy(path: actix_web::web::Path<String>) -> impl Re
                 if let Some(tile_url) = tile.as_str() {
                     *tile = tile_url
                         .replace(
-                            "https://openrailwaymap.fly.dev/",
+                            "https://openrailwaymap.app/",
                             "https://birch_orm1.catenarymaps.org/openrailwaymap_proxy/",
                         )
                         .into();
