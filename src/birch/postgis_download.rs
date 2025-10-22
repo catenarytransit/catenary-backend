@@ -68,7 +68,7 @@ pub async fn bus_stops_meta(req: HttpRequest) -> impl Responder {
         version: None,
         other: std::collections::BTreeMap::new(),
         tiles: vec![String::from(
-            "https://birch.catenarymaps.org/busstops/{z}/{x}/{y}",
+            "https://birch_stops_tiles.catenarymaps.org/busstops/{z}/{x}/{y}",
         )],
         attribution: None,
     };
@@ -199,7 +199,7 @@ pub async fn station_features_meta(req: HttpRequest) -> impl Responder {
         version: None,
         other: std::collections::BTreeMap::new(),
         tiles: vec![String::from(
-            "https://birch.catenarymaps.org/station_features/{z}/{x}/{y}",
+            "https://birch_stops_tiles.catenarymaps.org/station_features/{z}/{x}/{y}",
         )],
         attribution: None,
     };
@@ -410,7 +410,7 @@ pub async fn rail_stops_meta(req: HttpRequest) -> impl Responder {
         version: None,
         other: std::collections::BTreeMap::new(),
         tiles: vec![String::from(
-            "https://birch.catenarymaps.org/railstops/{z}/{x}/{y}",
+            "https://birch_stops_tiles.catenarymaps.org/railstops/{z}/{x}/{y}",
         )],
         attribution: None,
     };
@@ -546,7 +546,7 @@ pub async fn other_stops_meta(req: HttpRequest) -> impl Responder {
         version: None,
         other: std::collections::BTreeMap::new(),
         tiles: vec![String::from(
-            "https://birch.catenarymaps.org/otherstops/{z}/{x}/{y}",
+            "https://birch_stops_tiles.catenarymaps.org/otherstops/{z}/{x}/{y}",
         )],
         attribution: None,
     };
@@ -1111,7 +1111,7 @@ pub async fn shapes_bus_meta(req: HttpRequest) -> impl Responder {
         version: None,
         other: std::collections::BTreeMap::new(),
         tiles: vec![String::from(
-            "https://birch.catenarymaps.org/shapes_bus/{z}/{x}/{y}",
+            "https://birch_shapes_bus.catenarymaps.org/shapes_bus/{z}/{x}/{y}",
         )],
         attribution: None,
     };
