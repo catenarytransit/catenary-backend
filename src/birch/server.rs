@@ -824,9 +824,11 @@ struct QueryNominatimDetails {
 }
 
 #[actix_web::get("nominatim_details")]
-pub async fn nominatim_details(query: web::Query<QueryNominatimDetails>,
+pub async fn nominatim_details(
+    query: web::Query<QueryNominatimDetails>,
 
-    client: actix_web::web::Data<Arc<reqwest::Client>>) -> impl Responder {
+    client: actix_web::web::Data<Arc<reqwest::Client>>,
+) -> impl Responder {
     use query_string_builder::QueryString;
 
     let query = query.into_inner();

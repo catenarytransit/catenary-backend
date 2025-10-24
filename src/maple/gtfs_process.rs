@@ -1015,7 +1015,7 @@ pub async fn gtfs_process_feed(
     println!("Routes inserted for {}", feed_id);
 
     //calculate concave hull
-    let hull = crate::gtfs_handlers::hull_from_gtfs::hull_from_gtfs(&gtfs);
+    let hull = crate::gtfs_handlers::hull_from_gtfs::hull_from_gtfs(&gtfs, &feed_id);
 
     let bbox = hull.as_ref().map(|hull| hull.bounding_rect()).flatten();
 

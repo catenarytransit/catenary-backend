@@ -40,7 +40,7 @@ lazy_static! {
     ]);
 }
 
-pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
+pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Polygon> {
     let bus_only = gtfs
         .routes
         .iter()
@@ -87,6 +87,14 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs) -> Option<Polygon> {
         .chain(stop_points.into_iter())
         .collect::<Vec<Point>>();
 
+    let new_point_collection = match feed_id {
+        "f-bus~dft~gov~uk" => new_point_collection
+            .into_iter()
+            .filter(|point| point.x() < 6. && point.y() > 45.)
+            .collect::<Vec<Point>>(),
+        _ => new_point_collection,
+    };
+
     if new_point_collection.len() < 4 {
         return None;
     }
@@ -130,7 +138,7 @@ struct PolygonSide {
 pub fn longest_side_length_metres(polygon: &geo::Polygon<f64>) -> PolygonSide {
     let exterior = polygon.exterior();
 
-    let points = exterior.points_iter().collect::<Vec<_>>();
+    let points = exterior.points().collect::<Vec<_>>();
 
     let mut longest_side = PolygonSide {
         starting_index: 0,
@@ -170,7 +178,7 @@ pub fn buffer_geo_polygon_internal(
         Some(centre) => {
             let mut points = Vec::new();
 
-            let points_of_polygon = polygon.exterior().points_iter().collect::<Vec<_>>();
+            let points_of_polygon = polygon.exterior().points().collect::<Vec<_>>();
 
             for original_point in points_of_polygon {
                 //calculate bearing between the centre and the point
