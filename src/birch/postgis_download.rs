@@ -836,7 +836,7 @@ pub async fn shapes_bus(
     let simp_amount: f32 = match z {
         6 => 0.005,
         7 => 0.004,
-        8 => 0.003,
+        8 => 0.004,
         _ => 0.003,
     };
 
