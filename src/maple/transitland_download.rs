@@ -135,8 +135,8 @@ fn make_reqwest_client() -> reqwest::Client {
     reqwest::ClientBuilder::new()
         .use_rustls_tls()
         .user_agent("Catenary Maple")
-        //timeout queries after 10 minutes
-        .timeout(Duration::from_secs(60 * 10))
+        //timeout queries after 30 minutes
+        .timeout(Duration::from_secs(60 * 30))
         .connect_timeout(Duration::from_secs(20))
         .danger_accept_invalid_certs(true)
         .deflate(true)
