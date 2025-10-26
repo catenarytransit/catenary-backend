@@ -44,10 +44,10 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
-use std::sync::Arc;
-use std::time::Instant;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -62,26 +62,27 @@ pub struct GtfsSummary {
 fn execute_pfaedle(
     gtfs_path: &str,
     osm_path: &str,
-    mots: Option<Vec<String>>
+    mots: Option<Vec<String>>,
+    drop_shapes: bool,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut command_pfaedle = Command::new("pfaedle");
 
     let mut run = command_pfaedle
-    .arg("-x")
-    .arg(&osm_path)
-    .arg(&gtfs_path)
-    .arg("-F")
-    .arg("--inplace");
+        .arg("-x")
+        .arg(&osm_path)
+        .arg(&gtfs_path)
+        .arg("-F")
+        .arg("--inplace");
 
     if let Some(mots) = mots {
-        run = 
-        run
-    .arg("--mots")
-    .arg(mots.iter().join(","));
+        run = run.arg("--mots").arg(mots.iter().join(","));
     }
 
-    run = 
-    run.arg("--write-colors");
+    run = run.arg("--write-colors");
+
+    if drop_shapes {
+        run = run.arg("--drop-shapes").arg("true");
+    }
 
     let run = run.output();
 
@@ -116,11 +117,15 @@ pub async fn gtfs_process_feed(
     //read the GTFS zip file
     let path = format!("{}/{}", gtfs_unzipped_path, feed_id);
 
-    
     match feed_id {
         "f-u05-tcl~systral" => {
-           let _ = execute_pfaedle(path.as_str(), "./pfaedle-filtered-france-latest.osm", None)?;
-        },
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-france-latest.osm",
+                None,
+                true,
+            )?;
+        }
         _ => {
             //no pfaedle needed
         }
