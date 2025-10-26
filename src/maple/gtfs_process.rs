@@ -46,6 +46,8 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Instant;
+use std::path::Path;
+use std::process::Command;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -55,6 +57,37 @@ pub struct GtfsSummary {
     pub default_lang: Option<String>,
     pub general_timezone: String,
     pub bbox: Option<geo::Rect>,
+}
+
+fn execute_pfaedle(
+    gtfs_path: &str,
+    osm_path: &str,
+    mots: Option<Vec<String>>
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let mut command_pfaedle = Command::new("pfaedle");
+
+    let mut run = command_pfaedle
+    .arg("-x")
+    .arg(&osm_path)
+    .arg(&gtfs_path)
+    .arg("-F")
+    .arg("--in-place");
+
+    if let Some(mots) = mots {
+        run = 
+        run
+    .arg("--mots")
+    .arg(mots.iter().join(","));
+    }
+
+    run = 
+    run.arg("--write-colors");
+
+    let run = run.output();
+
+    println!("ran pfaedle for {}, {:#?}", gtfs_path, run);
+
+    Ok(())
 }
 
 // take a feed id and throw it into postgres
@@ -80,6 +113,16 @@ pub async fn gtfs_process_feed(
 
     //read the GTFS zip file
     let path = format!("{}/{}", gtfs_unzipped_path, feed_id);
+
+    
+    match feed_id {
+        "f-u05-tcl~systral" => {
+           let _ = execute_pfaedle(path.as_str(), "./pfaedle-filtered-france-latest.osm", None)?;
+        },
+        _ => {
+            //no pfaedle needed
+        }
+    }
 
     let gtfs = gtfs_structures::Gtfs::new(path.as_str())?;
 

@@ -84,3 +84,7 @@ recompression_test
 germany.zip
 maple_test_unzip
 reduced.gtfs.zip
+
+#Ignore osm files
+*.osm
+*.osm.pbf
