@@ -182,6 +182,22 @@ pub async fn gtfs_process_feed(
                 false,
             )?;
         }
+        "f-keolis~dijon~fr" => {
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-france-latest.osm",
+                None,
+                true,
+            )?;
+        }
+        "f-mobigo~côte~dor" => {
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-france-latest.osm",
+                None,
+                true,
+            )?;
+        }
         _ => {
             //no pfaedle needed
         }
