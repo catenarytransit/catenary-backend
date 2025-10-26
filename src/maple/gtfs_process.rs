@@ -87,6 +87,8 @@ fn execute_pfaedle(
 
     println!("ran pfaedle for {}, {:#?}", gtfs_path, run);
 
+    let run_output = run?;
+
     Ok(())
 }
 
