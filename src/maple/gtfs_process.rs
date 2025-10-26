@@ -174,6 +174,14 @@ pub async fn gtfs_process_feed(
                 false,
             )?;
         }
+        "f-artis~arras" => => {
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-france-latest.osm",
+                None,
+                true,
+            )?;
+        }
         "f-hauts~de~france~laisne" => {
             let _ = execute_pfaedle(
                 path.as_str(),
