@@ -126,6 +126,62 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
+        "f-hauts~de~france~du~nord~2" => {
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-france-latest.osm",
+                None,
+                false,
+            )?;
+        }
+        "f-hauts~de~france~pas~de~calais" => {
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-france-latest.osm",
+                None,
+                false,
+            )?;
+        }
+        "f-mobigo~nièvre" => {
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-france-latest.osm",
+                None,
+                false,
+            )?;
+        }
+        "f-mobigo~yonne" => {
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-france-latest.osm",
+                None,
+                false,
+            )?;
+        }
+        "f-hauts~de~france~somme" => {
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-france-latest.osm",
+                None,
+                false,
+            )?;
+        }
+        "f-ametis" => {
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-france-latest.osm",
+                None,
+                false,
+            )?;
+        }
+        "f-hauts~de~france~laisne" => {
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-france-latest.osm",
+                None,
+                false,
+            )?;
+        }
         _ => {
             //no pfaedle needed
         }
