@@ -71,7 +71,7 @@ fn execute_pfaedle(
     .arg(&osm_path)
     .arg(&gtfs_path)
     .arg("-F")
-    .arg("--in-place");
+    .arg("--inplace");
 
     if let Some(mots) = mots {
         run = 
