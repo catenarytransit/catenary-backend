@@ -626,7 +626,7 @@ pub async fn get_rt_of_route(
         .vehicle_positions
         .iter()
         .map(|(_, vehicle_info)| match &vehicle_info.trip {
-            Some(trip) => trip.route_id.clone(),
+            Some(trip) => trip.trip_id.clone(),
             None => None,
         })
         .filter(|x| x.is_some())
