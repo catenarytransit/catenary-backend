@@ -517,7 +517,7 @@ pub struct SingleRouteRtInfo {
 }
 
 #[actix_web::get("/get_rt_of_single_route")]
-async fn get_rt_of_route(
+pub async fn get_rt_of_route(
     req: HttpRequest,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     path: web::Path<(String, String, u64, u64)>,
