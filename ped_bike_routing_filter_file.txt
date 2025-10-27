@@ -1,0 +1,5 @@
+w/highway
+w/bicycle
+w/foot
+n/crossing
+n/highway

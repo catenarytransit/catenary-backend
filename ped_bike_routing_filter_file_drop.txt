@@ -1,0 +1,16 @@
+
+
+n/highway=motorway,bicycle=no
+w/highway=motorway,bicycle=no
+r/highway=motorway,bicycle=no
+w/barrier=hedge
+n/natural=tree
+n/building
+w/building
+r/building
+w/natural
+n/amenity
+r/route=bus
+w/railway
+w/waterway
+n/highway=bus_stop
