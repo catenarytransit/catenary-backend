@@ -617,6 +617,12 @@ pub async fn get_rt_of_route(
 
     let get_vehicles = get_vehicles.unwrap().unwrap();
 
+    if let Some(query_last_updated_time_ms) = query.last_updated_time_ms {
+        if query_last_updated_time_ms == get_vehicles.last_updated_time_ms {
+            return HttpResponse::NoContent().body("");
+        }
+    }
+
     let returned_vehicle_struct = get_vehicles
         .vehicle_positions
         .iter()
