@@ -1057,6 +1057,54 @@ impl AspenRpc for AspenServer {
         }
     }
 
+    async fn get_vehicle_locations_with_route_filtering(
+        self,
+        context: tarpc::context::Context,
+        chateau_id: String,
+        existing_fasthash_of_routes: Option<u64>,
+        route_ids: Option<Vec<String>>,
+    ) -> Option<GetVehicleLocationsResponse> {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let fast_hash_of_routes = aspenised_data.vehicle_routes_cache_hash;
+
+                let vehicle_pos_new = aspenised_data
+                    .vehicle_positions
+                    .iter()
+                    .filter(|(key, value)| match &route_ids {
+                        Some(route_ids_filter_input) => match &value.trip {
+                            None => false,
+                            Some(trip) => match &trip.route_id {
+                                None => false,
+                                Some(route_id) => route_ids_filter_input.contains(&route_id),
+                            },
+                        },
+                        None => false,
+                    })
+                    .map(|(a, b)| (a.clone(), b.clone()))
+                    .collect::<AHashMap<_, _>>();
+
+                Some(GetVehicleLocationsResponse {
+                    vehicle_route_cache: match existing_fasthash_of_routes {
+                        Some(existing_fasthash_of_routes) => {
+                            match existing_fasthash_of_routes == fast_hash_of_routes {
+                                true => None,
+                                false => Some(aspenised_data.vehicle_routes_cache.clone()),
+                            }
+                        }
+                        None => Some(aspenised_data.vehicle_routes_cache.clone()),
+                    },
+                    vehicle_positions: vehicle_pos_new,
+                    hash_of_routes: fast_hash_of_routes,
+                    last_updated_time_ms: aspenised_data.last_updated_time_ms,
+                })
+            }
+            None => None,
+        }
+    }
+
     async fn get_single_vehicle_location_from_gtfsid(
         self,
         _: context::Context,
@@ -1107,6 +1155,41 @@ impl AspenRpc for AspenServer {
                     }
                     None => None,
                 }
+            }
+            None => None,
+        }
+    }
+
+    async fn get_trip_updates_from_route_ids(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        route_ids: Vec<String>,
+    ) -> Option<Vec<AspenisedTripUpdate>> {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let mut data_out: Vec<AspenisedTripUpdate> = Vec::new();
+
+                for route_id in route_ids {
+                    let trip_updates_id_list = aspenised_data
+                        .trip_updates_lookup_by_route_id_to_trip_update_ids
+                        .get(route_id.as_str());
+
+                    if let Some(trip_update_ids) = trip_updates_id_list {
+                        for trip_update_id in trip_update_ids.iter() {
+                            let trip_update =
+                                aspenised_data.trip_updates.get(trip_update_id.as_str());
+
+                            if let Some(trip_update) = trip_update {
+                                data_out.push(trip_update.clone());
+                            }
+                        }
+                    }
+                }
+
+                Some(data_out)
             }
             None => None,
         }

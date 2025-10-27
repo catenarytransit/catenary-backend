@@ -1,9 +1,16 @@
+use actix_web::http::StatusCode;
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use ahash::AHashMap;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::GetVehicleLocationsResponse;
 use catenary::aspen_dataset::*;
+use catenary::models::CompressedTrip;
+use catenary::postgres_tools::CatenaryPostgresPool;
+use diesel::prelude::*;
+use diesel::{ExpressionMethods, SelectableHelper};
+use diesel_async::AsyncConnection;
+use diesel_async::RunQueryDsl;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -33,7 +40,7 @@ pub struct AspenisedVehicleTripInfoOutput {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 
-struct AspenisedVehiclePositionOutput {
+pub struct AspenisedVehiclePositionOutput {
     pub trip: Option<AspenisedVehicleTripInfoOutput>,
     pub vehicle: Option<AspenisedVehicleDescriptor>,
     pub position: Option<CatenaryRtVehiclePosition>,
@@ -134,6 +141,14 @@ pub struct EachCategoryPayload {
 #[derive(Serialize, Deserialize)]
 pub struct BulkFetchResponse {
     chateaus: BTreeMap<String, EachChateauResponse>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PerRouteRtInfo {
+    pub vehicle_positions: Option<AHashMap<String, AspenisedVehiclePositionOutput>>,
+    pub last_updated_time_ms: u64,
+    pub trips_to_trips_compressed: Option<AHashMap<String, CompressedTrip>>,
+    pub itinerary_to_direction_id: Option<AHashMap<String, String>>,
 }
 
 #[actix_web::post("/bulk_realtime_fetch_v1")]
@@ -492,4 +507,177 @@ pub async fn get_realtime_locations(
             .append_header(("Cache-Control", "no-cache"))
             .body("No realtime data found for this chateau, aspen server returned None"),
     }
+}
+
+#[derive(Deserialize)]
+pub struct SingleRouteRtInfo {
+    pub last_updated_time_ms: Option<u64>,
+    pub chateau: String,
+    pub route_id: String,
+}
+
+#[actix_web::get("/get_rt_of_single_route")]
+async fn get_rt_of_route(
+    req: HttpRequest,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    path: web::Path<(String, String, u64, u64)>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    query: web::Query<SingleRouteRtInfo>,
+) -> impl Responder {
+    let query = query.into_inner();
+
+    let chateau_id = query.chateau.clone();
+
+    //connect to postgres
+    let conn_pool = pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+
+    if let Err(conn_pre) = &conn_pre {
+        eprintln!("{}", conn_pre);
+        return HttpResponse::InternalServerError().body("Error connecting to postgres");
+    }
+
+    let conn = &mut conn_pre.unwrap();
+
+    let etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await;
+
+    if let Err(etcd_err) = &etcd {
+        eprintln!("{:#?}", etcd_err);
+
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Could not connect to etcd");
+    }
+
+    let mut etcd = etcd.unwrap();
+
+    let fetch_assigned_node_for_this_realtime_feed = etcd
+        .get(
+            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
+            None,
+        )
+        .await;
+
+    if let Err(err_fetch) = &fetch_assigned_node_for_this_realtime_feed {
+        eprintln!("{}", err_fetch);
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body(format!(
+                "Error fetching assigned node: {}, failed to connect to etcd",
+                err_fetch
+            ));
+    }
+
+    let fetch_assigned_node_for_this_realtime_feed =
+        fetch_assigned_node_for_this_realtime_feed.unwrap();
+
+    if fetch_assigned_node_for_this_realtime_feed.kvs().is_empty() {
+        return HttpResponse::Ok()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("No assigned node found for this chateau according to etcd database");
+    }
+
+    //deserialise into ChateauMetadataZookeeper
+
+    let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
+        fetch_assigned_node_for_this_realtime_feed
+            .kvs()
+            .first()
+            .unwrap()
+            .value(),
+    )
+    .unwrap();
+
+    //then connect to the node via tarpc
+
+    let aspen_client =
+        catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
+
+    if aspen_client.is_err() {
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Error connecting to assigned node. Failed to connect to tarpc");
+    }
+
+    let aspen_client = aspen_client.unwrap();
+
+    let get_vehicles = aspen_client
+        .get_vehicle_locations_with_route_filtering(
+            context::current(),
+            chateau_id.clone(),
+            None,
+            Some(vec![query.route_id.clone()]),
+        )
+        .await;
+
+    let get_vehicles = get_vehicles.unwrap().unwrap();
+
+    let returned_vehicle_struct = get_vehicles
+        .vehicle_positions
+        .iter()
+        .map(|(a, b)| (a.clone(), convert_to_output(b)))
+        .collect::<AHashMap<_, _>>();
+
+    let trip_ids_to_lookup = get_vehicles
+        .vehicle_positions
+        .iter()
+        .map(|(_, vehicle_info)| match &vehicle_info.trip {
+            Some(trip) => trip.route_id.clone(),
+            None => None,
+        })
+        .filter(|x| x.is_some())
+        .map(|x| x.unwrap())
+        .collect::<ahash::AHashSet<String>>();
+
+    let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+        .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(&query.chateau))
+        .filter(catenary::schema::gtfs::trips_compressed::dsl::trip_id.eq_any(&trip_ids_to_lookup))
+        .select(catenary::models::CompressedTrip::as_select())
+        .load(conn)
+        .await
+        .unwrap();
+
+    let mut trips_table = AHashMap::new();
+
+    let mut itineraries_to_fetch: Vec<String> = vec![];
+
+    for trip in trips {
+        itineraries_to_fetch.push(trip.itinerary_pattern_id.clone());
+        trips_table.insert(trip.trip_id.clone(), trip);
+    }
+
+    let mut itinerary_to_direction_id: AHashMap<String, String> = AHashMap::new();
+
+    let itineraries_fetch =
+        catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+            .filter(catenary::schema::gtfs::itinerary_pattern_meta::dsl::chateau.eq(&query.chateau))
+            .filter(
+                catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_id
+                    .eq_any(&itineraries_to_fetch),
+            )
+            .select(catenary::models::ItineraryPatternMeta::as_select())
+            .load(conn)
+            .await
+            .unwrap();
+
+    for itinerary in itineraries_fetch {
+        itinerary_to_direction_id.insert(
+            itinerary.itinerary_pattern_id.clone(),
+            itinerary.direction_pattern_id.clone().unwrap(),
+        );
+    }
+
+    let returned_data = PerRouteRtInfo {
+        vehicle_positions: Some(returned_vehicle_struct),
+        last_updated_time_ms: get_vehicles.last_updated_time_ms,
+        trips_to_trips_compressed: Some(trips_table),
+        itinerary_to_direction_id: Some(itinerary_to_direction_id),
+    };
+
+    return HttpResponse::Ok().json(returned_data);
 }

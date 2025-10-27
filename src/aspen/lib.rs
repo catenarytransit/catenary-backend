@@ -101,6 +101,12 @@ pub trait AspenRpc {
         existing_fasthash_of_routes: Option<u64>,
     ) -> Option<GetVehicleLocationsResponse>;
 
+    async fn get_vehicle_locations_with_route_filtering(
+        chateau_id: String,
+        existing_fasthash_of_routes: Option<u64>,
+        route_ids: Option<Vec<String>>,
+    ) -> Option<GetVehicleLocationsResponse>;
+
     async fn get_gtfs_rt(
         realtime_feed_id: String,
         feed_type: crate::aspen_dataset::GtfsRtType,
@@ -114,6 +120,11 @@ pub trait AspenRpc {
     async fn get_trip_updates_from_trip_id(
         chateau_id: String,
         trip_id: String,
+    ) -> Option<Vec<AspenisedTripUpdate>>;
+
+    async fn get_trip_updates_from_route_ids(
+        chateau_id: String,
+        route_id: Vec<String>,
     ) -> Option<Vec<AspenisedTripUpdate>>;
 
     async fn get_alerts_from_route_id(
