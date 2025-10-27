@@ -520,7 +520,6 @@ pub struct SingleRouteRtInfo {
 pub async fn get_rt_of_route(
     req: HttpRequest,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    path: web::Path<(String, String, u64, u64)>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     query: web::Query<SingleRouteRtInfo>,
