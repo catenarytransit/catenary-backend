@@ -1802,8 +1802,8 @@ pub async fn nearby_from_coords_v2(
                                 StopOutput {
                                     gtfs_id: (&stop.0.gtfs_id).into(),
                                     name: stop.0.name.clone().unwrap_or("".to_string()),
-                                    lat: stop.0.point.as_ref().unwrap().x,
-                                    lon: stop.0.point.as_ref().unwrap().y,
+                                    lat: stop.0.point.as_ref().unwrap().y,
+                                    lon: stop.0.point.as_ref().unwrap().x,
                                     timezone: stop.0.timezone.clone(),
                                     url: stop.0.url.clone(),
                                 },
