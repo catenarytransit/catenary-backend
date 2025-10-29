@@ -13,6 +13,7 @@ pub async fn fetch_chicago_data(
     let api_keys = [
         "ae8e2a26183d45438e85a8dd5ff4aac7",
         "13f685e4b9054545b19470556103ec73",
+        "c08cdb1cc63a40f186bc9f960deeb5fd",
     ];
 
     let randomly_picked_api_key = rand::random_range(0..api_keys.len());
