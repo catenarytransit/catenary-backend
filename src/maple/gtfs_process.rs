@@ -206,6 +206,14 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
+        "f-f24-octranspo" => {
+            let _ = execute_pfaedle(
+                path.as_str(),
+                "./pfaedle-filtered-ontario-latest.osm",
+                None,
+                true,
+            )?;
+        }
         _ => {
             //no pfaedle needed
         }
