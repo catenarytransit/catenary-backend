@@ -168,7 +168,22 @@ pub async fn departures_at_stop(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
 
+    // ----- Bounds & paging window -----
+    let now_secs = catenary::duration_since_unix_epoch().as_secs();
+    let greater_than_time = query.greater_than_time.unwrap_or(now_secs - 3600);
+    let less_than_time = query.less_than_time.unwrap_or(now_secs + 60 * 60 * 24);
+    let requested_window_secs = less_than_time.saturating_sub(greater_than_time);
+
+    // grace to catch boundary events straddling pages
+    let grace_secs: i64 = 5 * 60; // 5 minutes
+
     let mut redirected_to_parent = false;
+
+    let min_lookahead = chrono::TimeDelta::hours(12);
+    let max_lookahead = chrono::TimeDelta::days(5);
+    let req_lookahead = chrono::TimeDelta::seconds(requested_window_secs as i64 + grace_secs)
+        .max(min_lookahead)
+        .min(max_lookahead);
 
     let greater_than_time = match query.greater_than_time {
         Some(greater_than_time) => greater_than_time,
@@ -569,6 +584,18 @@ pub async fn departures_at_stop(
     let calendar_structure =
         make_calendar_structure_from_pg(calender_responses, calendar_dates_responses).unwrap();
 
+    let point_raw = stop.point.clone().unwrap();
+    let stop_tz_txt = match &stop.timezone {
+        Some(tz) => tz.clone(),
+        None => {
+            match (-90.0..=90.0).contains(&point_raw.y) && (-180.0..=180.0).contains(&point_raw.x) {
+                true => tz_search::lookup(point_raw.y, point_raw.x)
+                    .unwrap_or_else(|| String::from("Etc/GMT")),
+                false => String::from("Etc/GMT"),
+            }
+        }
+    };
+
     //query added trips and modifications by stop id, and also matching trips in chateau
 
     //requery all the missing trips, and their itins and directions if they exist
@@ -591,6 +618,11 @@ pub async fn departures_at_stop(
     };
 
     let stop_tz = chrono_tz::Tz::from_str_insensitive(&stop_tz_txt).unwrap();
+
+    // Convert bounds to DateTime in stop tz (start anchor for service search) and UTC for comparisons
+    let gt_utc = chrono::DateTime::from_timestamp(greater_than_time as i64, 0).unwrap();
+    let gt_in_stop_tz = gt_utc.with_timezone(&stop_tz);
+    let lt_utc = chrono::DateTime::from_timestamp(less_than_time as i64, 0).unwrap();
 
     //convert greater than time to DateTime Tz
 
@@ -782,7 +814,7 @@ pub async fn departures_at_stop(
                     &t_to_find_schedule_for,
                     greater_than_date_time.with_timezone(&chrono::Utc),
                     chrono::TimeDelta::new(86400, 0).unwrap(),
-                    chrono::TimeDelta::new(3600 * 24 * 5, 0).unwrap(),
+                    req_lookahead,
                 );
 
                 if !dates.is_empty() {
@@ -1213,6 +1245,17 @@ pub async fn departures_at_stop(
     //also need a method to accom multiple stop_directions inside a single itinerary/direction
 
     //sort the event list
+
+    let gt = greater_than_time;
+    let lt = less_than_time;
+    events.retain(|e| {
+        let t1 = e.realtime_departure;
+        let t2 = e.realtime_arrival;
+        let t3 = e.scheduled_departure;
+        let t4 = e.scheduled_arrival;
+        let in_range = |t: Option<u64>| t.map(|x| x >= gt && x <= lt).unwrap_or(false);
+        in_range(t1) || in_range(t2) || in_range(t3) || in_range(t4)
+    });
 
     events.sort_by_key(|x| {
         x.realtime_departure.unwrap_or(
