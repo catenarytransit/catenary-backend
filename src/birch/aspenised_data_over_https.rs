@@ -149,7 +149,7 @@ pub struct PerRouteRtInfo {
     pub last_updated_time_ms: u64,
     pub trips_to_trips_compressed: Option<AHashMap<String, CompressedTrip>>,
     pub itinerary_to_direction_id: Option<AHashMap<String, String>>,
-    pub trip_updates: Vec<AspenisedTripUpdate>
+    pub trip_updates: Vec<AspenisedTripUpdate>,
 }
 
 #[actix_web::post("/bulk_realtime_fetch_v1")]
@@ -646,7 +646,8 @@ pub async fn get_rt_of_route(
             chateau_id.clone(),
             vec![query.route_id.clone()],
         )
-        .await.unwrap();
+        .await
+        .unwrap();
 
     let current_unix_time = catenary::duration_since_unix_epoch().as_secs();
 
@@ -660,48 +661,41 @@ pub async fn get_rt_of_route(
                 0 => trip_update.stop_time_update,
                 1 => trip_update.stop_time_update,
                 _ => {
-
-                    let mut start_filter = trip_update.stop_time_update.into_iter().filter(|stu|
-                        {
+                    let mut start_filter = trip_update
+                        .stop_time_update
+                        .into_iter()
+                        .filter(|stu| {
                             if let Some(departure) = &stu.departure {
                                 if let Some(d_time) = departure.time {
                                     if ((d_time as u64) < current_unix_time) {
                                         return false;
                                     }
                                 }
-
-                               
                             } else {
                                 if let Some(arrival) = &stu.arrival {
                                     if let Some(a_time) = arrival.time {
-                                         if ((a_time as u64) < current_unix_time) {
-                                        return false;
-                                    }
+                                        if ((a_time as u64) < current_unix_time) {
+                                            return false;
+                                        }
                                     }
                                 }
                             }
-                        
-                            return true
-                        }
-                    ).collect::<Vec<_>>();
+
+                            return true;
+                        })
+                        .collect::<Vec<_>>();
 
                     if start_filter.len() > 8 {
                         start_filter.truncate(8);
                     }
 
-                    
-
                     start_filter
-
                 }
             };
-
 
             trip_update.stop_time_update = stop_time_update;
 
             trip_update_list.push(trip_update);
-
-            
         }
     }
 
@@ -748,7 +742,7 @@ pub async fn get_rt_of_route(
         last_updated_time_ms: get_vehicles.last_updated_time_ms,
         trips_to_trips_compressed: Some(trips_table),
         itinerary_to_direction_id: Some(itinerary_to_direction_id),
-        trip_updates: trip_update_list
+        trip_updates: trip_update_list,
     };
 
     return HttpResponse::Ok().json(returned_data);

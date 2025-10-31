@@ -155,6 +155,14 @@ async fn try_to_download(
 ) -> Result<reqwest::Response, reqwest::Error> {
     let new_url = transform_for_bay_area(url.to_string());
 
+    if url.contains("nap.transportes.gob.es") {
+        return client
+            .get(url)
+            .header("ApiKey", "d6bfc458-3f53-4456-9108-28fa9f97069d")
+            .send()
+            .await;
+    }
+
     if feed_id == "f-dr5-nj~transit~rail" {
         let form = reqwest::multipart::Form::new()
             //i dont care, whatever, leak it, so what?
