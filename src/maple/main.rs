@@ -33,6 +33,7 @@
 
 use cleanup::delete_attempt_objects_elasticsearch;
 use cleanup::delete_feed_elasticsearch;
+use itertools::Itertools;
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 
@@ -291,6 +292,42 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                     chrono::Utc::now().to_rfc3339()
                 )))
                 .send();
+
+            if let Ok(eligible_feeds) = &eligible_feeds {
+                let errored_feeds = eligible_feeds
+                    .iter()
+                    .filter(|feed_result| feed_result.http_response_code.is_some())
+                    .filter(|feed_result| {
+                        feed_result
+                            .http_response_code
+                            .as_ref()
+                            .unwrap()
+                            .starts_with("4")
+                            || feed_result
+                                .http_response_code
+                                .as_ref()
+                                .unwrap()
+                                .starts_with("5")
+                    })
+                    .collect::<Vec<_>>();
+
+                let error_feeds_text = errored_feeds
+                    .iter()
+                    .map(|feed_info| {
+                        format!("{} : {:?}", feed_info.feed_id, feed_info.http_response_code)
+                    })
+                    .join("\n");
+
+                let hook_result = Webhook::new(discord_log_env.as_str())
+                    .username("Catenary Maple")
+                    .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
+                    .content(format!(
+                        "Error feeds `{}`:\n{}",
+                        chrono::Utc::now().to_rfc3339(),
+                        error_feeds_text,
+                    ))
+                    .send();
+            }
         }
 
         // debug print to output
