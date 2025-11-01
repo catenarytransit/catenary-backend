@@ -1520,6 +1520,15 @@ async fn main() -> anyhow::Result<()> {
                         Err(e) => {
                             eprintln!("Error renewing lease: {:#?}", e);
 
+                            if let Ok(etcd_new) = etcd_client::Client::connect(
+                                etcd_addresses.clone().as_slice(),
+                                arc_etcd_connect_options.as_ref().to_owned(),
+                            )
+                            .await
+                            {
+                                etcd = etcd_new
+                            }
+
                             let make_lease = etcd
                                 .lease_grant(
                                     //10 seconds
