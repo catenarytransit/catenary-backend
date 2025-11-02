@@ -266,6 +266,18 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
+        "f-sncf~fr" => {
+            let mut gtfs = gtfs;
+
+            for (trip_id, trip) in gtfs.trips.iter_mut() {
+                if trip.trip_short_name.is_none() && trip.trip_headsign.is_some() {
+                    trip.trip_short_name = trip.trip_headsign.clone();
+                    trip.trip_headsign = None;
+                }
+            }
+
+            gtfs
+        }
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
             //there's 8184 school buses in the feed. I'm removing them lmfao.
             let mut gtfs = gtfs;
