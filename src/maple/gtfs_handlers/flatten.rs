@@ -249,7 +249,7 @@ pub fn flatten_feed(
 
     //if feed id starts with f-r1-ptv
     if feed_id.contains("-ptv") {
-        let subfolder_to_get = feed_id.split("~").last().unwrap();
+        let subfolder_to_get = feed_id.rsplitn(2, '~').next().unwrap();
 
         println!(
             "Extracting subfolder {} for Victoria Australia",
