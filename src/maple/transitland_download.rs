@@ -189,7 +189,7 @@ async fn try_to_download(
         _ => new_url,
     };
 
-    let request = client.get(&new_url);
+    let request = client.get(&new_url).header("Accept", "*/*");
 
     let request = add_auth_headers(request, feed_id);
 
