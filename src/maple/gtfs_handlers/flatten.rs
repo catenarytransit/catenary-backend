@@ -256,11 +256,8 @@ pub fn flatten_feed(
             subfolder_to_get
         );
 
-        let subfolder_answer = extract_sub_zip(
-            gtfs_uncompressed_temp_storage,
-            feed_id,
-            subfolder_to_get,
-        );
+        let subfolder_answer =
+            extract_sub_zip(gtfs_uncompressed_temp_storage, feed_id, subfolder_to_get);
 
         match &subfolder_answer {
             Ok(_) => {
