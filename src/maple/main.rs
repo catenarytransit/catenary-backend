@@ -320,15 +320,30 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                     })
                     .join("\n");
 
-                let hook_result = Webhook::new(discord_log_env.as_str())
-                    .username("Catenary Maple")
-                    .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
-                    .content(format!(
-                        "Error feeds `{}`:\n{}",
-                        chrono::Utc::now().to_rfc3339(),
-                        error_feeds_text,
-                    ))
-                    .send();
+                let page_count = errored_feeds.chunks(30).len();
+
+                for (page_num, errored_feed_chunk) in errored_feeds.chunks(30).enumerate() {
+                    let error_feeds_text = errored_feed_chunk
+                        .iter()
+                        .map(|feed_info| {
+                            format!("{} : {:?}", feed_info.feed_id, feed_info.http_response_code)
+                        })
+                        .join("\n");
+
+                    let hook_result = Webhook::new(discord_log_env.as_str())
+                        .username("Catenary Maple")
+                        .avatar_url(
+                            "https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg",
+                        )
+                        .content(format!(
+                            "Error feeds page {} of {}, `{}`:\n{}",
+                            page_num,
+                            page_count,
+                            chrono::Utc::now().to_rfc3339(),
+                            error_feeds_text,
+                        ))
+                        .send();
+                }
             }
         }
 
