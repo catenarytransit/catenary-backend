@@ -156,7 +156,7 @@ async fn try_to_download(
     let new_url = transform_for_bay_area(url.to_string());
 
     let client = match feed_id {
-        "f-9q5b-torrancetransit" => reqwest::ClientBuilder::new()
+        "f-9q5b-torrancetransit" | "f-west~hollywood" => reqwest::ClientBuilder::new()
             .use_rustls_tls()
             .user_agent(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) Gecko/20100101 Firefox/138.0",
