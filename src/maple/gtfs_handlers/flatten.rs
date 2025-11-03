@@ -249,23 +249,17 @@ pub fn flatten_feed(
 
     //if feed id starts with f-r1-ptv
     if feed_id.contains("-ptv") {
-        let subfolder_to_get = feed
-            .urls
-            .static_current
-            .as_ref()
-            .unwrap()
-            .replace("http://data.ptv.vic.gov.au/downloads/gtfs.zip#", "")
-            .replace(".zip", "");
+        let subfolder_to_get = feed.id.split("~").last().unwrap();
 
         println!(
             "Extracting subfolder {} for Victoria Australia",
-            subfolder_to_get.as_str()
+            subfolder_to_get
         );
 
         let subfolder_answer = extract_sub_zip(
             gtfs_uncompressed_temp_storage,
             feed_id,
-            subfolder_to_get.as_str(),
+            subfolder_to_get,
         );
 
         match &subfolder_answer {
