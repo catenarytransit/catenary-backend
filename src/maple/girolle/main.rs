@@ -64,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let feeds_to_download = dmfr_result
         .feed_hashmap
         .iter()
+        .filter(|(string, feed)| feed.urls.static_current.is_some())
         .map(|(string, feed)| StaticFeedToDownload {
             feed_id: feed.id.clone(),
             url: feed.urls.static_current.as_ref().unwrap().to_string(),
