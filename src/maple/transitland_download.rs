@@ -1,3 +1,6 @@
+//Written by Kyler Chin
+//You are required under the APGL license to retain this annotation
+
 use crate::CatenaryPostgresPool;
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use catenary::models::StaticDownloadAttempt;
@@ -248,9 +251,6 @@ async fn try_to_download(
         }
     }
 }
-
-//Written by Kyler Chin
-//You are required under the APGL license to retain this annotation
 
 //It's giving UC Berkeley lab assignment!!! 🐻💅🐻💅
 //context for this joke: https://inst.eecs.berkeley.edu/~cs162/fa22/static/hw/hw-map-reduce-rs/

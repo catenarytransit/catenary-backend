@@ -101,7 +101,7 @@ tzf-rs = "1.0"
 lazy_static = "1.4.0"
 serde_bytes = "0.11"
 bincode = { version = "2.0", features = ["serde"] }
-evmap = "10.0.2"
+evmap = "11.0.0"
 dashmap = "6.0"
 ipnetwork = "0.21.1"
 pnet = "0.35.0"
@@ -117,7 +117,7 @@ rgb = "0.8.37"
 zotgtfs = "0.3.7"
 amtrak-gtfs-rt = "0.8.1"
 chrono-tz = { version = "0.10.4", features = ["case-insensitive", "serde"] }
-ping = "0.6.1"
+ping = "0.7.0"
 online = { version = "4.0.2", features = ["tokio-runtime"] }
 chicago-gtfs-rt = "0.3.2"
 etcd-client = "0.17.0"
@@ -131,7 +131,7 @@ mime = "0.3.17"
 gtfs-realtime = "0.2.0"
 via-rail-gtfsrt = "0.2.0"
 wyhash2 = "0.2.1"
-console-subscriber = "0.4.0"
+console-subscriber = "0.5.0"
 strumbra = "0.6.0"
 compact_str = { version = "0.9.0", features = ["serde", "diesel"] }
 urlencoding = "2.1.3"
@@ -151,7 +151,7 @@ async-recursion = "1.1.1"
 path-clean = "1.0.1"
 tokio-stream = { version = "0.1.17", features = ["full"] }
 thiserror = "2.0.12"
-elasticsearch = "9.0.0-alpha.1"
+elasticsearch = "9.1.0-alpha.1"
 language-tags = { version = "0.3.2", features = ["serde"] }
 discord-message = "0.1.0"
 discord-webhook-rs = "1.0.5"
@@ -199,7 +199,7 @@ path = "src/alpenrose/main.rs"
 #path = "src/maple_syrup/test.rs"
 
 [build-dependencies]
-prost-build = "0.13"
+prost-build = "0.14.1"
 
 [[bin]]
 name = "manual_login_manager"
@@ -228,3 +228,8 @@ path = "src/ip_addr_geo_db_update/main.rs"
 [[bin]]
 name = "update_vehicles_db"
 path = "src/update_vehicles_db/main.rs"
+
+
+[[bin]]
+name ="girolle"
+path = "src/maple/girolle/main.rs"
