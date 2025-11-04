@@ -398,7 +398,7 @@ pub async fn make_index_and_mappings(
                         "type": "geo_point"
                     },
                     "route_types": {
-                        "type": "byte"
+                        "type": "short"
                     },
                     "stop_name": {
                         "type": "object",
@@ -524,7 +524,12 @@ pub async fn make_index_and_mappings(
                                      }
                                      ],
                              "properties": {
-                                "route_name": {
+                                "route_short_name": {
+                                     "type": "object",
+                                     "dynamic": true,
+                                     "properties": generate_language_properties()
+                                 },
+                                "route_long_name": {
                                      "type": "object",
                                      "dynamic": true,
                                      "properties": generate_language_properties()
@@ -536,8 +541,11 @@ pub async fn make_index_and_mappings(
                                      "type": "text",
                                      "analyzer": "standard"
                                  },
+                                 "route_name_search": {
+                                     "type": "text",
+                                     "analyzer": "standard"
+                                 },
                                  "chateau": {
-
                                      "type": "text",
                                  },
                                  "onestop_feed_id": {
@@ -551,7 +559,6 @@ pub async fn make_index_and_mappings(
                                     "type": "geo_shape"
                                 },
                                  "attempt_id": {
-
                                      "type": "text",
                                  },
                                  "route_id": {

@@ -184,7 +184,7 @@ async fn try_to_download(
             .cookie_store(true)
             .build()
             .unwrap(),
-        _ => client.clone()
+        _ => client.clone(),
     };
 
     if url.contains("nap.transportes.gob.es") {

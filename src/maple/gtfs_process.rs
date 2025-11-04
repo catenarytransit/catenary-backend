@@ -22,6 +22,7 @@ use catenary::models::{
     DirectionPatternMeta, DirectionPatternRow, ItineraryPatternMeta, ItineraryPatternRow,
     Route as RoutePgModel,
 };
+use catenary::name_shortening_hash_insert_elastic;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::route_id_transform;
 use catenary::schedule_filtering::include_only_route_types;
@@ -37,9 +38,11 @@ use gtfs_structures::Gtfs;
 use gtfs_translations::TranslationResult;
 use gtfs_translations::translation_csv_text_to_translations;
 use itertools::Itertools;
+use language_tags::LanguageTag;
 use prost::Message;
 use regex::Regex;
 use rgb::RGB;
+use serde_json::json;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -1148,6 +1151,110 @@ pub async fn gtfs_process_feed(
         })
         .collect();
 
+    let mut finished_route_chunks_elasticsearch: Vec<
+        Vec<elasticsearch::http::request::JsonBody<_>>,
+    > = Vec::new();
+
+    //insert routes into elastic search with seperate columns for both names
+    for route_chunk in &gtfs.routes.iter().chunks(256) {
+        let mut insertable_elastic: Vec<elasticsearch::http::request::JsonBody<_>> = Vec::new();
+        for (route_id, route) in route_chunk {
+            let shape_points_combined =
+                route_ids_to_shape_ids
+                    .get(&route_id.clone())
+                    .and_then(|shape_ids| {
+                        Some(
+                            shape_ids
+                                .iter()
+                                .filter_map(|shape_id| gtfs.shapes.get(shape_id.as_str()))
+                                .flatten()
+                                .collect::<Vec<&gtfs_structures::Shape>>(),
+                        )
+                    });
+
+            let envelope = match shape_points_combined {
+                Some(shape_points) => Some(compute_shape_envelope(route, &shape_points)),
+                None => None,
+            };
+
+            let mut short_name_translations_shortened_locales_elastic: HashMap<String, String> =
+                HashMap::new();
+
+            let mut long_name_translations_shortened_locales_elastic: HashMap<String, String> =
+                HashMap::new();
+
+            let route_id = route_id_transform(feed_id, route_id.to_string());
+
+            let elastic_id = format!("{}_{}_{}", feed_id, attempt_id, route_id);
+
+            let route_type = route_type_to_int(&route.route_type);
+
+            let agency_name = match gtfs.agencies.len() {
+                0 => String::new(),
+                1 => gtfs.agencies[0].name.clone(),
+                _ => match gtfs
+                    .agencies
+                    .iter()
+                    .find(|agency| agency.id == route.agency_id)
+                {
+                    Some(agency) => agency.name.clone(),
+                    None => String::new(),
+                },
+            };
+
+            insertable_elastic
+                .push(json!({"index": {"_index": "routes", "_id": elastic_id}}).into());
+
+            if let Some(default_lang) = &default_lang {
+                if let Some(short_name) = &route.short_name {
+                    if let Ok(lang_tag) = LanguageTag::parse(default_lang.as_str()) {
+                        name_shortening_hash_insert_elastic(
+                            &mut short_name_translations_shortened_locales_elastic,
+                            &lang_tag,
+                            short_name.as_str(),
+                        );
+                    }
+                }
+
+                if let Some(long_name) = &route.long_name {
+                    if let Ok(lang_tag) = LanguageTag::parse(default_lang.as_str()) {
+                        name_shortening_hash_insert_elastic(
+                            &mut long_name_translations_shortened_locales_elastic,
+                            &lang_tag,
+                            long_name.as_str(),
+                        );
+                    }
+                }
+            } else {
+                if let Some(short_name) = &route.short_name {
+                    short_name_translations_shortened_locales_elastic
+                        .insert("en".to_string(), short_name.clone());
+                }
+
+                if let Some(long_name) = &route.long_name {
+                    long_name_translations_shortened_locales_elastic
+                        .insert("en".to_string(), long_name.clone());
+                }
+            }
+
+            insertable_elastic.push(
+                json!({
+                    "chateau": chateau_id.to_string(),
+                    "attempt_id": attempt_id.to_string(),
+                    "route_id": route_id,
+                    "route_type": route_type,
+                    "agency_name_search": agency_name,
+                    "route_short_name": serde_json::to_string(&short_name_translations_shortened_locales_elastic).unwrap(),
+                    "route_long_name": serde_json::to_string(&long_name_translations_shortened_locales_elastic).unwrap(),
+                    "bbox": envelope
+                })
+                .into(),
+            );
+        }
+
+        finished_route_chunks_elasticsearch.push(insertable_elastic);
+    }
+
     conn.build_transaction()
         .run::<(), diesel::result::Error, _>(|conn| {
             Box::pin(async move {
@@ -1161,6 +1268,26 @@ pub async fn gtfs_process_feed(
             })
         })
         .await?;
+
+    for chunk in finished_route_chunks_elasticsearch {
+        let response = elasticclient
+            .bulk(elasticsearch::BulkParts::Index("routes"))
+            .body(chunk)
+            .send()
+            .await?;
+
+        let response_body = response.json::<serde_json::Value>().await?;
+
+        let mut print_err = true;
+
+        if response_body.get("errors").map(|x| x.as_bool()).flatten() == Some(false) {
+            print_err = false;
+        }
+
+        if print_err {
+            println!("elastic routes response: {:#?}", response_body);
+        }
+    }
 
     println!("Routes inserted for {}", feed_id);
 
@@ -1278,4 +1405,59 @@ pub fn continuous_pickup_drop_off_to_i16(x: &ContinuousPickupDropOff) -> i16 {
         ContinuousPickupDropOff::CoordinateWithDriver => 3,
         ContinuousPickupDropOff::Unknown(x) => *x,
     }
+}
+
+fn compute_shape_envelope(
+    route: &gtfs_structures::Route,
+    shapes: &Vec<&gtfs_structures::Shape>,
+) -> serde_json::Value {
+    let mut min_latitude: Option<f64> = None;
+    let mut max_latitude: Option<f64> = None;
+
+    let mut min_longitude: Option<f64> = None;
+    let mut max_longitude: Option<f64> = None;
+
+    for shape in shapes {
+        match min_latitude {
+            None => min_latitude = Some(shape.latitude),
+            Some(current_min) => {
+                if shape.latitude < current_min {
+                    min_latitude = Some(shape.latitude);
+                }
+            }
+        }
+
+        match max_latitude {
+            None => max_latitude = Some(shape.latitude),
+            Some(current_max) => {
+                if shape.latitude > current_max {
+                    max_latitude = Some(shape.latitude);
+                }
+            }
+        }
+
+        match min_longitude {
+            None => min_longitude = Some(shape.longitude),
+            Some(current_min) => {
+                if shape.longitude < current_min {
+                    min_longitude = Some(shape.longitude);
+                }
+            }
+        }
+
+        match max_longitude {
+            None => max_longitude = Some(shape.longitude),
+            Some(current_max) => {
+                if shape.longitude > current_max {
+                    max_longitude = Some(shape.longitude);
+                }
+            }
+        }
+    }
+
+    //[[minLon, maxLat], [maxLon, minLat]] as defined in https://www.elastic.co/docs/reference/elasticsearch/mapping-reference/geo-shape
+    return json! ({
+      "type" : "envelope",
+      "coordinates" : [ [min_longitude.unwrap(), max_latitude.unwrap()], [max_longitude.unwrap(), min_latitude.unwrap()] ]
+    });
 }
