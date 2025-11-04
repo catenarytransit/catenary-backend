@@ -1244,8 +1244,8 @@ pub async fn gtfs_process_feed(
                     "route_id": route_id,
                     "route_type": route_type,
                     "agency_name_search": agency_name,
-                    "route_short_name": serde_json::to_string(&short_name_translations_shortened_locales_elastic).unwrap(),
-                    "route_long_name": serde_json::to_string(&long_name_translations_shortened_locales_elastic).unwrap(),
+                    "route_short_name": serde_json::to_value(&short_name_translations_shortened_locales_elastic).unwrap(),
+                    "route_long_name": serde_json::to_value(&long_name_translations_shortened_locales_elastic).unwrap(),
                     "bbox": envelope
                 })
                 .into(),
