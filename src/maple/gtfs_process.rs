@@ -1173,7 +1173,10 @@ pub async fn gtfs_process_feed(
                     });
 
             let envelope = match shape_points_combined {
-                Some(shape_points) => Some(compute_shape_envelope(route, &shape_points)),
+                Some(shape_points) => match shape_points.len() {
+                    0 => None,
+                    _ => Some(compute_shape_envelope(route, &shape_points)),
+                },
                 None => None,
             };
 
