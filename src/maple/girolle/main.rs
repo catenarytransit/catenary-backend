@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let client = reqwest::ClientBuilder::new()
         .use_rustls_tls()
         .user_agent("Catenary Girolle")
-        .timeout(std::time::Duration::from_secs(60 * 30))
+        .timeout(std::time::Duration::from_secs(60 * 5))
         .connect_timeout(std::time::Duration::from_secs(20))
         .danger_accept_invalid_certs(true)
         .deflate(true)
