@@ -1,17 +1,8 @@
 use std::{collections::BTreeMap, fs, sync::Arc};
 
+use catenary::GirolleFeedDownloadResult;
 use futures::StreamExt;
 use std::time::Instant;
-
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-pub struct GirolleFeedDownloadResult {
-    feed_id: String,
-    seahash: Option<u64>,
-    download_timestamp_ms: u64,
-    valid_gtfs: bool,
-    time_to_download_ms: Option<u64>,
-    byte_size: Option<usize>,
-}
 
 use clap::Parser;
 

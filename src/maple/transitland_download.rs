@@ -23,6 +23,8 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex;
 use url::{ParseError, Url};
+use std::collections::BTreeMap;
+use catenary::GirolleFeedDownloadResult;
 
 #[derive(Clone)]
 struct StaticFeedToDownload {
@@ -296,6 +298,8 @@ pub async fn download_return_eligible_feeds(
     feeds_to_discard: &HashSet<String>,
     restrict_to_feed_id: &Option<String>,
     transitland_path: &str,
+    girolle_data: &Option<BTreeMap<String, GirolleFeedDownloadResult>>,
+    use_girolle: bool,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let threads: usize = match std::env::var("DOWNLOAD_THREADS") {
         Ok(ok) => ok.parse::<usize>().unwrap_or_else(|_| 64),
@@ -375,7 +379,67 @@ pub async fn download_return_eligible_feeds(
                                     staticfeed.feed_id.clone()
                                 ))
                                 .expect("failed to create file");
+
+                            let girolle_for_this_feed = match girolle_data {
+                                Some(girolle_data) => girolle_data.get(&staticfeed.feed_id),
+                                None => None,
+                            };
+
+                            let mut skip_due_to_girolle = false;
+
+                            
+                                        use catenary::schema::gtfs::static_download_attempts::dsl as sda_dsl;
             
+                            if use_girolle {
+                                if let Some(girolle_for_this_feed) = girolle_for_this_feed {
+
+                                    if let Some(hash_girolle) = &girolle_for_this_feed.seahash {
+                                         let conn  = &mut pool.get().await.unwrap();
+                                        let download_attempts_postgres_lookup = sda_dsl::static_download_attempts
+                                            .filter(sda_dsl::file_hash.eq(hash_girolle.to_string()))
+                                            .filter(sda_dsl::ingestion_version.eq(MAPLE_INGESTION_VERSION))
+                                            .filter(sda_dsl::onestop_feed_id.eq(&staticfeed.feed_id))
+                                            .load::<StaticDownloadAttempt>(conn)
+                                            .await;
+
+                                        if let Ok(download_attempts_postgres_lookup) = download_attempts_postgres_lookup {
+                                            
+                                        let check_for_previous_insert_sucesses = download_attempts_postgres_lookup
+                                                        .iter()
+                                                        .find(|&x| x.ingested && !x.mark_for_redo);
+
+                                                     if check_for_previous_insert_sucesses.is_some() {
+                                            //println!("{} already inserted from girolle hash", &staticfeed.feed_id);
+                                            skip_due_to_girolle = true;
+                                        }
+                                        }
+
+                                       
+                                    }
+
+                                    
+                                }
+                            }
+
+                            if (skip_due_to_girolle) {
+                                let mut download_progress  = download_progress.lock().unwrap();
+                                *download_progress += 1;
+
+                                println!("Skipping download of {}/{} [{:.2}%]: {} due to girolle hash match",download_progress, total_feeds_to_download, (*download_progress as f32/total_feeds_to_download as f32) * 100.0, &staticfeed.clone().feed_id);
+
+                                return DownloadedFeedsInformation {
+                                    feed_id: staticfeed.feed_id.clone(),
+                                    url: staticfeed.url.clone(),
+                                    hash: None,
+                                    download_timestamp_ms: current_unix_ms_time as u64,
+                                    operation_success: true,
+                                    ingest: false,
+                                    byte_size: None,
+                                    duration_download: None,
+                                    http_response_code: None,
+                                };
+                            }
+
                             let response = try_to_download(
                                 &staticfeed.feed_id,
                                 &client,
@@ -428,9 +492,10 @@ pub async fn download_return_eligible_feeds(
                                         // stringify the hash
                                         let hash_str = hash.to_string();
 
-            
-                                        use catenary::schema::gtfs::static_download_attempts::dsl as sda_dsl;
 
+
+            
+                                       
                                         //query the SQL database for any ingests that have the same zip
                                         
                             let conn  = &mut pool.get().await.unwrap();

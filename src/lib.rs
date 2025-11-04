@@ -993,3 +993,13 @@ pub fn name_shortening_hash_insert_elastic(
 pub fn yyyymmdd_to_naive_date(date_str: &str) -> Result<NaiveDate, chrono::ParseError> {
     NaiveDate::parse_from_str(date_str, "%Y%m%d")
 }
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct GirolleFeedDownloadResult {
+    pub feed_id: String,
+    pub seahash: Option<u64>,
+    pub download_timestamp_ms: u64,
+    pub valid_gtfs: bool,
+    pub time_to_download_ms: Option<u64>,
+    pub byte_size: Option<usize>,
+}

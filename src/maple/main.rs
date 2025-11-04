@@ -47,7 +47,9 @@ use catenary::postgres_tools::make_async_pool;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use futures::StreamExt;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
+use catenary::GirolleFeedDownloadResult;
 use std::error::Error;
 use std::fs;
 mod delete_overlapping_feeds_dmfr;
@@ -83,6 +85,8 @@ struct Args {
     /// Name of the person to greet
     #[arg(long)]
     transitland: String,
+    #[arg(long)]
+    use_girolle: Option<bool>,
 }
 
 fn get_threads_gtfs() -> usize {
@@ -108,6 +112,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let elasticclient = Arc::new(elasticclient);
 
     let args = Args::parse();
+
+    let use_girolle = args.use_girolle.unwrap_or(false);
 
     let delete_everything_in_feed_before_ingest = match std::env::var("DELETE_BEFORE_INGEST") {
         Ok(val) => match val.as_str().to_lowercase().as_str() {
@@ -185,6 +191,23 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
+    //Download Girolle data if it exists and deserialise it with Ron Btreemap<string, girollefeeddownloadresult>
+
+    let girolle_data = match reqwest::get("https://github.com/catenarytransit/girolle-run/releases/download/latest/girolle-results.txt").await {
+        Ok(response) => {
+            let body = response.text().await?;
+            let girolle_data: BTreeMap<String, GirolleFeedDownloadResult> = ron::from_str(body.as_str())?;
+
+            let girolle_data = girolle_data.into_iter().filter(|(_feed_id, feed_data)| {
+                //filter to only valid gtfs feeds
+                feed_data.valid_gtfs
+            }).collect::<BTreeMap<String, GirolleFeedDownloadResult>>();
+
+            Some(girolle_data)
+        },
+        _ => None
+    };
+
     // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
     // See https://github.com/catenarytransit/dmfr-folder-reader
     println!("Reading transitland directory");
@@ -231,6 +254,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             &feeds_to_discard,
             &restrict_to_feed_id,
             &args.transitland,
+            &girolle_data,
+            use_girolle
         )
         .await;
 
