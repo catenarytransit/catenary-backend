@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
 
     let threads: usize = match args.threads {
         Some(threads) => threads,
-        _ => 256,
+        _ => 512,
     };
 
     let client = reqwest::ClientBuilder::new()
