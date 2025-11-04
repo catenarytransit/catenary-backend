@@ -99,6 +99,8 @@ fn get_threads_gtfs() -> usize {
 }
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+    let args = Args::parse();
+
     let discord_log_env = std::env::var("DISCORD_LOG");
 
     let elastic_url = std::env::var("ELASTICSEARCH_URL").unwrap();
@@ -110,8 +112,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     catenary::elasticutils::make_index_and_mappings(&elasticclient).await?;
 
     let elasticclient = Arc::new(elasticclient);
-
-    let args = Args::parse();
 
     let use_girolle = args.use_girolle.unwrap_or(false);
 
