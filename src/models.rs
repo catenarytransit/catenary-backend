@@ -291,8 +291,8 @@ pub struct Stop {
     pub allowed_spatial_query: bool,
 }
 
-#[diesel(check_for_backend(Pg))]
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(check_for_backend(Pg))]
 #[diesel(table_name = crate::schema::gtfs::calendar)]
 pub struct Calendar {
     pub onestop_feed_id: String,
@@ -310,8 +310,8 @@ pub struct Calendar {
     pub chateau: String,
 }
 
-#[diesel(check_for_backend(Pg))]
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(check_for_backend(Pg))]
 #[diesel(table_name = crate::schema::gtfs::calendar_dates)]
 pub struct CalendarDate {
     pub onestop_feed_id: String,
