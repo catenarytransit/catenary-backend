@@ -103,7 +103,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
                         data_about_feed.time_to_download_ms = Some(duration.as_millis() as u64);
 
                         if let Ok(bytes) = bytes {
-                            let hash = seahash::hash(bytes);
+                            let data = bytes_result.as_ref();
+                            let hash = seahash::hash(data);
 
                             data_about_feed.seahash = Some(hash);
                             data_about_feed.byte_size = Some(bytes.len());
