@@ -21,7 +21,9 @@ struct Args {
     /// Name of the person to greet
     #[arg(long)]
     transitland: String,
+    #[arg(long)]
     threads: Option<usize>,
+    #[arg(long)]
     outfile: String,
 }
 
