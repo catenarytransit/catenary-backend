@@ -13,19 +13,14 @@ use actix_web::web::Query;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
-use diesel::dsl::sql;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
-use diesel::sql_types::Bool;
-use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
 use elasticsearch::SearchParts;
 use futures::StreamExt;
-use ordered_float::OrderedFloat;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
-use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -76,14 +71,28 @@ pub struct TextSearchResponseStopsSection {
     ranking: Vec<StopRankingInfo>,
 }
 
+#[derive(Serialize, Clone, Debug)]
+pub struct RouteRankingInfo {
+    pub gtfs_id: String,
+    pub score: f64,
+    pub chateau: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TextSearchResponseRoutesSection {
+    routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>,
+    ranking: Vec<RouteRankingInfo>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct TextSearchResponse {
     pub stops_section: TextSearchResponseStopsSection,
+    pub routes_section: TextSearchResponseRoutesSection,
 }
 
 #[actix_web::get("/text_search_v1")]
 pub async fn text_search_v1(
-    req: HttpRequest,
+    _req: HttpRequest,
     query: Query<TextSearchQuery>,
     arc_conn_pool: web::Data<Arc<CatenaryPostgresPool>>,
     elasticclient: web::Data<Arc<elasticsearch::Elasticsearch>>,
@@ -94,7 +103,7 @@ pub async fn text_search_v1(
     let conn = &mut conn_pre.unwrap();
 
     let map_pos_exists = match (query.map_lat, query.map_lon, query.map_z) {
-        (Some(map_lat), Some(map_lon), Some(map_z)) => true,
+        (Some(_map_lat), Some(_map_lon), Some(_map_z)) => true,
         _ => false,
     };
 
@@ -276,15 +285,127 @@ pub async fn text_search_v1(
         },
     };
 
-    let stops_response = elasticclient
+    let routes_query = match (query.user_lat, query.user_lon) {
+        (Some(user_lat), Some(user_lon)) => json!({
+            "query": {
+                "function_score": {
+                    "query": {
+                        "bool": {
+                            "must": {
+                                "multi_match" : {
+                                    "query":  query.text.clone(),
+                                    "fields": [ "route_long_name.*^1.5", "route_short_name.*^2", "agency_name_search" ]
+                                }
+                            },
+                            "should": [
+                                {
+                                    "distance_feature": {
+                                        "field": "bbox",
+                                        "origin": [user_lon, user_lat],
+                                        "pivot": "2km"
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "functions": [
+                      {
+                        "script_score": {
+                          "script": {
+                            "source": "if (!doc.containsKey('route_type') || doc['route_type'].empty) { return 1.0; } if (doc['route_type'].value == 2) { return 4.0; } if (doc['route_type'].value == 1) { return 2.0; } if (doc['route_type'].value == 0) { return 1.5; } return 1.0;"
+                          }
+                        }
+                      }
+                    ],
+                    "score_mode": "multiply",
+                    "boost_mode": "multiply"
+                  }
+            }
+        }),
+        _ => match map_pos_exists {
+            true => json!({
+                "query": {
+                    "function_score": {
+                        "query": {
+                            "bool": {
+                                "must": {
+                                    "multi_match" : {
+                                        "query":  query.text.clone(),
+                                        "fields": [ "route_long_name.*^1.5", "route_short_name.*^2", "agency_name_search" ]
+                                    }
+                                },
+                                "should": [
+                                    {
+                                        "distance_feature": {
+                                            "field": "bbox",
+                                            "origin": [query.map_lon.unwrap(), query.map_lat.unwrap()],
+                                            "pivot": offset_map_gauss
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        "functions": [
+                          {
+                            "script_score": {
+                              "script": {
+                                "source": "if (!doc.containsKey('route_type') || doc['route_type'].empty) { return 1.0; } if (doc['route_type'].value == 2) { return 3.0; } if (doc['route_type'].value == 1) { return 2.0; } if (doc['route_type'].value == 0) { return 1.5; } return 1.0;"
+                              }
+                            }
+                          }
+                        ],
+                        "score_mode": "multiply",
+                        "boost_mode": "multiply"
+                      }
+                }
+            }),
+            false => json!({
+                "query": {
+                    "function_score": {
+                        "query": {
+                          "multi_match" : {
+                            "query":  query.text.clone(),
+                            "fields": [ "route_long_name.*^1.5", "route_short_name.*^2", "agency_name_search" ]
+                         }
+                        },
+                        "functions": [
+                          {
+                            "script_score": {
+                              "script": {
+                                "source": "if (!doc.containsKey('route_type') || doc['route_type'].empty) { return 1.0; } if (doc['route_type'].value == 2) { return 3.0; } if (doc['route_type'].value == 1) { return 2.0; } if (doc['route_type'].value == 0) { return 1.5; } return 1.0;"
+                              }
+                            }
+                          }
+                        ],
+                        "score_mode": "multiply",
+                        "boost_mode": "multiply"
+                      }
+                }
+            }),
+        },
+    };
+
+
+    let stops_response_future = elasticclient
         .as_ref()
         .search(SearchParts::Index(&["stops"]))
         .from(0)
         .size(30)
         .body(stops_query)
-        .send()
-        .await
-        .unwrap();
+        .send();
+
+    let routes_response_future = elasticclient
+        .as_ref()
+        .search(SearchParts::Index(&["routes"]))
+        .from(0)
+        .size(10)
+        .body(routes_query)
+        .send();
+
+    let (stops_response_result, routes_response_result) = tokio::join!(stops_response_future, routes_response_future);
+    let stops_response = stops_response_result.unwrap();
+    let routes_response = routes_response_result.unwrap();
+
 
     let response_body = stops_response.json::<serde_json::Value>().await.unwrap();
 
@@ -346,8 +467,6 @@ pub async fn text_search_v1(
             .or_default()
             .push(hit_ranking.gtfs_id.clone());
     }
-
-    let conn_pool = arc_conn_pool.as_ref();
 
     let queries_for_stops =
         futures::stream::iter(init_stops_to_fetch.iter().map(|(chateau, stops)| {
@@ -631,6 +750,109 @@ pub async fn text_search_v1(
         }
     }
 
+    let routes_response_body = routes_response.json::<serde_json::Value>().await.unwrap();
+    let hits_list_routes = routes_response_body
+        .get("hits")
+        .map(|x| x.get("hits"))
+        .flatten()
+        .map(|x| x.as_array())
+        .flatten();
+
+    let mut hit_rankings_for_routes: Vec<RouteRankingInfo> = vec![];
+    let mut existing_hits_routes: HashSet<(String, String)> = HashSet::new();
+
+    if let Some(hits_list_routes) = hits_list_routes {
+        for hit in hits_list_routes {
+            if let Some(hit) = hit.as_object() {
+                match (hit.get("_score"), hit.get("_source")) {
+                    (Some(score), Some(source)) => match (score.as_f64(), source.as_object()) {
+                        (Some(score), Some(source)) => {
+                            if let Some(chateau) = source.get("chateau").map(|x| x.as_str()).flatten() {
+                                if let Some(route_id) = source.get("route_id").map(|x| x.as_str()).flatten() {
+                                    let existing_key = (chateau.to_string(), route_id.to_string());
+                                    if !existing_hits_routes.contains(&existing_key) {
+                                        existing_hits_routes.insert(existing_key);
+                                        hit_rankings_for_routes.push(RouteRankingInfo {
+                                            chateau: chateau.to_string(),
+                                            gtfs_id: route_id.to_string(),
+                                            score: score,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let mut routes_to_fetch_from_search: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for hit_ranking in &hit_rankings_for_routes {
+        routes_to_fetch_from_search
+            .entry(hit_ranking.chateau.clone())
+            .or_default()
+            .push(hit_ranking.gtfs_id.clone());
+    }
+
+    let queries_for_routes_from_search =
+        futures::stream::iter(routes_to_fetch_from_search.iter().map(|(chateau, routes)| {
+            let chateau = chateau.clone();
+            let routes = routes.clone();
+
+            let conn_pool = conn_pool.clone();
+            async move {
+                let conn_pre = conn_pool.get().await;
+                let conn = &mut conn_pre.unwrap();
+
+                let diesel_route_query = catenary::schema::gtfs::routes::table
+                    .filter(catenary::schema::gtfs::routes::chateau.eq(&chateau))
+                    .filter(catenary::schema::gtfs::routes::route_id.eq_any(routes))
+                    .select(catenary::models::Route::as_select())
+                    .load(conn)
+                    .await;
+
+                match diesel_route_query {
+                    Ok(routes) => {
+                        let mut route_map: BTreeMap<String, catenary::models::Route> =
+                            BTreeMap::new();
+                        for route in routes {
+                            route_map.insert(route.route_id.clone(), route);
+                        }
+                        Ok((chateau, route_map))
+                    }
+                    Err(e) => {
+                        eprintln!("Error querying routes: {}", e);
+                        Err(e)
+                    }
+                }
+            }
+        }))
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut all_routes_from_search_chateau_groups: BTreeMap<String, BTreeMap<String, catenary::models::Route>> =
+        BTreeMap::new();
+    for result in queries_for_routes_from_search {
+        match result {
+            Ok((chateau, route_map)) => {
+                all_routes_from_search_chateau_groups.insert(chateau.clone(), route_map.clone());
+            }
+            Err(e) => {
+                eprintln!("Error querying routes: {}", e);
+            }
+        }
+    }
+
+    let routes_section = TextSearchResponseRoutesSection {
+        ranking: hit_rankings_for_routes,
+        routes: all_routes_from_search_chateau_groups,
+    };
+
+
     /*
     let mut reranking_stops = hit_rankings_for_stops
         .into_iter()
@@ -671,7 +893,7 @@ pub async fn text_search_v1(
         routes: all_routes_chateau_groups,
     };
 
-    let response_struct = TextSearchResponse { stops_section };
+    let response_struct = TextSearchResponse { stops_section, routes_section };
 
     HttpResponse::Ok().json(response_struct)
 }
