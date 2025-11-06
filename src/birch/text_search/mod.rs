@@ -300,7 +300,7 @@ pub async fn text_search_v1(
                             "should": [
                                 {
                                     "distance_feature": {
-                                        "field": "bbox",
+                                        "field": "important_points",
                                         "origin": [user_lon, user_lat],
                                         "pivot": "2km"
                                     }
@@ -337,7 +337,7 @@ pub async fn text_search_v1(
                                 "should": [
                                     {
                                         "distance_feature": {
-                                            "field": "bbox",
+                                            "field": "important_points",
                                             "origin": [query.map_lon.unwrap(), query.map_lat.unwrap()],
                                             "pivot": offset_map_gauss
                                         }
