@@ -60,6 +60,7 @@ pub mod custom_alerts;
 pub mod elasticutils;
 pub mod hashfolder;
 pub mod shape_fetcher;
+pub mod travic_types;
 use ahash::AHasher;
 use chrono::Datelike;
 use chrono::NaiveDate;
@@ -1003,3 +1004,4 @@ pub struct GirolleFeedDownloadResult {
     pub time_to_download_ms: Option<u64>,
     pub byte_size: Option<usize>,
 }
+
