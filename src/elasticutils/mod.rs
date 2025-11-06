@@ -558,6 +558,9 @@ pub async fn make_index_and_mappings(
                                 "bbox": {
                                     "type": "geo_shape"
                                 },
+                                "important_points": {
+                                     "type": "geo_point"
+                                 },
                                  "attempt_id": {
                                      "type": "text",
                                  },

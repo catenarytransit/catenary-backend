@@ -591,6 +591,15 @@ pub async fn gtfs_process_feed(
         reduction.trips_to_itineraries.len() as f64 / reduction.itineraries.len() as f64
     );
 
+    let mut route_to_direction_patterns: HashMap<String, Vec<&maple_syrup::DirectionPattern>> =
+        HashMap::new();
+    for (_, direction_pattern) in &reduction.direction_patterns {
+        route_to_direction_patterns
+            .entry(direction_pattern.route_id.to_string())
+            .or_default()
+            .push(direction_pattern);
+    }
+
     let feed_info: Option<FeedInfo> = match !gtfs.feed_info.is_empty() {
         true => Some(gtfs.feed_info[0].clone()),
         false => None,
@@ -1186,6 +1195,71 @@ pub async fn gtfs_process_feed(
             let mut long_name_translations_shortened_locales_elastic: HashMap<String, String> =
                 HashMap::new();
 
+            let mut important_points: Vec<[f64; 2]> = Vec::new();
+            let mut important_points_set: HashSet<(i32, i32)> = HashSet::new();
+
+            if let Some(direction_patterns) = route_to_direction_patterns.get(route_id) {
+                // First, collect all start and end points
+                for direction_pattern in &*direction_patterns {
+                    let stops: Vec<_> = direction_pattern
+                        .stop_sequence
+                        .iter()
+                        .filter_map(|stop_id| gtfs.stops.get(stop_id.as_str()))
+                        .collect();
+
+                    if let Some(start_stop) = stops.iter().next() {
+                        if let (Some(lat), Some(lon)) = (start_stop.latitude, start_stop.longitude)
+                        {
+                            let lat_i = (lat * 1_000_000.0) as i32;
+                            let lon_i = (lon * 1_000_000.0) as i32;
+                            if important_points_set.insert((lat_i, lon_i)) {
+                                important_points.push([lon, lat]);
+                            }
+                        }
+                    }
+
+                    if let Some(end_stop) = stops.iter().last() {
+                        if let (Some(lat), Some(lon)) = (end_stop.latitude, end_stop.longitude) {
+                            let lat_i = (lat * 1_000_000.0) as i32;
+                            let lon_i = (lon * 1_000_000.0) as i32;
+                            if important_points_set.insert((lat_i, lon_i)) {
+                                important_points.push([lon, lat]);
+                            }
+                        }
+                    }
+                }
+
+                // Then, iterate through all stops to find intermediate points
+                for direction_pattern in &*direction_patterns {
+                    let stops: Vec<_> = direction_pattern
+                        .stop_sequence
+                        .iter()
+                        .filter_map(|stop_id| gtfs.stops.get(stop_id.as_str()))
+                        .collect();
+
+                    for stop in stops {
+                        if let (Some(lat), Some(lon)) = (stop.latitude, stop.longitude) {
+                            let lat_i = (lat * 1_000_000.0) as i32;
+                            let lon_i = (lon * 1_000_000.0) as i32;
+
+                            if important_points_set.contains(&(lat_i, lon_i)) {
+                                continue;
+                            }
+
+                            let is_far_enough =
+                                important_points.iter().all(|p| {
+                                    haversine_distance(lat, lon, p[1], p[0]) >= 50.0
+                                });
+
+                            if is_far_enough {
+                                important_points.push([lon, lat]);
+                                important_points_set.insert((lat_i, lon_i));
+                            }
+                        }
+                    }
+                }
+            }
+
             let route_id = route_id_transform(feed_id, route_id.to_string());
 
             let elastic_id = format!("{}_{}_{}", feed_id, attempt_id, route_id);
@@ -1249,7 +1323,8 @@ pub async fn gtfs_process_feed(
                     "agency_name_search": agency_name,
                     "route_short_name": serde_json::to_value(&short_name_translations_shortened_locales_elastic).unwrap(),
                     "route_long_name": serde_json::to_value(&long_name_translations_shortened_locales_elastic).unwrap(),
-                    "bbox": envelope
+                    "bbox": envelope,
+                    "important_points": important_points
                 })
                 .into(),
             );
@@ -1408,6 +1483,16 @@ pub fn continuous_pickup_drop_off_to_i16(x: &ContinuousPickupDropOff) -> i16 {
         ContinuousPickupDropOff::CoordinateWithDriver => 3,
         ContinuousPickupDropOff::Unknown(x) => *x,
     }
+}
+
+fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    const R: f64 = 6371.0; // Earth radius in kilometers
+    let d_lat = (lat2 - lat1).to_radians();
+    let d_lon = (lon2 - lon1).to_radians();
+    let a = (d_lat / 2.0).sin() * (d_lat / 2.0).sin()
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * (d_lon / 2.0).sin() * (d_lon / 2.0).sin();
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+    R * c
 }
 
 fn compute_shape_envelope(
