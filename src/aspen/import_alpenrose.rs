@@ -12,7 +12,6 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use chrono::Datelike;
 use chrono::TimeZone;
 use chrono::Utc;
-use chrono_tz::Africa::Sao_Tome;
 use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
@@ -837,6 +836,31 @@ pub async fn new_rt_data(
         let mut route_ids_to_insert: AHashSet<String> = AHashSet::new();
 
         for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
+            let vehicle_id_to_trip_update_start_time: AHashMap<String, String> =
+                if realtime_feed_id == "f-irvine~ca~us~rt" {
+                    if let Some(trip_updates_gtfs_rt_data) = authoritative_gtfs_rt
+                        .get_sync(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+                    {
+                        let mut map = AHashMap::new();
+                        for entity in trip_updates_gtfs_rt_data.get().entity.iter() {
+                            if let Some(trip_update) = &entity.trip_update {
+                                if let (Some(vehicle), Some(start_time)) =
+                                    (&trip_update.vehicle, &trip_update.trip.start_time)
+                                {
+                                    if let Some(id) = &vehicle.id {
+                                        map.insert(id.clone(), start_time.clone());
+                                    }
+                                }
+                            }
+                        }
+                        map
+                    } else {
+                        AHashMap::new()
+                    }
+                } else {
+                    AHashMap::new()
+                };
+
             if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
                 .get_async(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
                 .await
@@ -1017,42 +1041,16 @@ pub async fn new_rt_data(
                                     direction_id: trip.direction_id,
                                     start_date: start_date,
                                     start_time: match realtime_feed_id.as_str() {
-                                        //fix passio not assigning start times cuz they are complete loser connards
-                                        "f-irvine~ca~us~rt" => {                                            
-                                             let trip_updates_gtfs_rt_data = authoritative_gtfs_rt.get_sync(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates));
-
-
-                                            match trip_updates_gtfs_rt_data {
-                                                Some(trip_updates_gtfs_rt_data) => {
-                                                    let trip_updates_gtfs_rt_data = trip_updates_gtfs_rt_data.get();
-
-                                                    let find_matching_vehicle_in_trip_feed = trip_updates_gtfs_rt_data.entity.iter().find(|x| {
-
-                                                        match &x.trip_update {
-                                                            Some(trip_update) => {
-                                                                match &trip_update.vehicle {
-                                                                    Some(vehicle_iden_from_matching_trip) => {
-                                                                        vehicle_iden_from_matching_trip.id == vehicle_pos.vehicle.as_ref().unwrap().id
-                                                                    },
-                                                                    None => false
-                                                                }
-                                                            },
-                                                            None => false
-                                                        }
-                                                    });
-
-                                                    match find_matching_vehicle_in_trip_feed {
-                                                        Some(matching_trip_entity) => {
-                                                            matching_trip_entity.trip_update.as_ref().map(|x| x.trip.start_time.clone()).flatten()
-                                                        },
-                                                        None => None
-                                                    }
-                                                },
-                                                 _ => None
-                                            }
-                                        },
-                                        //regular start time
-                                        _ => trip.start_time.clone()
+                                        "f-irvine~ca~us~rt" => vehicle_pos
+                                            .vehicle
+                                            .as_ref()
+                                            .and_then(|v| v.id.as_ref())
+                                            .and_then(|id| {
+                                                vehicle_id_to_trip_update_start_time
+                                                    .get(id)
+                                                    .cloned()
+                                            }),
+                                        _ => trip.start_time.clone(),
                                     },
                                     schedule_relationship: option_i32_to_schedule_relationship(
                                         &trip.schedule_relationship,
@@ -1448,28 +1446,27 @@ pub async fn new_rt_data(
                                     match &previous_authoritative_data_store {
                                         Some(previous_authoritative_data_store) => {
                                             let previous_trip_update_id = match previous_authoritative_data_store.trip_updates_lookup_by_trip_id_to_trip_update_ids.get(trip_id.as_str()) {
-                                    Some(trip_updates_lookup_by_trip_id_to_trip_update_ids) => {
-
-                                        let filter_matching_trip_update_key = trip_updates_lookup_by_trip_id_to_trip_update_ids.into_iter().filter(
-                                            |possible_match_trip_id| 
-                                                match previous_authoritative_data_store
-                                                    .trip_updates
-                                                    .get(possible_match_trip_id.as_str()) {
-                                                        Some(possible_old_trip) => {
+                                        Some(trip_updates_lookup_by_trip_id_to_trip_update_ids) => {
+                                            let mut matching_ids = trip_updates_lookup_by_trip_id_to_trip_update_ids.iter().filter(
+                                                |possible_match_trip_id| {
+                                                    previous_authoritative_data_store
+                                                        .trip_updates
+                                                        .get(possible_match_trip_id.as_str())
+                                                        .map_or(false, |possible_old_trip| {
                                                             possible_old_trip.trip == trip_descriptor
-                                                        },
-                                                        None => false
-                                                    }
-                                        ).collect::<Vec<_>>();
-
-                                        match filter_matching_trip_update_key.len() {
-                                            0 => None,
-                                            1 => Some(filter_matching_trip_update_key[0].clone()),
-                                            _ => None
+                                                        })
+                                                },
+                                            );
+                                    
+                                            let first_match = matching_ids.next();
+                                            if first_match.is_some() && matching_ids.next().is_none() {
+                                                first_match.cloned()
+                                            } else {
+                                                None
+                                            }
                                         }
-                                    },
-                                    None => None
-                                };
+                                        None => None,
+                                    };
 
                                             match previous_trip_update_id {
                                                 Some(previous_trip_update_id) => {
