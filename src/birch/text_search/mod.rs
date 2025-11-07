@@ -309,26 +309,39 @@ pub async fn text_search_v1(
             "query": {
                 "function_score": {
                     "query": {
-                        "bool": {
-                            "must": {
-                                "multi_match" : {
-                                    "query":  query.text.clone(),
-                                    "fields": [ "route_long_name.*^1.5", "route_short_name.*^2", "agency_name_search" ]
-                                }
-                            },
-                            "should": [
-                                {
-                                    "distance_feature": {
-                                        "field": "important_points",
-                                        "origin": [user_lon, user_lat],
-                                        "pivot": "2km"
-                                    }
-                                }
-                            ]
+                        "multi_match" : {
+                            "query":  query.text.clone(),
+                            "fields": [ "route_long_name.*^1.2", "route_short_name.*^1.5", "agency_name_search" ]
                         }
                     },
                     "functions": [
-                        route_type_function.clone()
+                        route_type_function.clone(),
+                        {
+                            "script_score": {
+                                "script": {
+                                    "source": "
+                                      double min_distance = -1.0;
+                                      if (doc.containsKey('important_points') && !doc['important_points'].empty) {
+                                        for (def point : doc['important_points']) {
+                                          double current_distance = point.arcDistance(params.lat, params.lon);
+                                          if (min_distance == -1.0 || current_distance < min_distance) {
+                                            min_distance = current_distance;
+                                          }
+                                        }
+                                      }
+                                      if (min_distance == -1.0) {
+                                        return 1.0;
+                                      }
+                                      double pivot = 2000.0;
+                                      return pivot / (pivot + min_distance);
+                                    ",
+                                    "params": {
+                                        "lat": user_lat,
+                                        "lon": user_lon
+                                    }
+                                }
+                            }
+                        }
                     ],
                     "score_mode": "multiply",
                     "boost_mode": "multiply"
@@ -340,26 +353,42 @@ pub async fn text_search_v1(
                 "query": {
                     "function_score": {
                         "query": {
-                            "bool": {
-                                "must": {
-                                    "multi_match" : {
-                                        "query":  query.text.clone(),
-                                        "fields": [ "route_long_name.*^1.5", "route_short_name.*^2", "agency_name_search" ]
-                                    }
-                                },
-                                "should": [
-                                    {
-                                        "distance_feature": {
-                                            "field": "important_points",
-                                            "origin": [query.map_lon.unwrap(), query.map_lat.unwrap()],
-                                            "pivot": offset_map_gauss
-                                        }
-                                    }
-                                ]
+                            "multi_match" : {
+                                "query":  query.text.clone(),
+                                "fields": [ "route_long_name.*^1.5", "route_short_name.*^2", "agency_name_search" ]
                             }
                         },
                         "functions": [
-                            route_type_function.clone()
+                            route_type_function.clone(),
+                            {
+                                "script_score": {
+                                    "script": {
+                                        "source": "
+                                          double min_distance = -1.0;
+                                          if (doc.containsKey('important_points') && !doc['important_points'].empty) {
+                                            for (def point : doc['important_points']) {
+                                              double current_distance = point.arcDistance(params.lat, params.lon);
+                                              if (min_distance == -1.0 || current_distance < min_distance) {
+                                                min_distance = current_distance;
+                                              }
+                                            }
+                                          }
+                                          if (min_distance == -1.0) {
+                                            return 1.0;
+                                          }
+                                          String pivot_str = params.pivot;
+                                          double pivot_km = Double.parseDouble(pivot_str.substring(0, pivot_str.length() - 2));
+                                          double pivot_meters = pivot_km * 1000.0;
+                                          return pivot_meters / (pivot_meters + min_distance);
+                                        ",
+                                        "params": {
+                                            "lat": query.map_lat.unwrap(),
+                                            "lon": query.map_lon.unwrap(),
+                                            "pivot": offset_map_gauss
+                                        }
+                                    }
+                                }
+                            }
                         ],
                         "score_mode": "multiply",
                         "boost_mode": "multiply"
