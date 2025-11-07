@@ -320,15 +320,18 @@ pub async fn text_search_v1(
                             "script_score": {
                                 "script": {
                                     "source": "
-                                      double min_distance = Double.POSITIVE_INFINITY;
+                                      double min_distance = -1.0;
                                       if (doc.containsKey('important_points') && !doc['important_points'].empty) {
-                                        for (double distance : doc['important_points'].arcDistance(params.lat, params.lon)) {
-                                          min_distance = Math.min(min_distance, distance);
+                                        def distances = doc['important_points'].arcDistance(params.lat, params.lon);
+                                        if (distances instanceof List) {
+                                          for (double d : distances) {
+                                            if (min_distance == -1.0 || d < min_distance) { min_distance = d; }
+                                          }
+                                        } else {
+                                          min_distance = distances;
                                         }
                                       }
-                                      if (min_distance == -1.0) {
-                                        return 1.0;
-                                      }
+                                      if (min_distance < 0) { return 1.0; }
                                       double pivot = 2000.0;
                                       return pivot / (pivot + min_distance);
                                     ",
@@ -361,15 +364,18 @@ pub async fn text_search_v1(
                                 "script_score": {
                                     "script": {
                                         "source": "
-                                          double min_distance = Double.POSITIVE_INFINITY;
+                                          double min_distance = -1.0;
                                           if (doc.containsKey('important_points') && !doc['important_points'].empty) {
-                                            for (double distance : doc['important_points'].arcDistance(params.lat, params.lon)) {
-                                              min_distance = Math.min(min_distance, distance);
+                                            def distances = doc['important_points'].arcDistance(params.lat, params.lon);
+                                            if (distances instanceof List) {
+                                              for (double d : distances) {
+                                                if (min_distance == -1.0 || d < min_distance) { min_distance = d; }
+                                              }
+                                            } else {
+                                              min_distance = distances;
                                             }
                                           }
-                                          if (min_distance == -1.0) {
-                                            return 1.0;
-                                          }
+                                          if (min_distance < 0) { return 1.0; }
                                           String pivot_str = params.pivot;
                                           double pivot_km = Double.parseDouble(pivot_str.substring(0, pivot_str.length() - 2));
                                           double pivot_meters = pivot_km * 1000.0;
