@@ -320,13 +320,10 @@ pub async fn text_search_v1(
                             "script_score": {
                                 "script": {
                                     "source": "
-                                      double min_distance = -1.0;
+                                      double min_distance = Double.POSITIVE_INFINITY;
                                       if (doc.containsKey('important_points') && !doc['important_points'].empty) {
-                                        for (def p : doc['important_points']) {
-                                          double current_distance = p.arcDistance(params.lat, params.lon);
-                                          if (min_distance == -1.0 || current_distance < min_distance) {
-                                            min_distance = current_distance;
-                                          }
+                                        for (double distance : doc['important_points'].arcDistance(params.lat, params.lon)) {
+                                          min_distance = Math.min(min_distance, distance);
                                         }
                                       }
                                       if (min_distance == -1.0) {
@@ -364,13 +361,10 @@ pub async fn text_search_v1(
                                 "script_score": {
                                     "script": {
                                         "source": "
-                                          double min_distance = -1.0;
+                                          double min_distance = Double.POSITIVE_INFINITY;
                                           if (doc.containsKey('important_points') && !doc['important_points'].empty) {
-                                            for (def p : doc['important_points']) {
-                                              double current_distance = p.arcDistance(params.lat, params.lon);
-                                              if (min_distance == -1.0 || current_distance < min_distance) {
-                                                min_distance = current_distance;
-                                              }
+                                            for (double distance : doc['important_points'].arcDistance(params.lat, params.lon)) {
+                                              min_distance = Math.min(min_distance, distance);
                                             }
                                           }
                                           if (min_distance == -1.0) {
