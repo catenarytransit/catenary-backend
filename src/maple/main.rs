@@ -936,10 +936,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             .send();
     }
 
-    println!("Deleting temp data");
-
-    fs::remove_dir_all(gtfs_temp_storage).unwrap();
-    fs::remove_dir_all(gtfs_uncompressed_temp_storage).unwrap();
+    if std::env::var("BYPASS_TEMP_DELETE").is_err() {
+        println!("Deleting temp data");
+        fs::remove_dir_all(gtfs_temp_storage).unwrap();
+        fs::remove_dir_all(gtfs_uncompressed_temp_storage).unwrap();
+    }
 
     Ok(())
 }
