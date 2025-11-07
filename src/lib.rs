@@ -1004,4 +1004,3 @@ pub struct GirolleFeedDownloadResult {
     pub time_to_download_ms: Option<u64>,
     pub byte_size: Option<usize>,
 }
-

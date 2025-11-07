@@ -3,6 +3,7 @@
 
 use crate::CatenaryPostgresPool;
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
+use catenary::GirolleFeedDownloadResult;
 use catenary::models::StaticDownloadAttempt;
 use chrono::{DateTime, FixedOffset};
 use diesel::prelude::*;
@@ -11,6 +12,7 @@ use dmfr_dataset_reader::ReturnDmfrAnalysis;
 use reqwest::RequestBuilder;
 use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
@@ -23,8 +25,6 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex;
 use url::{ParseError, Url};
-use std::collections::BTreeMap;
-use catenary::GirolleFeedDownloadResult;
 
 #[derive(Clone)]
 struct StaticFeedToDownload {

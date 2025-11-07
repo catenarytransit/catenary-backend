@@ -42,6 +42,7 @@ use tikv_jemallocator::Jemalloc;
 static GLOBAL: Jemalloc = Jemalloc;
 
 use ahash::AHashMap;
+use catenary::GirolleFeedDownloadResult;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::postgres_tools::make_async_pool;
 use diesel::prelude::*;
@@ -49,7 +50,6 @@ use diesel_async::RunQueryDsl;
 use futures::StreamExt;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-use catenary::GirolleFeedDownloadResult;
 use std::error::Error;
 use std::fs;
 mod delete_overlapping_feeds_dmfr;
@@ -255,7 +255,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             &restrict_to_feed_id,
             &args.transitland,
             &girolle_data,
-            use_girolle
+            use_girolle,
         )
         .await;
 

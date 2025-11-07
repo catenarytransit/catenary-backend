@@ -386,7 +386,6 @@ pub async fn text_search_v1(
         },
     };
 
-
     let stops_response_future = elasticclient
         .as_ref()
         .search(SearchParts::Index(&["stops"]))
@@ -403,10 +402,10 @@ pub async fn text_search_v1(
         .body(routes_query)
         .send();
 
-    let (stops_response_result, routes_response_result) = tokio::join!(stops_response_future, routes_response_future);
+    let (stops_response_result, routes_response_result) =
+        tokio::join!(stops_response_future, routes_response_future);
     let stops_response = stops_response_result.unwrap();
     let routes_response = routes_response_result.unwrap();
-
 
     let response_body = stops_response.json::<serde_json::Value>().await.unwrap();
 
@@ -773,8 +772,12 @@ pub async fn text_search_v1(
                 match (hit.get("_score"), hit.get("_source")) {
                     (Some(score), Some(source)) => match (score.as_f64(), source.as_object()) {
                         (Some(score), Some(source)) => {
-                            if let Some(chateau) = source.get("chateau").map(|x| x.as_str()).flatten() {
-                                if let Some(route_id) = source.get("route_id").map(|x| x.as_str()).flatten() {
+                            if let Some(chateau) =
+                                source.get("chateau").map(|x| x.as_str()).flatten()
+                            {
+                                if let Some(route_id) =
+                                    source.get("route_id").map(|x| x.as_str()).flatten()
+                                {
                                     let existing_key = (chateau.to_string(), route_id.to_string());
                                     if !existing_hits_routes.contains(&existing_key) {
                                         existing_hits_routes.insert(existing_key);
@@ -840,8 +843,10 @@ pub async fn text_search_v1(
         .collect::<Vec<_>>()
         .await;
 
-    let mut all_routes_from_search_chateau_groups: BTreeMap<String, BTreeMap<String, catenary::models::Route>> =
-        BTreeMap::new();
+    let mut all_routes_from_search_chateau_groups: BTreeMap<
+        String,
+        BTreeMap<String, catenary::models::Route>,
+    > = BTreeMap::new();
     for result in queries_for_routes_from_search {
         match result {
             Ok((chateau, route_map)) => {
@@ -877,8 +882,8 @@ pub async fn text_search_v1(
         }
     }
 
-    let queries_for_agencies =
-        futures::stream::iter(agencies_to_query_by_chateau.iter().map(|(chateau, agencies)| {
+    let queries_for_agencies = futures::stream::iter(agencies_to_query_by_chateau.iter().map(
+        |(chateau, agencies)| {
             let chateau = chateau.clone();
             let agencies = agencies.clone();
 
@@ -909,13 +914,16 @@ pub async fn text_search_v1(
                     }
                 }
             }
-        }))
-        .buffer_unordered(4)
-        .collect::<Vec<_>>()
-        .await;
+        },
+    ))
+    .buffer_unordered(4)
+    .collect::<Vec<_>>()
+    .await;
 
-    let mut all_agencies_chateau_groups: BTreeMap<String, BTreeMap<String, catenary::models::Agency>> =
-        BTreeMap::new();
+    let mut all_agencies_chateau_groups: BTreeMap<
+        String,
+        BTreeMap<String, catenary::models::Agency>,
+    > = BTreeMap::new();
     for result in queries_for_agencies {
         match result {
             Ok((chateau, agency_map)) => {
@@ -933,19 +941,17 @@ pub async fn text_search_v1(
             let new_route_map = route_map
                 .into_iter()
                 .map(|(route_id, route)| {
-                    let agency_name = route.agency_id.as_ref().and_then(|id| {
-                        all_agencies_chateau_groups
-                            .get(&chateau)
-                            .and_then(|agencies| agencies.get(id))
-                            .map(|agency| agency.agency_name.clone())
-                    }).unwrap_or_else(|| "".to_string());
-                    (
-                        route_id,
-                        RouteDeserialised {
-                            route,
-                            agency_name,
-                        },
-                    )
+                    let agency_name = route
+                        .agency_id
+                        .as_ref()
+                        .and_then(|id| {
+                            all_agencies_chateau_groups
+                                .get(&chateau)
+                                .and_then(|agencies| agencies.get(id))
+                                .map(|agency| agency.agency_name.clone())
+                        })
+                        .unwrap_or_else(|| "".to_string());
+                    (route_id, RouteDeserialised { route, agency_name })
                 })
                 .collect::<BTreeMap<_, _>>();
             (chateau, new_route_map)
@@ -958,19 +964,17 @@ pub async fn text_search_v1(
             let new_route_map = route_map
                 .into_iter()
                 .map(|(route_id, route)| {
-                    let agency_name = route.agency_id.as_ref().and_then(|id| {
-                        all_agencies_chateau_groups
-                            .get(&chateau)
-                            .and_then(|agencies| agencies.get(id))
-                            .map(|agency| agency.agency_name.clone())
-                    }).unwrap_or_else(|| "".to_string());
-                    (
-                        route_id,
-                        RouteDeserialised {
-                            route,
-                            agency_name,
-                        },
-                    )
+                    let agency_name = route
+                        .agency_id
+                        .as_ref()
+                        .and_then(|id| {
+                            all_agencies_chateau_groups
+                                .get(&chateau)
+                                .and_then(|agencies| agencies.get(id))
+                                .map(|agency| agency.agency_name.clone())
+                        })
+                        .unwrap_or_else(|| "".to_string());
+                    (route_id, RouteDeserialised { route, agency_name })
                 })
                 .collect::<BTreeMap<_, _>>();
             (chateau, new_route_map)
@@ -983,9 +987,10 @@ pub async fn text_search_v1(
                 let mut agency_names = BTreeSet::new();
                 for route_id in &stop.routes {
                     if let Some(route) = routes.get(route_id) {
-                                        if !route.agency_name.is_empty() {
-                                            agency_names.insert(route.agency_name.clone());
-                                        }                    }
+                        if !route.agency_name.is_empty() {
+                            agency_names.insert(route.agency_name.clone());
+                        }
+                    }
                 }
                 stop.agency_names = agency_names.into_iter().collect();
             }
@@ -1005,7 +1010,10 @@ pub async fn text_search_v1(
         agencies: all_agencies_chateau_groups,
     };
 
-    let response_struct = TextSearchResponse { stops_section, routes_section };
+    let response_struct = TextSearchResponse {
+        stops_section,
+        routes_section,
+    };
 
     HttpResponse::Ok().json(response_struct)
 }
