@@ -285,6 +285,15 @@ pub async fn text_search_v1(
         },
     };
 
+    let route_type_function = json!({
+        "script_score": {
+            "script": {
+                // rail, metro, tram
+                "source": "if (!doc.containsKey('route_type') || doc['route_type'].empty) { return 1.0; } if (doc['route_type'].value == 2) { return 4.0; } if (doc['route_type'].value == 1) { return 3.0; } if (doc['route_type'].value == 0) { return 2.0; } return 1.0;"
+            }
+        }
+    });
+
     let routes_query = match (query.user_lat, query.user_lon) {
         (Some(user_lat), Some(user_lon)) => json!({
             "query": {
@@ -309,13 +318,7 @@ pub async fn text_search_v1(
                         }
                     },
                     "functions": [
-                      {
-                        "script_score": {
-                          "script": {
-                            "source": "if (!doc.containsKey('route_type') || doc['route_type'].empty) { return 1.0; } if (doc['route_type'].value == 2) { return 4.0; } if (doc['route_type'].value == 1) { return 2.0; } if (doc['route_type'].value == 0) { return 1.5; } return 1.0;"
-                          }
-                        }
-                      }
+                        route_type_function.clone()
                     ],
                     "score_mode": "multiply",
                     "boost_mode": "multiply"
@@ -346,13 +349,7 @@ pub async fn text_search_v1(
                             }
                         },
                         "functions": [
-                          {
-                            "script_score": {
-                              "script": { // rail, metro, tram
-                                "source": "if (!doc.containsKey('route_type') || doc['route_type'].empty) { return 1.0; } if (doc['route_type'].value == 2) { return 3.0; } if (doc['route_type'].value == 1) { return 2.0; } if (doc['route_type'].value == 0) { return 1.5; } return 1.0;"
-                              }
-                            }
-                          }
+                            route_type_function.clone()
                         ],
                         "score_mode": "multiply",
                         "boost_mode": "multiply"
@@ -369,13 +366,7 @@ pub async fn text_search_v1(
                          }
                         },
                         "functions": [
-                          {
-                            "script_score": {
-                              "script": { // rail, metro, tram
-                                "source": "if (!doc.containsKey('route_type') || doc['route_type'].empty) { return 1.0; } if (doc['route_type'].value == 2) { return 4.0; } if (doc['route_type'].value == 1) { return 3.0; } if (doc['route_type'].value == 0) { return 2.0; } return 1.0;"
-                              }
-                            }
-                          }
+                            route_type_function.clone()
                         ],
                         "score_mode": "multiply",
                         "boost_mode": "multiply"
