@@ -348,7 +348,7 @@ pub async fn text_search_v1(
                         "functions": [
                           {
                             "script_score": {
-                              "script": {
+                              "script": { // rail, metro, tram
                                 "source": "if (!doc.containsKey('route_type') || doc['route_type'].empty) { return 1.0; } if (doc['route_type'].value == 2) { return 3.0; } if (doc['route_type'].value == 1) { return 2.0; } if (doc['route_type'].value == 0) { return 1.5; } return 1.0;"
                               }
                             }
@@ -371,7 +371,7 @@ pub async fn text_search_v1(
                         "functions": [
                           {
                             "script_score": {
-                              "script": {
+                              "script": { // rail, metro, tram
                                 "source": "if (!doc.containsKey('route_type') || doc['route_type'].empty) { return 1.0; } if (doc['route_type'].value == 2) { return 3.0; } if (doc['route_type'].value == 1) { return 2.0; } if (doc['route_type'].value == 0) { return 1.5; } return 1.0;"
                               }
                             }
