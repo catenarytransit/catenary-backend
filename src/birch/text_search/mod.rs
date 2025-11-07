@@ -312,7 +312,7 @@ pub async fn text_search_v1(
                     "query": {
                         "multi_match" : {
                             "query":  query.text.clone(),
-                            "fields": [ "route_long_name.*^1.2", "route_short_name.*^1.5", "agency_name_search" ]
+                            "fields": [ "route_long_name.*^1.5", "route_short_name.*^2", "agency_name_search" ]
                         }
                     },
                     "functions": [
