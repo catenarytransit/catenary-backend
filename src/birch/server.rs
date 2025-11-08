@@ -234,6 +234,71 @@ async fn routesofchateau(
         .body(serde_json::to_string(&routes).unwrap())
 }
 
+#[derive(Deserialize)]
+struct RouteFetchParams {
+    pub agency_filter: Option<Vec<String>>,
+}
+
+#[actix_web::post("/getroutesofchateauwithagency/{chateau}")]
+async fn routesofchateauwithagency(
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    path: web::Path<String>,
+     params: web::Json<RouteFetchParams>,
+    req: HttpRequest,
+) -> impl Responder {
+    let conn_pool = pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre.unwrap();
+
+    let chateau_id = path.into_inner();
+
+    use catenary::schema::gtfs::routes as routes_pg_schema;
+
+    let routes = routes_pg_schema::dsl::routes
+        .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
+        .select(catenary::models::Route::as_select())
+        .load::<catenary::models::Route>(conn)
+        .await
+        .unwrap();
+
+    let uses_only_one_agency = match &routes.iter() .map(|x| x.agency_id.clone()) .collect::<Vec<Option<String>>>() {
+        agencies_vec => {
+            let unique_agencies: Vec<Option<String>> = agencies_vec
+                .clone()
+                .into_iter()
+                .collect::<std::collections::HashSet<Option<String>>>()
+                .into_iter()
+                .collect();
+
+            unique_agencies.len() == 1
+        }
+    };
+
+    let routes_filtered = routes
+        .into_iter()
+        .filter(|route| {
+            if let Some(agency_filter) = &params.agency_filter {
+                if uses_only_one_agency {
+                    return true;
+                }
+
+                if let Some(route_agency_id) = &route.agency_id {
+                    return agency_filter.contains(route_agency_id);
+                } else {
+                    return false;
+                }
+            } else {
+                return true;
+            }
+        })
+        .collect::<Vec<catenary::models::Route>>();
+
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "application/json"))
+        .insert_header(("Cache-Control", "max-age=3600"))
+        .body(serde_json::to_string(&routes_filtered).unwrap())
+}
+
 #[actix_web::get("/metrolinktrackproxy")]
 pub async fn metrolinktrackproxy(req: HttpRequest) -> impl Responder {
     let raw_data = reqwest::get("https://rtt.metrolinktrains.com/StationScheduleList.json").await;
@@ -774,6 +839,7 @@ async fn main() -> std::io::Result<()> {
             .service(openrailwaymap_proxy::openrailwaymap_proxy)
             .service(text_search::text_search_v1)
             .service(nominatim_details)
+            .service(routesofchateauwithagency)
             //   .service(nearby_departuresv2::nearby_from_coords_v2)
             //we do some trolling
             .service(web::redirect(
