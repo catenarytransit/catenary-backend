@@ -560,7 +560,7 @@ pub async fn bulk_realtime_fetch_v2(
         }
     }
 
-    return HttpResponse::InternalServerError()
+    return HttpResponse::Ok()
         .append_header(("Cache-Control", "no-cache"))
         .json(bulk_fetch_response);
 }
