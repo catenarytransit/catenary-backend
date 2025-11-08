@@ -2063,6 +2063,7 @@ pub async fn new_rt_data(
                         route_type: route.route_type,
                         route_colour: route.color.clone(),
                         route_text_colour: route.text_color.clone(),
+                        agency_id: route.agency_id.clone(),
                     },
                 );
             }

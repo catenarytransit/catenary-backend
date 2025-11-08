@@ -705,6 +705,7 @@ pub struct AspenisedVehicleRouteCache {
     pub route_text_colour: Option<String>,
     pub route_type: i16,
     pub route_desc: Option<String>,
+    pub agency_id: Option<String>,
 }
 
 #[derive(Copy, Eq, Hash, PartialEq, Clone, Deserialize, Serialize, Debug)]

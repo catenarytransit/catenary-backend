@@ -25,7 +25,7 @@ pub enum CategoryOfRealtimeVehicleData {
     Other,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Hash)]
 pub struct AspenisedVehicleTripInfoOutput {
     pub trip_id: Option<String>,
     pub trip_headsign: Option<String>,
@@ -104,6 +104,11 @@ pub struct ChateauAskParams {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct ChateauAskParamsV2 {
+    category_params: CategoryAskParamsV2,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct CategoryAskParams {
     bus: Option<SubCategoryAskParams>,
     metro: Option<SubCategoryAskParams>,
@@ -115,6 +120,43 @@ pub struct CategoryAskParams {
 pub struct SubCategoryAskParams {
     last_updated_time_ms: u64,
     hash_of_routes: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SubCategoryAskParamsV2 {
+    last_updated_time_ms: u64,
+    hash_of_routes: HashMap<String, u64>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CategoryAskParamsV2 {
+    bus: Option<SubCategoryAskParamsV2>,
+    metro: Option<SubCategoryAskParamsV2>,
+    rail: Option<SubCategoryAskParamsV2>,
+    other: Option<SubCategoryAskParamsV2>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BoundsInput {
+    level5: BoundsInputPerLevel,
+    level7: BoundsInputPerLevel,
+    level8: BoundsInputPerLevel,
+    level10: BoundsInputPerLevel,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BoundsInputPerLevel {
+    min_x: u32,
+    max_x: u32,
+    min_y: u32,
+    max_y: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BulkFetchParamsV2 {
+    chateaus: BTreeMap<String, ChateauAskParamsV2>,
+    categories: Vec<String>,
+    bounds_input: BoundsInput,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -139,8 +181,52 @@ pub struct EachCategoryPayload {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct EachChateauResponseV2 {
+    categories: Option<PositionDataCategoryV2>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct PositionDataCategoryV2 {
+    metro: Option<EachCategoryPayloadV2>,
+    bus: Option<EachCategoryPayloadV2>,
+    rail: Option<EachCategoryPayloadV2>,
+    other: Option<EachCategoryPayloadV2>,
+}
+
+//other should load at z5
+
+// rail should be loaded at z7
+
+// local rail should be loaded at z8
+
+// buses should load at z10
+
+//v2 of the bulk fetch algorithm should return all new tiles if the last updated time changes, otherwise it should selectively insert into tiles
+
+#[derive(Serialize, Deserialize)]
+pub struct EachCategoryPayloadV2 {
+    // agency id (unwrap to "null") -> route id -> route
+    pub vehicle_route_cache: Option<BTreeMap<String, BTreeMap<String, AspenisedVehicleRouteCache>>>,
+    pub vehicle_positions:
+        Option<BTreeMap<u32, BTreeMap<u32, BTreeMap<String, AspenisedVehiclePositionOutput>>>>,
+    pub last_updated_time_ms: u64,
+    // agency id (unwrap to "null") -> hash
+    pub hash_of_routes: BTreeMap<String, u64>,
+    pub z_level: u8,
+    pub user_min_x: u32,
+    pub user_max_x: u32,
+    pub user_min_y: u32,
+    pub user_max_y: u32,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct BulkFetchResponse {
     chateaus: BTreeMap<String, EachChateauResponse>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BulkFetchResponseV2 {
+    chateaus: BTreeMap<String, EachChateauResponseV2>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -150,6 +236,38 @@ pub struct PerRouteRtInfo {
     pub trips_to_trips_compressed: Option<AHashMap<String, CompressedTrip>>,
     pub itinerary_to_direction_id: Option<AHashMap<String, String>>,
     pub trip_updates: Vec<AspenisedTripUpdate>,
+}
+
+#[actix_web::post("/bulk_realtime_fetch_v2")]
+pub async fn bulk_realtime_fetch_v2(
+    req: HttpRequest,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    params: web::Json<BulkFetchParams>,
+) -> impl Responder {
+    let mut etcd = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().as_ref().to_owned(),
+    )
+    .await;
+
+    if let Err(etcd_err) = &etcd {
+        eprintln!("{:#?}", etcd_err);
+
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Could not connect to etcd");
+    }
+
+    let mut etcd = etcd.unwrap();
+
+    let mut bulk_fetch_response = BulkFetchResponseV2 {
+        chateaus: BTreeMap::new(),
+    };
+
+    return HttpResponse::InternalServerError()
+        .append_header(("Cache-Control", "no-cache"))
+        .body("Not Implemented Yet");
 }
 
 #[actix_web::post("/bulk_realtime_fetch_v1")]
