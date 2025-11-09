@@ -270,11 +270,12 @@ async fn routesofchateauwithagency(
             let unique_agencies: Vec<Option<String>> = agencies_vec
                 .clone()
                 .into_iter()
+                .filter(|x| x.is_some()) // Filter out None values
                 .collect::<std::collections::HashSet<Option<String>>>()
                 .into_iter()
                 .collect();
 
-            unique_agencies.len() == 1
+            unique_agencies.len() <= 1 // True if 0 or 1 unique agencies
         }
     };
 
