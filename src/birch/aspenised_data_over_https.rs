@@ -217,6 +217,7 @@ pub struct EachCategoryPayloadV2 {
     // agency id (unwrap to "null") -> hash
     //pub hash_of_routes: BTreeMap<String, u64>,
     pub z_level: u8,
+    pub list_of_agency_ids: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -521,6 +522,19 @@ pub async fn bulk_realtime_fetch_v2(
                     }
                 }
 
+                let list_of_agency_ids = response.vehicle_route_cache.as_ref().map(|cache| {
+                    cache
+                        .values()
+                        .filter_map(|route_cache| {
+                            if route_types_allowed.contains(&route_cache.route_type) {
+                                route_cache.agency_id.clone()
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<String>>()
+                });
+
                 let payload = EachCategoryPayloadV2 {
                     vehicle_positions: match vehicles_by_tile.is_empty() {
                         false => Some(vehicles_by_tile),
@@ -534,6 +548,7 @@ pub async fn bulk_realtime_fetch_v2(
                         CategoryOfRealtimeVehicleData::Bus => 10,
                         CategoryOfRealtimeVehicleData::Other => 5,
                     },
+                    list_of_agency_ids
                 };
 
                 //add to categories hashmap
