@@ -71,7 +71,7 @@ seahash = "4.1.0"
 dmfr = "0.2"
 chateau = {git = "https://github.com/catenarytransit/chateau"}
 rtc-quebec-gtfs-rt = "0.4.0"
-dmfr-dataset-reader = "0.2.4"
+dmfr-dataset-reader = "0.2.5"
 uuid = {version = "1.15", features = ["v4", "fast-rng", "macro-diagnostics"]}
 zip = "6.0"
 git2 = "0.20"
