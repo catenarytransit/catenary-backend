@@ -13,7 +13,7 @@ use diesel_async::AsyncConnection;
 use diesel_async::RunQueryDsl;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tarpc::context;
 
@@ -532,6 +532,8 @@ pub async fn bulk_realtime_fetch_v2(
                                 None
                             }
                         })
+                        .collect::<BTreeSet<String>>()
+                        .into_iter()
                         .collect::<Vec<String>>()
                 });
 
@@ -548,7 +550,7 @@ pub async fn bulk_realtime_fetch_v2(
                         CategoryOfRealtimeVehicleData::Bus => 10,
                         CategoryOfRealtimeVehicleData::Other => 5,
                     },
-                    list_of_agency_ids
+                    list_of_agency_ids,
                 };
 
                 //add to categories hashmap

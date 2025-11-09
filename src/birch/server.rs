@@ -243,7 +243,7 @@ struct RouteFetchParams {
 async fn routesofchateauwithagency(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     path: web::Path<String>,
-     params: web::Json<RouteFetchParams>,
+    params: web::Json<RouteFetchParams>,
     req: HttpRequest,
 ) -> impl Responder {
     let conn_pool = pool.as_ref();
@@ -261,7 +261,11 @@ async fn routesofchateauwithagency(
         .await
         .unwrap();
 
-    let uses_only_one_agency = match &routes.iter() .map(|x| x.agency_id.clone()) .collect::<Vec<Option<String>>>() {
+    let uses_only_one_agency = match &routes
+        .iter()
+        .map(|x| x.agency_id.clone())
+        .collect::<Vec<Option<String>>>()
+    {
         agencies_vec => {
             let unique_agencies: Vec<Option<String>> = agencies_vec
                 .clone()
