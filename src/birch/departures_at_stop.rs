@@ -296,9 +296,10 @@ pub async fn departures_at_stop(
 
     // If the primary stop has a code, find other nearby stops from different chateaus with the same code.
     if let Some(stop_code) = &stop.code {
-        for nearby_stop in stops_nearby.iter().filter(|s| {
-            s.chateau != query.chateau_id && s.code.as_ref() == Some(stop_code)
-        }) {
+        for nearby_stop in stops_nearby
+            .iter()
+            .filter(|s| s.chateau != query.chateau_id && s.code.as_ref() == Some(stop_code))
+        {
             stops_to_search
                 .entry(nearby_stop.chateau.clone())
                 .or_default()
@@ -700,7 +701,8 @@ pub async fn departures_at_stop(
 
     let mut chateau_to_trips_aspenised: HashMap<String, TripsSelectionResponse> = HashMap::new();
 
-    let mut alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>> = BTreeMap::new();
+    let mut alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>> =
+        BTreeMap::new();
 
     for (chateau_id, trips_compressed_data) in &trip_compressed_btreemap_by_chateau {
         let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
@@ -750,7 +752,8 @@ pub async fn departures_at_stop(
                     }
                     Err(err) => {
                         eprintln!("Error creating aspen client for {}: {:?}", chateau_id, err);
-                        None}
+                        None
+                    }
                 }
             }
             None => None,
@@ -763,25 +766,50 @@ pub async fn departures_at_stop(
     }
 
     // Filter alerts
-    let mut filtered_alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>> = BTreeMap::new();
+    let mut filtered_alerts: BTreeMap<
+        String,
+        BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>,
+    > = BTreeMap::new();
     for (chateau_id, chateau_alerts) in &alerts {
-        let relevant_routes: BTreeSet<String> = routes.get(chateau_id).map_or_else(BTreeSet::new, |r| r.keys().cloned().collect());
-        let relevant_trips: BTreeSet<String> = trip_compressed_btreemap_by_chateau.get(chateau_id).map_or_else(BTreeSet::new, |t| t.keys().cloned().collect());
-        let relevant_stops: BTreeSet<String> = stops_to_search.get(chateau_id).map_or_else(BTreeSet::new, |s| s.iter().cloned().collect());
+        let relevant_routes: BTreeSet<String> = routes
+            .get(chateau_id)
+            .map_or_else(BTreeSet::new, |r| r.keys().cloned().collect());
+        let relevant_trips: BTreeSet<String> = trip_compressed_btreemap_by_chateau
+            .get(chateau_id)
+            .map_or_else(BTreeSet::new, |t| t.keys().cloned().collect());
+        let relevant_stops: BTreeSet<String> = stops_to_search
+            .get(chateau_id)
+            .map_or_else(BTreeSet::new, |s| s.iter().cloned().collect());
 
-        let chateau_filtered_alerts = chateau_alerts.iter().filter(|(_alert_id, alert)| {
-            alert.informed_entity.iter().any(|entity| {
-                let route_match = entity.route_id.as_ref().map_or(false, |r_id| relevant_routes.contains(r_id));
-                let trip_match = entity.trip.as_ref().map_or(false, |t| t.trip_id.as_ref().map_or(false, |t_id| relevant_trips.contains(t_id)));
-                let stop_match = entity.stop_id.as_ref().map_or(false, |s_id| relevant_stops.contains(s_id));
+        let chateau_filtered_alerts = chateau_alerts
+            .iter()
+            .filter(|(_alert_id, alert)| {
+                alert.informed_entity.iter().any(|entity| {
+                    let route_match = entity
+                        .route_id
+                        .as_ref()
+                        .map_or(false, |r_id| relevant_routes.contains(r_id));
+                    let trip_match = entity.trip.as_ref().map_or(false, |t| {
+                        t.trip_id
+                            .as_ref()
+                            .map_or(false, |t_id| relevant_trips.contains(t_id))
+                    });
+                    let stop_match = entity
+                        .stop_id
+                        .as_ref()
+                        .map_or(false, |s_id| relevant_stops.contains(s_id));
 
-                // An entity is relevant if it matches a route, trip, or stop we are looking at.
-                // If an entity selector is broad (e.g., no specific route/trip/stop), we should include it if it's for the agency.
-                let is_general_alert = entity.route_id.is_none() && entity.trip.is_none() && entity.stop_id.is_none();
+                    // An entity is relevant if it matches a route, trip, or stop we are looking at.
+                    // If an entity selector is broad (e.g., no specific route/trip/stop), we should include it if it's for the agency.
+                    let is_general_alert = entity.route_id.is_none()
+                        && entity.trip.is_none()
+                        && entity.stop_id.is_none();
 
-                route_match || trip_match || stop_match || is_general_alert
+                    route_match || trip_match || stop_match || is_general_alert
+                })
             })
-        }).map(|(id, alert)| (id.clone(), alert.clone())).collect::<BTreeMap<_,_>>();
+            .map(|(id, alert)| (id.clone(), alert.clone()))
+            .collect::<BTreeMap<_, _>>();
 
         if !chateau_filtered_alerts.is_empty() {
             filtered_alerts.insert(chateau_id.clone(), chateau_filtered_alerts);
@@ -953,13 +981,26 @@ pub async fn departures_at_stop(
                                 let effect_is_no_service = alert.effect == Some(1); // NO_SERVICE
                                 if effect_is_no_service {
                                     let applies_to_trip = alert.informed_entity.iter().any(|e| {
-                                        let route_match = e.route_id.as_ref().map_or(false, |r_id| *r_id == valid_trip.route_id);
-                                        let trip_match = e.trip.as_ref().map_or(false, |t| t.trip_id.as_ref().map_or(false, |t_id| *t_id == valid_trip.trip_id));
+                                        let route_match = e
+                                            .route_id
+                                            .as_ref()
+                                            .map_or(false, |r_id| *r_id == valid_trip.route_id);
+                                        let trip_match = e.trip.as_ref().map_or(false, |t| {
+                                            t.trip_id
+                                                .as_ref()
+                                                .map_or(false, |t_id| *t_id == valid_trip.trip_id)
+                                        });
                                         route_match || trip_match
                                     });
 
                                     if applies_to_trip {
-                                        let event_time = valid_trip.reference_start_of_service_date.timestamp() as u64 + valid_trip.trip_start_time as u64 + itin_option.departure_time_since_start.unwrap_or(0) as u64;
+                                        let event_time = valid_trip
+                                            .reference_start_of_service_date
+                                            .timestamp()
+                                            as u64
+                                            + valid_trip.trip_start_time as u64
+                                            + itin_option.departure_time_since_start.unwrap_or(0)
+                                                as u64;
                                         let is_active = alert.active_period.iter().any(|ap| {
                                             let start = ap.start.unwrap_or(0);
                                             let end = ap.end.unwrap_or(u64::MAX);
@@ -1174,7 +1215,7 @@ pub async fn departures_at_stop(
                                 }
                             }
                         }
-                        
+
                         if let Some(trip_update) = trip_update_for_event {
                             if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) {
                                 is_cancelled = true;

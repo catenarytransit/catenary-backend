@@ -243,6 +243,7 @@ pub struct DepartingTripsDataAnswer {
     pub rail_and_other_limited_metres: f64,
     pub departures: Vec<DepartureRouteGroupExport>,
     pub stop: HashMap<String, AHashMap<CompactString, StopOutput>>,
+    pub alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>>,
     pub debug: DeparturesDebug,
 }
 
@@ -1018,6 +1019,10 @@ pub async fn nearby_from_coords_v2(
             let mut stops_answer: HashMap<String, AHashMap<CompactString, StopOutput>> =
                 HashMap::new();
             let mut departures: Vec<DepartureRouteGroup> = vec![];
+            let mut all_alerts: BTreeMap<
+                String,
+                BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>,
+            > = BTreeMap::new();
 
             for (chateau_id, calendar_in_chateau) in calendar_structure.iter() {
                 let mut directions_route_group_for_this_chateau: HashMap<
@@ -1113,40 +1118,63 @@ pub async fn nearby_from_coords_v2(
 
                 //1. connect with tarpc server
 
-                let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
+                let (gtfs_trips_aspenised, all_alerts_for_chateau) = match chateau_metadata
+                    .get(chateau_id)
+                {
                     Some(chateau_metadata_for_c) => {
-                        let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(
+                        let aspen_client_res = catenary::aspen::lib::spawn_aspen_client_from_ip(
                             &chateau_metadata_for_c.socket,
                         )
                         .await;
 
-                        match aspen_client {
-                            Ok(aspen_client) => {
-                                let gtfs_trip_aspenised = aspen_client
-                                    .get_all_trips_with_ids(
-                                        tarpc::context::current(),
-                                        chateau_id.clone(),
-                                        valid_trips.keys().cloned().collect::<Vec<String>>(),
-                                    )
-                                    .await;
+                        if let Err(e) = aspen_client_res {
+                            eprintln!("Error connecting to aspen: {:#?}", e);
+                            (None, None)
+                        } else {
+                            let aspen_client = aspen_client_res.unwrap();
+                            let gtfs_trip_aspenised_res = aspen_client
+                                .get_all_trips_with_ids(
+                                    tarpc::context::current(),
+                                    chateau_id.clone(),
+                                    valid_trips.keys().cloned().collect::<Vec<String>>(),
+                                )
+                                .await;
 
-                                match gtfs_trip_aspenised {
-                                    Ok(gtfs_trip_aspenised) => Some(gtfs_trip_aspenised),
-                                    Err(err) => {
-                                        eprintln!(
-                                            "Error getting trip updates, line 1010: {:#?}",
-                                            err
-                                        );
-                                        None
-                                    }
+                            let all_alerts_res = aspen_client
+                                .get_all_alerts(tarpc::context::current(), chateau_id.clone())
+                                .await;
+
+                            let trips = match gtfs_trip_aspenised_res {
+                                Ok(gtfs_trip_aspenised) => gtfs_trip_aspenised,
+                                Err(err) => {
+                                    eprintln!("Error getting trip updates, line 1010: {:#?}", err);
+                                    None
                                 }
-                            }
-                            Err(err) => None,
+                            };
+
+                            let alerts = match all_alerts_res {
+                                Ok(Some(all_alerts)) => Some(all_alerts),
+                                Ok(None) => None,
+                                Err(err) => {
+                                    eprintln!("Error getting alerts: {:#?}", err);
+                                    None
+                                }
+                            };
+                            (trips, alerts)
                         }
                     }
-                    None => None,
+                    None => (None, None),
+                };
+
+                if let Some(alerts_for_chateau) = &all_alerts_for_chateau {
+                    if !alerts_for_chateau.is_empty() {
+                        let mut btree_alerts = BTreeMap::new();
+                        for (k, v) in alerts_for_chateau {
+                            btree_alerts.insert(k.clone(), v.clone());
+                        }
+                        all_alerts.insert(chateau_id.clone(), btree_alerts);
+                    }
                 }
-                .flatten();
 
                 //sort through each time response
 
@@ -1420,7 +1448,61 @@ pub async fn nearby_from_coords_v2(
                                                     platform = Some(platform_id.to_string());
                                                 }
                                             }
+                                                                                        }
+                                            }
                                         }
+                                    }
+                                }
+
+                                if let Some(chateau_alerts) = all_alerts_for_chateau.as_ref() {
+                                    for alert in chateau_alerts.values() {
+                                        if is_cancelled {
+                                            break;
+                                        }
+                                        let effect_is_no_service = alert.effect == Some(1); // NO_SERVICE
+                                        if effect_is_no_service {
+                                            let applies_to_trip =
+                                                alert.informed_entity.iter().any(|e| {
+                                                    let route_match =
+                                                        e.route_id.as_ref().map_or(false, |r_id| {
+                                                            *r_id == trip.route_id
+                                                        });
+                                                    let trip_match =
+                                                        e.trip.as_ref().map_or(false, |t| {
+                                                            t.trip_id
+                                                                .as_ref()
+                                                                .map_or(false, |t_id| {
+                                                                    *t_id == trip.trip_id
+                                                                })
+                                                        });
+                                                    route_match || trip_match
+                                                });
+
+                                            if applies_to_trip {
+                                                let event_time_opt = match itinerary_options[0]
+                                                    .departure_time_since_start
+                                                {
+                                                    Some(departure_time_since_start) => Some(
+                                                        trip.reference_start_of_service_date
+                                                            .timestamp()
+                                                            as u64
+                                                            + trip.trip_start_time as u64
+                                                            + departure_time_since_start as u64,
+                                                    ),
+                                                    None => None,
+                                                };
+
+                                                if let Some(event_time) = event_time_opt {
+                                                    let is_active =
+                                                        alert.active_period.iter().any(|ap| {
+                                                            let start = ap.start.unwrap_or(0);
+                                                            let end = ap.end.unwrap_or(u64::MAX);
+                                                            event_time >= start && event_time <= end
+                                                        });
+                                                    if is_active {
+                                                        is_cancelled = true;
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -1500,22 +1582,6 @@ pub async fn nearby_from_coords_v2(
 
                             let frequencies = trip.frequencies.as_ref().unwrap();
 
-                            let mut is_cancelled: bool = false;
-                            let mut deleted: bool = false;
-
-                            let mut departure_time_rt: Option<u64> = None;
-                            let mut platform: Option<String> = None;
-
-                            let stop = stops
-                                .iter()
-                                .find(|x| x.gtfs_id == trip.itinerary_options[0].stop_id);
-
-                            if let Some(stop) = stop {
-                                if let Some(platform_code) = &stop.platform_code {
-                                    platform = Some(platform_code.clone());
-                                }
-                            }
-
                             //trip start time array
 
                             let mut trip_start_times: Vec<u32> = frequencies
@@ -1533,6 +1599,21 @@ pub async fn nearby_from_coords_v2(
                             let trip_start_times = trip_start_times;
 
                             for scheduled_frequency_start_time in trip_start_times {
+                                let mut is_cancelled: bool = false;
+                                let mut deleted: bool = false;
+                                let mut departure_time_rt: Option<u64> = None;
+                                let mut platform: Option<String> = None;
+
+                                let stop = stops
+                                    .iter()
+                                    .find(|x| x.gtfs_id == trip.itinerary_options[0].stop_id);
+
+                                if let Some(stop) = stop {
+                                    if let Some(platform_code) = &stop.platform_code {
+                                        platform = Some(platform_code.clone());
+                                    }
+                                }
+
                                 if let Some(gtfs_trip_aspenised) = gtfs_trips_aspenised.as_ref() {
                                     if let Some(trip_update_ids) = gtfs_trip_aspenised
                                         .trip_id_to_trip_update_ids
@@ -1721,6 +1802,60 @@ pub async fn nearby_from_coords_v2(
                                     }
                                 }
 
+                                if let Some(chateau_alerts) = all_alerts_for_chateau.as_ref() {
+                                    for alert in chateau_alerts.values() {
+                                        if is_cancelled {
+                                            break;
+                                        }
+                                        let effect_is_no_service = alert.effect == Some(1); // NO_SERVICE
+                                        if effect_is_no_service {
+                                            let applies_to_trip =
+                                                alert.informed_entity.iter().any(|e| {
+                                                    let route_match =
+                                                        e.route_id.as_ref().map_or(false, |r_id| {
+                                                            *r_id == trip.route_id
+                                                        });
+                                                    let trip_match =
+                                                        e.trip.as_ref().map_or(false, |t| {
+                                                            t.trip_id
+                                                                .as_ref()
+                                                                .map_or(false, |t_id| {
+                                                                    *t_id == trip.trip_id
+                                                                })
+                                                        });
+                                                    route_match || trip_match
+                                                });
+
+                                            if applies_to_trip {
+                                                let event_time_opt = match trip.itinerary_options[0]
+                                                    .departure_time_since_start
+                                                {
+                                                    Some(departure_time_since_start) => Some(
+                                                        trip.reference_start_of_service_date
+                                                            .timestamp()
+                                                            as u64
+                                                            + scheduled_frequency_start_time as u64
+                                                            + departure_time_since_start as u64,
+                                                    ),
+                                                    None => None,
+                                                };
+
+                                                if let Some(event_time) = event_time_opt {
+                                                    let is_active =
+                                                        alert.active_period.iter().any(|ap| {
+                                                            let start = ap.start.unwrap_or(0);
+                                                            let end = ap.end.unwrap_or(u64::MAX);
+                                                            event_time >= start && event_time <= end
+                                                        });
+                                                    if is_active {
+                                                        is_cancelled = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 headsign_group.trips.push(DepartingStopTime {
                                     trip_id: trip.trip_id.clone(),
                                     gtfs_schedule_start_day: trip.trip_service_date,
@@ -1837,6 +1972,7 @@ pub async fn nearby_from_coords_v2(
                 rail_and_other_limited_metres: rail_and_other_distance_limit as f64,
                 departures: departures.into_iter().map(|x| x.into()).collect::<Vec<_>>(),
                 stop: stops_answer,
+                alerts: all_alerts,
                 debug: DeparturesDebug {
                     stop_lookup_ms: end_stops_duration.as_millis(),
                     directions_ms: directions_lookup_duration.as_millis(),
