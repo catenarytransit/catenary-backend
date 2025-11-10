@@ -144,7 +144,9 @@ struct NearbyFromStopsResponse {
     routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>,
     // chateau_id -> shape_id -> Shape
     pub shapes: BTreeMap<EcoString, BTreeMap<EcoString, String>>,
-    // alerts
+    // alerts - chateau_id -> alert_id -> alert
+    //chateau_id -> alert_id -> alert
+    pub alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>>,
 }
 
 #[actix_web::get("/departures_at_stop")]
@@ -693,6 +695,8 @@ pub async fn departures_at_stop(
 
     let mut chateau_to_trips_aspenised: HashMap<String, TripsSelectionResponse> = HashMap::new();
 
+    let mut alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>> = BTreeMap::new();
+
     for (chateau_id, trips_compressed_data) in &trip_compressed_btreemap_by_chateau {
         let gtfs_trips_aspenised = match chateau_metadata.get(chateau_id) {
             Some(chateau_metadata_for_c) => {
@@ -703,6 +707,20 @@ pub async fn departures_at_stop(
 
                 match aspen_client {
                     Ok(aspen_client) => {
+                        let all_alerts_for_chateau = aspen_client
+                            .get_all_alerts(tarpc::context::current(), chateau_id.clone())
+                            .await;
+
+                        if let Ok(Some(all_alerts)) = all_alerts_for_chateau {
+                            let mut alert_map = BTreeMap::new();
+                            for (alert_id, alert) in all_alerts {
+                                alert_map.insert(alert_id, alert);
+                            }
+                            alerts.insert(chateau_id.clone(), alert_map);
+                        } else if let Err(e) = all_alerts_for_chateau {
+                            eprintln!("Error fetching alerts for {}: {:?}", chateau_id, e);
+                        }
+
                         let gtfs_trip_aspenised = aspen_client
                             .get_all_trips_with_ids(
                                 tarpc::context::current(),
@@ -725,7 +743,9 @@ pub async fn departures_at_stop(
                             }
                         }
                     }
-                    Err(err) => None,
+                    Err(err) => {
+                        eprintln!("Error creating aspen client for {}: {:?}", chateau_id, err);
+                        None}
                 }
             }
             None => None,
@@ -736,6 +756,33 @@ pub async fn departures_at_stop(
             chateau_to_trips_aspenised.insert(chateau_id.clone(), gtfs_trips_aspenised);
         }
     }
+
+    // Filter alerts
+    let mut filtered_alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>> = BTreeMap::new();
+    for (chateau_id, chateau_alerts) in &alerts {
+        let relevant_routes: BTreeSet<String> = routes.get(chateau_id).map_or_else(BTreeSet::new, |r| r.keys().cloned().collect());
+        let relevant_trips: BTreeSet<String> = trip_compressed_btreemap_by_chateau.get(chateau_id).map_or_else(BTreeSet::new, |t| t.keys().cloned().collect());
+        let relevant_stops: BTreeSet<String> = stops_to_search.get(chateau_id).map_or_else(BTreeSet::new, |s| s.iter().cloned().collect());
+
+        let chateau_filtered_alerts = chateau_alerts.iter().filter(|(_alert_id, alert)| {
+            alert.informed_entity.iter().any(|entity| {
+                let route_match = entity.route_id.as_ref().map_or(false, |r_id| relevant_routes.contains(r_id));
+                let trip_match = entity.trip.as_ref().map_or(false, |t| t.trip_id.as_ref().map_or(false, |t_id| relevant_trips.contains(t_id)));
+                let stop_match = entity.stop_id.as_ref().map_or(false, |s_id| relevant_stops.contains(s_id));
+
+                // An entity is relevant if it matches a route, trip, or stop we are looking at.
+                // If an entity selector is broad (e.g., no specific route/trip/stop), we should include it if it's for the agency.
+                let is_general_alert = entity.route_id.is_none() && entity.trip.is_none() && entity.stop_id.is_none();
+
+                route_match || trip_match || stop_match || is_general_alert
+            })
+        }).map(|(id, alert)| (id.clone(), alert.clone())).collect::<BTreeMap<_,_>>();
+
+        if !chateau_filtered_alerts.is_empty() {
+            filtered_alerts.insert(chateau_id.clone(), chateau_filtered_alerts);
+        }
+    }
+    alerts = filtered_alerts;
 
     //look through time compressed and decompress the itineraries, using timezones and calendar calcs
 
@@ -894,6 +941,33 @@ pub async fn departures_at_stop(
                         let mut platform: Option<String> = None;
                         let mut arrival_time_rt: Option<u64> = None;
 
+                        let mut trip_update_for_event: Option<&AspenisedTripUpdate> = None;
+
+                        if let Some(chateau_alerts) = alerts.get(chateau_id) {
+                            for alert in chateau_alerts.values() {
+                                let effect_is_no_service = alert.effect == Some(1); // NO_SERVICE
+                                if effect_is_no_service {
+                                    let applies_to_trip = alert.informed_entity.iter().any(|e| {
+                                        let route_match = e.route_id.as_ref().map_or(false, |r_id| *r_id == valid_trip.route_id);
+                                        let trip_match = e.trip.as_ref().map_or(false, |t| t.trip_id.as_ref().map_or(false, |t_id| *t_id == valid_trip.trip_id));
+                                        route_match || trip_match
+                                    });
+
+                                    if applies_to_trip {
+                                        let event_time = valid_trip.reference_start_of_service_date.timestamp() as u64 + valid_trip.trip_start_time as u64 + itin_option.departure_time_since_start.unwrap_or(0) as u64;
+                                        let is_active = alert.active_period.iter().any(|ap| {
+                                            let start = ap.start.unwrap_or(0);
+                                            let end = ap.end.unwrap_or(u64::MAX);
+                                            event_time >= start && event_time <= end
+                                        });
+                                        if is_active {
+                                            is_cancelled = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         let mut vehicle_num: Option<String> = None;
 
                         if let Some(gtfs_trip_aspenised) =
@@ -1020,6 +1094,8 @@ pub async fn departures_at_stop(
                                             .collect();
 
                                     if trip_updates.len() > 0 {
+                                        trip_update_for_event = Some(trip_updates[0].1);
+
                                         let trip_update = trip_updates[0].1;
                                         let trip_update_id = trip_updates[0].0;
 
@@ -1093,6 +1169,12 @@ pub async fn departures_at_stop(
                                 }
                             }
                         }
+                        
+                        if let Some(trip_update) = trip_update_for_event {
+                            if trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) {
+                                is_cancelled = true;
+                            }
+                        }
 
                         //add to stop event list
 
@@ -1147,8 +1229,8 @@ pub async fn departures_at_stop(
                             chateau: chateau_id.clone(),
                             trip_id: valid_trip.trip_id.clone().to_string(),
                             stop_id: itin_option.stop_id.clone().to_string(),
-                            stop_cancelled: false,
-                            trip_cancelled: false,
+                            stop_cancelled: is_cancelled,
+                            trip_cancelled: is_cancelled,
                             trip_modified: false,
                             realtime_arrival: arrival_time_rt,
                             realtime_departure: departure_time_rt,
@@ -1306,6 +1388,7 @@ pub async fn departures_at_stop(
         events: events,
         routes: routes,
         shapes: shapes,
+        alerts: alerts,
     };
 
     HttpResponse::Ok().json(response)
