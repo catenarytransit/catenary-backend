@@ -263,7 +263,6 @@ pub async fn departures_at_stop(
 
     let stops_nearby: diesel::prelude::QueryResult<Vec<catenary::models::Stop>> =
         catenary::schema::gtfs::stops::dsl::stops
-            .filter(catenary::schema::gtfs::stops::chateau.eq(query.chateau_id.clone()))
             .filter(sql::<Bool>(&where_query_for_stops))
             .select(catenary::models::Stop::as_select())
             .load::<catenary::models::Stop>(conn)
@@ -295,15 +294,21 @@ pub async fn departures_at_stop(
         }
     }
 
-    for nearby_stop in stops_nearby
-        .iter()
-        .filter(|s| s.chateau != query.chateau_id)
-        .filter(|s| children_of_stop.contains(&s.gtfs_id) || stop.gtfs_id == s.gtfs_id)
-    {
-        stops_to_search
-            .entry(nearby_stop.chateau.clone())
-            .or_insert(vec![])
-            .push(nearby_stop.gtfs_id.clone());
+    // If the primary stop has a code, find other nearby stops from different chateaus with the same code.
+    if let Some(stop_code) = &stop.code {
+        for nearby_stop in stops_nearby.iter().filter(|s| {
+            s.chateau != query.chateau_id && s.code.as_ref() == Some(stop_code)
+        }) {
+            stops_to_search
+                .entry(nearby_stop.chateau.clone())
+                .or_default()
+                .push(nearby_stop.gtfs_id.clone());
+        }
+    }
+
+    for (chateau, stops) in stops_to_search.iter_mut() {
+        stops.sort();
+        stops.dedup();
     }
 
     let mut itins_btreemap_by_chateau: BTreeMap<
