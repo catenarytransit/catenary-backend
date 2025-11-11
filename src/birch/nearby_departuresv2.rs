@@ -1500,7 +1500,7 @@ pub async fn nearby_from_coords_v2(
                                                             event_time >= start && event_time <= end
                                                         });
                                                     if is_active {
-                                                        if alert.effect = Some(1) {
+                                                        if alert.effect == Some(1) {
                                                             is_cancelled = true;
                                                         }
                                                     }
