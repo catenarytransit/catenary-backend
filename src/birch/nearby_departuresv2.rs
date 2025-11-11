@@ -1848,7 +1848,9 @@ pub async fn nearby_from_coords_v2(
                                                             event_time >= start && event_time <= end
                                                         });
                                                     if is_active {
-                                                        is_cancelled = true;
+                                                        if alert.effect == Some(1) {
+                                                            is_cancelled = true;
+                                                        }
                                                     }
                                                 }
                                             }
