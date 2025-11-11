@@ -176,7 +176,10 @@ async fn try_to_download(
         _ => client.clone(),
     };
 
-    let client = match url.contains("showpublisheddocument") || url.contains("showdocument") {
+    let client = match url.contains("showpublisheddocument")
+        || url.contains("showdocument")
+        || feed_id == "f-glendora~ca~us"
+    {
         true => reqwest::ClientBuilder::new()
             .use_rustls_tls()
             .user_agent(
