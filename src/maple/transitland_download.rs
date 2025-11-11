@@ -176,6 +176,7 @@ async fn try_to_download(
         _ => client.clone(),
     };
 
+    //the wordpress backup thing
     let client = match url.contains("showpublisheddocument")
         || url.contains("showdocument")
         || feed_id == "f-glendora~ca~us"
@@ -236,18 +237,43 @@ async fn try_to_download(
     let response = request.await.send().await;
 
     match response {
-        Ok(response) => Ok(response),
+        Ok(response) => {
+            if response.status() == reqwest::StatusCode::FORBIDDEN {
+                println!(
+                    "Got 403 for {}, trying again with wordpress bypass user agent",
+                    feed_id
+                );
+                let client = reqwest::ClientBuilder::new()
+            .use_rustls_tls()
+            .user_agent(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) Gecko/20100101 Firefox/138.0",
+            )
+            .danger_accept_invalid_certs(true)
+            .deflate(true)
+            .gzip(true)
+            .brotli(true)
+            .cookie_store(true)
+            .build()
+            .unwrap();
+
+                let request = client.get(&new_url).header("Accept", "*/*");
+                let request = add_auth_headers(request, feed_id);
+                return request.await.send().await;
+            } else {
+                Ok(response)
+            }
+        }
         Err(error) => {
             println!(
                 "Error with downloading {}: {}, {:?}, trying again",
-                feed_id, url, error
+                feed_id, &new_url, error
             );
 
             //trying again with a different client
 
             let client = reqwest::ClientBuilder::new()
                 .user_agent("Catenary Maple")
-                .timeout(Duration::from_secs(60 * 3))
+                .timeout(Duration::from_secs(180))
                 .connect_timeout(Duration::from_secs(20))
                 .build()
                 .unwrap();
