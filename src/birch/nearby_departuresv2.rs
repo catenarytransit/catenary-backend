@@ -1492,6 +1492,25 @@ pub async fn nearby_from_coords_v2(
                                                     None => None,
                                                 };
 
+                                                let applies_to_trip_without_a_referenced_stop = alert.informed_entity.iter()
+                                            .filter(|e| e.stop_id.is_none())
+                                            .any(|e| {
+                                                    let route_match =
+                                                        e.route_id.as_ref().map_or(false, |r_id| {
+                                                            *r_id == trip.route_id
+                                                        });
+                                                    let trip_match =
+                                                        e.trip.as_ref().map_or(false, |t| {
+                                                            t.trip_id
+                                                                .as_ref()
+                                                                .map_or(false, |t_id| {
+                                                                    *t_id == trip.trip_id
+                                                                })
+                                                        });
+                                                    
+                                                    route_match || trip_match
+                                                });
+
                                                 if let Some(event_time) = event_time_opt {
                                                     let is_active =
                                                         alert.active_period.iter().any(|ap| {
@@ -1501,7 +1520,9 @@ pub async fn nearby_from_coords_v2(
                                                         });
                                                     if is_active {
                                                         if alert.effect == Some(1) {
-                                                            is_cancelled = true;
+                                                            if (applies_to_trip_without_a_referenced_stop) {
+                                                                is_cancelled = true;
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -1828,6 +1849,25 @@ pub async fn nearby_from_coords_v2(
                                                     route_match || trip_match
                                                 });
 
+                                            let applies_to_trip_without_a_referenced_stop = alert.informed_entity.iter()
+                                            .filter(|e| e.stop_id.is_none())
+                                            .any(|e| {
+                                                    let route_match =
+                                                        e.route_id.as_ref().map_or(false, |r_id| {
+                                                            *r_id == trip.route_id
+                                                        });
+                                                    let trip_match =
+                                                        e.trip.as_ref().map_or(false, |t| {
+                                                            t.trip_id
+                                                                .as_ref()
+                                                                .map_or(false, |t_id| {
+                                                                    *t_id == trip.trip_id
+                                                                })
+                                                        });
+                                                    
+                                                    route_match || trip_match
+                                                });
+
                                             if applies_to_trip {
                                                 let event_time_opt = match trip.itinerary_options[0]
                                                     .departure_time_since_start
@@ -1851,7 +1891,9 @@ pub async fn nearby_from_coords_v2(
                                                         });
                                                     if is_active {
                                                         if alert.effect == Some(1) {
-                                                            is_cancelled = true;
+                                                            if (applies_to_trip_without_a_referenced_stop) {
+                                                                is_cancelled = true;
+                                                            }
                                                         }
                                                     }
                                                 }
