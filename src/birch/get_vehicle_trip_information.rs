@@ -45,18 +45,40 @@ pub async fn get_vehicle_information_from_label(
     path: web::Path<(String, String)>,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
     let (chateau, vehicle_label) = path.into_inner();
 
-    let etcd = etcd_client::Client::connect(
-        etcd_connection_ips.ip_addresses.as_slice(),
-        etcd_connection_options.as_ref().as_ref().to_owned(),
-    )
-    .await;
+    let etcd_reuser = etcd_reuser.as_ref();
 
-    if let Err(etcd_err) = &etcd {
-        eprintln!("{:#?}", etcd_err);
+    let mut etcd = None;
+    {
+        let etcd_reuser_contents = etcd_reuser.read().await;
+        let mut client_is_healthy = false;
+        if let Some(client) = etcd_reuser_contents.as_ref() {
+            let mut client = client.clone();
 
+            if client.status().await.is_ok() {
+                etcd = Some(client.clone());
+                client_is_healthy = true;
+            }
+        }
+
+        if !client_is_healthy {
+            drop(etcd_reuser_contents);
+            let new_client = etcd_client::Client::connect(
+                etcd_connection_ips.ip_addresses.as_slice(),
+                etcd_connection_options.as_ref().as_ref().to_owned(),
+            )
+            .await
+            .unwrap();
+            etcd = Some(new_client.clone());
+            let mut etcd_reuser_write_lock = etcd_reuser.write().await;
+            *etcd_reuser_write_lock = Some(new_client);
+        }
+    }
+
+    if etcd.is_none() {
         return HttpResponse::InternalServerError()
             .append_header(("Cache-Control", "no-cache"))
             .body("Could not connect to etcd");
