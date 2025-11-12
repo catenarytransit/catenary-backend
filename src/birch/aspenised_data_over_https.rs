@@ -279,16 +279,6 @@ pub async fn bulk_realtime_fetch_v2(
 
     let mut etcd = etcd.unwrap();
 
-    if let Err(etcd_err) = &etcd {
-        eprintln!("{:#?}", etcd_err);
-
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("Could not connect to etcd");
-    }
-
-    let mut etcd = etcd.unwrap();
-
     let mut bulk_fetch_response = BulkFetchResponseV2 {
         chateaus: BTreeMap::new(),
     };
