@@ -149,6 +149,14 @@ pub struct BoundsInput {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct BoundsInputV3 {
+    level5: BoundsInputPerLevel,
+    level7: BoundsInputPerLevel,
+    level8: BoundsInputPerLevel,
+    level12: BoundsInputPerLevel,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct BoundsInputPerLevel {
     min_x: u32,
     max_x: u32,
@@ -161,6 +169,13 @@ pub struct BulkFetchParamsV2 {
     chateaus: BTreeMap<String, ChateauAskParamsV2>,
     categories: Vec<String>,
     bounds_input: BoundsInput,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BulkFetchParamsV3 {
+    chateaus: BTreeMap<String, ChateauAskParamsV2>,
+    categories: Vec<String>,
+    bounds_input: BoundsInputV3,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -246,7 +261,7 @@ pub async fn bulk_realtime_fetch_v3(
     req: HttpRequest,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
-    params: web::Json<BulkFetchParamsV2>,
+    params: web::Json<BulkFetchParamsV3>,
     etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
     let etcd_reuser = etcd_reuser.as_ref();
@@ -426,7 +441,7 @@ pub async fn bulk_realtime_fetch_v3(
                         })
                     }
                     CategoryOfRealtimeVehicleData::Bus => {
-                        let bounds = &params.bounds_input.level10;
+                        let bounds = &params.bounds_input.level12;
                         chateau_params_for_this_category.as_ref().map_or(true, |p| {
                             p.prev_user_min_x.is_none()
                                 || p.prev_user_max_x.is_none()
@@ -506,7 +521,7 @@ pub async fn bulk_realtime_fetch_v3(
                                 chateau_params_for_this_category.as_ref(),
                             ),
                             CategoryOfRealtimeVehicleData::Bus => (
-                                &params.bounds_input.level10,
+                                &params.bounds_input.level12,
                                 chateau_params_for_this_category.as_ref(),
                             ),
                             CategoryOfRealtimeVehicleData::Other => (
