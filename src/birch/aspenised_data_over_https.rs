@@ -895,18 +895,41 @@ pub async fn bulk_realtime_fetch_v2(
                     true => {
                         for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
                             if let Some(pos) = &vehicle_position.position {
+                                let bounds = match category {
+                                    CategoryOfRealtimeVehicleData::Metro => {
+                                        &params.bounds_input.level8
+                                    }
+                                    CategoryOfRealtimeVehicleData::Rail => {
+                                        &params.bounds_input.level7
+                                    }
+                                    CategoryOfRealtimeVehicleData::Bus => {
+                                        &params.bounds_input.level10
+                                    }
+                                    CategoryOfRealtimeVehicleData::Other => {
+                                        &params.bounds_input.level5
+                                    }
+                                };
+
                                 if pos.latitude != 0.0 && pos.longitude != 0.0 {
                                     let (x, y) = slippy_map_tiles::lat_lon_to_tile(
                                         pos.latitude,
                                         pos.longitude,
                                         zoom,
                                     );
-                                    vehicles_by_tile
-                                        .entry(x)
-                                        .or_default()
-                                        .entry(y)
-                                        .or_default()
-                                        .insert(vehicle_id, vehicle_position);
+
+                                    let in_current_bounds = x >= bounds.min_x
+                                        && x <= bounds.max_x
+                                        && y >= bounds.min_y
+                                        && y <= bounds.max_y;
+
+                                    if in_current_bounds {
+                                        vehicles_by_tile
+                                            .entry(x)
+                                            .or_default()
+                                            .entry(y)
+                                            .or_default()
+                                            .insert(vehicle_id, vehicle_position);
+                                    }
                                 }
                             }
                         }
