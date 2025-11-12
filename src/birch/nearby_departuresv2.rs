@@ -793,7 +793,7 @@ pub async fn nearby_from_coords_v2(
                     .first::<catenary::models::ItineraryPatternRow>(conn)
             },
         ))
-        .buffer_unordered(16)
+        .buffer_unordered(64)
         .collect::<Vec<diesel::QueryResult<ItineraryPatternRow>>>()
         .await;
 
