@@ -248,7 +248,6 @@ pub async fn bulk_realtime_fetch_v2(
     params: web::Json<BulkFetchParamsV2>,
     etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
-
     let etcd_reuser = etcd_reuser.as_ref();
 
     let mut etcd = None;
@@ -257,7 +256,7 @@ pub async fn bulk_realtime_fetch_v2(
         let mut client_is_healthy = false;
         if let Some(client) = etcd_reuser_contents.as_ref() {
             let mut client = client.clone();
-            
+
             if client.status().await.is_ok() {
                 etcd = Some(client.clone());
                 client_is_healthy = true;

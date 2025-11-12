@@ -301,7 +301,7 @@ pub async fn nearby_from_coords_v2(
         let mut client_is_healthy = false;
         if let Some(client) = etcd_reuser_contents.as_ref() {
             let mut client = client.clone();
-            
+
             if client.status().await.is_ok() {
                 etcd = Some(client.clone());
                 client_is_healthy = true;

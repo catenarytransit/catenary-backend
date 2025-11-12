@@ -757,8 +757,8 @@ async fn main() -> std::io::Result<()> {
 
     let shared_client = Arc::new(reqwest::Client::new());
 
-    let etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>
-     = Arc::new(tokio::sync::RwLock::new(None));
+    let etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>> =
+        Arc::new(tokio::sync::RwLock::new(None));
 
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
@@ -790,9 +790,7 @@ async fn main() -> std::io::Result<()> {
                 etcd_connection_options.clone(),
             )))
             .app_data(actix_web::web::Data::new(Arc::clone(&etcd_connection_ips)))
-            .app_data(actix_web::web::Data::new(Arc::new(
-                etcd_reuser.clone(),
-            )))
+            .app_data(actix_web::web::Data::new(Arc::new(etcd_reuser.clone())))
             .app_data(actix_web::web::Data::new(Arc::clone(&shared_client)))
             .route("/", web::get().to(index))
             .route("robots.txt", web::get().to(robots))
