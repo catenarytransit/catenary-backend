@@ -470,7 +470,7 @@ pub async fn bulk_realtime_fetch_v3(
                 let zoom = match category {
                     CategoryOfRealtimeVehicleData::Metro => 8,
                     CategoryOfRealtimeVehicleData::Rail => 7,
-                    CategoryOfRealtimeVehicleData::Bus => 10,
+                    CategoryOfRealtimeVehicleData::Bus => 12,
                     CategoryOfRealtimeVehicleData::Other => 5,
                 };
 
@@ -586,7 +586,7 @@ pub async fn bulk_realtime_fetch_v3(
                     z_level: match category {
                         CategoryOfRealtimeVehicleData::Metro => 8,
                         CategoryOfRealtimeVehicleData::Rail => 7,
-                        CategoryOfRealtimeVehicleData::Bus => 10,
+                        CategoryOfRealtimeVehicleData::Bus => 12,
                         CategoryOfRealtimeVehicleData::Other => 5,
                     },
                     list_of_agency_ids,
@@ -850,7 +850,7 @@ pub async fn bulk_realtime_fetch_v2(
                 let zoom = match category {
                     CategoryOfRealtimeVehicleData::Metro => 8,
                     CategoryOfRealtimeVehicleData::Rail => 7,
-                    CategoryOfRealtimeVehicleData::Bus => 11,
+                    CategoryOfRealtimeVehicleData::Bus => 10,
                     CategoryOfRealtimeVehicleData::Other => 5,
                 };
 
