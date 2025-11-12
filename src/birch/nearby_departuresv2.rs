@@ -102,6 +102,8 @@ pub struct DeparturesDebug {
     pub total_time_ms: u128,
     pub etcd_time_ms: u128,
     pub aspen_data_fetch_time_elapsed: Option<u128>,
+    pub db_connection_time_ms: u128,
+    pub etcd_connection_time_ms: u128,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -297,6 +299,10 @@ pub async fn nearby_from_coords_v2(
     .await
     .unwrap();
 
+    let etcd_connection_time = start.elapsed();
+
+    let db_timer = Instant::now();
+
     let conn_pool = pool.as_ref();
     let (conn_pre, conn2_pre, conn3_pre) =
         tokio::join!(conn_pool.get(), conn_pool.get(), conn_pool.get());
@@ -309,6 +315,8 @@ pub async fn nearby_from_coords_v2(
     let conn = &mut conn_pre.unwrap();
     let conn2 = &mut conn2_pre.unwrap();
     let conn3 = &mut conn3_pre.unwrap();
+
+    let db_connection_time = db_timer.elapsed();
 
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
@@ -2084,6 +2092,8 @@ pub async fn nearby_from_coords_v2(
                     etcd_time_ms: etcd_time_elapsed.as_millis(),
                     aspen_data_fetch_time_elapsed: aspen_data_fetch_time_elapsed
                         .map(|x| x.as_millis() as u128),
+                    etcd_connection_time_ms: etcd_connection_time.as_millis() as u128,
+                    db_connection_time_ms: db_connection_time.as_millis() as u128,
                 },
             })
         }
