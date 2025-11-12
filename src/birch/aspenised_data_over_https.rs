@@ -12,6 +12,7 @@ use diesel::{ExpressionMethods, SelectableHelper};
 use diesel_async::AsyncConnection;
 use diesel_async::RunQueryDsl;
 use futures::StreamExt;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -304,6 +305,16 @@ pub async fn bulk_realtime_fetch_v2(
     .collect::<Vec<_>>()
     .await;
 
+    let route_types_wanted = Arc::new(match categories_requested.len() {
+        4 => None,
+        _ => Some(
+            categories_requested
+                .iter()
+                .flat_map(|category| category_to_allowed_route_ids(category))
+                .collect::<Vec<i16>>(),
+        ),
+    });
+
     let parallel_chateau_data_fetch = futures::stream::iter(
         etcd_data_list
             .iter()
@@ -311,37 +322,48 @@ pub async fn bulk_realtime_fetch_v2(
             .map(|(chateau_id, chateau_params, etcd_data)| {
                 (chateau_id, chateau_params, etcd_data.as_ref().unwrap())
             })
-            .map(|(chateau_id, chateau_params, etcd_data_list)| async move {
-                if etcd_data_list.kvs().is_empty() {
-                    return (chateau_id, None, chateau_params);
-                }
+            .map(|(chateau_id, chateau_params, etcd_data_list)| {
+                let route_types_wanted = Arc::clone(&route_types_wanted);
 
-                //deserialise into ChateauMetadataZookeeper
+                async move {
+                    if etcd_data_list.kvs().is_empty() {
+                        return (chateau_id, None, chateau_params);
+                    }
 
-                let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
-                    etcd_data_list.kvs().first().unwrap().value(),
-                )
-                .unwrap();
+                    //deserialise into ChateauMetadataZookeeper
 
-                //then connect to the node via tarpc
+                    let assigned_chateau_data =
+                        catenary::bincode_deserialize::<ChateauMetadataEtcd>(
+                            etcd_data_list.kvs().first().unwrap().value(),
+                        )
+                        .unwrap();
 
-                let aspen_client =
-                    catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
-                        .await;
+                    //then connect to the node via tarpc
 
-                if aspen_client.is_err() {
-                    return (chateau_id, None, chateau_params);
-                }
-
-                let aspen_client = aspen_client.unwrap();
-
-                //then call the get_vehicle_locations method
-
-                let response = aspen_client
-                    .get_vehicle_locations(context::current(), chateau_id.to_string(), None)
+                    let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(
+                        &assigned_chateau_data.socket,
+                    )
                     .await;
 
-                (chateau_id, Some(response), chateau_params)
+                    if aspen_client.is_err() {
+                        return (chateau_id, None, chateau_params);
+                    }
+
+                    let aspen_client = aspen_client.unwrap();
+
+                    //then call the get_vehicle_locations method
+
+                    let response = aspen_client
+                        .get_vehicle_locations(
+                            context::current(),
+                            chateau_id.to_string(),
+                            None,
+                            route_types_wanted.as_ref().clone(),
+                        )
+                        .await;
+
+                    (chateau_id, Some(response), chateau_params)
+                }
             }),
     )
     .buffer_unordered(32)
@@ -416,8 +438,8 @@ pub async fn bulk_realtime_fetch_v2(
                     .filter(|vehicle_position| {
                         route_types_allowed.contains(&vehicle_position.1.route_type)
                     })
-                    .map(|(a, b)| (a.clone(), b))
-                    .map(|(a, b)| (a, convert_to_output(&b)))
+                    //.map(|(a, b)| (a.clone(), b))
+                    .map(|(a, b)| (a.clone(), convert_to_output(&b)))
                     .collect::<AHashMap<String, AspenisedVehiclePositionOutput>>();
 
                 // vehicles are sorted into the slippy tile structure
@@ -435,85 +457,85 @@ pub async fn bulk_realtime_fetch_v2(
                     CategoryOfRealtimeVehicleData::Other => 5,
                 };
 
-                if replace_all_tiles {
-                    for (vehicle_id, vehicle_position) in &filtered_vehicle_positions {
-                        if let Some(pos) = &vehicle_position.position {
-                            if pos.latitude != 0.0 && pos.longitude != 0.0 {
-                                let (x, y) = slippy_map_tiles::lat_lon_to_tile(
-                                    pos.latitude,
-                                    pos.longitude,
-                                    zoom,
-                                );
-                                vehicles_by_tile
-                                    .entry(x)
-                                    .or_default()
-                                    .entry(y)
-                                    .or_default()
-                                    .insert(vehicle_id.clone(), vehicle_position.clone());
+                match replace_all_tiles {
+                    true => {
+                        for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
+                            if let Some(pos) = &vehicle_position.position {
+                                if pos.latitude != 0.0 && pos.longitude != 0.0 {
+                                    let (x, y) = slippy_map_tiles::lat_lon_to_tile(
+                                        pos.latitude,
+                                        pos.longitude,
+                                        zoom,
+                                    );
+                                    vehicles_by_tile
+                                        .entry(x)
+                                        .or_default()
+                                        .entry(y)
+                                        .or_default()
+                                        .insert(vehicle_id, vehicle_position);
+                                }
                             }
                         }
                     }
-                } else {
-                    // We only send back vehicle positions for tiles that are new to the user.
-                    let (bounds, prev_bounds_params) = match category {
-                        CategoryOfRealtimeVehicleData::Metro => (
-                            &params.bounds_input.level8,
-                            chateau_params_for_this_category.as_ref(),
-                        ),
-                        CategoryOfRealtimeVehicleData::Rail => (
-                            &params.bounds_input.level7,
-                            chateau_params_for_this_category.as_ref(),
-                        ),
-                        CategoryOfRealtimeVehicleData::Bus => (
-                            &params.bounds_input.level10,
-                            chateau_params_for_this_category.as_ref(),
-                        ),
-                        CategoryOfRealtimeVehicleData::Other => (
-                            &params.bounds_input.level5,
-                            chateau_params_for_this_category.as_ref(),
-                        ),
-                    };
+                    false => {
+                        // We only send back vehicle positions for tiles that are new to the user.
+                        let (bounds, prev_bounds_params) = match category {
+                            CategoryOfRealtimeVehicleData::Metro => (
+                                &params.bounds_input.level8,
+                                chateau_params_for_this_category.as_ref(),
+                            ),
+                            CategoryOfRealtimeVehicleData::Rail => (
+                                &params.bounds_input.level7,
+                                chateau_params_for_this_category.as_ref(),
+                            ),
+                            CategoryOfRealtimeVehicleData::Bus => (
+                                &params.bounds_input.level10,
+                                chateau_params_for_this_category.as_ref(),
+                            ),
+                            CategoryOfRealtimeVehicleData::Other => (
+                                &params.bounds_input.level5,
+                                chateau_params_for_this_category.as_ref(),
+                            ),
+                        };
 
-                    if let Some(prev_bounds) = prev_bounds_params {
-                        if let (
-                            Some(prev_min_x),
-                            Some(prev_max_x),
-                            Some(prev_min_y),
-                            Some(prev_max_y),
-                        ) = (
-                            prev_bounds.prev_user_min_x,
-                            prev_bounds.prev_user_max_x,
-                            prev_bounds.prev_user_min_y,
-                            prev_bounds.prev_user_max_y,
-                        ) {
-                            for (vehicle_id, vehicle_position) in &filtered_vehicle_positions {
-                                if let Some(pos) = &vehicle_position.position {
-                                    if pos.latitude != 0.0 && pos.longitude != 0.0 {
-                                        let (x, y) = slippy_map_tiles::lat_lon_to_tile(
-                                            pos.latitude,
-                                            pos.longitude,
-                                            zoom,
-                                        );
+                        if let Some(prev_bounds) = prev_bounds_params {
+                            if let (
+                                Some(prev_min_x),
+                                Some(prev_max_x),
+                                Some(prev_min_y),
+                                Some(prev_max_y),
+                            ) = (
+                                prev_bounds.prev_user_min_x,
+                                prev_bounds.prev_user_max_x,
+                                prev_bounds.prev_user_min_y,
+                                prev_bounds.prev_user_max_y,
+                            ) {
+                                for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
+                                    if let Some(pos) = &vehicle_position.position {
+                                        if pos.latitude != 0.0 && pos.longitude != 0.0 {
+                                            let (x, y) = slippy_map_tiles::lat_lon_to_tile(
+                                                pos.latitude,
+                                                pos.longitude,
+                                                zoom,
+                                            );
 
-                                        let in_current_bounds = x >= bounds.min_x
-                                            && x <= bounds.max_x
-                                            && y >= bounds.min_y
-                                            && y <= bounds.max_y;
-                                        let in_prev_bounds = x >= prev_min_x
-                                            && x <= prev_max_x
-                                            && y >= prev_min_y
-                                            && y <= prev_max_y;
+                                            let in_current_bounds = x >= bounds.min_x
+                                                && x <= bounds.max_x
+                                                && y >= bounds.min_y
+                                                && y <= bounds.max_y;
+                                            let in_prev_bounds = x >= prev_min_x
+                                                && x <= prev_max_x
+                                                && y >= prev_min_y
+                                                && y <= prev_max_y;
 
-                                        if in_current_bounds && !in_prev_bounds {
-                                            vehicles_by_tile
-                                                .entry(x)
-                                                .or_default()
-                                                .entry(y)
-                                                .or_default()
-                                                .insert(
-                                                    vehicle_id.clone(),
-                                                    vehicle_position.clone(),
-                                                );
+                                            if in_current_bounds && !in_prev_bounds {
+                                                vehicles_by_tile
+                                                    .entry(x)
+                                                    .or_default()
+                                                    .entry(y)
+                                                    .or_default()
+                                                    .insert(vehicle_id, vehicle_position);
+                                            }
                                         }
                                     }
                                 }
@@ -681,7 +703,7 @@ pub async fn bulk_realtime_fetch_v1(
                 //then call the get_vehicle_locations method
 
                 let response = aspen_client
-                    .get_vehicle_locations(context::current(), chateau_id.to_string(), None)
+                    .get_vehicle_locations(context::current(), chateau_id.to_string(), None, None)
                     .await;
 
                 (chateau_id, Some(response), chateau_params)
@@ -889,7 +911,12 @@ pub async fn get_realtime_locations(
     //then call the get_vehicle_locations method
 
     let response = aspen_client
-        .get_vehicle_locations(context::current(), chateau_id, existing_fasthash_of_routes)
+        .get_vehicle_locations(
+            context::current(),
+            chateau_id,
+            existing_fasthash_of_routes,
+            None,
+        )
         .await
         .unwrap();
 

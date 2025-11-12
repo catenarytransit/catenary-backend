@@ -99,6 +99,7 @@ pub trait AspenRpc {
     async fn get_vehicle_locations(
         chateau_id: String,
         existing_fasthash_of_routes: Option<u64>,
+        route_types_filter: Option<Vec<i16>>,
     ) -> Option<GetVehicleLocationsResponse>;
 
     async fn get_vehicle_locations_with_route_filtering(

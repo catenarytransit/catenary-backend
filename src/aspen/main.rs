@@ -53,6 +53,7 @@ use tarpc::{
 };
 use tokio::sync::Mutex;
 use tokio::time;
+use tracing_subscriber::filter;
 use uuid::Uuid;
 mod import_alpenrose;
 use ahash::AHashMap;
@@ -79,6 +80,7 @@ use flate2::read::ZlibDecoder;
 use prost::Message;
 use rand::distr::Uniform;
 use rand::rng;
+use rayon::prelude::*;
 use std::io::Read;
 use std::io::Write;
 use std::time::Instant;
@@ -1031,6 +1033,7 @@ impl AspenRpc for AspenServer {
         _: context::Context,
         chateau_id: String,
         existing_fasthash_of_routes: Option<u64>,
+        route_types_filter: Option<Vec<i16>>,
     ) -> Option<GetVehicleLocationsResponse> {
         match self.authoritative_data_store.get_async(&chateau_id).await {
             Some(aspenised_data) => {
@@ -1039,16 +1042,64 @@ impl AspenRpc for AspenServer {
                 let fast_hash_of_routes = aspenised_data.vehicle_routes_cache_hash;
 
                 Some(GetVehicleLocationsResponse {
-                    vehicle_route_cache: match existing_fasthash_of_routes {
-                        Some(existing_fasthash_of_routes) => {
-                            match existing_fasthash_of_routes == fast_hash_of_routes {
-                                true => None,
-                                false => Some(aspenised_data.vehicle_routes_cache.clone()),
+                    vehicle_route_cache: {
+                        let send_nothing = match &existing_fasthash_of_routes {
+                            Some(existing_fasthash_of_routes) => {
+                                existing_fasthash_of_routes == &fast_hash_of_routes
+                            }
+                            None => false,
+                        };
+
+                        if send_nothing {
+                            None
+                        } else {
+                            match &route_types_filter {
+                                Some(route_types_filter) => {
+                                    let filtered_vehicle_routes_cache = aspenised_data
+                                        .vehicle_routes_cache
+                                        .iter()
+                                        .filter(|(route_id, route_info)| {
+                                            route_types_filter.contains(&route_info.route_type)
+                                        })
+                                        .map(|(a, b)| (a.clone(), b.clone()))
+                                        .collect::<AHashMap<_, _>>();
+
+                                    Some(filtered_vehicle_routes_cache)
+                                }
+                                None => Some(aspenised_data.vehicle_routes_cache.clone()),
                             }
                         }
-                        None => Some(aspenised_data.vehicle_routes_cache.clone()),
                     },
-                    vehicle_positions: aspenised_data.vehicle_positions.clone(),
+                    vehicle_positions: match &route_types_filter {
+                        Some(route_types_filter) => {
+                            let filtered_vehicle_positions = aspenised_data
+                                .vehicle_positions
+                                .iter()
+                                .filter(|(gtfs_id, vehicle_position)| {
+                                    match &vehicle_position.trip {
+                                        Some(trip) => match &trip.route_id {
+                                            Some(route_id) => {
+                                                match aspenised_data
+                                                    .vehicle_routes_cache
+                                                    .get(route_id)
+                                                {
+                                                    Some(route_info) => route_types_filter
+                                                        .contains(&route_info.route_type),
+                                                    None => false,
+                                                }
+                                            }
+                                            None => false,
+                                        },
+                                        None => false,
+                                    }
+                                })
+                                .map(|(a, b)| (a.clone(), b.clone()))
+                                .collect::<AHashMap<_, _>>();
+
+                            filtered_vehicle_positions
+                        }
+                        None => aspenised_data.vehicle_positions.clone(),
+                    },
                     hash_of_routes: fast_hash_of_routes,
                     last_updated_time_ms: aspenised_data.last_updated_time_ms,
                 })

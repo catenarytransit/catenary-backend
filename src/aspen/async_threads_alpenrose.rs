@@ -3,6 +3,7 @@ use catenary::aspen_dataset::GtfsRtType;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 use gtfs_realtime::FeedMessage;
+use rayon::prelude::*;
 use scc::HashMap as SccHashMap;
 use std::collections::HashSet;
 use std::error::Error;
