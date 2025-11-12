@@ -14,6 +14,7 @@ use actix_web::web::Query;
 use ahash::AHashMap;
 use catenary::CalendarUnified;
 use catenary::EtcdConnectionIps;
+use catenary::aspen::lib::AspenRpcClient;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenisedTripUpdate;
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
@@ -99,6 +100,8 @@ pub struct DeparturesDebug {
     pub trips_ms: u128,
     pub route_and_cal_ms: u128,
     pub total_time_ms: u128,
+    pub etcd_time_ms: u128,
+    pub aspen_data_fetch_time_elapsed: Option<u128>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -990,6 +993,8 @@ pub async fn nearby_from_coords_v2(
 
     let mut chateau_metadata = HashMap::new();
 
+    let etcd_timer = Instant::now();
+
     for chateau_id in chateaus {
         let etcd_data = etcd
             .get(
@@ -1009,6 +1014,9 @@ pub async fn nearby_from_coords_v2(
         }
     }
 
+    let etcd_time_elapsed = etcd_timer.elapsed();
+
+    let mut aspen_data_fetch_time_elapsed: Option<std::time::Duration> = None;
     let chateau_metadata = chateau_metadata;
 
     match calendar_structure {
@@ -1118,53 +1126,89 @@ pub async fn nearby_from_coords_v2(
 
                 //1. connect with tarpc server
 
+                let aspen_data_fetch_timer = Instant::now();
+                let scc_aspen_client_reuse: scc::HashMap<std::net::SocketAddr, AspenRpcClient> =
+                    scc::HashMap::new();
+
                 let (gtfs_trips_aspenised, all_alerts_for_chateau) = match chateau_metadata
                     .get(chateau_id)
                 {
                     Some(chateau_metadata_for_c) => {
-                        let aspen_client_res = catenary::aspen::lib::spawn_aspen_client_from_ip(
-                            &chateau_metadata_for_c.socket,
-                        )
-                        .await;
+                        let aspen_client = match scc_aspen_client_reuse
+                            .get_async(&chateau_metadata_for_c.socket)
+                            .await
+                        {
+                            Some(aspen_client) => {
+                                let aspen_client = aspen_client.get();
 
-                        if let Err(e) = aspen_client_res {
-                            eprintln!("Error connecting to aspen: {:#?}", e);
-                            (None, None)
-                        } else {
-                            let aspen_client = aspen_client_res.unwrap();
-                            let gtfs_trip_aspenised_res = aspen_client
-                                .get_all_trips_with_ids(
+                                Some(aspen_client.clone())
+                            }
+                            None => {
+                                let aspen_client_res =
+                                    catenary::aspen::lib::spawn_aspen_client_from_ip(
+                                        &chateau_metadata_for_c.socket,
+                                    )
+                                    .await;
+
+                                match aspen_client_res {
+                                    Ok(aspen_client) => {
+                                        let _ = scc_aspen_client_reuse
+                                            .insert_async(
+                                                chateau_metadata_for_c.socket,
+                                                aspen_client.clone(),
+                                            )
+                                            .await;
+                                        Some(aspen_client)
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Error connecting to aspen: {:#?}", e);
+                                        None
+                                    }
+                                }
+                            }
+                        };
+
+                        match aspen_client {
+                            Some(aspen_client) => {
+                                let gtfs_fut = aspen_client.get_all_trips_with_ids(
                                     tarpc::context::current(),
                                     chateau_id.clone(),
                                     valid_trips.keys().cloned().collect::<Vec<String>>(),
-                                )
-                                .await;
+                                );
+                                let alerts_fut = aspen_client
+                                    .get_all_alerts(tarpc::context::current(), chateau_id.clone());
 
-                            let all_alerts_res = aspen_client
-                                .get_all_alerts(tarpc::context::current(), chateau_id.clone())
-                                .await;
+                                let (gtfs_trip_aspenised_res, all_alerts_res) =
+                                    tokio::join!(gtfs_fut, alerts_fut);
 
-                            let trips = match gtfs_trip_aspenised_res {
-                                Ok(gtfs_trip_aspenised) => gtfs_trip_aspenised,
-                                Err(err) => {
-                                    eprintln!("Error getting trip updates, line 1010: {:#?}", err);
-                                    None
-                                }
-                            };
+                                let trips = match gtfs_trip_aspenised_res {
+                                    Ok(gtfs_trip_aspenised) => gtfs_trip_aspenised,
+                                    Err(err) => {
+                                        eprintln!(
+                                            "Error getting trip updates, line 1010: {:#?}",
+                                            err
+                                        );
+                                        None
+                                    }
+                                };
 
-                            let alerts = match all_alerts_res {
-                                Ok(Some(all_alerts)) => Some(all_alerts),
-                                Ok(None) => None,
-                                Err(err) => {
-                                    eprintln!("Error getting alerts: {:#?}", err);
-                                    None
-                                }
-                            };
-                            (trips, alerts)
+                                let alerts = match all_alerts_res {
+                                    Ok(Some(all_alerts)) => Some(all_alerts),
+                                    Ok(None) => None,
+                                    Err(err) => {
+                                        eprintln!("Error getting alerts: {:#?}", err);
+                                        None
+                                    }
+                                };
+                                (trips, alerts)
+                            }
+                            None => (None, None),
                         }
                     }
                     None => (None, None),
                 };
+
+                aspen_data_fetch_time_elapsed = Some(aspen_data_fetch_timer.elapsed());
 
                 if let Some(alerts_for_chateau) = &all_alerts_for_chateau {
                     if !alerts_for_chateau.is_empty() {
@@ -2037,6 +2081,9 @@ pub async fn nearby_from_coords_v2(
                     trips_ms: trip_lookup_elapsed.as_millis(),
                     total_time_ms: total_elapsed_time.as_millis(),
                     route_and_cal_ms: calendar_timer_finish.as_millis(),
+                    etcd_time_ms: etcd_time_elapsed.as_millis(),
+                    aspen_data_fetch_time_elapsed: aspen_data_fetch_time_elapsed
+                        .map(|x| x.as_millis() as u128),
                 },
             })
         }
