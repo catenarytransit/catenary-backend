@@ -816,7 +816,7 @@ async fn main() -> std::io::Result<()> {
             .service(api_key_management::set_realtime_key)
             .service(api_key_management::export_realtime_keys)
             .service(aspenised_data_over_https::get_realtime_locations)
-         //   .service(aspenised_data_over_https::bulk_realtime_fetch_v1)
+            //   .service(aspenised_data_over_https::bulk_realtime_fetch_v1)
             .service(aspenised_data_over_https::bulk_realtime_fetch_v2)
             .service(aspenised_data_over_https::bulk_realtime_fetch_v3)
             .service(aspenised_data_over_https::get_rt_of_route)
