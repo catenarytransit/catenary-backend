@@ -70,7 +70,7 @@ mod chicago_proxy;
 mod get_agencies;
 mod get_vehicle_trip_information;
 mod gtfs_rt_api;
-mod nearby_departures;
+//mod nearby_departures;
 mod nearby_departuresv2;
 mod route_info;
 use rand::Rng;
@@ -757,6 +757,9 @@ async fn main() -> std::io::Result<()> {
 
     let shared_client = Arc::new(reqwest::Client::new());
 
+    let etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>
+     = Arc::new(tokio::sync::RwLock::new(None));
+
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
         App::new()
@@ -787,6 +790,9 @@ async fn main() -> std::io::Result<()> {
                 etcd_connection_options.clone(),
             )))
             .app_data(actix_web::web::Data::new(Arc::clone(&etcd_connection_ips)))
+            .app_data(actix_web::web::Data::new(Arc::new(
+                etcd_reuser.clone(),
+            )))
             .app_data(actix_web::web::Data::new(Arc::clone(&shared_client)))
             .route("/", web::get().to(index))
             .route("robots.txt", web::get().to(robots))
@@ -816,7 +822,7 @@ async fn main() -> std::io::Result<()> {
             .service(aspenised_data_over_https::bulk_realtime_fetch_v2)
             .service(aspenised_data_over_https::get_rt_of_route)
             .service(chicago_proxy::ttarrivals_proxy)
-            .service(nearby_departures::nearby_from_coords)
+            //.service(nearby_departures::nearby_from_coords)
             .service(nearby_departuresv2::nearby_from_coords_v2)
             .service(departures_at_stop::departures_at_stop)
             .service(get_vehicle_trip_information::get_trip_init)
