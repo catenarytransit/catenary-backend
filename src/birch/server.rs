@@ -790,7 +790,7 @@ async fn main() -> std::io::Result<()> {
                 etcd_connection_options.clone(),
             )))
             .app_data(actix_web::web::Data::new(Arc::clone(&etcd_connection_ips)))
-            .app_data(actix_web::web::Data::new(Arc::new(etcd_reuser.clone())))
+            .app_data(actix_web::web::Data::new(Arc::clone(&etcd_reuser)))
             .app_data(actix_web::web::Data::new(Arc::clone(&shared_client)))
             .route("/", web::get().to(index))
             .route("robots.txt", web::get().to(robots))
