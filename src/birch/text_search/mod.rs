@@ -815,7 +815,7 @@ pub async fn text_search_v1(
 
     let routes_response_body = routes_response.json::<serde_json::Value>().await.unwrap();
 
-    println!("routes_response_body {:?}", routes_response_body);
+    println!("routes_response_body {:#?}", routes_response_body);
 
     let hits_list_routes = routes_response_body
         .get("hits")
