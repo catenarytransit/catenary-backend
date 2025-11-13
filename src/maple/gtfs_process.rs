@@ -1313,20 +1313,22 @@ pub async fn gtfs_process_feed(
                 }
             }
 
-            insertable_elastic.push(
-                json!({
-                    "chateau": chateau_id.to_string(),
-                    "attempt_id": attempt_id.to_string(),
-                    "route_id": route_id,
-                    "route_type": route_type,
-                    "agency_name_search": agency_name,
-                    "route_short_name": serde_json::to_value(&short_name_translations_shortened_locales_elastic).unwrap(),
-                    "route_long_name": serde_json::to_value(&long_name_translations_shortened_locales_elastic).unwrap(),
-                    "bbox": envelope,
-                    "important_points": important_points
-                })
-                .into(),
-            );
+            if important_points.len() > 1 {
+                insertable_elastic.push(
+                    json!({
+                        "chateau": chateau_id.to_string(),
+                        "attempt_id": attempt_id.to_string(),
+                        "route_id": route_id,
+                        "route_type": route_type,
+                        "agency_name_search": agency_name,
+                        "route_short_name": serde_json::to_value(&short_name_translations_shortened_locales_elastic).unwrap(),
+                        "route_long_name": serde_json::to_value(&long_name_translations_shortened_locales_elastic).unwrap(),
+                        "bbox": envelope,
+                        "important_points": important_points
+                    })
+                    .into(),
+                );
+            }
         }
 
         finished_route_chunks_elasticsearch.push(insertable_elastic);
