@@ -344,7 +344,8 @@ pub async fn text_search_v1(
                     "query": {
                         "multi_match" : {
                             "query":  cleaned_query_text.clone(),
-                            "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ]
+                            "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ],
+                            "type": "cross_fields"
                         }
                     },
                     "functions": [
@@ -403,7 +404,8 @@ pub async fn text_search_v1(
                         "query": {
                             "multi_match" : {
                                 "query":  cleaned_query_text.clone(),
-                                "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ]
+                                "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ],
+                                 "type": "cross_fields"
                             }
                         },
                         "functions": [
@@ -465,7 +467,8 @@ pub async fn text_search_v1(
                         "query": {
                           "multi_match" : {
                             "query":  query.text.clone(),
-                            "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ]
+                            "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ],
+                            "type": "cross_fields"
                          }
                         },
                         "functions": [
