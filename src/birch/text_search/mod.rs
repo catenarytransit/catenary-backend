@@ -369,7 +369,7 @@ pub async fn text_search_v1(
                                   }
                                   if (min_distance < 0) { return 1.0; }
 
-                                  double pivot = 2000.0;
+                                  double pivot = 10000.0;
                                   double score = pivot / (pivot + min_distance);
 
                                   // Adjust by route_type: buses (3) penalised more, other modes less
