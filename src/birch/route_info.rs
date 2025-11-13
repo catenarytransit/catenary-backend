@@ -40,6 +40,7 @@ pub struct RouteInfoResponse {
     pub alert_id_to_alert: BTreeMap<String, AspenisedAlert>,
     pub stop_id_to_alert_ids: BTreeMap<String, Vec<String>>,
     pub onestop_feed_id: String,
+    pub bounding_box: Option<geo::Rect<f64>>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -369,6 +370,38 @@ pub async fn route_info(
         }
     }
 
+    let mut min_x = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut min_y = f64::MAX;
+    let mut max_y = f64::MIN;
+
+    for shape in &shapes_pg {
+        for point in &shape.linestring.points {
+            min_x = min_x.min(point.x);
+            max_x = max_x.max(point.x);
+            min_y = min_y.min(point.y);
+            max_y = max_y.max(point.y);
+        }
+    }
+
+    for stop in stops_hashmap.values() {
+        if let (Some(lat), Some(lon)) = (stop.latitude, stop.longitude) {
+            min_x = min_x.min(lon);
+            max_x = max_x.max(lon);
+            min_y = min_y.min(lat);
+            max_y = max_y.max(lat);
+        }
+    }
+
+    let bounding_box = if min_x == f64::MAX {
+        None
+    } else {
+        Some(geo::Rect::new(
+            coord! { x: min_x, y: min_y },
+            coord! { x: max_x, y: max_y },
+        ))
+    };
+
     //return as struct
     //pdf is none for now
 
@@ -415,6 +448,7 @@ pub async fn route_info(
         alert_ids_for_this_route: alert_ids,
         alert_id_to_alert: alerts_for_route_send,
         stop_id_to_alert_ids,
+        bounding_box: bounding_box,
     };
 
     HttpResponse::Ok().json(response)
