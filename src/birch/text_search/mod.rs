@@ -295,15 +295,47 @@ pub async fn text_search_v1(
         },
     };
 
-    let route_type_function = json!({
+    let mut route_type_function = json!({
         "script_score": {
             "script": {
                 // rail, metro, tram
-                "source": "if (!doc.containsKey('route_type') || doc['route_type'].empty) { return 1.0; }
+                "source": "if (!doc.containsKey('route_type')) { return 1.0; }
                 if (doc['route_type'].value == 2) { return 3.0; } if (doc['route_type'].value == 1) { return 2.0; } if (doc['route_type'].value == 0) { return 1.5; } return 1.0;"
             }
         }
     });
+
+    let mut cleaned_query_text = query.text.to_lowercase();
+
+    if query.text.to_lowercase().contains("train") || query.text.to_lowercase().contains("rail") {
+        route_type_function = json!({
+            "script_score": {
+                "script": {
+                "source": "if (!doc.containsKey('route_type')) { return 1.0; }
+                if (doc['route_type'].value == 2) { return 3.0; } if (doc['route_type'].value == 1) { return 2.0; } if (doc['route_type'].value == 0) { return 3.0; } return 1.0;"
+                }
+            }
+        });
+
+        cleaned_query_text = cleaned_query_text.replace("train", "").replace("rail", "");
+    }
+
+    if query.text.to_lowercase().contains("subway") || query.text.to_lowercase().contains("metro") {
+        route_type_function = json!({
+            "script_score": {
+                "script": {
+                "source": "if (!doc.containsKey('route_type')) { return 1.0; }
+                if (doc['route_type'].value == 2) { return 2.5; } if (doc['route_type'].value == 1) { return 3.0; } if (doc['route_type'].value == 0) { return 4.0; } return 1.0;"
+                }
+            }
+        });
+
+        cleaned_query_text = cleaned_query_text.replace("subway", "").replace("metro", "");
+    }
+
+    let cleaned_query_text = cleaned_query_text.trim().to_string();
+
+    let route_type_function = route_type_function;
 
     let routes_query = match (query.user_lat, query.user_lon) {
         (Some(user_lat), Some(user_lon)) => json!({
@@ -311,12 +343,11 @@ pub async fn text_search_v1(
                 "function_score": {
                     "query": {
                         "multi_match" : {
-                            "query":  query.text.clone(),
+                            "query":  cleaned_query_text.clone(),
                             "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ]
                         }
                     },
                     "functions": [
-                        route_type_function.clone(),
                         {
                             "script_score": {
                                 "script": {
@@ -338,7 +369,7 @@ pub async fn text_search_v1(
                                   double score = pivot / (pivot + min_distance);
 
                                   // Adjust by route_type: buses (3) penalised more, other modes less
-                                  if (doc.containsKey(\"route_type\") && !doc['route_type'].empty) {
+                                  if (doc.containsKey(\"route_type\")) {
                                     def rt = doc['route_type'].value;
                                     if (rt == 3) {
                                       // bus -> stronger distance penalty
@@ -357,7 +388,8 @@ pub async fn text_search_v1(
                                     }
                                 }
                             }
-                        }
+                        },
+                        route_type_function.clone(),
                     ],
                     "score_mode": "multiply",
                     "boost_mode": "multiply"
@@ -370,12 +402,11 @@ pub async fn text_search_v1(
                     "function_score": {
                         "query": {
                             "multi_match" : {
-                                "query":  query.text.clone(),
+                                "query":  cleaned_query_text.clone(),
                                 "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ]
                             }
                         },
                         "functions": [
-                            route_type_function.clone(),
                             {
                                 "script_score": {
                                     "script": {
@@ -400,7 +431,7 @@ pub async fn text_search_v1(
                                       double score = pivot_meters / (pivot_meters + min_distance);
 
                                       // Adjust by route_type: buses (3) penalised more, other modes less
-                                      if (doc.containsKey(\"route_type\") && !doc['route_type'].empty) {
+                                      if (doc.containsKey(\"route_type\")) {
                                         def rt = doc['route_type'].value;
                                         if (rt == 3) {
                                           // bus -> stronger distance penalty
@@ -420,7 +451,8 @@ pub async fn text_search_v1(
                                         }
                                     }
                                 }
-                            }
+                            },
+                            route_type_function.clone(),
                         ],
                         "score_mode": "multiply",
                         "boost_mode": "multiply"
