@@ -1278,8 +1278,7 @@ pub async fn gtfs_process_feed(
                 },
             };
 
-            insertable_elastic
-                .push(json!({"index": {"_index": "routes", "_id": elastic_id}}).into());
+            
 
             if let Some(default_lang) = &default_lang {
                 if let Some(short_name) = &route.short_name {
@@ -1314,6 +1313,8 @@ pub async fn gtfs_process_feed(
             }
 
             if important_points.len() > 1 {
+                insertable_elastic
+                .push(json!({"index": {"_index": "routes", "_id": elastic_id}}).into());
                 insertable_elastic.push(
                     json!({
                         "chateau": chateau_id.to_string(),
