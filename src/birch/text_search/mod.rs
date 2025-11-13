@@ -491,7 +491,7 @@ pub async fn text_search_v1(
         .as_ref()
         .search(SearchParts::Index(&["routes"]))
         .from(0)
-        .size(10)
+        .size(30)
         .body(routes_query)
         .send();
 
