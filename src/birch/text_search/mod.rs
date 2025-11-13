@@ -339,7 +339,7 @@ pub async fn text_search_v1(
 
                                   // Adjust by route_type: buses (3) penalised more, other modes less
                                   if (doc.containsKey(\"route_type\") && !doc['route_type'].empty) {
-                                    int rt = doc['route_type'].value;
+                                    def rt = doc['route_type'].value;
                                     if (rt == 3) {
                                       // bus -> stronger distance penalty
                                       score = Math.pow(score, 2);
@@ -401,7 +401,7 @@ pub async fn text_search_v1(
 
                                       // Adjust by route_type: buses (3) penalised more, other modes less
                                       if (doc.containsKey(\"route_type\") && !doc['route_type'].empty) {
-                                        int rt = doc['route_type'].value;
+                                        def rt = doc['route_type'].value;
                                         if (rt == 3) {
                                           // bus -> stronger distance penalty
                                           score = Math.pow(score, 2);
