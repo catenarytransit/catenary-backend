@@ -321,6 +321,65 @@ pub async fn text_search_v1(
                             "script_score": {
                                 "script": {
                                     "source": "
+                                  double min_distance = -1.0;
+                                  if (doc.containsKey('important_points') && !doc['important_points'].empty) {
+                                    def distances = doc['important_points'].arcDistance(params.lat, params.lon);
+                                    if (distances instanceof List) {
+                                      for (double d : distances) {
+                                        if (min_distance == -1.0 || d < min_distance) { min_distance = d; }
+                                      }
+                                    } else {
+                                      min_distance = distances;
+                                    }
+                                  }
+                                  if (min_distance < 0) { return 1.0; }
+
+                                  double pivot = 2000.0;
+                                  double score = pivot / (pivot + min_distance);
+
+                                  // Adjust by route_type: buses (3) penalised more, other modes less
+                                  if (doc.containsKey(\"route_type\") && !doc['route_type'].empty) {
+                                    int rt = doc['route_type'].value;
+                                    if (rt == 3) {
+                                      // bus -> stronger distance penalty
+                                      score = Math.pow(score, 2);
+                                    } else {
+                                      // rail/metro/tram/etc -> weaker distance penalty
+                                      score = Math.sqrt(score);
+                                    }
+                                  }
+
+                                  return score;
+                                ",
+                                    "params": {
+                                        "lat": user_lat,
+                                        "lon": user_lon
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "score_mode": "multiply",
+                    "boost_mode": "multiply"
+                }
+            }
+        }),
+        _ => match map_pos_exists {
+            true => json!({
+                "query": {
+                    "function_score": {
+                        "query": {
+                            "multi_match" : {
+                                "query":  query.text.clone(),
+                                "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ]
+                            }
+                        },
+                        "functions": [
+                            route_type_function.clone(),
+                            {
+                                "script_score": {
+                                    "script": {
+                                        "source": "
                                       double min_distance = -1.0;
                                       if (doc.containsKey('important_points') && !doc['important_points'].empty) {
                                         def distances = doc['important_points'].arcDistance(params.lat, params.lon);
@@ -333,55 +392,27 @@ pub async fn text_search_v1(
                                         }
                                       }
                                       if (min_distance < 0) { return 1.0; }
-                                      double pivot = 2000.0;
-                                      return pivot / (pivot + min_distance);
+
+                                      String pivot_str = params.pivot;
+                                      double pivot_km = Double.parseDouble(pivot_str.substring(0, pivot_str.length() - 2));
+                                      double pivot_meters = pivot_km * 1000.0;
+
+                                      double score = pivot_meters / (pivot_meters + min_distance);
+
+                                      // Adjust by route_type: buses (3) penalised more, other modes less
+                                      if (doc.containsKey(\"route_type\") && !doc['route_type'].empty) {
+                                        int rt = doc['route_type'].value;
+                                        if (rt == 3) {
+                                          // bus -> stronger distance penalty
+                                          score = Math.pow(score, 2);
+                                        } else {
+                                          // rail/metro/tram/etc -> weaker distance penalty
+                                          score = Math.sqrt(score);
+                                        }
+                                      }
+
+                                      return score;
                                     ",
-                                    "params": {
-                                        "lat": user_lat,
-                                        "lon": user_lon
-                                    }
-                                }
-                            }
-                        }
-                    ],
-                    "score_mode": "multiply",
-                    "boost_mode": "multiply"
-                  }
-            }
-        }),
-        _ => match map_pos_exists {
-            true => json!({
-                "query": {
-                    "function_score": {
-                        "query": {
-                            "multi_match" : {
-                                "query":  query.text.clone(),
-                                "fields": [ "route_long_name.*^1.5", "route_short_name.*^2", "agency_name_search" ]
-                            }
-                        },
-                        "functions": [
-                            route_type_function.clone(),
-                            {
-                                "script_score": {
-                                    "script": {
-                                        "source": "
-                                          double min_distance = -1.0;
-                                          if (doc.containsKey('important_points') && !doc['important_points'].empty) {
-                                            def distances = doc['important_points'].arcDistance(params.lat, params.lon);
-                                            if (distances instanceof List) {
-                                              for (double d : distances) {
-                                                if (min_distance == -1.0 || d < min_distance) { min_distance = d; }
-                                              }
-                                            } else {
-                                              min_distance = distances;
-                                            }
-                                          }
-                                          if (min_distance < 0) { return 1.0; }
-                                          String pivot_str = params.pivot;
-                                          double pivot_km = Double.parseDouble(pivot_str.substring(0, pivot_str.length() - 2));
-                                          double pivot_meters = pivot_km * 1000.0;
-                                          return pivot_meters / (pivot_meters + min_distance);
-                                        ",
                                         "params": {
                                             "lat": query.map_lat.unwrap(),
                                             "lon": query.map_lon.unwrap(),
@@ -393,7 +424,7 @@ pub async fn text_search_v1(
                         ],
                         "score_mode": "multiply",
                         "boost_mode": "multiply"
-                      }
+                    }
                 }
             }),
             false => json!({
@@ -402,7 +433,7 @@ pub async fn text_search_v1(
                         "query": {
                           "multi_match" : {
                             "query":  query.text.clone(),
-                            "fields": [ "route_long_name.*^1.5", "route_short_name.*^2", "agency_name_search" ]
+                            "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ]
                          }
                         },
                         "functions": [
@@ -410,7 +441,7 @@ pub async fn text_search_v1(
                         ],
                         "score_mode": "multiply",
                         "boost_mode": "multiply"
-                      }
+                    }
                 }
             }),
         },
