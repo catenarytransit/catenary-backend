@@ -379,7 +379,7 @@ pub async fn text_search_v1(
                                     def rt = doc['route_type'].value;
                                     if (rt == 3) {
                                       // bus -> stronger distance penalty
-                                      score = Math.pow(score, 2);
+                                      score = Math.pow(score, 1.3);
                                     } else {
                                       // rail/metro/tram/etc -> weaker distance penalty
                                       score = Math.sqrt(score);
@@ -442,7 +442,7 @@ pub async fn text_search_v1(
                                         def rt = doc['route_type'].value;
                                         if (rt == 3) {
                                           // bus -> stronger distance penalty
-                                          score = Math.pow(score, 2);
+                                          score = Math.pow(score, 1.3);
                                         } else {
                                           // rail/metro/tram/etc -> weaker distance penalty
                                           score = Math.sqrt(score);
