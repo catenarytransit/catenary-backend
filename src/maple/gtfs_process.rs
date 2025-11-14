@@ -120,6 +120,9 @@ pub async fn gtfs_process_feed(
     //read the GTFS zip file
     let path = format!("{}/{}", gtfs_unzipped_path, feed_id);
 
+    // Fix route colors before processing
+    let _ = crate::gtfs_handlers::route_file_fixer::fix_gtfs_route_colors(&path);
+
     match feed_id {
         "f-u05-tcl~systral" => {
             let _ = execute_pfaedle(
