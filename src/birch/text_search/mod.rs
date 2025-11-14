@@ -333,7 +333,9 @@ pub async fn text_search_v1(
             }
         });
 
-        cleaned_query_text = cleaned_query_text.replace("subway", "").replace("metro", "");
+        cleaned_query_text = cleaned_query_text
+            .replace("subway", "")
+            .replace("metro", "");
     }
 
     let cleaned_query_text = cleaned_query_text.trim().to_string();

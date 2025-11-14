@@ -330,8 +330,7 @@ pub async fn gtfs_process_feed(
             let mut gtfs_routes_new: HashMap<String, gtfs_structures::Route> = HashMap::new();
 
             for (route_id, route) in gtfs.routes.iter() {
-                if route_id.contains("-")
-                  { 
+                if route_id.contains("-") {
                     cut_route_ids.insert(route_id.to_string());
 
                     let new_route_id = route_id.split('-').collect::<Vec<&str>>()[0].to_string();
@@ -340,25 +339,22 @@ pub async fn gtfs_process_feed(
 
                     route.id = new_route_id.clone();
                     gtfs_routes_new.insert(new_route_id, route);
-                  } else {
+                } else {
                     gtfs_routes_new.insert(route_id.to_string(), route.clone());
-                  }
+                }
             }
 
             gtfs.routes = gtfs_routes_new;
 
             for (trip_id, trip) in gtfs.trips.iter_mut() {
                 if cut_route_ids.contains(&trip.route_id) {
-                    let new_route_id = trip
-                        .route_id
-                        .split('-')
-                        .collect::<Vec<&str>>()[0]
-                        .to_string();
+                    let new_route_id =
+                        trip.route_id.split('-').collect::<Vec<&str>>()[0].to_string();
                     trip.route_id = new_route_id;
                 }
             }
 
-            gtfs       
+            gtfs
         }
 
         "f-los~angeles~international~airport~shuttle" => {
@@ -1317,8 +1313,6 @@ pub async fn gtfs_process_feed(
                 },
             };
 
-            
-
             if let Some(default_lang) = &default_lang {
                 if let Some(short_name) = &route.short_name {
                     if let Ok(lang_tag) = LanguageTag::parse(default_lang.as_str()) {
@@ -1353,7 +1347,7 @@ pub async fn gtfs_process_feed(
 
             if important_points.len() > 1 {
                 insertable_elastic
-                .push(json!({"index": {"_index": "routes", "_id": elastic_id}}).into());
+                    .push(json!({"index": {"_index": "routes", "_id": elastic_id}}).into());
                 insertable_elastic.push(
                     json!({
                         "chateau": chateau_id.to_string(),
