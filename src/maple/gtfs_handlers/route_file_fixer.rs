@@ -26,9 +26,7 @@ pub fn fix_gtfs_route_colors<P: AsRef<Path>>(gtfs_folder: P) -> Result<(), Box<d
         return Ok(());
     }
 
-    let mut wtr = WriterBuilder::new()
-        .flexible(true)
-        .from_path(&temp_path)?;
+    let mut wtr = WriterBuilder::new().flexible(true).from_path(&temp_path)?;
 
     // Write headers back unchanged
     wtr.write_record(&headers)?;

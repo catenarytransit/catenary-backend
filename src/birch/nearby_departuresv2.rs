@@ -774,26 +774,38 @@ pub async fn nearby_from_coords_v2(
 
     let itineraries_timer = Instant::now();
 
+    let pool_clone = pool.clone();
+
     let new_seek_itinerary_list =
         futures::stream::iter(itineraries_and_seq_to_lookup_join.into_iter().map(
             |(chateau, itin_id, stop_seq)| {
-                catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                    .filter(
-                        catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(chateau.clone()),
-                    )
-                    .filter(
-                        catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id
-                            .eq(itin_id.clone()),
-                    )
-                    .filter(
-                        catenary::schema::gtfs::itinerary_pattern::dsl::stop_sequence
-                            .eq(stop_seq as i32),
-                    )
-                    .select(catenary::models::ItineraryPatternRow::as_select())
-                    .first::<catenary::models::ItineraryPatternRow>(conn)
+                let conn_clone = pool_clone.clone();
+                async move {
+                    let conn = conn_clone.get().await;
+                    match conn {
+                        Ok(mut conn) => {
+                            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                                .filter(
+                                    catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(chateau.clone()),
+                                )
+                                .filter(
+                                    catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id
+                                        .eq(itin_id.clone()),
+                                )
+                                .filter(
+                                    catenary::schema::gtfs::itinerary_pattern::dsl::stop_sequence
+                                        .eq(stop_seq as i32),
+                                )
+                                .select(catenary::models::ItineraryPatternRow::as_select())
+                                .first::<catenary::models::ItineraryPatternRow>(&mut conn)
+                                .await
+                        }
+                        Err(_) => Err(diesel::result::Error::NotFound),
+                    }
+                }
             },
         ))
-        .buffer_unordered(64)
+        .buffer_unordered(32)
         .collect::<Vec<diesel::QueryResult<ItineraryPatternRow>>>()
         .await;
 
