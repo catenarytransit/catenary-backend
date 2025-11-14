@@ -12,6 +12,7 @@ use actix_web::Responder;
 use actix_web::web;
 use actix_web::web::Query;
 use ahash::AHashMap;
+use ahash::AHashSet;
 use catenary::CalendarUnified;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::AspenRpcClient;
@@ -818,7 +819,7 @@ pub async fn nearby_from_coords_v2(
 
     // println!("Itins: {:#?}", seek_for_itineraries);
 
-    let mut itins_per_chateau: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut itins_per_chateau: HashMap<String, AHashSet<String>> = HashMap::new();
 
     //(chateau, itinerary_pattern_id) -> ItineraryPatternRowMerge
     let mut itinerary_table: AHashMap<(String, String), Vec<ItineraryPatternRowMerge>> =
@@ -832,7 +833,7 @@ pub async fn nearby_from_coords_v2(
                         oe.get_mut().insert(itinerary.itinerary_pattern_id.clone());
                     }
                     Entry::Vacant(mut ve) => {
-                        ve.insert(HashSet::from_iter([itinerary.itinerary_pattern_id.clone()]));
+                        ve.insert(AHashSet::from_iter([itinerary.itinerary_pattern_id.clone()]));
                     }
                 }
 
