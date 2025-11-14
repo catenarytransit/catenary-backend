@@ -505,7 +505,7 @@ impl AspenRpc for AspenServer {
                     _ => gtfs_rt_feed,
                 });
 
-            if realtime_feed_id == "f-metro~losangeles~bus~rt" {
+            if realtime_feed_id == "f-metro~losangeles~bus~rt" || realtime_feed_id == "f-r7h-translink~rt" {
                 if let Some(v) = &mut vehicles_gtfs_rt {
                     //remove anything from the route id that is the hyphen - or after
 
@@ -562,7 +562,7 @@ impl AspenRpc for AspenServer {
                     _ => gtfs_rt_feed,
                 });
 
-            if realtime_feed_id == "f-metro~losangeles~bus~rt" {
+            if realtime_feed_id == "f-metro~losangeles~bus~rt" || "f-r7h-translink~rt" == realtime_feed_id {
                 if let Some(t) = &mut trips_gtfs_rt {
                     //remove anything from the route id that is the hyphen - or after
 
@@ -611,7 +611,7 @@ impl AspenRpc for AspenServer {
                 }
             }
 
-            if realtime_feed_id == "f-metro~losangeles~bus~rt" {
+            if realtime_feed_id == "f-metro~losangeles~bus~rt" || "f-r7h-translink~rt" == realtime_feed_id {
                 if let Some(a) = &mut alerts_gtfs_rt {
                     //remove anything from the route id that is the hyphen - or after
 
