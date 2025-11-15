@@ -812,6 +812,7 @@ async fn main() -> std::io::Result<()> {
             .service(other_stops)
             .service(other_stops_meta)
             .service(chateaus_no_geom)
+            .service(count_rail_in_box)
             .service(api_key_management::get_realtime_keys)
             .service(api_key_management::set_realtime_key)
             .service(api_key_management::export_realtime_keys)

@@ -17,6 +17,67 @@ use tilejson::TileJSON;
 
 // smaller simplification threshold means more detail
 
+#[derive(Deserialize)]
+struct BboxForPostgis {
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+}
+
+#[derive(Serialize)]
+struct CountShapesResponse {
+    intercityrail_shapes: usize,
+    metro_shapes: usize,
+    tram_shapes: usize,
+}
+
+#[actix_web::get("/countrailinbox")]
+pub async fn count_rail_in_box(
+    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    req: HttpRequest,
+    query: web::Query<BboxForPostgis>,
+) -> impl Responder {
+    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+
+    let query_str = "SELECT count(DISTINCT routes) FROM gtfs.shapes WHERE ST_Intersects(linestring, ST_MakeEnvelope($1, $2, $3, $4, 4326)) AND route_type = $5";
+
+    let intercityrail_shapes_fut = sqlx::query_scalar::<_, i64>(query_str)
+        .bind(query.min_x)
+        .bind(query.min_y)
+        .bind(query.max_x)
+        .bind(query.max_y)
+        .bind(2)
+        .fetch_one(sqlx_pool_ref);
+
+    let metro_shapes_fut = sqlx::query_scalar::<_, i64>(query_str)
+        .bind(query.min_x)
+        .bind(query.min_y)
+        .bind(query.max_x)
+        .bind(query.max_y)
+        .bind(1)
+        .fetch_one(sqlx_pool_ref);
+
+    let tram_shapes_fut = sqlx::query_scalar::<_, i64>(query_str)
+        .bind(query.min_x)
+        .bind(query.min_y)
+        .bind(query.max_x)
+        .bind(query.max_y)
+        .bind(0)
+        .fetch_one(sqlx_pool_ref);
+
+    let (intercityrail_shapes, metro_shapes, tram_shapes) = futures::join!(intercityrail_shapes_fut, metro_shapes_fut, tram_shapes_fut);
+
+    let resp = CountShapesResponse {
+        intercityrail_shapes: intercityrail_shapes.unwrap_or(0) as usize,
+        metro_shapes: metro_shapes.unwrap_or(0) as usize,
+        tram_shapes: tram_shapes.unwrap_or(0) as usize,
+    };
+
+    HttpResponse::Ok().json(resp)
+}
+
 #[actix_web::get("/busstops")]
 pub async fn bus_stops_meta(req: HttpRequest) -> impl Responder {
     let mut fields = std::collections::BTreeMap::new();
