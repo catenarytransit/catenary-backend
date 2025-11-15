@@ -17,6 +17,7 @@ use gtfs_translations::TranslationResult;
 use gtfs_translations::translation_csv_text_to_translations;
 use itertools::Itertools;
 use language_tags::LanguageTag;
+use regex::Regex;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -43,6 +44,7 @@ pub async fn stops_into_postgres_and_elastic(
     let mut stops_finished_chunks_array = Vec::new();
 
     let mut stops_finished_chunks_arrays_array_elasticsearch: Vec<Vec<JsonBody<_>>> = Vec::new();
+    let platform_regex = Regex::new(r",? Platform \d+").unwrap();
 
     let avaliable_langs_to_check = gtfs_translations.map(|translations_export| {
         translations_export
@@ -58,9 +60,8 @@ pub async fn stops_into_postgres_and_elastic(
 
         for (stop_id, stop) in chunk {
             let name: Option<String> = titlecase_process_new(stop.name.as_ref()).map(|x| {
-                x.replace("Fermata ", "")
-                //        .replace("LAX / Metro", "Kyler Chin LAX")
-                //       .replace("LAX/Metro", "Kyler Chin LAX")
+                let cleaned = x.replace("Fermata ", "");
+                platform_regex.replace_all(&cleaned, "").to_string()
             });
             let display_name: Option<String> = name.as_ref().map(|name| {
                 name.clone()
