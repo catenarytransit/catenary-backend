@@ -594,24 +594,35 @@ pub async fn nearby_from_coords_v2(
             .join(",")
     );*/
 
-    let directions_meta_search_list = futures::stream::iter(direction_ids_to_lookup.iter().map(
-        |(chateau, set_of_directions)| {
-            catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
-                .filter(
-                    catenary::schema::gtfs::direction_pattern_meta::dsl::chateau
-                        .eq(chateau.clone()),
-                )
-                .filter(
-                    catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_id
-                        .eq_any(set_of_directions),
-                )
-                .select(catenary::models::DirectionPatternMeta::as_select())
-                .load::<catenary::models::DirectionPatternMeta>(conn)
-        },
-    ))
-    .buffer_unordered(32)
-    .collect::<Vec<diesel::QueryResult<Vec<DirectionPatternMeta>>>>()
-    .await;
+    let directions_meta_search_list =
+        futures::stream::iter(direction_ids_to_lookup.iter().map(|(chateau, set_of_directions)| {
+            let pool_clone = pool.clone();
+            let chateau = chateau.clone();
+            let set_of_directions = set_of_directions.clone();
+            async move {
+                let conn = pool_clone.get().await;
+                match conn {
+                    Ok(mut conn) => {
+                        catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                            .filter(
+                                catenary::schema::gtfs::direction_pattern_meta::dsl::chateau
+                                    .eq(chateau),
+                            )
+                            .filter(
+                                catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_id
+                                    .eq_any(set_of_directions),
+                            )
+                            .select(catenary::models::DirectionPatternMeta::as_select())
+                            .load::<catenary::models::DirectionPatternMeta>(&mut conn)
+                            .await
+                    }
+                    Err(_) => Err(diesel::result::Error::NotFound),
+                }
+            }
+        }))
+        .buffer_unordered(32)
+        .collect::<Vec<diesel::QueryResult<Vec<DirectionPatternMeta>>>>()
+        .await;
 
     let mut direction_meta_lookup_table: HashMap<String, HashMap<String, DirectionPatternMeta>> =
         HashMap::new();
@@ -639,30 +650,39 @@ pub async fn nearby_from_coords_v2(
 
     let itin_meta_timer = Instant::now();
 
-    let itineraries_meta_search_list =
-        futures::stream::iter(hashmap_of_directions_lookup.iter().map(
-            |(chateau, set_of_directions)| {
-                catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                    .filter(
-                        catenary::schema::gtfs::itinerary_pattern_meta::dsl::chateau
-                            .eq(chateau.clone()),
-                    )
-                    .filter(
-                        catenary::schema::gtfs::itinerary_pattern_meta::dsl::direction_pattern_id
-                            .eq_any(
-                                set_of_directions
-                                    .iter()
-                                    .map(|x| x.0.clone())
-                                    .collect::<Vec<String>>(),
-                            ),
-                    )
-                    .select(catenary::models::ItineraryPatternMeta::as_select())
-                    .load::<catenary::models::ItineraryPatternMeta>(conn)
-            },
-        ))
-        .buffer_unordered(32)
-        .collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternMeta>>>>()
-        .await;
+    let itineraries_meta_search_list = futures::stream::iter(
+        hashmap_of_directions_lookup
+            .iter()
+            .map(|(chateau, set_of_directions)| {
+                let pool_clone = pool.clone();
+                let chateau = chateau.clone();
+                let direction_ids: Vec<String> =
+                    set_of_directions.iter().map(|x| x.0.clone()).collect();
+                async move {
+                    let conn = pool_clone.get().await;
+                    match conn {
+                        Ok(mut conn) => {
+                            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                                .filter(
+                                    catenary::schema::gtfs::itinerary_pattern_meta::dsl::chateau
+                                        .eq(chateau),
+                                )
+                                .filter(
+                                    catenary::schema::gtfs::itinerary_pattern_meta::dsl::direction_pattern_id
+                                        .eq_any(direction_ids),
+                                )
+                                .select(catenary::models::ItineraryPatternMeta::as_select())
+                                .load::<catenary::models::ItineraryPatternMeta>(&mut conn)
+                                .await
+                        }
+                        Err(_) => Err(diesel::result::Error::NotFound),
+                    }
+                }
+            }),
+    )
+    .buffer_unordered(32)
+    .collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternMeta>>>>()
+    .await;
 
     println!(
         "Finished getting itinerary metas in {:?}",
