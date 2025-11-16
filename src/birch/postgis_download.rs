@@ -67,7 +67,8 @@ pub async fn count_rail_in_box(
         .bind(0)
         .fetch_one(sqlx_pool_ref);
 
-    let (intercityrail_shapes, metro_shapes, tram_shapes) = futures::join!(intercityrail_shapes_fut, metro_shapes_fut, tram_shapes_fut);
+    let (intercityrail_shapes, metro_shapes, tram_shapes) =
+        futures::join!(intercityrail_shapes_fut, metro_shapes_fut, tram_shapes_fut);
 
     let resp = CountShapesResponse {
         intercityrail_shapes: intercityrail_shapes.unwrap_or(0) as usize,

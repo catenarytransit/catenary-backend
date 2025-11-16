@@ -853,7 +853,9 @@ pub async fn nearby_from_coords_v2(
                         oe.get_mut().insert(itinerary.itinerary_pattern_id.clone());
                     }
                     Entry::Vacant(mut ve) => {
-                        ve.insert(AHashSet::from_iter([itinerary.itinerary_pattern_id.clone()]));
+                        ve.insert(AHashSet::from_iter([itinerary
+                            .itinerary_pattern_id
+                            .clone()]));
                     }
                 }
 
