@@ -6,32 +6,34 @@ use prost::Message;
 use rand::Rng;
 use std::collections::HashSet;
 
+const HTTP_PROXY_ADDRESSES: &[&str] = &[
+    "4.239.94.226:3128",
+    "149.56.24.51:3128",
+    "16.52.47.20:3128",
+    "51.79.80.224:3535",
+    "167.114.98.246:9595",
+    "15.223.57.73:3128",
+    "35.183.180.110:3128",
+    "158.69.59.135:80",
+    "69.70.244.34:80",
+    "23.132.28.133:3128",
+    "204.83.205.117:3128",
+    "74.48.160.189:3128",
+    "142.93.202.130:3128"
+];
+
 pub async fn fetch_rtc_data(
     etcd: &mut etcd_client::KvClient,
     feed_id: &str,
     gtfs: &gtfs_structures::Gtfs,
     client: &reqwest::Client,
 ) {
-    let http_proxy_addresses = [
-        "4.239.94.226:3128",
-        "149.56.24.51:3128",
-        "16.52.47.20:3128",
-        "51.79.80.224:3535",
-        "167.114.98.246:9595",
-        "15.223.57.73:3128",
-        "35.183.180.110:3128",
-        "158.69.59.135:80",
-        "69.70.244.34:80",
-        "23.132.28.133:3128",
-        "204.83.205.117:3128",
-    ];
-
     //test proxy addresses, filter out the ones that don't work
 
     let mut working_proxies = Vec::new();
     let mut futures = Vec::new();
 
-    for proxy in http_proxy_addresses.iter() {
+    for proxy in HTTP_PROXY_ADDRESSES.iter() {
         let proxy = proxy.to_string();
         let future = async move {
             let proxy_url = proxy.clone();
@@ -201,5 +203,48 @@ pub async fn fetch_rtc_data(
         }
     } else {
         println!("No assigned node found for Rtc Quebec");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::future::join_all;
+
+    #[tokio::test]
+  //  #[ignore] // This test makes network requests and can be slow.
+    async fn test_proxies() {
+        let mut futures = Vec::new();
+
+        for &proxy_address in HTTP_PROXY_ADDRESSES {
+            let future = async move {
+                let proxy = match reqwest::Proxy::http(proxy_address) {
+                    Ok(p) => p,
+                    Err(e) => return (proxy_address, Err(e.to_string())),
+                };
+                let client = reqwest::Client::builder()
+                    .proxy(proxy)
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build()
+                    .unwrap();
+
+                match client.get("https://api.ipify.org").send().await {
+                    Ok(res) if res.status().is_success() => (proxy_address, Ok(())),
+                    Ok(res) => (proxy_address, Err(format!("Status: {}", res.status()))),
+                    Err(e) => (proxy_address, Err(e.to_string())),
+                }
+            };
+            futures.push(future);
+        }
+
+        let results = join_all(futures).await;
+
+        for (proxy, result) in results {
+            if let Err(e) = result {
+                println!("Proxy {} failed: {}", proxy, e);
+            } else {
+                println!("Proxy {} is working.", proxy);
+            }
+        }
     }
 }
