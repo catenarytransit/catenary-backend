@@ -234,7 +234,6 @@ async fn routesofchateau(
         .body(serde_json::to_string(&routes).unwrap())
 }
 
-
 #[derive(Deserialize)]
 struct RouteFetchParamsV2 {
     pub agency_filter: Option<Vec<String>>,
@@ -244,15 +243,14 @@ struct RouteFetchParamsV2 {
 #[actix_web::post("/getroutesofchateauwithagencyv2")]
 async fn routesofchateauwithagencyv2(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
-    path: web::Path<String>,
-    params: web::Json<RouteFetchParams>,
+    params: web::Json<RouteFetchParamsV2>,
     req: HttpRequest,
 ) -> impl Responder {
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
 
-    let chateau_id = path.into_inner();
+    let chateau_id = params.chateau.clone();
 
     use catenary::schema::gtfs::routes as routes_pg_schema;
 
