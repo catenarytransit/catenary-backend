@@ -158,13 +158,38 @@ pub async fn departures_at_stop(
 
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
-    let mut etcd = etcd_client::Client::connect(
-        etcd_connection_ips.ip_addresses.as_slice(),
-        etcd_connection_options.as_ref().as_ref().to_owned(),
-    )
-    .await
-    .unwrap();
+    let etcd_reuser = etcd_reuser.as_ref();
+
+    let mut etcd = None;
+    {
+        let etcd_reuser_contents = etcd_reuser.read().await;
+        let mut client_is_healthy = false;
+        if let Some(client) = etcd_reuser_contents.as_ref() {
+            let mut client = client.clone();
+
+            if client.status().await.is_ok() {
+                etcd = Some(client.clone());
+                client_is_healthy = true;
+            }
+        }
+
+        if !client_is_healthy {
+            drop(etcd_reuser_contents);
+            let new_client = etcd_client::Client::connect(
+                etcd_connection_ips.ip_addresses.as_slice(),
+                etcd_connection_options.as_ref().as_ref().to_owned(),
+            )
+            .await
+            .unwrap();
+            etcd = Some(new_client.clone());
+            let mut etcd_reuser_write_lock = etcd_reuser.write().await;
+            *etcd_reuser_write_lock = Some(new_client);
+        }
+    }
+
+    let mut etcd = etcd.unwrap();
 
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
