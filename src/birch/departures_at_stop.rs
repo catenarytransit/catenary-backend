@@ -34,8 +34,8 @@ use diesel::sql_types::Bool;
 use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
 use ecow::EcoString;
-use geo::coord;
 use futures::future::join_all;
+use geo::coord;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -384,7 +384,8 @@ pub async fn departures_at_stop(
                 .await
                 .unwrap_or_default();
 
-            let mut itins_btreemap = BTreeMap::<String, Vec<catenary::models::ItineraryPatternRow>>::new();
+            let mut itins_btreemap =
+                BTreeMap::<String, Vec<catenary::models::ItineraryPatternRow>>::new();
             for itin in itins.iter() {
                 itins_btreemap
                     .entry(itin.itinerary_pattern_id.clone())
@@ -394,15 +395,23 @@ pub async fn departures_at_stop(
 
             let itinerary_list: Vec<String> = itins_btreemap.keys().cloned().collect();
 
-            let itin_meta = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau_id.clone()))
-                .filter(catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id.eq_any(&itinerary_list))
-                .select(catenary::models::ItineraryPatternMeta::as_select())
-                .load::<catenary::models::ItineraryPatternMeta>(&mut conn)
-                .await
-                .unwrap_or_default();
+            let itin_meta =
+                catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern_meta::chateau
+                            .eq(chateau_id.clone()),
+                    )
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id
+                            .eq_any(&itinerary_list),
+                    )
+                    .select(catenary::models::ItineraryPatternMeta::as_select())
+                    .load::<catenary::models::ItineraryPatternMeta>(&mut conn)
+                    .await
+                    .unwrap_or_default();
 
-            let mut itin_meta_btreemap = BTreeMap::<String, catenary::models::ItineraryPatternMeta>::new();
+            let mut itin_meta_btreemap =
+                BTreeMap::<String, catenary::models::ItineraryPatternMeta>::new();
             for itin in &itin_meta {
                 itin_meta_btreemap.insert(itin.itinerary_pattern_id.clone(), itin.clone());
             }
@@ -412,26 +421,38 @@ pub async fn departures_at_stop(
                 .filter_map(|x| x.direction_pattern_id.clone())
                 .collect();
 
-            let direction_meta = catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
-                .filter(catenary::schema::gtfs::direction_pattern_meta::chateau.eq(chateau_id.clone()))
-                .filter(catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id.eq_any(&direction_ids_to_search))
-                .select(catenary::models::DirectionPatternMeta::as_select())
-                .load::<catenary::models::DirectionPatternMeta>(&mut conn)
-                .await
-                .unwrap_or_default();
+            let direction_meta =
+                catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                    .filter(
+                        catenary::schema::gtfs::direction_pattern_meta::chateau
+                            .eq(chateau_id.clone()),
+                    )
+                    .filter(
+                        catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id
+                            .eq_any(&direction_ids_to_search),
+                    )
+                    .select(catenary::models::DirectionPatternMeta::as_select())
+                    .load::<catenary::models::DirectionPatternMeta>(&mut conn)
+                    .await
+                    .unwrap_or_default();
 
-            let mut direction_meta_btreemap = BTreeMap::<String, catenary::models::DirectionPatternMeta>::new();
+            let mut direction_meta_btreemap =
+                BTreeMap::<String, catenary::models::DirectionPatternMeta>::new();
             let mut shape_ids_to_fetch_for_this_chateau = BTreeSet::new();
             for direction in &direction_meta {
                 if let Some(shape_id) = &direction.gtfs_shape_id {
                     shape_ids_to_fetch_for_this_chateau.insert(shape_id.clone());
                 }
-                direction_meta_btreemap.insert(direction.direction_pattern_id.clone(), direction.clone());
+                direction_meta_btreemap
+                    .insert(direction.direction_pattern_id.clone(), direction.clone());
             }
 
             let shapes_result = catenary::schema::gtfs::shapes::dsl::shapes
                 .filter(catenary::schema::gtfs::shapes::chateau.eq(chateau_id.clone()))
-                .filter(catenary::schema::gtfs::shapes::shape_id.eq_any(&shape_ids_to_fetch_for_this_chateau))
+                .filter(
+                    catenary::schema::gtfs::shapes::shape_id
+                        .eq_any(&shape_ids_to_fetch_for_this_chateau),
+                )
                 .load::<catenary::models::Shape>(&mut conn)
                 .await
                 .unwrap_or_default();
@@ -440,29 +461,45 @@ pub async fn departures_at_stop(
             for db_shape in shapes_result {
                 let shape_polyline = polyline::encode_coordinates(
                     geo::LineString::new(
-                        db_shape.linestring.points.iter().map(|point| coord! { x: point.x, y: point.y }).collect::<Vec<_>>(),
+                        db_shape
+                            .linestring
+                            .points
+                            .iter()
+                            .map(|point| coord! { x: point.x, y: point.y })
+                            .collect::<Vec<_>>(),
                     ),
                     5,
-                ).unwrap();
+                )
+                .unwrap();
                 shape_polyline_for_chateau.insert(db_shape.shape_id.clone().into(), shape_polyline);
             }
 
-            let direction_row_query = catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
-                .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_id.clone()))
-                .filter(catenary::schema::gtfs::direction_pattern::direction_pattern_id.eq_any(&direction_ids_to_search))
-                .select(catenary::models::DirectionPatternRow::as_select())
-                .load::<catenary::models::DirectionPatternRow>(&mut conn)
-                .await
-                .unwrap_or_default();
+            let direction_row_query =
+                catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+                    .filter(
+                        catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_id.clone()),
+                    )
+                    .filter(
+                        catenary::schema::gtfs::direction_pattern::direction_pattern_id
+                            .eq_any(&direction_ids_to_search),
+                    )
+                    .select(catenary::models::DirectionPatternRow::as_select())
+                    .load::<catenary::models::DirectionPatternRow>(&mut conn)
+                    .await
+                    .unwrap_or_default();
 
-            let mut direction_rows_for_chateau = BTreeMap::<String, Vec<catenary::models::DirectionPatternRow>>::new();
+            let mut direction_rows_for_chateau =
+                BTreeMap::<String, Vec<catenary::models::DirectionPatternRow>>::new();
             for direction_row in direction_row_query {
-                let entry = direction_rows_for_chateau.entry(direction_row.direction_pattern_id.clone()).or_insert_with(Vec::new);
+                let entry = direction_rows_for_chateau
+                    .entry(direction_row.direction_pattern_id.clone())
+                    .or_insert_with(Vec::new);
                 entry.push(direction_row);
                 entry.sort_by_key(|x| x.stop_sequence);
             }
 
-            let route_ids: Vec<CompactString> = itin_meta.iter().map(|x| x.route_id.clone()).collect();
+            let route_ids: Vec<CompactString> =
+                itin_meta.iter().map(|x| x.route_id.clone()).collect();
 
             let routes_ret = catenary::schema::gtfs::routes::dsl::routes
                 .filter(catenary::schema::gtfs::routes::chateau.eq(chateau_id.clone()))
@@ -479,18 +516,23 @@ pub async fn departures_at_stop(
 
             let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
                 .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_id.clone()))
-                .filter(catenary::schema::gtfs::trips_compressed::itinerary_pattern_id.eq_any(&itinerary_list))
+                .filter(
+                    catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                        .eq_any(&itinerary_list),
+                )
                 .select(catenary::models::CompressedTrip::as_select())
                 .load::<catenary::models::CompressedTrip>(&mut conn)
                 .await
                 .unwrap_or_default();
 
-            let mut trip_compressed_btreemap = BTreeMap::<String, catenary::models::CompressedTrip>::new();
+            let mut trip_compressed_btreemap =
+                BTreeMap::<String, catenary::models::CompressedTrip>::new();
             for trip in &trips {
                 trip_compressed_btreemap.insert(trip.trip_id.clone(), trip.clone());
             }
 
-            let service_ids_to_search: BTreeSet<CompactString> = trips.iter().map(|x| x.service_id.clone()).collect();
+            let service_ids_to_search: BTreeSet<CompactString> =
+                trips.iter().map(|x| x.service_id.clone()).collect();
 
             let calendar = catenary::schema::gtfs::calendar::dsl::calendar
                 .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_id.clone()))
@@ -502,7 +544,10 @@ pub async fn departures_at_stop(
 
             let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
                 .filter(catenary::schema::gtfs::calendar_dates::chateau.eq(chateau_id.clone()))
-                .filter(catenary::schema::gtfs::calendar_dates::service_id.eq_any(&service_ids_to_search))
+                .filter(
+                    catenary::schema::gtfs::calendar_dates::service_id
+                        .eq_any(&service_ids_to_search),
+                )
                 .select(catenary::models::CalendarDate::as_select())
                 .load::<catenary::models::CalendarDate>(&mut conn)
                 .await
@@ -678,7 +723,10 @@ pub async fn departures_at_stop(
     for (chateau_id, trips_compressed_data) in &trip_compressed_btreemap_by_chateau {
         if let Some(chateau_metadata_for_c) = chateau_metadata.get(chateau_id) {
             let chateau_id = chateau_id.clone();
-            let trips_to_get = trips_compressed_data.keys().cloned().collect::<Vec<String>>();
+            let trips_to_get = trips_compressed_data
+                .keys()
+                .cloned()
+                .collect::<Vec<String>>();
             let socket = chateau_metadata_for_c.socket.clone();
 
             aspen_futures.push(async move {
@@ -690,8 +738,13 @@ pub async fn departures_at_stop(
                     }
                 };
 
-                let alerts_future = client.get_all_alerts(tarpc::context::current(), chateau_id.clone());
-                let trips_future = client.get_all_trips_with_ids(tarpc::context::current(), chateau_id.clone(), trips_to_get);
+                let alerts_future =
+                    client.get_all_alerts(tarpc::context::current(), chateau_id.clone());
+                let trips_future = client.get_all_trips_with_ids(
+                    tarpc::context::current(),
+                    chateau_id.clone(),
+                    trips_to_get,
+                );
 
                 let (alerts_res, trips_res) = tokio::join!(alerts_future, trips_future);
 
