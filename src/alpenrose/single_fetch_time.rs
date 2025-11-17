@@ -555,6 +555,7 @@ pub async fn single_fetch_time(
                                             &client,
                                             chicago_text_str.as_str(),
                                             chicago_gtfs,
+                                            &assignment,
                                         )
                                         .await;
                                     }

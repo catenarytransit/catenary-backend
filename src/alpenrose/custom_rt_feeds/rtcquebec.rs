@@ -216,7 +216,7 @@ mod tests {
     use futures::future::join_all;
 
     #[tokio::test]
-  //  #[ignore] // This test makes network requests and can be slow.
+    //  #[ignore] // This test makes network requests and can be slow.
     async fn test_proxies() {
         let mut futures = Vec::new();
 
