@@ -85,6 +85,8 @@ use std::io::Read;
 use std::io::Write;
 use std::time::Instant;
 
+mod track_number;
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct GtfsRealtimeHashStore {
     vehicles: Option<u64>,
