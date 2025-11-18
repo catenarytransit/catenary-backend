@@ -87,6 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
                 valid_gtfs: false,
                 time_to_download_ms: None,
                 byte_size: None,
+                url: staticfeed.url.clone(),
             };
 
             async move {

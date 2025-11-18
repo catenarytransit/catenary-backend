@@ -438,8 +438,12 @@ pub async fn download_return_eligible_feeds(
                                                         .find(|&x| x.ingested && !x.mark_for_redo);
 
                                                      if check_for_previous_insert_sucesses.is_some() {
-                                            //println!("{} already inserted from girolle hash", &staticfeed.feed_id);
-                                            skip_due_to_girolle = true;
+                                                      //println!("{} already inserted from girolle hash", &staticfeed.feed_id);
+
+                                                       if staticfeed.url.as_str() == girolle_for_this_feed.url.as_str() {
+                                                    
+                                                             skip_due_to_girolle = true;
+                                                             }
                                         }
                                         }
 

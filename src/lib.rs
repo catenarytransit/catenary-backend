@@ -1003,4 +1003,5 @@ pub struct GirolleFeedDownloadResult {
     pub valid_gtfs: bool,
     pub time_to_download_ms: Option<u64>,
     pub byte_size: Option<usize>,
+    pub url: String,
 }
