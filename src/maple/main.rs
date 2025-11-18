@@ -196,15 +196,26 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let girolle_data = match reqwest::get("https://github.com/catenarytransit/girolle-run/releases/download/latest/girolle-results.txt").await {
         Ok(response) => {
             let body = response.text().await?;
-            let girolle_data: BTreeMap<String, GirolleFeedDownloadResult> = ron::from_str(body.as_str())?;
+            let girolle_data = ron::from_str::<BTreeMap<String, GirolleFeedDownloadResult>>(body.as_str());
+
+            match girolle_data {
+                Ok(girolle_data) =>  {
+
 
             let girolle_data = girolle_data.into_iter().filter(|(_feed_id, feed_data)| {
                 //filter to only valid gtfs feeds
                 feed_data.valid_gtfs
             }).collect::<BTreeMap<String, GirolleFeedDownloadResult>>();
 
+
             Some(girolle_data)
         },
+        Err(e) =>  {
+            eprintln!("error reading girolle data");
+            
+            None
+        }}
+    }
         _ => None
     };
 
