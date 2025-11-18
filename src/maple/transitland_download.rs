@@ -375,6 +375,11 @@ pub async fn download_return_eligible_feeds(
             let total_feeds_to_download = feeds_to_download.len();
             use futures::StreamExt;
 
+            println!(
+                "Downloading {} feeds with {} threads",
+                total_feeds_to_download, threads
+            );
+
             //allow various compression algorithms to be used during the download process, as enabled in Cargo.toml
             let client = make_reqwest_client();
 
