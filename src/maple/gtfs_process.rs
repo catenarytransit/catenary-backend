@@ -237,6 +237,15 @@ pub async fn gtfs_process_feed(
             gtfs.print_stats();
             gtfs
         }
+        "f-dr5-nj~transit~rail~no~realtime" => {
+            let route_types = vec![gtfs_structures::RouteType::Tramway];
+
+            let gtfs = include_only_route_types(gtfs, route_types, true);
+
+            println!("Filtered NJ Light Rail");
+            gtfs.print_stats();
+            gtfs
+        }
         "f-amtrak~sanjoaquin" => {
             let mut gtfs = gtfs;
 
