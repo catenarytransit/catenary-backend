@@ -56,6 +56,24 @@ pub fn include_only_route_types(
         }
     }
 
+    let mut stop_ids_to_add = BTreeSet::new();
+
+    for stop_id in &keep_stop_ids {
+        if let Some(stop) = gtfs.stops.get(stop_id) {
+            if let Some(parent_station_id) = &stop.parent_station {
+                stop_ids_to_add.insert(parent_station_id.clone());
+
+                if let Some(parent_stop) = gtfs.stops.get(parent_station_id) {
+                    if let Some(grandparent_station_id) = &parent_stop.parent_station {
+                        stop_ids_to_add.insert(grandparent_station_id.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    keep_stop_ids.extend(stop_ids_to_add);
+
     // remove data that are not needed
 
     gtfs.routes = gtfs
