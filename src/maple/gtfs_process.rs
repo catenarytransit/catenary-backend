@@ -265,6 +265,15 @@ pub async fn gtfs_process_feed(
             gtfs.print_stats();
             gtfs
         }
+        "f-hongkong~justusewheels" => {
+            let route_types = vec![gtfs_structures::RouteType::Subway];
+
+            let gtfs = include_only_route_types(gtfs, route_types, true);
+
+            let mut gtfs = gtfs;
+
+            gtfs
+        }
         "f-amtrak~sanjoaquin" => {
             let mut gtfs = gtfs;
 
