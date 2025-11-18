@@ -51,6 +51,19 @@ pub fn fix_background_colour_rgb_feed_route(
             "GreenLine" => RGB::new(88, 140, 50),
             _ => fix_background_colour_rgb(background),
         },
+        "f-hongkong~justusewheels" => match route.id.as_str() {
+            "MTR-TCL" => RGB::new(243, 152, 45),  // F3982D
+            "MTR-TML" => RGB::new(156, 46, 0),    // 9C2E00
+            "MTR-TWL" => RGB::new(230, 0, 18),    // E60012
+            "MTR-TKL" => RGB::new(126, 60, 147),  // 7E3C93
+            "MTR-ISL" => RGB::new(0, 117, 194),   // 0075C2
+            "MTR-DRL" => RGB::new(235, 110, 165), // EB6EA5
+            "MTR-KTL" => RGB::new(0, 160, 64),    // 00A040
+            "MTR-EAL" => RGB::new(94, 183, 232),  // 5EB7E8
+            "MTR-SIL" => RGB::new(203, 211, 0),   // CBD300
+            "MTR-AEL" => RGB::new(0, 136, 142),   // 00888E
+            _ => fix_background_colour_rgb(background),
+        },
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
             match &route.short_name {
                 Some(short_name) => match &route.desc.as_deref() {
