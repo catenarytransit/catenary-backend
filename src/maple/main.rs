@@ -184,12 +184,12 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let gtfs_uncompressed_temp_storage = std::env::var("GTFS_UNCOMPRESSED_TEMP").expect("Missing GTFS_UNCOMPRESSED_TEMP env variable. Please give a path to store gtfs uncompressed files.");
 
     // get connection pool from database pool
-    let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
+    let conn_pool: CatenaryPostgresPool = make_async_pool().await.unwrap();
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
 
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
-    let conn = &mut conn_pre?;
+    let conn = &mut conn_pre.unwrap();
 
     //Download Girolle data if it exists and deserialise it with Ron Btreemap<string, girollefeeddownloadresult>
 
