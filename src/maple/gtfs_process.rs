@@ -253,19 +253,13 @@ pub async fn gtfs_process_feed(
 
             let mut gtfs = gtfs;
 
-            let route_ids_to_delete = vec![
-                "HBLR",
-                "NLR",
-                "PRIB",
-                "RvLN",
-            ];
+            let route_ids_to_delete = vec!["HBLR", "NLR", "PRIB", "RvLN"];
 
             gtfs.routes
                 .retain(|route_id, _| !route_ids_to_delete.contains(&route_id.as_str()));
 
-            gtfs.trips.retain(|trip_id, trip| {
-                !route_ids_to_delete.contains(&trip.route_id.as_str())
-            });
+            gtfs.trips
+                .retain(|trip_id, trip| !route_ids_to_delete.contains(&trip.route_id.as_str()));
 
             println!("Filtered NJ Light Rail Out");
             gtfs.print_stats();
