@@ -203,8 +203,7 @@ async fn try_to_download(
             .send()
             .await;
     }
-
-    /*
+    
     if feed_id == "f-dr5-nj~transit~rail" {
         let form = reqwest::multipart::Form::new()
             //i dont care, whatever, leak it, so what?
@@ -220,7 +219,7 @@ async fn try_to_download(
         let request = add_auth_headers(request, feed_id).await;
 
         return request.send().await;
-    }*/
+    }
 
     let new_url = match feed_id {
         "f-administration~des~transports~publics~du~luxembourg" => {
