@@ -1379,7 +1379,7 @@ pub async fn departures_at_stop(
                                 .map(|x| x.into()),
                         })
                     }
-                } } else {
+                } else {
                     let frequencies = valid_trip.frequencies.as_ref().unwrap();
 
                     // trip start time array
@@ -1629,26 +1629,31 @@ pub async fn departures_at_stop(
                                 for alert in chateau_alerts.values() {
                                     let effect_is_no_service = alert.effect == Some(1); // NO_SERVICE
                                     if effect_is_no_service {
-                                        let applies_to_trip = alert.informed_entity.iter().any(|e| {
-                                            let route_match = e
-                                                .route_id
-                                                .as_ref()
-                                                .map_or(false, |r_id| *r_id == valid_trip.route_id);
-                                            let trip_match = e.trip.as_ref().map_or(false, |t| {
-                                                t.trip_id
-                                                    .as_ref()
-                                                    .map_or(false, |t_id| *t_id == valid_trip.trip_id)
+                                        let applies_to_trip =
+                                            alert.informed_entity.iter().any(|e| {
+                                                let route_match =
+                                                    e.route_id.as_ref().map_or(false, |r_id| {
+                                                        *r_id == valid_trip.route_id
+                                                    });
+                                                let trip_match =
+                                                    e.trip.as_ref().map_or(false, |t| {
+                                                        t.trip_id.as_ref().map_or(false, |t_id| {
+                                                            *t_id == valid_trip.trip_id
+                                                        })
+                                                    });
+                                                route_match || trip_match
                                             });
-                                            route_match || trip_match
-                                        });
 
                                         if applies_to_trip {
                                             // Use the frequency specific start time for the event time calculation
                                             let event_time = valid_trip
                                                 .reference_start_of_service_date
-                                                .timestamp() as u64
+                                                .timestamp()
+                                                as u64
                                                 + scheduled_frequency_start_time as u64
-                                                + itin_option.departure_time_since_start.unwrap_or(0)
+                                                + itin_option
+                                                    .departure_time_since_start
+                                                    .unwrap_or(0)
                                                     as u64;
 
                                             let is_active = alert.active_period.iter().any(|ap| {
