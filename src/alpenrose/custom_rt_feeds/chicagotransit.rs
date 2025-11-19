@@ -57,13 +57,13 @@ pub async fn fetch_chicago_data(
                                             String::from(feed_id),
                                             Some(chicago_rt_data.vehicle_positions.encode_to_vec()),
                                             Some(chicago_rt_data.trip_updates.encode_to_vec()),
-                                            None,
+                                            Some(chicago_rt_data.alerts.encode_to_vec()),
                                             true,
                                             true,
-                                            false,
+                                            true,
                                             Some(200),
                                             Some(200),
-                                            None,
+                                            Some(200),
                                             duration_since_unix_epoch().as_millis() as u64,
                                         )
                                         .await;
