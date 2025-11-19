@@ -143,7 +143,7 @@ pub struct DepartureRouteGroup {
     pub short_name: Option<CompactString>,
     pub long_name: Option<String>,
     pub route_type: i16,
-    pub directions: HashMap<(String, Option<i16>), DepartingHeadsignGroup>,
+    pub directions: AHashMap<(String, Option<i16>), DepartingHeadsignGroup>,
     pub closest_distance: f64,
 }
 
@@ -248,7 +248,7 @@ pub struct DepartingTripsDataAnswer {
     pub bus_limited_metres: f64,
     pub rail_and_other_limited_metres: f64,
     pub departures: Vec<DepartureRouteGroupExport>,
-    pub stop: HashMap<String, AHashMap<CompactString, StopOutput>>,
+    pub stop: AHashMap<String, AHashMap<CompactString, StopOutput>>,
     pub alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>>,
     pub debug: DeparturesDebug,
 }
@@ -480,13 +480,13 @@ pub async fn nearby_from_coords_v2(
 
     let directions_rows = directions_fetch_sql.unwrap();
 
-    let mut direction_ids_to_lookup: HashMap<String, Vec<String>> = HashMap::new();
+    let mut direction_ids_to_lookup: AHashMap<String, Vec<String>> = AHashMap::new();
 
     //(chateau, stop_id) -> (direction_id, headsign_idx, stop_sequence)
-    let mut stops_to_directions_and_headsigns: HashMap<
+    let mut stops_to_directions_and_headsigns: AHashMap<
         (String, CompactString),
         Vec<(u64, Option<i16>, u32)>,
-    > = HashMap::new();
+    > = AHashMap::new();
 
     for d in directions_rows {
         let id = d.direction_pattern_id.parse::<u64>().unwrap();
@@ -536,10 +536,10 @@ pub async fn nearby_from_coords_v2(
 
     //sorting finished
 
-    let mut directions_with_headsign_to_closest_stop: HashMap<
+    let mut directions_with_headsign_to_closest_stop: AHashMap<
         (String, u64, Option<i16>),
         (CompactString, u32),
-    > = HashMap::new();
+    > = AHashMap::new();
 
     for ((chateau, stop_id), distance_m) in sorted_order_stops.iter() {
         let direction_at_this_stop =
@@ -624,8 +624,8 @@ pub async fn nearby_from_coords_v2(
         .collect::<Vec<diesel::QueryResult<Vec<DirectionPatternMeta>>>>()
         .await;
 
-    let mut direction_meta_lookup_table: HashMap<String, HashMap<String, DirectionPatternMeta>> =
-        HashMap::new();
+    let mut direction_meta_lookup_table: AHashMap<String, AHashMap<String, DirectionPatternMeta>> =
+        AHashMap::new();
 
     for result in directions_meta_search_list {
         if let Ok(result) = result {
@@ -633,7 +633,7 @@ pub async fn nearby_from_coords_v2(
                 match direction_meta_lookup_table.entry(row.chateau.clone()) {
                     Entry::Occupied(mut oe) => {}
                     Entry::Vacant(mut ve) => {
-                        ve.insert(HashMap::new());
+                        ve.insert(AHashMap::new());
                     }
                 }
 
@@ -692,11 +692,11 @@ pub async fn nearby_from_coords_v2(
     let itineraries_meta_duration = itin_meta_timer.elapsed();
 
     //chateau -> itinerary_pattern_id -> ItineraryPatternMeta
-    let mut itin_meta_table: HashMap<String, HashMap<String, ItineraryPatternMeta>> =
-        HashMap::new();
+    let mut itin_meta_table: AHashMap<String, AHashMap<String, ItineraryPatternMeta>> =
+        AHashMap::new();
     //chateau -> direction_id -> Vec<itinerary_pattern_id>
-    let mut chateau_direction_to_itin_meta_id: HashMap<String, HashMap<String, Vec<String>>> =
-        HashMap::new();
+    let mut chateau_direction_to_itin_meta_id: AHashMap<String, AHashMap<String, Vec<String>>> =
+        AHashMap::new();
 
     for itineraries_meta_search in itineraries_meta_search_list {
         match itineraries_meta_search {
@@ -720,7 +720,7 @@ pub async fn nearby_from_coords_v2(
                                 }
                             }
                             Entry::Vacant(mut ve) => {
-                                ve.insert(HashMap::from_iter([(
+                                ve.insert(AHashMap::from_iter([(
                                     direction_pattern_id.clone(),
                                     vec![itinerary_meta.itinerary_pattern_id.clone()],
                                 )]));
@@ -736,7 +736,7 @@ pub async fn nearby_from_coords_v2(
                             );
                         }
                         Entry::Vacant(mut ve) => {
-                            ve.insert(HashMap::from_iter([(
+                            ve.insert(AHashMap::from_iter([(
                                 itinerary_meta.itinerary_pattern_id.clone(),
                                 itinerary_meta,
                             )]));
@@ -754,7 +754,7 @@ pub async fn nearby_from_coords_v2(
     let itin_meta_table = itin_meta_table;
 
     //make a hashmap of Chateau -> (itinerary_pattern_id, stop_sequence)
-    let mut itineraries_and_seq_to_lookup: HashMap<String, Vec<(String, u32)>> = HashMap::new();
+    let mut itineraries_and_seq_to_lookup: AHashMap<String, Vec<(String, u32)>> = AHashMap::new();
 
     for (chateau, set_of_directions) in hashmap_of_directions_lookup.iter() {
         let mut vec_to_insert: Vec<(String, u32)> = vec![];
@@ -839,7 +839,7 @@ pub async fn nearby_from_coords_v2(
 
     // println!("Itins: {:#?}", seek_for_itineraries);
 
-    let mut itins_per_chateau: HashMap<String, AHashSet<String>> = HashMap::new();
+    let mut itins_per_chateau: AHashMap<String, AHashSet<String>> = AHashMap::new();
 
     //(chateau, itinerary_pattern_id) -> ItineraryPatternRowMerge
     let mut itinerary_table: AHashMap<(String, String), Vec<ItineraryPatternRowMerge>> =
@@ -927,11 +927,11 @@ pub async fn nearby_from_coords_v2(
 
     println!("Finished looking up trips in {:?}", timer_trips.elapsed());
 
-    let mut compressed_trips_table: HashMap<String, Vec<CompressedTrip>> = HashMap::new();
+    let mut compressed_trips_table: AHashMap<String, Vec<CompressedTrip>> = AHashMap::new();
 
-    let mut services_to_lookup_table: HashMap<String, BTreeSet<CompactString>> = HashMap::new();
+    let mut services_to_lookup_table: AHashMap<String, BTreeSet<CompactString>> = AHashMap::new();
 
-    let mut routes_to_lookup_table: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut routes_to_lookup_table: AHashMap<String, BTreeSet<String>> = AHashMap::new();
 
     for trip_group in trip_lookup_queries_to_perform {
         match trip_group {
@@ -1059,7 +1059,7 @@ pub async fn nearby_from_coords_v2(
         }
     }
 
-    let mut chateau_metadata = HashMap::new();
+    let mut chateau_metadata = AHashMap::new();
 
     let etcd_timer = Instant::now();
 
@@ -1092,8 +1092,8 @@ pub async fn nearby_from_coords_v2(
         Ok(calendar_structure) => {
             // iterate through all trips and produce a timezone and timeoffset.
 
-            let mut stops_answer: HashMap<String, AHashMap<CompactString, StopOutput>> =
-                HashMap::new();
+            let mut stops_answer: AHashMap<String, AHashMap<CompactString, StopOutput>> =
+                AHashMap::new();
             let mut departures: Vec<DepartureRouteGroup> = vec![];
             let mut all_alerts: BTreeMap<
                 String,
@@ -1101,12 +1101,12 @@ pub async fn nearby_from_coords_v2(
             > = BTreeMap::new();
 
             for (chateau_id, calendar_in_chateau) in calendar_structure.iter() {
-                let mut directions_route_group_for_this_chateau: HashMap<
+                let mut directions_route_group_for_this_chateau: AHashMap<
                     String,
                     DepartureRouteGroup,
-                > = HashMap::new();
+                > = AHashMap::new();
 
-                let mut valid_trips: HashMap<String, Vec<ValidTripSet>> = HashMap::new();
+                let mut valid_trips: AHashMap<String, Vec<ValidTripSet>> = AHashMap::new();
                 let itinerary = itins_per_chateau.get(chateau_id).unwrap();
                 let routes = routes_table.get(chateau_id).unwrap();
                 for trip in compressed_trips_table.get(chateau_id).unwrap() {
@@ -1312,7 +1312,7 @@ pub async fn nearby_from_coords_v2(
                                 short_name: route.short_name.as_ref().map(|x| x.into()),
                                 long_name: route.long_name.clone(),
                                 route_type: route.route_type,
-                                directions: HashMap::new(),
+                                directions: AHashMap::new(),
                                 closest_distance: 100000.,
                             },
                         );

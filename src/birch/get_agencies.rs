@@ -13,7 +13,6 @@ use serde::Deserialize;
 use serde_derive::Serialize;
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
-use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 use tilejson::TileJSON;

@@ -1,6 +1,7 @@
 use actix_web::middleware::DefaultHeaders;
 use actix_web::web::Query;
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
+use ahash::AHashMap;
 use catenary::EtcdConnectionIps;
 use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
@@ -48,7 +49,7 @@ struct TripInBlock {
 #[derive(Deserialize, Clone, Serialize)]
 struct BlockResponse {
     trips: Vec<TripInBlock>,
-    routes: HashMap<String, catenary::models::Route>,
+    routes: AHashMap<String, catenary::models::Route>,
 }
 
 #[actix_web::get("/get_block")]
@@ -140,10 +141,10 @@ pub async fn block_api(
 
     let tz = chrono_tz::Tz::from_str_insensitive(itin_metas[0].timezone.as_str()).unwrap();
 
-    //sort itin rows into a hashmap of vecs
+    //sort itin rows into a HashMap of vecs
 
-    let mut itin_row_map: HashMap<String, Vec<catenary::models::ItineraryPatternRow>> =
-        HashMap::new();
+    let mut itin_row_map: AHashMap<String, Vec<catenary::models::ItineraryPatternRow>> =
+        AHashMap::new();
 
     for row in itin_rows {
         if itin_row_map.contains_key(&row.itinerary_pattern_id) {
@@ -162,7 +163,8 @@ pub async fn block_api(
 
     //make itin meta map
 
-    let mut itin_meta_map: HashMap<String, catenary::models::ItineraryPatternMeta> = HashMap::new();
+    let mut itin_meta_map: AHashMap<String, catenary::models::ItineraryPatternMeta> =
+        AHashMap::new();
 
     for meta in itin_metas {
         itin_meta_map.insert(meta.itinerary_pattern_id.clone(), meta);
@@ -190,9 +192,9 @@ pub async fn block_api(
         .await
         .unwrap();
 
-    //sort into hashmap
+    //sort into HashMap
 
-    let mut stops_map: HashMap<String, catenary::models::Stop> = HashMap::new();
+    let mut stops_map: AHashMap<String, catenary::models::Stop> = AHashMap::new();
 
     for stop in stops {
         stops_map.insert(stop.gtfs_id.clone(), stop);
@@ -215,14 +217,14 @@ pub async fn block_api(
             .await
             .unwrap();
 
-    let calendar_hashmap: HashMap<String, Vec<catenary::models::Calendar>> = calendar
+    let calendar_hashmap: AHashMap<String, Vec<catenary::models::Calendar>> = calendar
         .into_iter()
         .chunk_by(|x| x.service_id.clone())
         .into_iter()
         .map(|(key, group)| (key, group.collect()))
         .collect();
 
-    let calendar_dates_hashmap: HashMap<String, Vec<catenary::models::CalendarDate>> =
+    let calendar_dates_hashmap: AHashMap<String, Vec<catenary::models::CalendarDate>> =
         calendar_dates
             .into_iter()
             .chunk_by(|x| x.service_id.clone())
@@ -370,7 +372,7 @@ pub async fn block_api(
         .await
         .unwrap();
 
-    let mut routes_map: HashMap<String, catenary::models::Route> = HashMap::new();
+    let mut routes_map: AHashMap<String, catenary::models::Route> = AHashMap::new();
 
     for route in routes {
         routes_map.insert(route.route_id.clone(), route);
