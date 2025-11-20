@@ -10,7 +10,7 @@ pub fn fix_files_in_gtfs_directory(path: &str) -> Result<(), anyhow::Error> {
 
     let mut buffer: Vec<u8> = Vec::new();
 
-    let read = f.read_to_end(&mut buffer)?;
+    let _read = f.read_to_end(&mut buffer)?;
 
     let stops_string = String::from_utf8_lossy(&buffer);
 

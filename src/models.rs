@@ -408,6 +408,7 @@ pub struct DirectionPatternMeta {
     pub route_type: Option<i16>,
     pub direction_id: Option<bool>,
     pub stop_headsigns_unique_list: Option<Vec<Option<String>>>,
+    pub direction_pattern_id_parents: Option<String>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]

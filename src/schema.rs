@@ -134,6 +134,7 @@ pub mod gtfs {
             route_type -> Nullable<Int2>,
             direction_id -> Nullable<Bool>,
             stop_headsigns_unique_list -> Nullable<Array<Nullable<Text>>>,
+            direction_pattern_id_parents -> Nullable<Text>,
         }
     }
 

@@ -56,7 +56,7 @@ lazy_static! {
     static ref TRANSIT_APP_REGEX: Regex = Regex::new(r"(?i)(the )?transit app").unwrap();
 }
 
-const realtime_feeds_to_use_vehicle_ids: [&str; 1] = ["f-ezzx-tbc~rt"];
+const REALTIME_FEEDS_TO_USE_VEHICLE_IDS: [&str; 1] = ["f-ezzx-tbc~rt"];
 
 fn mph_to_mps(mph: &CompactString) -> Option<f32> {
     let mph: f32 = match mph.parse() {
@@ -1150,7 +1150,7 @@ pub async fn new_rt_data(
                             chateau_id,
                         );
 
-                        let pos_aspenised = match realtime_feeds_to_use_vehicle_ids
+                        let pos_aspenised = match REALTIME_FEEDS_TO_USE_VEHICLE_IDS
                             .contains(&realtime_feed_id.as_str())
                         {
                             true => pos_aspenised.replace_vehicle_label_with_vehicle_id(),
@@ -1754,7 +1754,7 @@ pub async fn new_rt_data(
                             trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),
                         };
 
-                        let trip_update = match realtime_feeds_to_use_vehicle_ids
+                        let trip_update = match REALTIME_FEEDS_TO_USE_VEHICLE_IDS
                             .contains(&realtime_feed_id.as_str())
                         {
                             true => trip_update.replace_vehicle_label_with_vehicle_id(),

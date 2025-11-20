@@ -224,7 +224,7 @@ impl AspenRpc for AspenServer {
                 });
 
                 match trip_modification {
-                    Some(trip_modification) => Some(trip_modification.clone().to_owned()),
+                    Some(trip_modification) => Some((*trip_modification).to_owned()),
                     None => {
                         println!("Trip modification not found for trip id {}", trip_id);
                         None
