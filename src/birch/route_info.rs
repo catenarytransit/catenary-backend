@@ -18,6 +18,7 @@ use std::sync::Arc;
 //use diesel::query_dsl::methods::FilterDsl;
 //use diesel::query_dsl::methods::SelectDsl;
 use catenary::SerializableStop;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use tarpc::context;
@@ -41,6 +42,7 @@ pub struct RouteInfoResponse {
     pub stop_id_to_alert_ids: BTreeMap<String, Vec<String>>,
     pub onestop_feed_id: String,
     pub bounding_box: Option<geo::Rect<f64>>,
+    pub connecting_routes: Option<BTreeMap<String, BTreeMap<String, catenary::models::Route>>>, //chateau -> route_id -> Route
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -275,9 +277,21 @@ pub async fn route_info(
         .filter_map(|x| x.parent_station.clone())
         .collect();
 
+    let mut additional_routes_to_lookup: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
     for stop in stops_pg {
         let lat = stop.point.map(|x| x.y);
         let lon = stop.point.map(|x| x.x);
+
+        additional_routes_to_lookup
+            .entry(stop.chateau.clone())
+            .or_insert(BTreeSet::new())
+            .extend(
+                stop.routes
+                    .iter()
+                    .filter_map(|x| x.clone())
+                    .collect::<BTreeSet<String>>(),
+            );
 
         stops_hashmap.insert(
             stop.gtfs_id.clone(),
@@ -311,6 +325,16 @@ pub async fn route_info(
         let lat = stop.point.map(|x| x.y);
         let lon = stop.point.map(|x| x.x);
 
+        additional_routes_to_lookup
+            .entry(stop.chateau.clone())
+            .or_insert(BTreeSet::new())
+            .extend(
+                stop.routes
+                    .iter()
+                    .filter_map(|x| x.clone())
+                    .collect::<BTreeSet<String>>(),
+            );
+
         stops_hashmap.insert(
             stop.gtfs_id.clone(),
             catenary::SerializableStop {
@@ -329,6 +353,38 @@ pub async fn route_info(
                 level_id: stop.level_id,
             },
         );
+    }
+
+    if let Some(routes_set) = additional_routes_to_lookup.get_mut(&query.chateau) {
+        routes_set.remove(&route.route_id);
+    }
+
+    let mut response_connecting_routes = BTreeMap::new();
+
+    for (chateau, routes_to_lookup) in additional_routes_to_lookup {
+        if routes_to_lookup.is_empty() {
+            continue;
+        }
+
+        let connecting_routes_pg: Vec<catenary::models::Route> =
+            catenary::schema::gtfs::routes::dsl::routes
+                .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(&chateau))
+                .filter(
+                    catenary::schema::gtfs::routes::dsl::route_id
+                        .eq_any(&routes_to_lookup.iter().cloned().collect::<Vec<String>>()),
+                )
+                .select(catenary::models::Route::as_select())
+                .load(conn)
+                .await
+                .unwrap();
+
+        let mut connecting_routes_map: BTreeMap<String, catenary::models::Route> = BTreeMap::new();
+
+        for route in connecting_routes_pg {
+            connecting_routes_map.insert(route.route_id.clone(), route);
+        }
+
+        response_connecting_routes.insert(chateau, connecting_routes_map);
     }
 
     // fetch shapes
@@ -486,6 +542,7 @@ pub async fn route_info(
         alert_id_to_alert: alerts_for_route_send,
         stop_id_to_alert_ids,
         bounding_box: bounding_box,
+        connecting_routes: Some(response_connecting_routes),
     };
 
     HttpResponse::Ok().json(response)

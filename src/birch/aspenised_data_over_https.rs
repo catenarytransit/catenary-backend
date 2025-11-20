@@ -1047,8 +1047,10 @@ pub async fn get_rt_of_route(
     let directions_fetch =
         catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
             .filter(catenary::schema::gtfs::direction_pattern_meta::dsl::chateau.eq(&query.chateau))
-            .filter(catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_id
-                .eq_any(&directions_to_fetch))
+            .filter(
+                catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_id
+                    .eq_any(&directions_to_fetch),
+            )
             .select(catenary::models::DirectionPatternMeta::as_select())
             .load::<catenary::models::DirectionPatternMeta>(conn)
             .await
@@ -1069,22 +1071,23 @@ pub async fn get_rt_of_route(
         })
         .collect();
 
-    let trip_id_to_direction_pattern_parent_id: AHashMap<String, Option<String>> =  trip_id_to_direction_id
-        .iter()
-        .map(|(trip_id, direction_id)| {
-            let direction = match direction_id {
-                Some(direction_id) => direction_id_to_direction.get(direction_id),
-                None => None,
-            };
+    let trip_id_to_direction_pattern_parent_id: AHashMap<String, Option<String>> =
+        trip_id_to_direction_id
+            .iter()
+            .map(|(trip_id, direction_id)| {
+                let direction = match direction_id {
+                    Some(direction_id) => direction_id_to_direction.get(direction_id),
+                    None => None,
+                };
 
-            let direction_id_parent = match direction {
-                Some(direction) => direction.direction_pattern_id_parents.clone(),
-                None => None,
-            };
+                let direction_id_parent = match direction {
+                    Some(direction) => direction.direction_pattern_id_parents.clone(),
+                    None => None,
+                };
 
-            (trip_id.clone(), direction_id_parent)
-        })
-        .collect();
+                (trip_id.clone(), direction_id_parent)
+            })
+            .collect();
 
     let returned_data = PerRouteRtInfo {
         vehicle_positions: Some(returned_vehicle_struct),
