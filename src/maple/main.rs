@@ -66,6 +66,7 @@ mod gtfs_handlers;
 mod gtfs_ingestion_sequence;
 mod gtfs_process;
 mod refresh_metadata_tables;
+mod shapes_reader;
 mod transitland_download;
 mod update_schedules_with_new_chateau_id;
 

@@ -15,6 +15,7 @@ use crate::gtfs_ingestion_sequence::calendar_into_postgres::calendar_into_postgr
 use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::insert_stop_to_stop_geometry;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres_and_elastic;
+use crate::shapes_reader::*;
 use catenary::enum_to_int::*;
 use catenary::gtfs_schedule_protobuf::frequencies_to_protobuf;
 use catenary::maple_syrup;
@@ -225,7 +226,20 @@ pub async fn gtfs_process_feed(
         }
     }
 
-    let gtfs = gtfs_structures::Gtfs::new(path.as_str())?;
+    let gtfs = gtfs_structures::GtfsReader::default()
+        .read_shapes(false)
+        .read(path.as_str())?;
+
+    let shapes_txt_path = format!("{}/{}/shapes.txt", gtfs_unzipped_path, feed_id);
+
+    let gtfs_shapes_minimised = match std::path::Path::new(&shapes_txt_path).exists() {
+        true => {
+            let shapes_read = faster_shape_reader(Path::new(&shapes_txt_path).to_path_buf());
+
+            shapes_read.ok()
+        }
+        false => None,
+    };
 
     let gtfs: Gtfs = match feed_id {
         "f-dpz8-ttc" => {
@@ -778,6 +792,7 @@ pub async fn gtfs_process_feed(
         chateau_id,
         attempt_id,
         &shape_id_to_route_ids_lookup,
+        &gtfs_shapes_minimised,
     )
     .await?;
 
@@ -1256,9 +1271,17 @@ pub async fn gtfs_process_feed(
                         Some(
                             shape_ids
                                 .iter()
-                                .filter_map(|shape_id| gtfs.shapes.get(shape_id.as_str()))
+                                .filter_map(|shape_id| {
+                                    gtfs_shapes_minimised
+                                        .as_ref()
+                                        .map(|gtfs_shapes_minimised| {
+                                            gtfs_shapes_minimised.get(shape_id.as_str())
+                                        })
+                                        .flatten()
+                                })
+                                .cloned()
                                 .flatten()
-                                .collect::<Vec<&gtfs_structures::Shape>>(),
+                                .collect::<Vec<_>>(),
                         )
                     });
 
@@ -1581,7 +1604,7 @@ fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 
 fn compute_shape_envelope(
     route: &gtfs_structures::Route,
-    shapes: &Vec<&gtfs_structures::Shape>,
+    shapes: &Vec<ShapePoint>,
 ) -> serde_json::Value {
     let mut min_latitude: Option<f64> = None;
     let mut max_latitude: Option<f64> = None;
@@ -1591,37 +1614,37 @@ fn compute_shape_envelope(
 
     for shape in shapes {
         match min_latitude {
-            None => min_latitude = Some(shape.latitude),
+            None => min_latitude = Some(shape.geometry.y()),
             Some(current_min) => {
-                if shape.latitude < current_min {
-                    min_latitude = Some(shape.latitude);
+                if shape.geometry.y() < current_min {
+                    min_latitude = Some(shape.geometry.y());
                 }
             }
         }
 
         match max_latitude {
-            None => max_latitude = Some(shape.latitude),
+            None => max_latitude = Some(shape.geometry.y()),
             Some(current_max) => {
-                if shape.latitude > current_max {
-                    max_latitude = Some(shape.latitude);
+                if shape.geometry.y() > current_max {
+                    max_latitude = Some(shape.geometry.y());
                 }
             }
         }
 
         match min_longitude {
-            None => min_longitude = Some(shape.longitude),
+            None => min_longitude = Some(shape.geometry.x()),
             Some(current_min) => {
-                if shape.longitude < current_min {
-                    min_longitude = Some(shape.longitude);
+                if shape.geometry.x() < current_min {
+                    min_longitude = Some(shape.geometry.x());
                 }
             }
         }
 
         match max_longitude {
-            None => max_longitude = Some(shape.longitude),
+            None => max_longitude = Some(shape.geometry.x()),
             Some(current_max) => {
-                if shape.longitude > current_max {
-                    max_longitude = Some(shape.longitude);
+                if shape.geometry.x() > current_max {
+                    max_longitude = Some(shape.geometry.x());
                 }
             }
         }
