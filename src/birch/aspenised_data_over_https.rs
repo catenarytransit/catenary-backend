@@ -254,6 +254,7 @@ pub struct PerRouteRtInfo {
     pub itinerary_to_direction_id: Option<AHashMap<String, String>>,
     pub trip_updates: Vec<AspenisedTripUpdate>,
     pub trip_id_to_direction_id: AHashMap<String, Option<String>>,
+    pub trip_id_to_direction_pattern_parent_id: AHashMap<String, Option<String>>,
 }
 
 #[actix_web::post("/bulk_realtime_fetch_v3")]
@@ -1038,6 +1039,26 @@ pub async fn get_rt_of_route(
         );
     }
 
+    let directions_to_fetch = itinerary_to_direction_id
+        .values()
+        .cloned()
+        .collect::<ahash::AHashSet<String>>();
+
+    let directions_fetch =
+        catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+            .filter(catenary::schema::gtfs::direction_pattern_meta::dsl::chateau.eq(&query.chateau))
+            .filter(catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_id
+                .eq_any(&directions_to_fetch))
+            .select(catenary::models::DirectionPatternMeta::as_select())
+            .load::<catenary::models::DirectionPatternMeta>(conn)
+            .await
+            .unwrap();
+
+    let direction_id_to_direction = directions_fetch
+        .into_iter()
+        .map(|direction| (direction.direction_pattern_id.clone(), direction))
+        .collect::<AHashMap<String, catenary::models::DirectionPatternMeta>>();
+
     let mut trip_id_to_direction_id: AHashMap<String, Option<String>> = trips_table
         .iter()
         .map(|(trip_id, trip)| {
@@ -1048,6 +1069,23 @@ pub async fn get_rt_of_route(
         })
         .collect();
 
+    let trip_id_to_direction_pattern_parent_id: AHashMap<String, Option<String>> =  trip_id_to_direction_id
+        .iter()
+        .map(|(trip_id, direction_id)| {
+            let direction = match direction_id {
+                Some(direction_id) => direction_id_to_direction.get(direction_id),
+                None => None,
+            };
+
+            let direction_id_parent = match direction {
+                Some(direction) => direction.direction_pattern_id_parents.clone(),
+                None => None,
+            };
+
+            (trip_id.clone(), direction_id_parent)
+        })
+        .collect();
+
     let returned_data = PerRouteRtInfo {
         vehicle_positions: Some(returned_vehicle_struct),
         last_updated_time_ms: get_vehicles.last_updated_time_ms,
@@ -1055,6 +1093,7 @@ pub async fn get_rt_of_route(
         itinerary_to_direction_id: Some(itinerary_to_direction_id),
         trip_updates: trip_update_list,
         trip_id_to_direction_id: trip_id_to_direction_id,
+        trip_id_to_direction_pattern_parent_id: trip_id_to_direction_pattern_parent_id,
     };
 
     return HttpResponse::Ok().json(returned_data);
