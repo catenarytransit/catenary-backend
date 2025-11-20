@@ -487,15 +487,17 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 }
 
 fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<CompactString>) -> u64 {
-    let mut hash_of_direction_pattern_temp: Vec<CompactString> = Vec::new();
+    let mut hash_of_direction_pattern_temp: Vec<String> = Vec::new();
 
     hash_of_direction_pattern_temp.push(route_id.into());
 
     for stop_id in stop_sequence {
-        hash_of_direction_pattern_temp.push(stop_id);
+        hash_of_direction_pattern_temp.push(stop_id.into());
     }
 
-    ahash_fast_hash(&hash_of_direction_pattern_temp)
+    let convert_to_bytes = bincode::encode_to_vec(&hash_of_direction_pattern_temp, bincode::config::standard()).unwrap();
+
+    seahash::hash(&convert_to_bytes)
 }
 
 #[cfg(test)]
