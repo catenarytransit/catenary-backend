@@ -24,8 +24,8 @@ use tarpc::context;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RouteInfoResponse {
-    pub agency_name: String,
-    pub agency_id: String,
+    pub agency_name: Option<String>,
+    pub agency_id: Option<String>,
     pub short_name: Option<String>,
     pub long_name: Option<String>,
     pub url: Option<String>,
@@ -270,7 +270,41 @@ pub async fn route_info(
 
     let mut stops_hashmap: HashMap<String, SerializableStop> = HashMap::new();
 
+    let parent_stops: HashSet<String> = stops_pg
+        .iter()
+        .filter_map(|x| x.parent_station.clone())
+        .collect();
+
     for stop in stops_pg {
+        let lat = stop.point.map(|x| x.y);
+        let lon = stop.point.map(|x| x.x);
+
+        stops_hashmap.insert(
+            stop.gtfs_id.clone(),
+            catenary::SerializableStop {
+                id: stop.gtfs_id.clone(),
+                name: stop.name,
+                code: stop.code,
+                description: stop.gtfs_desc,
+                latitude: lat,
+                longitude: lon,
+                location_type: stop.location_type,
+                parent_station: stop.parent_station,
+                timezone: stop.timezone,
+                zone_id: stop.zone_id,
+            },
+        );
+    }
+
+    let parent_stops_pg: Vec<catenary::models::Stop> = catenary::schema::gtfs::stops::dsl::stops
+        .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&query.chateau))
+        .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq_any(&parent_stops))
+        .select(catenary::models::Stop::as_select())
+        .load(conn)
+        .await
+        .unwrap();
+
+    for stop in parent_stops_pg {
         let lat = stop.point.map(|x| x.y);
         let lon = stop.point.map(|x| x.x);
 
@@ -406,11 +440,8 @@ pub async fn route_info(
     //pdf is none for now
 
     let response = RouteInfoResponse {
-        agency_name: agency.map(|x| x.agency_name.clone()).unwrap_or_default(),
-        agency_id: match route.agency_id.clone() {
-            Some(agency_id) => agency_id,
-            None => "".to_string(),
-        },
+        agency_name: agency.map(|x| x.agency_name.clone()),
+        agency_id: route.agency_id,
         short_name: route.short_name,
         long_name: route.long_name,
         url: route.url,

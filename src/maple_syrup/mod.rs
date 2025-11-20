@@ -28,6 +28,7 @@ pub struct ItineraryCover {
     pub timezone: String,
     pub shape_id: Option<String>,
     pub direction_pattern_id: u64,
+    pub direction_pattern_id_with_parents: u64,
     pub route_type: i16,
     pub stop_headsigns: Option<String>,
     pub stop_headsigns_unique_list: Option<Vec<String>>,
@@ -60,6 +61,7 @@ pub struct DirectionPattern {
     pub route_type: i16,
     pub stop_headsigns: Option<String>,
     pub stop_headsigns_unique_list: Option<Vec<String>>,
+    pub direction_pattern_id_with_parents: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -246,6 +248,20 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                 .collect::<Vec<CompactString>>(),
         );
 
+        let direction_pattern_id_with_parents = calculate_direction_pattern_id(
+            &trip.route_id,
+            stop_diffs
+                .iter()
+                .map(|x| match gtfs.stops.get(x.stop_id.as_str()) {
+                    Some(stop) => match &stop.parent_station {
+                        Some(parent_station) => CompactString::from(parent_station),
+                        None => x.stop_id.clone(),
+                    },
+                    None => x.stop_id.clone(),
+                })
+                .collect::<Vec<CompactString>>(),
+        );
+
         let itinerary_cover = ItineraryCover {
             stop_sequences: stop_diffs,
             direction_id: trip.direction_id.map(|direction| match direction {
@@ -267,6 +283,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             timezone,
             shape_id: trip.shape_id.clone(),
             direction_pattern_id,
+            direction_pattern_id_with_parents,
             route_type: crate::enum_to_int::route_type_to_int(
                 &gtfs
                     .routes
@@ -313,6 +330,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
         let direction_pattern = DirectionPattern {
             direction_id: itinerary.direction_id,
+            direction_pattern_id_with_parents: itinerary.direction_pattern_id_with_parents,
             stop_sequence,
             stop_headsigns_unique_list: itinerary.stop_headsigns_unique_list.clone(),
             stop_headsigns: itinerary.stop_headsigns.clone(),

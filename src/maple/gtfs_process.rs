@@ -284,7 +284,7 @@ pub async fn gtfs_process_feed(
                     trip.trip_headsign = Some(last_st.stop.name.as_ref().unwrap().clone());
                 }
             }
-            
+
             gtfs.routes.remove_entry("ACE");
 
             gtfs.trips.retain(|trip_id, trip| trip.route_id != "ACE");
