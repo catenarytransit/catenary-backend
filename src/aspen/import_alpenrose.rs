@@ -236,7 +236,7 @@ pub async fn new_rt_data(
     let mut general_alerts: AHashMap<String, Vec<String>> = AHashMap::new();
 
     let mut stop_id_to_stop: AHashMap<CompactString, AspenisedStop> = AHashMap::new();
-    let mut shape_id_to_shape: AHashMap<CompactString, Option<String>> = AHashMap::new();
+    let mut shape_id_to_shape: AHashMap<CompactString, Option<EcoString>> = AHashMap::new();
     let mut trip_modifications: AHashMap<CompactString, AspenisedTripModification> =
         AHashMap::new();
     let mut trip_id_to_trip_modification_ids: AHashMap<CompactString, Vec<EcoString>> =
@@ -1863,8 +1863,10 @@ pub async fn new_rt_data(
 
                     if let Some(shape) = &trip_update_entity.shape {
                         if let Some(shape_id) = &shape.shape_id {
-                            shape_id_to_shape
-                                .insert(shape_id.clone().into(), shape.encoded_polyline.clone());
+                            shape_id_to_shape.insert(
+                                shape_id.clone().into(),
+                                shape.encoded_polyline.as_ref().map(|x| x.into()),
+                            );
                         }
                     }
 

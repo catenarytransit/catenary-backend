@@ -75,6 +75,7 @@ mod alerts_responder;
 mod aspen_assignment;
 use catenary::rt_recent_history::RtCacheEntry;
 use catenary::rt_recent_history::RtKey;
+use ecow::EcoString;
 use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use prost::Message;
@@ -162,7 +163,7 @@ impl AspenRpc for AspenServer {
         context: tarpc::context::Context,
         chateau_id: String,
         shape_id: String,
-    ) -> Option<String> {
+    ) -> Option<EcoString> {
         match self.authoritative_data_store.get_async(&chateau_id).await {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();

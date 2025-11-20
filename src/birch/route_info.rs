@@ -43,6 +43,7 @@ pub struct RouteInfoResponse {
     pub onestop_feed_id: String,
     pub bounding_box: Option<geo::Rect<f64>>,
     pub connecting_routes: Option<BTreeMap<String, BTreeMap<String, catenary::models::Route>>>, //chateau -> route_id -> Route
+                                                                                                //  pub connections_per_stop: Option<BTreeMap<String, BTreeMap<String, Vec<String>>>>, //stop_id -> chateau -> route_ids
 }
 
 #[derive(Serialize, Deserialize, Clone)]

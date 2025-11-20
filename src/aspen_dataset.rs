@@ -61,7 +61,7 @@ pub struct AspenisedData {
     pub itinerary_pattern_internal_cache: ItineraryPatternInternalCache,
     pub compressed_trip_internal_cache: CompressedTripInternalCache,
     pub stop_id_to_stop: AHashMap<CompactString, AspenisedStop>,
-    pub shape_id_to_shape: AHashMap<CompactString, Option<String>>,
+    pub shape_id_to_shape: AHashMap<CompactString, Option<EcoString>>,
     pub trip_modifications: AHashMap<CompactString, AspenisedTripModification>,
     pub trip_id_to_trip_modification_ids: AHashMap<CompactString, Vec<EcoString>>,
     pub stop_id_to_trip_modification_ids: AHashMap<CompactString, Vec<EcoString>>,

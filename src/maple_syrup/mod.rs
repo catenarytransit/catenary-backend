@@ -495,7 +495,9 @@ fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<CompactStri
         hash_of_direction_pattern_temp.push(stop_id.into());
     }
 
-    let convert_to_bytes = bincode::encode_to_vec(&hash_of_direction_pattern_temp, bincode::config::standard()).unwrap();
+    let convert_to_bytes =
+        bincode::encode_to_vec(&hash_of_direction_pattern_temp, bincode::config::standard())
+            .unwrap();
 
     seahash::hash(&convert_to_bytes)
 }

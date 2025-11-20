@@ -1777,7 +1777,7 @@ pub async fn get_trip_init(
 
                                         if let Ok(Some(shape_response)) = shape_response {
                                             old_shape_polyline = shape_polyline;
-                                            shape_polyline = Some(shape_response);
+                                            shape_polyline = Some(shape_response.to_string());
                                             rt_shape = true;
                                         }
                                     }

@@ -8,6 +8,7 @@ use crate::ChateauDataNoGeometry;
 use crate::aspen_dataset::*;
 use ahash::AHashMap;
 use ahash::AHashSet;
+use ecow::EcoString;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -31,7 +32,7 @@ pub trait AspenRpc {
         trip_id: Vec<String>,
     ) -> Option<TripsSelectionResponse>;
 
-    async fn get_shape(chateau_id: String, shape_id: String) -> Option<String>;
+    async fn get_shape(chateau_id: String, shape_id: String) -> Option<EcoString>;
 
     async fn get_trip_modification(
         chateau_id: String,
