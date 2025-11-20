@@ -773,6 +773,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
                                         if ingested_static_result.is_ok() {
                                             
+                                            println!("Assigning production tables for {} / {}", feed_id, attempt_id);
                                         let assign_prod_tables = assign_production_tables::assign_production_tables(
                                             &feed_id,
                                             &attempt_id,
@@ -780,12 +781,13 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                             gtfs_process_result.as_ref().unwrap().bbox
                                         ).await;
 
+                                        
+                                            println!("{} No longer in progress. Drop in progress lock", feed_id);
                                     use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
 
                                     let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
                                     .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
                                 .execute(conn).await;
-
                                         }
 
                                     } else {
