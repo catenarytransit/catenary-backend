@@ -291,6 +291,8 @@ struct TripIntroductionInformation {
     pub rt_shape: bool,
     pub old_shape_polyline: Option<String>,
     pub cancelled_stoptimes: Vec<StopTimeIntroduction>,
+    pub is_cancelled: bool,
+    pub deleted: bool,
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -832,6 +834,8 @@ pub async fn get_trip_init(
                         rt_shape: false,
                         old_shape_polyline: None,
                         cancelled_stoptimes: vec![],
+                        deleted: false,
+                        is_cancelled: false,
                     };
 
                     let response = serde_json::to_string(&response).unwrap();
@@ -1030,6 +1034,9 @@ pub async fn get_trip_init(
     }
 
     let timezone = tz.unwrap();
+
+    let mut is_cancelled = false;
+    let mut deleted = false;
 
     if let Err(stops_data_err) = &stops_data {
         eprintln!("{}", stops_data_err);
@@ -1300,6 +1307,13 @@ pub async fn get_trip_init(
                                     let mut modifications_for_this_trip: Option<
                                         AspenisedTripModification,
                                     > = None;
+
+                                    if rt_trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) {
+                                            is_cancelled = true;
+                                        } else if rt_trip_update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Deleted)
+                                        {
+                                            deleted = true;
+                                        }
 
                                     if let Some(modified_trip) = &rt_trip_update.trip.modified_trip
                                     {
@@ -1866,6 +1880,74 @@ pub async fn get_trip_init(
                         alert_ids_for_this_route = alerts_response.alert_ids_for_this_route;
                         alert_ids_for_this_trip = alerts_response.alert_ids_for_this_trip;
                         stop_id_to_alert_ids = alerts_response.stop_id_to_alert_ids;
+
+                        for alert in alert_id_to_alert.values() {
+                            if is_cancelled {
+                                break;
+                            }
+
+                            let effect_is_no_service = alert.effect == Some(1); // NO_SERVICE
+                            if effect_is_no_service {
+                                let applies_to_trip = alert.informed_entity.iter().any(|e| {
+                                    let route_match = e
+                                        .route_id
+                                        .as_ref()
+                                        .map_or(false, |r_id| *r_id == itin_meta.route_id);
+                                    let trip_match = e.trip.as_ref().map_or(false, |t| {
+                                        t.trip_id
+                                            .as_ref()
+                                            .map_or(false, |t_id| *t_id == query.trip_id)
+                                    });
+                                    route_match || trip_match
+                                });
+
+                                let applies_to_trip_without_a_referenced_stop = alert
+                                    .informed_entity
+                                    .iter()
+                                    .filter(|e| e.stop_id.is_none())
+                                    .any(|e| {
+                                        let route_match = e
+                                            .route_id
+                                            .as_ref()
+                                            .map_or(false, |r_id| *r_id == itin_meta.route_id);
+                                        let trip_match = e.trip.as_ref().map_or(false, |t| {
+                                            t.trip_id
+                                                .as_ref()
+                                                .map_or(false, |t_id| *t_id == query.trip_id)
+                                        });
+
+                                        route_match || trip_match
+                                    });
+
+                                if applies_to_trip {
+                                    let is_active = alert.active_period.iter().any(|ap| {
+                                        let start = ap.start.unwrap_or(0);
+                                        let end = ap.end.unwrap_or(u64::MAX);
+
+                                        let start_of_trip = stop_times_for_this_trip[0]
+                                            .scheduled_arrival_time_unix_seconds
+                                            .unwrap_or(
+                                                stop_times_for_this_trip[0]
+                                                    .scheduled_arrival_time_unix_seconds
+                                                    .unwrap_or(u64::MAX),
+                                            );
+                                        let end_of_trip = stop_times_for_this_trip
+                                            .last()
+                                            .unwrap()
+                                            .scheduled_arrival_time_unix_seconds
+                                            .unwrap_or(0);
+                                        start_of_trip >= start && end_of_trip <= end
+                                    });
+                                    if is_active {
+                                        if alert.effect == Some(1) {
+                                            if applies_to_trip_without_a_referenced_stop {
+                                                is_cancelled = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     } else {
                         eprintln!("Error fetching alerts from aspen");
                     }
@@ -1906,6 +1988,8 @@ pub async fn get_trip_init(
         rt_shape: rt_shape,
         old_shape_polyline,
         cancelled_stoptimes: cancelled_stop_times,
+        is_cancelled: is_cancelled,
+        deleted: deleted,
     };
 
     let text = serde_json::to_string(&response).unwrap();
