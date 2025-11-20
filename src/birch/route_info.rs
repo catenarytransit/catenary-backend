@@ -292,6 +292,9 @@ pub async fn route_info(
                 parent_station: stop.parent_station,
                 timezone: stop.timezone,
                 zone_id: stop.zone_id,
+                routes: stop.routes.iter().filter_map(|x| x.clone()).collect(),
+                platform_code: stop.platform_code,
+                level_id: stop.level_id,
             },
         );
     }
@@ -321,6 +324,9 @@ pub async fn route_info(
                 parent_station: stop.parent_station,
                 timezone: stop.timezone,
                 zone_id: stop.zone_id,
+                routes: stop.routes.iter().filter_map(|x| x.clone()).collect(),
+                platform_code: stop.platform_code,
+                level_id: stop.level_id,
             },
         );
     }

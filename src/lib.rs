@@ -465,6 +465,9 @@ pub struct SerializableStop {
     pub longitude: Option<f64>,
     pub latitude: Option<f64>,
     pub timezone: Option<String>,
+    pub platform_code: Option<String>,
+    pub level_id: Option<String>,
+    pub routes: Vec<String>,
 }
 
 pub fn is_null_island(x: f64, y: f64) -> bool {
