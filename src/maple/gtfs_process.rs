@@ -933,7 +933,12 @@ pub async fn gtfs_process_feed(
                 route_id: Some(itin_pattern.route_id.clone()),
                 route_type: Some(itin_pattern.route_type),
                 direction_id: itin_pattern.direction_id,
-                direction_pattern_id_parents: Some(direction_pattern.direction_pattern_id_with_parents.clone().to_string()),
+                direction_pattern_id_parents: Some(
+                    direction_pattern
+                        .direction_pattern_id_with_parents
+                        .clone()
+                        .to_string(),
+                ),
                 stop_headsigns_unique_list: itin_pattern.stop_headsigns_unique_list.as_ref().map(
                     |x| {
                         x.into_iter()
