@@ -507,6 +507,13 @@ pub async fn route_info(
 
     // --- end: compute close connections / transfers per stop ---
 
+    // Remove this route itself from transfer connections
+    for (_stop_id, per_chateau) in connections_per_stop.iter_mut() {
+        if let Some(routes) = per_chateau.get_mut(&query.chateau) {
+            routes.retain(|rid| rid != &route.route_id);
+        }
+    }
+
     if let Some(routes_set) = additional_routes_to_lookup.get_mut(&query.chateau) {
         routes_set.remove(&route.route_id);
     }
