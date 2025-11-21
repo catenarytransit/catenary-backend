@@ -11,7 +11,9 @@ use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel_async::AsyncConnection;
 use diesel_async::RunQueryDsl;
+use geo::Point;
 use geo::coord;
+use geo::prelude::HaversineDistance;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -27,7 +29,7 @@ use diesel::dsl::sql;
 use diesel::sql_types::Bool;
 use futures::future::join_all;
 
-const TRANSFER_SEARCH_RADIUS_DEGREES: f64 = 0.001;
+const TRANSFER_SEARCH_RADIUS_DEGREES: f64 = 0.005;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RouteInfoResponse {
@@ -427,7 +429,7 @@ pub async fn route_info(
 
         let mut best_connection_assignment: HashMap<
             (String, String),                      // (connection_chateau, connection_stop_id)
-            (String, f64, catenary::models::Stop), // (base_stop_id, dist2, stop)
+            (String, f64, catenary::models::Stop), // (base_stop_id, distance_m, stop)
         > = HashMap::new();
 
         for result in transfer_results {
@@ -446,9 +448,25 @@ pub async fn route_info(
                     None => continue,
                 };
 
-                let dlat = base_lat - point.y;
-                let dlon = base_lon - point.x;
-                let dist2 = dlat * dlat + dlon * dlon;
+                // Choose max allowed distance based on mode:
+                //  - 100 m for buses (primary_route_type == Some(3))
+                //  - 200 m for everything else (tram, subway, rail, ferry, etc.)
+                let max_distance_m = match connection_stop.primary_route_type {
+                    Some(3) => 100.0, // bus
+                    Some(0) => 200.0, // tram
+                    Some(1) => 200.0, // subway
+                    _ => 300.0,       // other modes
+                };
+
+                // Haversine distance in meters between base stop and connection stop
+                let base_point = Point::new(base_lon, base_lat);
+                let conn_point = Point::new(point.x, point.y);
+                let distance_m = base_point.haversine_distance(&conn_point);
+
+                // Skip if outside allowed radius for this mode
+                if distance_m > max_distance_m {
+                    continue;
+                }
 
                 let key = (
                     connection_stop.chateau.clone(),
@@ -457,11 +475,11 @@ pub async fn route_info(
 
                 match best_connection_assignment.entry(key) {
                     Entry::Vacant(v) => {
-                        v.insert((base_stop_id.clone(), dist2, connection_stop));
+                        v.insert((base_stop_id.clone(), distance_m, connection_stop));
                     }
                     Entry::Occupied(mut o) => {
-                        if dist2 < o.get().1 {
-                            o.insert((base_stop_id.clone(), dist2, connection_stop));
+                        if distance_m < o.get().1 {
+                            o.insert((base_stop_id.clone(), distance_m, connection_stop));
                         }
                     }
                 }
