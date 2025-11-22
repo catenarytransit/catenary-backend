@@ -2,6 +2,7 @@ use actix_web::rt;
 use actix_web::{HttpResponse, Responder, web};
 use ahash::AHashMap;
 use catenary::EtcdConnectionIps;
+use catenary::SerializableStop;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenisedTripScheduleRelationship;
 use catenary::aspen_dataset::AspenisedVehicleDescriptor;
@@ -22,17 +23,25 @@ use chrono_tz::Tz;
 use compact_str::CompactString;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
+use diesel::dsl::sql;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
+use diesel::sql_types::Bool;
 use diesel_async::RunQueryDsl;
 use ecow::EcoString;
+use futures::future::join_all;
+use geo::HaversineDistance;
+use geo::Point;
 use geo::coord;
 use gtfs_realtime::Alert;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tarpc::context;
+
+const TRANSFER_SEARCH_RADIUS_DEGREES: f64 = 0.005;
 
 #[actix_web::get("/get_vehicle_metadata/{chateau}/{vehicle_id}")]
 pub async fn get_vehicle_metadata(path: web::Path<(String, String)>) -> impl Responder {
@@ -293,6 +302,8 @@ struct TripIntroductionInformation {
     pub cancelled_stoptimes: Vec<StopTimeIntroduction>,
     pub is_cancelled: bool,
     pub deleted: bool,
+    pub connecting_routes: Option<BTreeMap<String, BTreeMap<String, catenary::models::Route>>>, // chateau -> route_id -> Route
+    pub connections_per_stop: Option<BTreeMap<String, BTreeMap<String, Vec<String>>>>, // stop_id -> chateau -> route_ids
 }
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct StopTimeIntroduction {
@@ -518,6 +529,22 @@ pub async fn get_trip_init(
             diesel_async::AsyncPgConnection,
         >,
     > = &mut conn_pre.unwrap();
+
+    let conn_pre2 = conn_pool.get().await;
+    let conn_pre3 = conn_pool.get().await;
+
+    let mut conn2: &mut bb8::PooledConnection<
+        '_,
+        diesel_async::pooled_connection::AsyncDieselConnectionManager<
+            diesel_async::AsyncPgConnection,
+        >,
+    > = &mut conn_pre2.unwrap();
+    let mut conn3: &mut bb8::PooledConnection<
+        '_,
+        diesel_async::pooled_connection::AsyncDieselConnectionManager<
+            diesel_async::AsyncPgConnection,
+        >,
+    > = &mut conn_pre3.unwrap();
 
     timer.add("open_pg_connection");
 
@@ -836,6 +863,8 @@ pub async fn get_trip_init(
                         cancelled_stoptimes: vec![],
                         deleted: false,
                         is_cancelled: false,
+                        connecting_routes: None,
+                        connections_per_stop: None,
                     };
 
                     let response = serde_json::to_string(&response).unwrap();
@@ -876,12 +905,12 @@ pub async fn get_trip_init(
                     .eq(&trip_compressed.itinerary_pattern_id),
             )
             .select(catenary::models::ItineraryPatternRow::as_select())
-            .load(conn),
+            .load(conn2),
         routes_pg_schema::dsl::routes
             .filter(routes_pg_schema::dsl::chateau.eq(&chateau))
             .filter(routes_pg_schema::dsl::route_id.eq(&trip_compressed.route_id))
             .select(catenary::models::Route::as_select())
-            .load(conn),
+            .load(conn3),
         calendar_pg_schema::dsl::calendar
             .filter(calendar_pg_schema::dsl::chateau.eq(&chateau))
             .filter(calendar_pg_schema::dsl::service_id.eq(&trip_compressed.service_id))
@@ -1961,6 +1990,296 @@ pub async fn get_trip_init(
         }
     }
 
+    // --- compute close connections / transfers per stop (copied from /route_info) ---
+
+    // Build SerializableStop map & seed additional_routes_to_lookup from the static stops
+    let mut additional_routes_to_lookup: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut stops_hashmap: AHashMap<String, SerializableStop> = AHashMap::new();
+
+    for stop in stops_data_map.values() {
+        let lat = stop.point.map(|p| p.y);
+        let lon = stop.point.map(|p| p.x);
+
+        additional_routes_to_lookup
+            .entry(stop.chateau.clone())
+            .or_insert_with(BTreeSet::new)
+            .extend(
+                stop.routes
+                    .iter()
+                    .filter_map(|r| r.clone())
+                    .collect::<BTreeSet<String>>(),
+            );
+
+        stops_hashmap.insert(
+            stop.gtfs_id.clone(),
+            SerializableStop {
+                id: stop.gtfs_id.clone(),
+                name: stop.name.clone(),
+                code: stop.code.clone(),
+                description: stop.gtfs_desc.clone(),
+                latitude: lat,
+                longitude: lon,
+                location_type: stop.location_type,
+                parent_station: stop.parent_station.clone(),
+                timezone: stop.timezone.clone(),
+                zone_id: stop.zone_id.clone(),
+                routes: stop.routes.iter().filter_map(|r| r.clone()).collect(),
+                platform_code: stop.platform_code.clone(),
+                level_id: stop.level_id.clone(),
+            },
+        );
+    }
+
+    // Pull in parent stations the same way /route_info does
+    let parent_stops: ahash::AHashSet<String> = stops_hashmap
+        .values()
+        .filter_map(|x| x.parent_station.clone())
+        .collect();
+
+    if !parent_stops.is_empty() {
+        let parent_stops_pg: Vec<catenary::models::Stop> = stops_pg_schema::dsl::stops
+            .filter(stops_pg_schema::dsl::chateau.eq(&chateau))
+            .filter(stops_pg_schema::dsl::gtfs_id.eq_any(&parent_stops))
+            .select(catenary::models::Stop::as_select())
+            .load(conn)
+            .await
+            .unwrap();
+
+        for stop in parent_stops_pg {
+            let lat = stop.point.map(|x| x.y);
+            let lon = stop.point.map(|x| x.x);
+
+            additional_routes_to_lookup
+                .entry(stop.chateau.clone())
+                .or_insert_with(BTreeSet::new)
+                .extend(
+                    stop.routes
+                        .iter()
+                        .filter_map(|x| x.clone())
+                        .collect::<BTreeSet<String>>(),
+                );
+
+            stops_hashmap.insert(
+                stop.gtfs_id.clone(),
+                SerializableStop {
+                    id: stop.gtfs_id.clone(),
+                    name: stop.name,
+                    code: stop.code,
+                    description: stop.gtfs_desc,
+                    latitude: lat,
+                    longitude: lon,
+                    location_type: stop.location_type,
+                    parent_station: stop.parent_station,
+                    timezone: stop.timezone,
+                    zone_id: stop.zone_id,
+                    routes: stop.routes.iter().filter_map(|x| x.clone()).collect(),
+                    platform_code: stop.platform_code,
+                    level_id: stop.level_id,
+                },
+            );
+        }
+    }
+
+    // base stops (for this trip) with coordinates
+    let stop_positions: Vec<(String, f64, f64)> = stops_hashmap
+        .iter()
+        .filter_map(|(stop_id, stop)| match (stop.latitude, stop.longitude) {
+            (Some(lat), Some(lon)) => Some((stop_id.clone(), lat, lon)),
+            _ => None,
+        })
+        .collect();
+
+    // Will hold: stop_id -> chateau -> route_ids
+    let mut connections_per_stop: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+
+    if !stop_positions.is_empty() {
+        let pool_for_transfers = pool.clone();
+
+        // one async query per stop, all awaited concurrently
+        let transfer_futures = stop_positions.iter().map(|(stop_id, lat, lon)| {
+            let pool_for_transfers = pool_for_transfers.clone();
+            let stop_id = stop_id.clone();
+            let lat = *lat;
+            let lon = *lon;
+
+            async move {
+                let conn_pre = pool_for_transfers.get().await;
+                if let Err(e) = &conn_pre {
+                    eprintln!(
+                        "error getting pool connection for transfers (trip endpoint): {}",
+                        e
+                    );
+                    return Vec::<(String, f64, f64, catenary::models::Stop)>::new();
+                }
+
+                let mut conn = conn_pre.unwrap();
+
+                let where_query_for_stops = format!(
+                    "ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) \
+                         AND allowed_spatial_query = TRUE",
+                    lon, lat, TRANSFER_SEARCH_RADIUS_DEGREES
+                );
+
+                let nearby: Vec<catenary::models::Stop> = stops_pg_schema::dsl::stops
+                    .filter(sql::<Bool>(&where_query_for_stops))
+                    .select(catenary::models::Stop::as_select())
+                    .load(&mut conn)
+                    .await
+                    .unwrap_or_else(|e| {
+                        eprintln!(
+                            "error computing transfers for stop {} (trip endpoint): {}",
+                            stop_id, e
+                        );
+                        Vec::new()
+                    });
+
+                nearby
+                    .into_iter()
+                    .map(|s| (stop_id.clone(), lat, lon, s))
+                    .collect::<Vec<_>>()
+            }
+        });
+
+        let transfer_results: Vec<Vec<(String, f64, f64, catenary::models::Stop)>> =
+            join_all(transfer_futures).await;
+
+        // For each *connection* stop, keep only the closest base stop
+        let mut best_connection_assignment: AHashMap<
+            (String, String),                      // (connection_chateau, connection_stop_id)
+            (String, f64, catenary::models::Stop), // (base_stop_id, distance_m, stop)
+        > = AHashMap::new();
+
+        for result in transfer_results {
+            for (base_stop_id, base_lat, base_lon, connection_stop) in result {
+                // We only care about connections to other chateaux,
+                // and not the exact same stop as our base.
+                if connection_stop.chateau == chateau && connection_stop.gtfs_id == base_stop_id {
+                    continue;
+                }
+
+                let point = match connection_stop.point {
+                    Some(p) => p,
+                    None => continue,
+                };
+
+                // Choose max allowed distance based on mode:
+                //  - 100 m for buses (primary_route_type == Some(3))
+                //  - 200 m for tram/subway
+                //  - 300 m for everything else
+                let max_distance_m = match connection_stop.primary_route_type {
+                    Some(3) => 100.0, // bus
+                    Some(0) => 200.0, // tram
+                    Some(1) => 200.0, // subway
+                    _ => 300.0,       // other modes
+                };
+
+                // Haversine distance in meters between base stop and connection stop
+                let base_point = Point::new(base_lon, base_lat);
+                let conn_point = Point::new(point.x, point.y);
+                let distance_m = base_point.haversine_distance(&conn_point);
+
+                if distance_m > max_distance_m {
+                    continue;
+                }
+
+                let key = (
+                    connection_stop.chateau.clone(),
+                    connection_stop.gtfs_id.clone(),
+                );
+
+                match best_connection_assignment.entry(key) {
+                    Entry::Vacant(v) => {
+                        v.insert((base_stop_id.clone(), distance_m, connection_stop));
+                    }
+                    Entry::Occupied(mut o) => {
+                        if distance_m < o.get().1 {
+                            o.insert((base_stop_id.clone(), distance_m, connection_stop));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build connections_per_stop and extend additional_routes_to_lookup
+        for ((connection_chateau, _connection_stop_id), (base_stop_id, _dist2, connection_stop)) in
+            best_connection_assignment
+        {
+            let routes_for_connection: BTreeSet<String> = connection_stop
+                .routes
+                .iter()
+                .filter_map(|r| r.clone())
+                .collect();
+
+            if routes_for_connection.is_empty() {
+                continue;
+            }
+
+            // stop_id -> chateau -> route_ids
+            let per_chateau = connections_per_stop
+                .entry(base_stop_id.clone())
+                .or_insert_with(BTreeMap::new);
+
+            let route_vec = per_chateau
+                .entry(connection_chateau.clone())
+                .or_insert_with(Vec::new);
+
+            for rid in &routes_for_connection {
+                if !route_vec.contains(rid) {
+                    route_vec.push(rid.clone());
+                }
+            }
+
+            // Make sure we look up these routes in connecting_routes below
+            additional_routes_to_lookup
+                .entry(connection_chateau.clone())
+                .or_insert_with(BTreeSet::new)
+                .extend(routes_for_connection);
+        }
+    }
+
+    // Remove this route itself from transfer connections
+    for (_stop_id, per_chateau) in connections_per_stop.iter_mut() {
+        if let Some(routes) = per_chateau.get_mut(&chateau) {
+            routes.retain(|rid| rid != &route.route_id);
+        }
+    }
+
+    if let Some(routes_set) = additional_routes_to_lookup.get_mut(&chateau) {
+        routes_set.remove(&route.route_id);
+    }
+
+    // Fetch metadata for connecting routes
+    let mut response_connecting_routes: BTreeMap<
+        String,
+        BTreeMap<String, catenary::models::Route>,
+    > = BTreeMap::new();
+
+    for (chateau_key, routes_to_lookup) in additional_routes_to_lookup {
+        if routes_to_lookup.is_empty() {
+            continue;
+        }
+
+        let connecting_routes_pg: Vec<catenary::models::Route> = routes_pg_schema::dsl::routes
+            .filter(routes_pg_schema::dsl::chateau.eq(&chateau_key))
+            .filter(
+                routes_pg_schema::dsl::route_id
+                    .eq_any(&routes_to_lookup.iter().cloned().collect::<Vec<String>>()),
+            )
+            .select(catenary::models::Route::as_select())
+            .load(conn)
+            .await
+            .unwrap();
+
+        let mut connecting_routes_map: BTreeMap<String, catenary::models::Route> = BTreeMap::new();
+
+        for route in connecting_routes_pg {
+            connecting_routes_map.insert(route.route_id.clone(), route);
+        }
+
+        response_connecting_routes.insert(chateau_key, connecting_routes_map);
+    }
+    // --- end: compute close connections / transfers per stop ---
+
     let response = TripIntroductionInformation {
         stoptimes: stop_times_for_this_trip,
         tz: timezone,
@@ -1990,6 +2309,16 @@ pub async fn get_trip_init(
         cancelled_stoptimes: cancelled_stop_times,
         is_cancelled: is_cancelled,
         deleted: deleted,
+        connecting_routes: if response_connecting_routes.is_empty() {
+            None
+        } else {
+            Some(response_connecting_routes)
+        },
+        connections_per_stop: if connections_per_stop.is_empty() {
+            None
+        } else {
+            Some(connections_per_stop)
+        },
     };
 
     let text = serde_json::to_string(&response).unwrap();
