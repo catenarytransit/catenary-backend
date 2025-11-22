@@ -2089,6 +2089,12 @@ pub async fn get_trip_init(
         })
         .collect();
 
+    // base stops for this trip, by stop_id
+    let base_stop_ids: ahash::AHashSet<String> = stop_positions
+        .iter()
+        .map(|(stop_id, _, _)| stop_id.clone())
+        .collect();
+
     // Will hold: stop_id -> chateau -> route_ids
     let mut connections_per_stop: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
 
@@ -2151,29 +2157,49 @@ pub async fn get_trip_init(
 
         for result in transfer_results {
             for (base_stop_id, base_lat, base_lon, connection_stop) in result {
-                // We only care about connections to other chateaux,
-                // and not the exact same stop as our base.
-                if connection_stop.chateau == chateau && connection_stop.gtfs_id == base_stop_id {
+                // If this (chateau, stop_id) is already in our base stop list,
+                // then its "best connection" should be itself, and nothing else
+                // should be able to claim it.
+                if connection_stop.chateau == chateau
+                    && base_stop_ids.contains(&connection_stop.gtfs_id)
+                {
+                    let key = (
+                        connection_stop.chateau.clone(),
+                        connection_stop.gtfs_id.clone(),
+                    );
+
+                    match best_connection_assignment.entry(key) {
+                        // only insert once, as a self-connection with distance 0
+                        Entry::Vacant(v) => {
+                            v.insert((
+                                connection_stop.gtfs_id.clone(), // base_stop_id = itself
+                                0.0,
+                                connection_stop,
+                            ));
+                        }
+                        // If it's already there, we never override it with a different base
+                        Entry::Occupied(_) => {}
+                    }
+
+                    // Don't let this stop be evaluated as a generic "nearby" candidate
+                    // for other base stops in this iteration.
                     continue;
                 }
 
+                // Only consider stops that actually have a point
                 let point = match connection_stop.point {
                     Some(p) => p,
                     None => continue,
                 };
 
                 // Choose max allowed distance based on mode:
-                //  - 100 m for buses (primary_route_type == Some(3))
-                //  - 200 m for tram/subway
-                //  - 300 m for everything else
                 let max_distance_m = match connection_stop.primary_route_type {
-                    Some(3) => 100.0, // bus
+                    Some(3) => 150.0, // bus
                     Some(0) => 200.0, // tram
                     Some(1) => 200.0, // subway
                     _ => 300.0,       // other modes
                 };
 
-                // Haversine distance in meters between base stop and connection stop
                 let base_point = Point::new(base_lon, base_lat);
                 let conn_point = Point::new(point.x, point.y);
                 let distance_m = base_point.haversine_distance(&conn_point);
