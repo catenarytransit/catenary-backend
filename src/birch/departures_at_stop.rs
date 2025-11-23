@@ -2010,7 +2010,7 @@ pub async fn departures_at_stop(
         x.realtime_departure.unwrap_or(
             x.realtime_arrival.unwrap_or(
                 x.scheduled_departure
-                    .unwrap_or(x.scheduled_arrival.unwrap()),
+                    .unwrap_or(x.scheduled_arrival.unwrap_or(0)),
             ),
         )
     });
