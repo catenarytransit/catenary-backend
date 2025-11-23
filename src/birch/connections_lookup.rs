@@ -157,33 +157,33 @@ pub async fn connections_lookup(
                 // Choose max allowed distance based on mode:
                 let max_distance_m = match input_route_type {
                     0 => match connection_stop.primary_route_type {
-                    Some(3) => 150.0, // bus
-                    Some(0) => 200.0, // tram
-                    Some(1) => 200.0, // subway
-                    Some(2) => 400.0, // rail
-                    _ => 300.0,       // other modes
-                },
-                1 => match connection_stop.primary_route_type {
-                    Some(3) => 150.0, // bus
-                    Some(0) => 200.0, // tram
-                    Some(1) => 200.0, // subway
-                    Some(2) => 400.0, // rail
-                    _ => 300.0,       // other modes
-                },
-                2 => match connection_stop.primary_route_type {
-                    Some(3) => 200.0, // bus
-                    Some(0) => 300.0, // tram
-                    Some(1) => 300.0, // subway
-                    Some(2) => 300.0, // rail
-                    _ => 300.0,       // other modes
-                },
+                        Some(3) => 150.0, // bus
+                        Some(0) => 200.0, // tram
+                        Some(1) => 200.0, // subway
+                        Some(2) => 400.0, // rail
+                        _ => 300.0,       // other modes
+                    },
+                    1 => match connection_stop.primary_route_type {
+                        Some(3) => 150.0, // bus
+                        Some(0) => 200.0, // tram
+                        Some(1) => 200.0, // subway
+                        Some(2) => 400.0, // rail
+                        _ => 300.0,       // other modes
+                    },
+                    2 => match connection_stop.primary_route_type {
+                        Some(3) => 200.0, // bus
+                        Some(0) => 300.0, // tram
+                        Some(1) => 300.0, // subway
+                        Some(2) => 300.0, // rail
+                        _ => 300.0,       // other modes
+                    },
                     _ => match connection_stop.primary_route_type {
-                    Some(3) => 150.0, // bus
-                    Some(0) => 200.0, // tram
-                    Some(1) => 200.0, // subway
-                    Some(2) => 300.0, // rail
-                    _ => 300.0,       // other modes
-                }
+                        Some(3) => 150.0, // bus
+                        Some(0) => 200.0, // tram
+                        Some(1) => 200.0, // subway
+                        Some(2) => 300.0, // rail
+                        _ => 300.0,       // other modes
+                    },
                 };
 
                 let base_point = Point::new(base_lon, base_lat);
