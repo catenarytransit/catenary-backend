@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-const TRANSFER_SEARCH_RADIUS_DEGREES: f64 = 0.005;
+const TRANSFER_SEARCH_RADIUS_DEGREES: f64 = 0.006;
 
 pub struct ConnectionsInfo {
     pub connecting_routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>, // chateau -> route_id -> Route
@@ -155,12 +155,35 @@ pub async fn connections_lookup(
                 };
 
                 // Choose max allowed distance based on mode:
-                let max_distance_m = match connection_stop.primary_route_type {
+                let max_distance_m = match input_route_type {
+                    0 => match connection_stop.primary_route_type {
                     Some(3) => 150.0, // bus
                     Some(0) => 200.0, // tram
                     Some(1) => 200.0, // subway
                     Some(2) => 400.0, // rail
                     _ => 300.0,       // other modes
+                },
+                1 => match connection_stop.primary_route_type {
+                    Some(3) => 150.0, // bus
+                    Some(0) => 200.0, // tram
+                    Some(1) => 200.0, // subway
+                    Some(2) => 400.0, // rail
+                    _ => 300.0,       // other modes
+                },
+                2 => match connection_stop.primary_route_type {
+                    Some(3) => 200.0, // bus
+                    Some(0) => 300.0, // tram
+                    Some(1) => 300.0, // subway
+                    Some(2) => 300.0, // rail
+                    _ => 300.0,       // other modes
+                },
+                    _ => match connection_stop.primary_route_type {
+                    Some(3) => 150.0, // bus
+                    Some(0) => 200.0, // tram
+                    Some(1) => 200.0, // subway
+                    Some(2) => 300.0, // rail
+                    _ => 300.0,       // other modes
+                }
                 };
 
                 let base_point = Point::new(base_lon, base_lat);
