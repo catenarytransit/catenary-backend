@@ -265,6 +265,45 @@ impl AspenRpc for AspenServer {
         }
     }
 
+    async fn get_nonscheduled_trips_updates_from_stop_ids(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        stop_ids: Vec<String>,
+    ) -> Option<Vec<AspenisedTripUpdate>> {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                let mut trip_update_ids_to_get: AHashSet<EcoString> = AHashSet::new();
+
+                for stop_id in stop_ids {
+                    if let Some(trip_update_ids) = aspenised_data
+                        .stop_id_to_non_scheduled_trip_ids
+                        .get(stop_id.as_str())
+                    {
+                        for trip_update_id in trip_update_ids {
+                            trip_update_ids_to_get.insert(trip_update_id.clone());
+                        }
+                    }
+                }
+
+                let mut trip_data_to_send: Vec<AspenisedTripUpdate> = vec![];
+
+                for trip_update_id in trip_update_ids_to_get.iter() {
+                    if let Some(trip_update) =
+                        aspenised_data.trip_updates.get(trip_update_id.as_str())
+                    {
+                        trip_data_to_send.push(trip_update.clone())
+                    }
+                }
+
+                Some(trip_data_to_send)
+            }
+            None => None,
+        }
+    }
+
     async fn get_trip_modifications(
         self,
         _: context::Context,

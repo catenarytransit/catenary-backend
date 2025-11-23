@@ -149,6 +149,11 @@ pub trait AspenRpc {
         stop_ids: Vec<String>,
     ) -> Option<AlertsforManyStops>;
 
+    async fn get_nonscheduled_trips_updates_from_stop_ids(
+        chateau_id: String,
+        stop_ids: Vec<String>,
+    ) -> Option<Vec<AspenisedTripUpdate>>;
+
     async fn get_all_alerts(chateau_id: String) -> Option<HashMap<String, AspenisedAlert>>;
 
     async fn full_aspen_dataset(chateau_id: String) -> Option<AspenisedData>;

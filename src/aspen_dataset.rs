@@ -375,6 +375,8 @@ pub struct AspenTripProperties {
     pub start_date: Option<chrono::NaiveDate>,
     pub start_time: Option<String>,
     pub shape_id: Option<String>,
+    pub trip_headsign: Option<String>,
+    pub trip_short_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
@@ -734,6 +736,8 @@ impl From<TripProperties> for AspenTripProperties {
             },
             start_time: trip_properties.start_time,
             shape_id: trip_properties.shape_id,
+            trip_headsign: trip_properties.trip_headsign,
+            trip_short_name: trip_properties.trip_short_name,
         }
     }
 }
