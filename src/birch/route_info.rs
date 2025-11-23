@@ -3,6 +3,7 @@ use actix_web::HttpResponse;
 use actix_web::Responder;
 use actix_web::web;
 use catenary::EtcdConnectionIps;
+use catenary::SerializableStop;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen_dataset::AspenisedAlert;
 use catenary::models::DirectionPatternMeta;
@@ -11,25 +12,17 @@ use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel_async::AsyncConnection;
 use diesel_async::RunQueryDsl;
-use geo::Point;
 use geo::coord;
-use geo::prelude::HaversineDistance;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::sync::Arc;
-//use diesel::query_dsl::methods::FilterDsl;
-//use diesel::query_dsl::methods::SelectDsl;
-use catenary::SerializableStop;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 use tarpc::context;
 
-use diesel::dsl::sql;
-use diesel::sql_types::Bool;
-use futures::future::join_all;
-
-const TRANSFER_SEARCH_RADIUS_DEGREES: f64 = 0.005;
+// NEW: import the helper
+use crate::connections_lookup::connections_lookup;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RouteInfoResponse {
@@ -180,10 +173,6 @@ pub async fn route_info(
             }
         }
     };
-
-    //get current attempt ids for onestop_feed_id
-
-    //TODO!
 
     // fetch directions
 
@@ -365,7 +354,7 @@ pub async fn route_info(
         );
     }
 
-    // --- compute close connections / transfers per stop (concurrent) ---
+    // --- compute close connections / transfers via shared helper ---
 
     // base stops (for this route) with coordinates
     let stop_positions: Vec<(String, f64, f64)> = stops_hashmap
@@ -376,193 +365,29 @@ pub async fn route_info(
         })
         .collect();
 
-    // Will hold: stop_id -> chateau -> route_ids
-    let mut connections_per_stop: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+    let (response_connecting_routes, connections_per_stop) = if stop_positions.is_empty() {
+        (BTreeMap::new(), BTreeMap::new())
+    } else {
+        // unwrap inner Arc<CatenaryPostgresPool> from web::Data
+        let pool_arc: Arc<CatenaryPostgresPool> = pool.get_ref().clone();
 
-    if !stop_positions.is_empty() {
-        let pool_for_transfers = pool.clone();
+        let connections_info = connections_lookup(
+            &query.chateau,
+            &route.route_id,
+            route.route_type,
+            stop_positions,
+            additional_routes_to_lookup,
+            pool_arc,
+        )
+        .await;
 
-        // one async query per stop, all awaited concurrently
-        let transfer_futures = stop_positions.iter().map(|(stop_id, lat, lon)| {
-            let pool_for_transfers = pool_for_transfers.clone();
-            let stop_id = stop_id.clone();
-            let lat = *lat;
-            let lon = *lon;
+        (
+            connections_info.connecting_routes,
+            connections_info.connections_per_stop,
+        )
+    };
 
-            async move {
-                let conn_pre = pool_for_transfers.get().await;
-                if let Err(e) = &conn_pre {
-                    eprintln!("error getting pool connection for transfers: {}", e);
-                    return Vec::<(String, f64, f64, catenary::models::Stop)>::new();
-                }
-
-                let mut conn = conn_pre.unwrap();
-
-                let where_query_for_stops = format!(
-                    "ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) \
-                         AND allowed_spatial_query = TRUE",
-                    lon, lat, TRANSFER_SEARCH_RADIUS_DEGREES
-                );
-
-                let nearby: Vec<catenary::models::Stop> = catenary::schema::gtfs::stops::dsl::stops
-                    .filter(sql::<Bool>(&where_query_for_stops))
-                    .select(catenary::models::Stop::as_select())
-                    .load(&mut conn)
-                    .await
-                    .unwrap_or_else(|e| {
-                        eprintln!("error computing transfers for stop {}: {}", stop_id, e);
-                        Vec::new()
-                    });
-
-                nearby
-                    .into_iter()
-                    .map(|s| (stop_id.clone(), lat, lon, s))
-                    .collect::<Vec<_>>()
-            }
-        });
-
-        let transfer_results: Vec<Vec<(String, f64, f64, catenary::models::Stop)>> =
-            join_all(transfer_futures).await;
-
-        // For each *connection* stop, keep only the closest base stop
-        use std::collections::hash_map::Entry;
-
-        let mut best_connection_assignment: HashMap<
-            (String, String),                      // (connection_chateau, connection_stop_id)
-            (String, f64, catenary::models::Stop), // (base_stop_id, distance_m, stop)
-        > = HashMap::new();
-
-        for result in transfer_results {
-            for (base_stop_id, base_lat, base_lon, connection_stop) in result {
-                // We only care about connections to other chateaux,
-                // and not the exact same stop as our base.
-                if connection_stop.chateau == query.chateau
-                    && connection_stop.gtfs_id == base_stop_id
-                {
-                    continue;
-                }
-
-                // Only consider stops that actually have a point
-                let point = match connection_stop.point {
-                    Some(p) => p,
-                    None => continue,
-                };
-
-                // Choose max allowed distance based on mode:
-                //  - 100 m for buses (primary_route_type == Some(3))
-                //  - 200 m for everything else (tram, subway, rail, ferry, etc.)
-                let max_distance_m = match connection_stop.primary_route_type {
-                    Some(3) => 100.0, // bus
-                    Some(0) => 200.0, // tram
-                    Some(1) => 200.0, // subway
-                    _ => 300.0,       // other modes
-                };
-
-                // Haversine distance in meters between base stop and connection stop
-                let base_point = Point::new(base_lon, base_lat);
-                let conn_point = Point::new(point.x, point.y);
-                let distance_m = base_point.haversine_distance(&conn_point);
-
-                // Skip if outside allowed radius for this mode
-                if distance_m > max_distance_m {
-                    continue;
-                }
-
-                let key = (
-                    connection_stop.chateau.clone(),
-                    connection_stop.gtfs_id.clone(),
-                );
-
-                match best_connection_assignment.entry(key) {
-                    Entry::Vacant(v) => {
-                        v.insert((base_stop_id.clone(), distance_m, connection_stop));
-                    }
-                    Entry::Occupied(mut o) => {
-                        if distance_m < o.get().1 {
-                            o.insert((base_stop_id.clone(), distance_m, connection_stop));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Build connections_per_stop and extend additional_routes_to_lookup
-        for ((connection_chateau, _connection_stop_id), (base_stop_id, _dist2, connection_stop)) in
-            best_connection_assignment
-        {
-            let routes_for_connection: BTreeSet<String> = connection_stop
-                .routes
-                .iter()
-                .filter_map(|r| r.clone())
-                .collect();
-
-            if routes_for_connection.is_empty() {
-                continue;
-            }
-
-            // stop_id -> chateau -> route_ids
-            let per_chateau = connections_per_stop
-                .entry(base_stop_id.clone())
-                .or_insert_with(BTreeMap::new);
-
-            let route_vec = per_chateau
-                .entry(connection_chateau.clone())
-                .or_insert_with(Vec::new);
-
-            for rid in &routes_for_connection {
-                if !route_vec.contains(rid) {
-                    route_vec.push(rid.clone());
-                }
-            }
-
-            // Make sure we look up these routes in connecting_routes below
-            additional_routes_to_lookup
-                .entry(connection_chateau.clone())
-                .or_insert_with(BTreeSet::new)
-                .extend(routes_for_connection);
-        }
-    }
-
-    // --- end: compute close connections / transfers per stop ---
-
-    // Remove this route itself from transfer connections
-    for (_stop_id, per_chateau) in connections_per_stop.iter_mut() {
-        if let Some(routes) = per_chateau.get_mut(&query.chateau) {
-            routes.retain(|rid| rid != &route.route_id);
-        }
-    }
-
-    if let Some(routes_set) = additional_routes_to_lookup.get_mut(&query.chateau) {
-        routes_set.remove(&route.route_id);
-    }
-
-    let mut response_connecting_routes = BTreeMap::new();
-
-    for (chateau, routes_to_lookup) in additional_routes_to_lookup {
-        if routes_to_lookup.is_empty() {
-            continue;
-        }
-
-        let connecting_routes_pg: Vec<catenary::models::Route> =
-            catenary::schema::gtfs::routes::dsl::routes
-                .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(&chateau))
-                .filter(
-                    catenary::schema::gtfs::routes::dsl::route_id
-                        .eq_any(&routes_to_lookup.iter().cloned().collect::<Vec<String>>()),
-                )
-                .select(catenary::models::Route::as_select())
-                .load(conn)
-                .await
-                .unwrap();
-
-        let mut connecting_routes_map: BTreeMap<String, catenary::models::Route> = BTreeMap::new();
-
-        for route in connecting_routes_pg {
-            connecting_routes_map.insert(route.route_id.clone(), route);
-        }
-
-        response_connecting_routes.insert(chateau, connecting_routes_map);
-    }
+    // --- end connections lookup ---
 
     // fetch shapes
 

@@ -77,6 +77,7 @@ use rand::Rng;
 mod terrain_tiles_proxy;
 use terrain_tiles_proxy::proxy_for_maptiler_terrain_tiles;
 mod block_api;
+mod connections_lookup;
 mod openrailwaymap_proxy;
 mod stop_preview;
 mod text_search;
