@@ -75,7 +75,7 @@ mod nearby_departuresv2;
 mod route_info;
 use rand::Rng;
 mod terrain_tiles_proxy;
-use terrain_tiles_proxy::proxy_for_maptiler_terrain_tiles;
+use terrain_tiles_proxy::*;
 mod block_api;
 mod connections_lookup;
 mod openrailwaymap_proxy;
@@ -912,6 +912,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_agencies::get_agencies_raw)
             .service(get_agencies::get_agencies_for_chateau)
             .service(proxy_for_maptiler_terrain_tiles)
+            .service(proxy_for_maptiler_coutours_tiles)
             .service(vehicle_api::get_vehicle_data_endpoint)
             .service(block_api::block_api)
             .service(size_bbox_zoom_birch)
