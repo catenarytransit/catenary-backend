@@ -473,6 +473,17 @@ pub async fn gtfs_process_feed(
             gtfs,
             &Vec::from([String::from("Wiener Linien GmbH & Co KG")]),
         ),
+        "f-lax~flyaway" => {
+            let mut gtfs = gtfs;
+
+            for (trip_id, trip) in gtfs.trips.iter_mut() {
+                for stop_time in trip.stop_times.iter_mut() {
+                    stop_time.stop_headsign = None;
+                }
+            }
+
+            gtfs
+        }
         "f-dr5r-mtasubway" => {
             //https://www.mta.info/document/134521
             //Align the GTFS schedule schedule ids for the New York City Subway to the realtime ids by dropping the first underscore
