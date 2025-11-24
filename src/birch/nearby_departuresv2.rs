@@ -83,6 +83,7 @@ struct NearbyFromCoords {
     lat: f64,
     lon: f64,
     departure_time: Option<u64>,
+    limit_n_events_after_departure_time: Option<usize>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -2133,6 +2134,58 @@ pub async fn nearby_from_coords_v2(
             );
 
             let total_elapsed_time = start.elapsed();
+
+            let now = catenary::duration_since_unix_epoch().as_secs() as u64;
+
+            if let Some(limit_n_events_after_departure_time) =
+                &query.limit_n_events_after_departure_time
+            {
+                for departures_for_route in departures.iter_mut() {
+                    for ((_, _), departing_headsign_group) in
+                        departures_for_route.directions.iter_mut()
+                    {
+                        if !departing_headsign_group.trips.is_empty() {
+                            let mut counter: usize = 0;
+                            let mut truncate_i: usize = 0;
+
+                            for (i, trip) in departing_headsign_group.trips.iter().enumerate() {
+                                truncate_i = truncate_i + 1;
+                                let mut after_now = false;
+
+                                if let Some(departure_realtime) = trip.departure_realtime {
+                                    if departure_realtime >= now {
+                                        after_now = true;
+                                    }
+                                } else if let Some(departure_schedule) = trip.departure_schedule {
+                                    if departure_schedule >= now {
+                                        after_now = true;
+                                    }
+                                }
+
+                                if let Some(arrival_realtime) = trip.arrival_realtime {
+                                    if arrival_realtime >= now {
+                                        after_now = true;
+                                    }
+                                } else if let Some(arrival_schedule) = trip.arrival_schedule {
+                                    if arrival_schedule >= now {
+                                        after_now = true;
+                                    }
+                                }
+
+                                if after_now {
+                                    counter = counter + 1;
+                                }
+
+                                if counter == *limit_n_events_after_departure_time {
+                                    break;
+                                }
+                            }
+
+                            departing_headsign_group.trips.truncate(truncate_i);
+                        }
+                    }
+                }
+            }
 
             HttpResponse::Ok().json(DepartingTripsDataAnswer {
                 number_of_stops_searched_through: stops.len(),
