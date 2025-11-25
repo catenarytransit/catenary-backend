@@ -92,7 +92,7 @@ async fn gtfs_rt(
                                     ConvertedFormat::Ron => HttpResponse::Ok()
                                         .append_header(("Cache-Control", "no-cache"))
                                         .append_header(actix_web::http::header::ContentType(
-                                            mime::TEXT,
+                                            mime::TEXT_PLAIN,
                                         ))
                                         .body(
                                             ron::ser::to_string_pretty(
