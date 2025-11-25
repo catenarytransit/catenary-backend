@@ -10,7 +10,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct ShapePoint {
     pub geometry: Point<f64>,
-    pub sequence: usize, // Changed to usize to match RawShape usually, but kept flexible
+    pub sequence: usize,
     pub dist_traveled: Option<f32>,
 }
 
@@ -26,6 +26,29 @@ struct RawShape {
     pub sequence: usize,
     #[serde(rename = "shape_dist_traveled")]
     pub dist_traveled: Option<f32>,
+}
+
+/// O(n) check; only sort if any sequence is out of order.
+fn maybe_sort_by_sequence(points: &mut Vec<ShapePoint>) {
+    if points.len() < 2 {
+        return;
+    }
+
+    let mut prev = points[0].sequence;
+    let mut sorted = true;
+
+    for p in points.iter().skip(1) {
+        if p.sequence < prev {
+            sorted = false;
+            break;
+        }
+        prev = p.sequence;
+    }
+
+    if !sorted {
+        // In-place, no extra allocation
+        points.sort_unstable_by_key(|p| p.sequence);
+    }
 }
 
 /// Reads a shapes.txt file and aggregates points into a HashMap.
@@ -44,7 +67,7 @@ pub fn faster_shape_reader(
     let mut shapes: AHashMap<String, Vec<ShapePoint>> = AHashMap::with_capacity(1000);
 
     // State buffers for the streaming aggregation
-    let mut current_points: Vec<ShapePoint> = Vec::with_capacity(500); // Pre-allocate for average shape size
+    let mut current_points: Vec<ShapePoint> = Vec::with_capacity(500);
     let mut current_shape_id: Option<EcoString> = None;
 
     for result in rdr.deserialize() {
@@ -53,17 +76,13 @@ pub fn faster_shape_reader(
         // Check if we have transitioned to a new shape_id
         if let Some(ref curr_id) = current_shape_id {
             if *curr_id != record.id {
-                // The ID has changed.
-                // 1. Commit the accumulated vector to the map.
-                // Note: We convert EcoString to String here as per the return signature requirement.
-                shapes.insert(curr_id.to_string(), current_points);
+                // ID changed: finish the current shape
+                if !current_points.is_empty() {
+                    maybe_sort_by_sequence(&mut current_points);
+                    shapes.insert(curr_id.to_string(), current_points);
+                    current_points = Vec::with_capacity(500);
+                }
 
-                // 2. Reset the vector for the new shape.
-                // We use new() rather than clear() to ensure the HashMap takes ownership
-                // of the full vector allocation, while we start fresh.
-                current_points = Vec::with_capacity(500);
-
-                // 3. Update the current ID tracker.
                 current_shape_id = Some(record.id.clone());
             }
         } else {
@@ -81,9 +100,10 @@ pub fn faster_shape_reader(
         current_points.push(point);
     }
 
-    // Crucial: Commit the final batch of points after the loop finishes
+    // Commit the final batch of points after the loop finishes
     if let Some(last_id) = current_shape_id {
         if !current_points.is_empty() {
+            maybe_sort_by_sequence(&mut current_points);
             shapes.insert(last_id.to_string(), current_points);
         }
     }
