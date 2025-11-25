@@ -91,6 +91,9 @@ async fn gtfs_rt(
                                         .body(data.encode_to_vec()),
                                     ConvertedFormat::Ron => HttpResponse::Ok()
                                         .append_header(("Cache-Control", "no-cache"))
+                                        .append_header(actix_web::http::header::ContentType(
+                                            mime::TEXT,
+                                        ))
                                         .body(
                                             ron::ser::to_string_pretty(
                                                 &data,
