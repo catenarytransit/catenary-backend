@@ -44,6 +44,8 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 mod postgis_download;
 use postgis_download::*;
+mod alerts;
+use alerts::*;
 mod departures_at_stop;
 mod transfer_calc;
 use actix_web::middleware::DefaultHeaders;
@@ -898,6 +900,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_vehicle_trip_information::get_trip_rt_update)
             .service(get_vehicle_trip_information::get_vehicle_information)
             .service(get_vehicle_trip_information::get_vehicle_information_from_label)
+            .service(fetch_alerts_with_hydrated_data)
             .service(calfireproxy)
             .service(ip_addr_to_geo_api)
             .service(route_info::route_info)

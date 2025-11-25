@@ -1,0 +1,2216 @@
+warning: unused manifest key: library
+   Compiling catenary-backend v0.4.0 (/home/kyler/catenary-backend)
+warning: unused `#[macro_use]` import
+  --> src/lib.rs:37:1
+   |
+37 | #[macro_use]
+   | ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::net::IpAddr`
+  --> src/aspen/lib.rs:15:5
+   |
+15 | use std::net::IpAddr;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FeedEntity` and `FeedMessage`
+ --> src/id_cleanup/mod.rs:2:21
+  |
+2 | use gtfs_realtime::{FeedEntity, FeedMessage};
+  |                     ^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused import: `Utc`
+ --> src/custom_alerts/metrolink_alerts.rs:1:24
+  |
+1 | use chrono::{TimeZone, Utc};
+  |                        ^^^
+
+warning: unused import: `self`
+ --> src/custom_alerts/metrolink_alerts.rs:3:23
+  |
+3 | use futures::stream::{self, StreamExt};
+  |                       ^^^^
+
+warning: unused import: `gtfs_realtime::FeedEntity`
+ --> src/custom_alerts/metrolink_alerts.rs:4:5
+  |
+4 | use gtfs_realtime::FeedEntity;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `auth::Credentials` and `cat::CatIndicesParts`
+ --> src/elasticutils/mod.rs:3:5
+  |
+3 |     auth::Credentials,
+  |     ^^^^^^^^^^^^^^^^^
+4 |     cat::CatIndicesParts,
+  |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `schema::gtfs::trip_frequencies::start_time`
+  --> src/lib.rs:70:5
+   |
+70 | use schema::gtfs::trip_frequencies::start_time;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::BTreeSet`
+  --> src/lib.rs:72:5
+   |
+72 | use std::collections::BTreeSet;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::BTreeMap`
+ --> src/schedule_filtering/mod.rs:4:5
+  |
+4 | use std::collections::BTreeMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> src/schedule_filtering/mod.rs:6:5
+  |
+6 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary parentheses around `if` condition
+  --> src/schedule_filtering/mod.rs:91:8
+   |
+91 |     if (delete_shapes_and_stops) {
+   |        ^                       ^
+   |
+   = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+   |
+91 -     if (delete_shapes_and_stops) {
+91 +     if delete_shapes_and_stops {
+   |
+
+warning: unused import: `crate::models::TileStorage`
+ --> src/tile_save_and_get.rs:1:5
+  |
+1 | use crate::models::TileStorage;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `prost::Message`
+ --> src/timestamp_extraction.rs:1:5
+  |
+1 | use prost::Message;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused import: `gtfs_realtime::FeedHeader`
+ --> src/timestamp_extraction.rs:3:5
+  |
+3 | use gtfs_realtime::FeedHeader;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `gtfs_realtime::FeedMessage`
+ --> src/timestamp_extraction.rs:4:5
+  |
+4 | use gtfs_realtime::FeedMessage;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::path::PathBuf`
+  --> src/lib.rs:93:5
+   |
+93 | use std::path::PathBuf;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::RtCacheEntry`
+ --> src/aspen_dataset.rs:1:5
+  |
+1 | use crate::RtCacheEntry;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::RtKey`
+ --> src/aspen_dataset.rs:2:5
+  |
+2 | use crate::RtKey;
+  |     ^^^^^^^^^^^^
+
+warning: unused import: `gtfs_realtime::FeedEntity`
+ --> src/aspen_dataset.rs:6:5
+  |
+6 | use gtfs_realtime::FeedEntity;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::sync::Arc`
+ --> src/aspen_dataset.rs:8:5
+  |
+8 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused doc comment
+   --> src/lib.rs:746:5
+    |
+746 |     ///Date(1729199040000)/
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+747 |     //extract all the numbers
+748 |     let mut numbers = date.chars().filter(|x| x.is_numeric()).collect::<String>();
+    |     ------------------------------------------------------------------------------ rustdoc does not generate documentation for statements
+    |
+    = help: use `//` for a plain comment
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of deprecated trait `geo::HaversineDestination`: Please use the `Haversine.destination` method from the `Destination` trait instead
+   --> src/lib.rs:864:10
+    |
+864 | use geo::HaversineDestination;
+    |          ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: unused variable: `finished_id_list`
+   --> src/custom_alerts/metrolink_alerts.rs:609:13
+    |
+609 |     let mut finished_id_list = raw_from_homepage.iter().map(|x| x.id.clone()).collect_vec();
+    |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_finished_id_list`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/custom_alerts/metrolink_alerts.rs:609:9
+    |
+609 |     let mut finished_id_list = raw_from_homepage.iter().map(|x| x.id.clone()).collect_vec();
+    |         ----^^^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `delete_response`
+  --> src/elasticutils/mod.rs:32:13
+   |
+32 |         let delete_response = client
+   |             ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delete_response`
+
+warning: unused variable: `delete_from_pg`
+  --> src/shape_fetcher/mod.rs:68:9
+   |
+68 |     let delete_from_pg = diesel::delete(
+   |         ^^^^^^^^^^^^^^
+   |
+help: if this is intentional, prefix it with an underscore
+   |
+68 |     let _delete_from_pg = diesel::delete(
+   |         +
+help: you might have meant to pattern match on the similarly named constant `BUFFER_SIZE`
+   |
+68 -     let delete_from_pg = diesel::delete(
+68 +     let hashfolder::BUFFER_SIZE = diesel::delete(
+   |
+
+warning: unused variable: `conn`
+  --> src/tile_save_and_get.rs:49:5
+   |
+49 |     conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
+   |     ^^^^ help: if this is intentional, prefix it with an underscore: `_conn`
+
+warning: unused variable: `conn`
+  --> src/tile_save_and_get.rs:69:5
+   |
+69 |     conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
+   |     ^^^^ help: if this is intentional, prefix it with an underscore: `_conn`
+
+warning: unused variable: `z`
+  --> src/tile_save_and_get.rs:71:5
+   |
+71 |     z: u8,
+   |     ^ help: if this is intentional, prefix it with an underscore: `_z`
+
+warning: use of deprecated method `geo::HaversineDestination::haversine_destination`: Please use the `Haversine.destination` method from the `Destination` trait instead
+   --> src/lib.rs:871:37
+    |
+871 |     let distance_calc_point = point.haversine_destination(direction, distance_metres);
+    |                                     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `rayon::prelude`
+ --> src/gtfs_rt_rough_hash/mod.rs:3:5
+  |
+3 | use rayon::prelude::*;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused import: `StreamExt`
+ --> src/custom_alerts/metrolink_alerts.rs:3:29
+  |
+3 | use futures::stream::{self, StreamExt};
+  |                             ^^^^^^^^^
+
+warning: unused variable: `stop_headsign_reference_idx`
+   --> src/maple_syrup/mod.rs:196:13
+    |
+196 |         let stop_headsign_reference_idx = if stop_headsigns_unique_list.len() <= 1 {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_stop_headsign_reference_idx`
+
+warning: value assigned to `current_range` is never read
+   --> src/maple_syrup/mod.rs:405:25
+    |
+405 |                         current_range = vec![];
+    |                         ^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/maple_syrup/mod.rs:371:21
+    |
+371 |                 let mut itinerary = entry.get_mut();
+    |                     ----^^^^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: unused variable: `desc`
+   --> src/custom_alerts/metrolink_alerts.rs:504:39
+    |
+504 | pub fn determine_effect(header: &str, desc: Option<&str>) -> i32 {
+    |                                       ^^^^ help: if this is intentional, prefix it with an underscore: `_desc`
+
+warning: unused variable: `route_id`
+  --> src/schedule_filtering/mod.rs:18:19
+   |
+18 |         .filter(|(route_id, route)| route_types.contains(&route.route_type))
+   |                   ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
+
+warning: unused variable: `route`
+  --> src/schedule_filtering/mod.rs:19:26
+   |
+19 |         .map(|(route_id, route)| route_id)
+   |                          ^^^^^ help: if this is intentional, prefix it with an underscore: `_route`
+
+warning: unused variable: `trip_id`
+  --> src/schedule_filtering/mod.rs:32:19
+   |
+32 |         .filter(|(trip_id, trip)| route_ids_to_keep.contains(&trip.route_id))
+   |                   ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip`
+  --> src/schedule_filtering/mod.rs:33:25
+   |
+33 |         .map(|(trip_id, trip)| trip_id)
+   |                         ^^^^ help: if this is intentional, prefix it with an underscore: `_trip`
+
+warning: unused variable: `route`
+  --> src/schedule_filtering/mod.rs:82:29
+   |
+82 |         .filter(|(route_id, route)| route_ids_to_keep.contains(route_id))
+   |                             ^^^^^ help: if this is intentional, prefix it with an underscore: `_route`
+
+warning: unused variable: `trip`
+  --> src/schedule_filtering/mod.rs:88:28
+   |
+88 |         .filter(|(trip_id, trip)| trips_to_keep.contains(trip_id))
+   |                            ^^^^ help: if this is intentional, prefix it with an underscore: `_trip`
+
+warning: unused variable: `stop`
+  --> src/schedule_filtering/mod.rs:95:32
+   |
+95 |             .filter(|(stop_id, stop)| keep_stop_ids.contains(stop_id))
+   |                                ^^^^ help: if this is intentional, prefix it with an underscore: `_stop`
+
+warning: unused variable: `shape`
+   --> src/schedule_filtering/mod.rs:101:33
+    |
+101 |             .filter(|(shape_id, shape)| keep_shapes.contains(shape_id))
+    |                                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_shape`
+
+warning: unused variable: `trip_id`
+   --> src/schedule_filtering/mod.rs:191:10
+    |
+191 |     for (trip_id, trip) in &gtfs.trips {
+    |          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: variable does not need to be mutable
+   --> src/schedule_filtering/mod.rs:181:9
+    |
+181 |     let mut trips_removed: BTreeSet<String> = gtfs
+    |         ----^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `bbox`
+   --> src/tile_save_and_get.rs:117:9
+    |
+117 |     let bbox = slippy_map_tiles::BBox::new(
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_bbox`
+
+warning: unused variable: `conn`
+   --> src/tile_save_and_get.rs:111:5
+    |
+111 |     conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_conn`
+
+warning: unused variable: `z`
+   --> src/tile_save_and_get.rs:113:5
+    |
+113 |     z: u8,
+    |     ^ help: if this is intentional, prefix it with an underscore: `_z`
+
+warning: unused variable: `c`
+   --> src/tile_save_and_get.rs:114:5
+    |
+114 |     c: TileCategory,
+    |     ^ help: if this is intentional, prefix it with an underscore: `_c`
+
+warning: unused variable: `prev_trip_id`
+   --> src/lib.rs:143:25
+    |
+143 |             if let Some(prev_trip_id) = current_trip_id {
+    |                         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_prev_trip_id`
+
+warning: unused variable: `prev_trip_id`
+   --> src/lib.rs:173:17
+    |
+173 |     if let Some(prev_trip_id) = current_trip_id {
+    |                 ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_prev_trip_id`
+
+warning: unreachable pattern
+   --> src/lib.rs:246:17
+    |
+245 |                 _ => None,
+    |                 - matches any value
+246 |                 None => None,
+    |                 ^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:566:21
+    |
+566 |                 let mut calendar_unified = oe.get_mut();
+    |                     ----^^^^^^^^^^^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:577:38
+    |
+577 |             btree_map::Entry::Vacant(mut ve) => {
+    |                                      ----^^
+    |                                      |
+    |                                      help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:936:29
+    |
+936 |                         let mut calendar_unified = oe.get_mut();
+    |                             ----^^^^^^^^^^^^^^^^
+    |                             |
+    |                             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:947:46
+    |
+947 |                     btree_map::Entry::Vacant(mut ve) => {
+    |                                              ----^^
+    |                                              |
+    |                                              help: remove this `mut`
+
+warning: static variable `throw_away_start_dates` should have an upper case name
+   --> src/lib.rs:102:12
+    |
+102 | pub static throw_away_start_dates: &[&str] = &["san-francisco-bay-area"];
+    |            ^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper case: `THROW_AWAY_START_DATES`
+    |
+    = note: `#[warn(non_upper_case_globals)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: `catenary-backend` (lib) generated 59 warnings (run `cargo fix --lib -p catenary-backend` to apply 28 suggestions)
+error[E0425]: cannot find value `alerts_of_chateau` in this scope
+   --> src/birch/server.rs:903:22
+    |
+903 |             .service(alerts_of_chateau)
+    |                      ^^^^^^^^^^^^^^^^^ not found in this scope
+
+warning: unused import: `actix_web::middleware::DefaultHeaders`
+ --> src/birch/postgis_download.rs:1:5
+  |
+1 | use actix_web::middleware::DefaultHeaders;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `App`, `HttpServer`, and `middleware`
+ --> src/birch/postgis_download.rs:2:17
+  |
+2 | use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
+  |                 ^^^                             ^^^^^^^^^^             ^^^^^^^^^^
+
+warning: unused import: `catenary::EtcdConnectionIps`
+ --> src/birch/postgis_download.rs:3:5
+  |
+3 | use catenary::EtcdConnectionIps;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::models::IpToGeoAddr`
+ --> src/birch/postgis_download.rs:4:5
+  |
+4 | use catenary::models::IpToGeoAddr;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::postgis_to_diesel::diesel_multi_polygon_to_geo`
+ --> src/birch/postgis_download.rs:5:5
+  |
+5 | use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `make_async_pool`
+ --> src/birch/postgis_download.rs:6:54
+  |
+6 | use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
+  |                                                      ^^^^^^^^^^^^^^^
+
+warning: unused imports: `Feature`, `GeoJson`, and `JsonValue`
+ --> src/birch/postgis_download.rs:7:15
+  |
+7 | use geojson::{Feature, GeoJson, JsonValue};
+  |               ^^^^^^^  ^^^^^^^  ^^^^^^^^^
+
+warning: unused import: `sqlx::postgres::PgPoolOptions`
+  --> src/birch/postgis_download.rs:12:5
+   |
+12 | use sqlx::postgres::PgPoolOptions;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> src/birch/postgis_download.rs:13:5
+   |
+13 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `RwLock`
+  --> src/birch/postgis_download.rs:14:22
+   |
+14 | use std::sync::{Arc, RwLock};
+   |                      ^^^^^^
+
+warning: unused import: `std::time::SystemTime`
+  --> src/birch/postgis_download.rs:15:5
+   |
+15 | use std::time::SystemTime;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `BTreeMap`
+ --> src/birch/alerts.rs:9:24
+  |
+9 | use std::collections::{BTreeMap, HashMap, HashSet};
+  |                        ^^^^^^^^
+
+warning: unused import: `alerts::*`
+  --> src/birch/server.rs:48:5
+   |
+48 | use alerts::*;
+   |     ^^^^^^^^^
+
+warning: unused import: `amtrak_gtfs_rt::asm::Stop`
+  --> src/birch/departures_at_stop.rs:13:5
+   |
+13 | use amtrak_gtfs_rt::asm::Stop;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::make_degree_length_as_distance_from_point`
+  --> src/birch/departures_at_stop.rs:21:5
+   |
+21 | use catenary::make_degree_length_as_distance_from_point;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::models::ItineraryPatternMeta`
+  --> src/birch/departures_at_stop.rs:22:5
+   |
+22 | use catenary::models::ItineraryPatternMeta;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::models::ItineraryPatternRow`
+  --> src/birch/departures_at_stop.rs:23:5
+   |
+23 | use catenary::models::ItineraryPatternRow;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `diesel::sql_types::*`
+  --> src/birch/departures_at_stop.rs:35:5
+   |
+35 | use diesel::sql_types::*;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ordered_float::Pow`
+  --> src/birch/server.rs:60:5
+   |
+60 | use ordered_float::Pow;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `tilejson::TileJSON`
+  --> src/birch/server.rs:68:5
+   |
+68 | use tilejson::TileJSON;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `actix_web::http::StatusCode`
+ --> src/birch/aspenised_data_over_https.rs:1:5
+  |
+1 | use actix_web::http::StatusCode;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `diesel_async::AsyncConnection`
+  --> src/birch/aspenised_data_over_https.rs:12:5
+   |
+12 | use diesel_async::AsyncConnection;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `HashMap`
+  --> src/birch/aspenised_data_over_https.rs:17:44
+   |
+17 | use std::collections::{BTreeMap, BTreeSet, HashMap};
+   |                                            ^^^^^^^
+
+warning: unnecessary parentheses around `if` condition
+   --> src/birch/aspenised_data_over_https.rs:972:40
+    |
+972 | ...                   if ((d_time as u64) < current_unix_time) {
+    |                          ^                                   ^
+    |
+    = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+    |
+972 -                                     if ((d_time as u64) < current_unix_time) {
+972 +                                     if (d_time as u64) < current_unix_time {
+    |
+
+warning: unnecessary parentheses around `if` condition
+   --> src/birch/aspenised_data_over_https.rs:979:44
+    |
+979 | ...                   if ((a_time as u64) < current_unix_time) {
+    |                          ^                                   ^
+    |
+help: remove these parentheses
+    |
+979 -                                         if ((a_time as u64) < current_unix_time) {
+979 +                                         if (a_time as u64) < current_unix_time {
+    |
+
+warning: unused import: `actix_web::middleware::DefaultHeaders`
+ --> src/birch/get_agencies.rs:1:5
+  |
+1 | use actix_web::middleware::DefaultHeaders;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `App`, `HttpServer`, and `middleware`
+ --> src/birch/get_agencies.rs:2:17
+  |
+2 | use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
+  |                 ^^^                             ^^^^^^^^^^             ^^^^^^^^^^
+
+warning: unused import: `catenary::EtcdConnectionIps`
+ --> src/birch/get_agencies.rs:3:5
+  |
+3 | use catenary::EtcdConnectionIps;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::models::IpToGeoAddr`
+ --> src/birch/get_agencies.rs:4:5
+  |
+4 | use catenary::models::IpToGeoAddr;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::postgis_to_diesel::diesel_multi_polygon_to_geo`
+ --> src/birch/get_agencies.rs:5:5
+  |
+5 | use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `make_async_pool`
+ --> src/birch/get_agencies.rs:6:54
+  |
+6 | use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
+  |                                                      ^^^^^^^^^^^^^^^
+
+warning: unused imports: `Feature`, `GeoJson`, and `JsonValue`
+  --> src/birch/get_agencies.rs:10:15
+   |
+10 | use geojson::{Feature, GeoJson, JsonValue};
+   |               ^^^^^^^  ^^^^^^^  ^^^^^^^^^
+
+warning: unused import: `ordered_float::Pow`
+  --> src/birch/get_agencies.rs:11:5
+   |
+11 | use ordered_float::Pow;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `serde_derive::Serialize`
+  --> src/birch/get_agencies.rs:13:5
+   |
+13 | use serde_derive::Serialize;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `sqlx::postgres::PgPoolOptions`
+  --> src/birch/get_agencies.rs:15:5
+   |
+15 | use sqlx::postgres::PgPoolOptions;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `RwLock`
+  --> src/birch/get_agencies.rs:16:22
+   |
+16 | use std::sync::{Arc, RwLock};
+   |                      ^^^^^^
+
+warning: unused import: `std::time::SystemTime`
+  --> src/birch/get_agencies.rs:17:5
+   |
+17 | use std::time::SystemTime;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `tilejson::TileJSON`
+  --> src/birch/get_agencies.rs:18:5
+   |
+18 | use tilejson::TileJSON;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `actix_web::rt`
+ --> src/birch/get_vehicle_trip_information.rs:2:5
+  |
+2 | use actix_web::rt;
+  |     ^^^^^^^^^^^^^
+
+warning: unused import: `catenary::aspen_dataset::AspenisedTripScheduleRelationship`
+ --> src/birch/get_vehicle_trip_information.rs:8:5
+  |
+8 | use catenary::aspen_dataset::AspenisedTripScheduleRelationship;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `diesel::dsl::sql`
+  --> src/birch/get_vehicle_trip_information.rs:27:5
+   |
+27 | use diesel::dsl::sql;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `diesel::sql_types::Bool`
+  --> src/birch/get_vehicle_trip_information.rs:30:5
+   |
+30 | use diesel::sql_types::Bool;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `futures::future::join_all`
+  --> src/birch/get_vehicle_trip_information.rs:33:5
+   |
+33 | use futures::future::join_all;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `geo::HaversineDistance`
+  --> src/birch/get_vehicle_trip_information.rs:34:5
+   |
+34 | use geo::HaversineDistance;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `geo::Point`
+  --> src/birch/get_vehicle_trip_information.rs:35:5
+   |
+35 | use geo::Point;
+   |     ^^^^^^^^^^
+
+warning: unused import: `gtfs_realtime::Alert`
+  --> src/birch/get_vehicle_trip_information.rs:37:5
+   |
+37 | use gtfs_realtime::Alert;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::hash_map::Entry`
+  --> src/birch/get_vehicle_trip_information.rs:40:5
+   |
+40 | use std::collections::hash_map::Entry;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::io::Read`
+ --> src/birch/gtfs_rt_api.rs:7:5
+  |
+7 | use std::io::Read;
+  |     ^^^^^^^^^^^^^
+
+warning: unused import: `catenary::CalendarUnified`
+  --> src/birch/nearby_departuresv2.rs:16:5
+   |
+16 | use catenary::CalendarUnified;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::make_weekdays`
+  --> src/birch/nearby_departuresv2.rs:24:5
+   |
+24 | use catenary::make_weekdays;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::maple_syrup::DirectionPattern`
+  --> src/birch/nearby_departuresv2.rs:25:5
+   |
+25 | use catenary::maple_syrup::DirectionPattern;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::schema::gtfs::itinerary_pattern`
+  --> src/birch/nearby_departuresv2.rs:31:5
+   |
+31 | use catenary::schema::gtfs::itinerary_pattern;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::schema::gtfs::trips_compressed`
+  --> src/birch/nearby_departuresv2.rs:32:5
+   |
+32 | use catenary::schema::gtfs::trips_compressed;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `futures::stream::FuturesUnordered`
+  --> src/birch/nearby_departuresv2.rs:41:5
+   |
+41 | use futures::stream::FuturesUnordered;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `futures::stream::futures_unordered`
+  --> src/birch/nearby_departuresv2.rs:43:5
+   |
+43 | use futures::stream::futures_unordered;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `geo::Distance`
+  --> src/birch/nearby_departuresv2.rs:44:5
+   |
+44 | use geo::Distance;
+   |     ^^^^^^^^^^^^^
+
+warning: unused import: `geo::HaversineDestination`
+  --> src/birch/nearby_departuresv2.rs:45:5
+   |
+45 | use geo::HaversineDestination;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `leapfrog::hashmap`
+  --> src/birch/nearby_departuresv2.rs:47:5
+   |
+47 | use leapfrog::hashmap;
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `rouille::input`
+  --> src/birch/nearby_departuresv2.rs:48:5
+   |
+48 | use rouille::input;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::btree_map`
+  --> src/birch/nearby_departuresv2.rs:55:5
+   |
+55 | use std::collections::btree_map;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `strumbra::UniqueString`
+  --> src/birch/nearby_departuresv2.rs:60:5
+   |
+60 | use strumbra::UniqueString;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary parentheses around `if` condition
+    --> src/birch/nearby_departuresv2.rs:1644:64
+     |
+1644 | ...                   if (applies_to_trip_without_a_referenced_stop) {
+     |                          ^                                         ^
+     |
+help: remove these parentheses
+     |
+1644 -                                                             if (applies_to_trip_without_a_referenced_stop) {
+1644 +                                                             if applies_to_trip_without_a_referenced_stop {
+     |
+
+warning: unnecessary parentheses around `if` condition
+    --> src/birch/nearby_departuresv2.rs:2017:64
+     |
+2017 | ...                   if (applies_to_trip_without_a_referenced_stop) {
+     |                          ^                                         ^
+     |
+help: remove these parentheses
+     |
+2017 -                                                             if (applies_to_trip_without_a_referenced_stop) {
+2017 +                                                             if applies_to_trip_without_a_referenced_stop {
+     |
+
+warning: unused import: `diesel_async::AsyncConnection`
+  --> src/birch/route_info.rs:14:5
+   |
+14 | use diesel_async::AsyncConnection;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `rand::Rng`
+  --> src/birch/server.rs:78:5
+   |
+78 | use rand::Rng;
+   |     ^^^^^^^^^
+
+warning: unused import: `actix_web::middleware::DefaultHeaders`
+ --> src/birch/block_api.rs:1:5
+  |
+1 | use actix_web::middleware::DefaultHeaders;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `App`, `HttpServer`, and `middleware`
+ --> src/birch/block_api.rs:3:17
+  |
+3 | use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
+  |                 ^^^                             ^^^^^^^^^^             ^^^^^^^^^^
+
+warning: unused import: `catenary::EtcdConnectionIps`
+ --> src/birch/block_api.rs:5:5
+  |
+5 | use catenary::EtcdConnectionIps;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::models::IpToGeoAddr`
+ --> src/birch/block_api.rs:6:5
+  |
+6 | use catenary::models::IpToGeoAddr;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `catenary::postgis_to_diesel::diesel_multi_polygon_to_geo`
+ --> src/birch/block_api.rs:7:5
+  |
+7 | use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `make_async_pool`
+ --> src/birch/block_api.rs:8:54
+  |
+8 | use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
+  |                                                      ^^^^^^^^^^^^^^^
+
+warning: unused imports: `Feature`, `GeoJson`, and `JsonValue`
+  --> src/birch/block_api.rs:14:15
+   |
+14 | use geojson::{Feature, GeoJson, JsonValue};
+   |               ^^^^^^^  ^^^^^^^  ^^^^^^^^^
+
+warning: unused import: `ordered_float::Pow`
+  --> src/birch/block_api.rs:16:5
+   |
+16 | use ordered_float::Pow;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> src/birch/block_api.rs:20:5
+   |
+20 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `RwLock`
+  --> src/birch/block_api.rs:21:22
+   |
+21 | use std::sync::{Arc, RwLock};
+   |                      ^^^^^^
+
+warning: unused import: `std::time::SystemTime`
+  --> src/birch/block_api.rs:22:5
+   |
+22 | use std::time::SystemTime;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `tilejson::TileJSON`
+  --> src/birch/block_api.rs:23:5
+   |
+23 | use tilejson::TileJSON;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ahash::AHashSet`
+ --> src/birch/connections_lookup.rs:2:5
+  |
+2 | use ahash::AHashSet;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `geo::coord`
+  --> src/birch/connections_lookup.rs:15:5
+   |
+15 | use geo::coord;
+   |     ^^^^^^^^^^
+
+warning: unused import: `diesel_async::AsyncConnection`
+ --> src/birch/vehicle_api.rs:8:5
+  |
+8 | use diesel_async::AsyncConnection;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `sqlx::query`
+  --> src/birch/vehicle_api.rs:10:5
+   |
+10 | use sqlx::query;
+   |     ^^^^^^^^^^^
+
+warning: use of deprecated struct `chrono::Date`: Use `NaiveDate` or `DateTime<Tz>` instead
+    --> src/birch/departures_at_stop.rs:1151:106
+     |
+1151 | ...                   let mut vec_possible_dates: Vec<(chrono::Date<chrono_tz::Tz>, i64)> = vec![];
+     |                                                                ^^^^
+     |
+     = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated struct `chrono::Date`: Use `NaiveDate` or `DateTime<Tz>` instead
+    --> src/birch/departures_at_stop.rs:1557:77
+     |
+1557 | ...                   chrono::Date<chrono_tz::Tz>,
+     |                               ^^^^
+
+warning: use of deprecated trait `geo::HaversineDistance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+  --> src/birch/get_vehicle_trip_information.rs:34:10
+   |
+34 | use geo::HaversineDistance;
+   |          ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated trait `geo::HaversineDestination`: Please use the `Haversine.destination` method from the `Destination` trait instead
+  --> src/birch/nearby_departuresv2.rs:45:10
+   |
+45 | use geo::HaversineDestination;
+   |          ^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated trait `geo::HaversineDistance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+  --> src/birch/nearby_departuresv2.rs:46:10
+   |
+46 | use geo::HaversineDistance;
+   |          ^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `chrono::Date`: Use `NaiveDate` or `DateTime<Tz>` instead
+    --> src/birch/nearby_departuresv2.rs:1473:106
+     |
+1473 | ...                   let mut vec_possible_dates: Vec<(chrono::Date<chrono_tz::Tz>, i64)> = vec![];
+     |                                                                ^^^^
+
+warning: use of deprecated struct `chrono::Date`: Use `NaiveDate` or `DateTime<Tz>` instead
+    --> src/birch/nearby_departuresv2.rs:1848:110
+     |
+1848 | ...                   let mut vec_possible_dates: Vec<(chrono::Date<chrono_tz::Tz>, i64)> = vec![];
+     |                                                                ^^^^
+
+warning: use of deprecated trait `geo::HaversineDistance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+  --> src/birch/connections_lookup.rs:13:10
+   |
+13 | use geo::HaversineDistance;
+   |          ^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `pool`
+  --> src/birch/postgis_download.rs:38:5
+   |
+38 |     pool: web::Data<Arc<CatenaryPostgresPool>>,
+   |     ^^^^ help: if this is intentional, prefix it with an underscore: `_pool`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `req`
+  --> src/birch/postgis_download.rs:39:5
+   |
+39 |     req: HttpRequest,
+   |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+  --> src/birch/postgis_download.rs:83:29
+   |
+83 | pub async fn bus_stops_meta(req: HttpRequest) -> impl Responder {
+   |                             ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `pool`
+   --> src/birch/postgis_download.rs:147:5
+    |
+147 |     pool: web::Data<Arc<CatenaryPostgresPool>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_pool`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:149:5
+    |
+149 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:215:36
+    |
+215 | pub async fn station_features_meta(req: HttpRequest) -> impl Responder {
+    |                                    ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `pool`
+   --> src/birch/postgis_download.rs:278:5
+    |
+278 |     pool: web::Data<Arc<CatenaryPostgresPool>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_pool`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:280:5
+    |
+280 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `pool`
+   --> src/birch/postgis_download.rs:353:5
+    |
+353 |     pool: web::Data<Arc<CatenaryPostgresPool>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_pool`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:355:5
+    |
+355 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:425:30
+    |
+425 | pub async fn rail_stops_meta(req: HttpRequest) -> impl Responder {
+    |                              ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `pool`
+   --> src/birch/postgis_download.rs:489:5
+    |
+489 |     pool: web::Data<Arc<CatenaryPostgresPool>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_pool`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:491:5
+    |
+491 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:561:31
+    |
+561 | pub async fn other_stops_meta(req: HttpRequest) -> impl Responder {
+    |                               ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:631:5
+    |
+631 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `err`
+   --> src/birch/postgis_download.rs:739:13
+    |
+739 |         Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_err`
+
+warning: unused variable: `pool`
+   --> src/birch/postgis_download.rs:746:5
+    |
+746 |     pool: web::Data<Arc<CatenaryPostgresPool>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_pool`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:748:5
+    |
+748 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `err`
+   --> src/birch/postgis_download.rs:809:13
+    |
+809 |         Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_err`
+
+warning: unused variable: `pool`
+   --> src/birch/postgis_download.rs:816:5
+    |
+816 |     pool: web::Data<Arc<CatenaryPostgresPool>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_pool`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:818:5
+    |
+818 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `err`
+   --> src/birch/postgis_download.rs:879:13
+    |
+879 |         Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_err`
+
+warning: unused variable: `pool`
+   --> src/birch/postgis_download.rs:886:5
+    |
+886 |     pool: web::Data<Arc<CatenaryPostgresPool>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_pool`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:888:5
+    |
+888 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `err`
+   --> src/birch/postgis_download.rs:947:13
+    |
+947 |         Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_err`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:952:32
+    |
+952 | pub async fn shapes_ferry_meta(req: HttpRequest) -> impl Responder {
+    |                                ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/postgis_download.rs:999:34
+    |
+999 | pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
+    |                                  ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+    --> src/birch/postgis_download.rs:1042:41
+     |
+1042 | pub async fn shapes_intercity_rail_meta(req: HttpRequest) -> impl Responder {
+     |                                         ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+    --> src/birch/postgis_download.rs:1097:37
+     |
+1097 | pub async fn shapes_local_rail_meta(req: HttpRequest) -> impl Responder {
+     |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+    --> src/birch/postgis_download.rs:1145:30
+     |
+1145 | pub async fn shapes_bus_meta(req: HttpRequest) -> impl Responder {
+     |                              ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: use of deprecated method `chrono::TimeZone::timestamp`: use `timestamp_opt()` instead
+    --> src/birch/departures_at_stop.rs:1144:94
+     |
+1144 | ...                   let rt_least_naive_date = tz.timestamp(least_num as i64, 0);
+     |                                                    ^^^^^^^^^
+
+warning: use of deprecated method `chrono::DateTime::<Tz>::date`: Use `date_naive()` instead
+    --> src/birch/departures_at_stop.rs:1148:117
+     |
+1148 | ...                   let approx_service_date = approx_service_date_start.date();
+     |                                                                           ^^^^
+
+warning: use of deprecated method `chrono::NaiveDate::and_hms`: use `and_hms_opt()` instead
+    --> src/birch/departures_at_stop.rs:1168:106
+     |
+1168 | ...                   let day_in_tz_midnight = day.and_hms(12, 0, 0).and_local_timezone(*tz).unwrap() - chrono::Duration::hours(12);
+     |                                                    ^^^^^^^
+
+warning: use of deprecated method `chrono::DateTime::<Tz>::date`: Use `date_naive()` instead
+    --> src/birch/departures_at_stop.rs:1172:121
+     |
+1172 | ...                   vec_possible_dates.push((day_in_tz_midnight.date(), time_delta.num_seconds().abs()));
+     |                                                                   ^^^^
+
+warning: use of deprecated method `chrono::TimeZone::timestamp`: use `timestamp_opt()` instead
+    --> src/birch/departures_at_stop.rs:1545:72
+     |
+1545 | ...                   tz.timestamp(least_num as i64, 0);
+     |                          ^^^^^^^^^
+
+warning: use of deprecated method `chrono::DateTime::<Tz>::date`: Use `date_naive()` instead
+    --> src/birch/departures_at_stop.rs:1552:95
+     |
+1552 | ...                   approx_service_date_start.date();
+     |                                                 ^^^^
+
+warning: use of deprecated method `chrono::NaiveDate::and_hms`: use `and_hms_opt()` instead
+    --> src/birch/departures_at_stop.rs:1577:106
+     |
+1577 | ...                   let day_in_tz_midnight = day.and_hms(12, 0, 0).and_local_timezone(*tz).unwrap() - chrono::Duration::hours(12);
+     |                                                    ^^^^^^^
+
+warning: use of deprecated method `chrono::DateTime::<Tz>::date`: Use `date_naive()` instead
+    --> src/birch/departures_at_stop.rs:1581:86
+     |
+1581 | ...                   .date(),
+     |                        ^^^^
+
+warning: unused variable: `x`
+    --> src/birch/departures_at_stop.rs:1106:51
+     |
+1106 | ...                   |(x, trip_update)| match does_trip_set_use_dates {
+     |                         ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `req`
+   --> src/birch/departures_at_stop.rs:157:5
+    |
+157 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: variable `redirected_to_parent` is assigned to, but never used
+   --> src/birch/departures_at_stop.rs:210:13
+    |
+210 |     let mut redirected_to_parent = false;
+    |             ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: consider using `_redirected_to_parent` instead
+
+warning: value assigned to `redirected_to_parent` is never read
+   --> src/birch/departures_at_stop.rs:266:13
+    |
+266 |             redirected_to_parent = true;
+    |             ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `chateau`
+   --> src/birch/departures_at_stop.rs:338:10
+    |
+338 |     for (chateau, stops) in stops_to_search.iter_mut() {
+    |          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_chateau`
+
+warning: unused variable: `stop_tz_txt`
+   --> src/birch/departures_at_stop.rs:603:9
+    |
+603 |     let stop_tz_txt = match &stop.timezone {
+    |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_stop_tz_txt`
+
+warning: unused variable: `gt_in_stop_tz`
+   --> src/birch/departures_at_stop.rs:639:9
+    |
+639 |     let gt_in_stop_tz = gt_utc.with_timezone(&stop_tz);
+    |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_gt_in_stop_tz`
+
+warning: unused variable: `lt_utc`
+   --> src/birch/departures_at_stop.rs:640:9
+    |
+640 |     let lt_utc = chrono::DateTime::from_timestamp(less_than_time as i64, 0).unwrap();
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_lt_utc`
+
+warning: unused variable: `service_id`
+   --> src/birch/departures_at_stop.rs:884:17
+    |
+884 |             let service_id = trip_compressed.service_id.clone();
+    |                 ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_service_id`
+
+warning: unused variable: `trip_update_id`
+    --> src/birch/departures_at_stop.rs:1202:45
+     |
+1202 | ...                   let trip_update_id = trip_updates[0].0;
+     |                           ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_update_id`
+
+warning: variable `trip_update_for_event` is assigned to, but never used
+    --> src/birch/departures_at_stop.rs:1454:37
+     |
+1454 | ...                   let mut trip_update_for_event: Option<&AspenisedTripUpdate> = None;
+     |                               ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: consider using `_trip_update_for_event` instead
+
+warning: value assigned to `trip_update_for_event` is never read
+    --> src/birch/departures_at_stop.rs:1610:45
+     |
+1610 | ...                   trip_update_for_event = Some(trip_updates[0].1);
+     |                       ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: variable does not need to be mutable
+   --> src/birch/departures_at_stop.rs:195:9
+    |
+195 |     let mut etcd = etcd.unwrap();
+    |         ----^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/birch/departures_at_stop.rs:316:13
+    |
+316 |         let mut children_entry = stops_to_search
+    |             ----^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> src/birch/departures_at_stop.rs:1010:71
+     |
+1010 | ...                   std::collections::hash_map::Entry::Vacant(mut ve) => {
+     |                                                                 ----^^
+     |                                                                 |
+     |                                                                 help: remove this `mut`
+
+warning: unused variable: `pool`
+  --> src/birch/transfer_calc.rs:23:5
+   |
+23 |     pool: Arc<CatenaryPostgresPool>,
+   |     ^^^^ help: if this is intentional, prefix it with an underscore: `_pool`
+
+warning: unused variable: `input_stops`
+  --> src/birch/transfer_calc.rs:24:5
+   |
+24 |     input_stops: Vec<&Stop>,
+   |     ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_input_stops`
+
+warning: unused variable: `radius_metres`
+  --> src/birch/transfer_calc.rs:25:5
+   |
+25 |     radius_metres: f32,
+   |     ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_radius_metres`
+
+warning: unused variable: `req`
+   --> src/birch/api_key_management.rs:227:5
+    |
+227 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/aspenised_data_over_https.rs:262:5
+    |
+262 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `bounds`
+   --> src/birch/aspenised_data_over_https.rs:427:29
+    |
+427 |                         let bounds = &params.bounds_input.level8;
+    |                             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_bounds`
+
+warning: unused variable: `bounds`
+   --> src/birch/aspenised_data_over_https.rs:436:29
+    |
+436 |                         let bounds = &params.bounds_input.level7;
+    |                             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_bounds`
+
+warning: unused variable: `bounds`
+   --> src/birch/aspenised_data_over_https.rs:445:29
+    |
+445 |                         let bounds = &params.bounds_input.level12;
+    |                             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_bounds`
+
+warning: unused variable: `bounds`
+   --> src/birch/aspenised_data_over_https.rs:454:29
+    |
+454 |                         let bounds = &params.bounds_input.level5;
+    |                             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_bounds`
+
+warning: variable does not need to be mutable
+   --> src/birch/aspenised_data_over_https.rs:297:9
+    |
+297 |     let mut etcd = etcd.unwrap();
+    |         ----^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `route_id`
+   --> src/birch/aspenised_data_over_https.rs:788:43
+    |
+788 | ...                   .filter(|(route_id, vehicle_route_cache)| {
+    |                                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
+
+warning: unused variable: `req`
+   --> src/birch/aspenised_data_over_https.rs:667:5
+    |
+667 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/aspenised_data_over_https.rs:824:5
+    |
+824 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: variable does not need to be mutable
+    --> src/birch/aspenised_data_over_https.rs:1064:9
+     |
+1064 |     let mut trip_id_to_direction_id: AHashMap<String, Option<String>> = trips_table
+     |         ----^^^^^^^^^^^^^^^^^^^^^^^
+     |         |
+     |         help: remove this `mut`
+
+warning: unused variable: `req`
+  --> src/birch/chicago_proxy.rs:11:5
+   |
+11 |     req: HttpRequest,
+   |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+  --> src/birch/get_agencies.rs:23:5
+   |
+23 |     req: HttpRequest,
+   |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `chateau`
+  --> src/birch/get_vehicle_trip_information.rs:47:10
+   |
+47 |     let (chateau, vehicle_id) = path.into_inner();
+   |          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_chateau`
+
+warning: unused variable: `vehicle_id`
+  --> src/birch/get_vehicle_trip_information.rs:47:19
+   |
+47 |     let (chateau, vehicle_id) = path.into_inner();
+   |                   ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_vehicle_id`
+
+warning: unused variable: `i`
+   --> src/birch/get_vehicle_trip_information.rs:704:32
+    |
+704 |                         .map(|(i, stu)| {
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `err`
+    --> src/birch/get_vehicle_trip_information.rs:1020:29
+     |
+1020 |                         Err(err) => None,
+     |                             ^^^ help: if this is intentional, prefix it with an underscore: `_err`
+
+warning: unused variable: `stop`
+    --> src/birch/get_vehicle_trip_information.rs:1704:100
+     |
+1704 | ...                   StopPostgresOrAspen::Aspen(stop) => {
+     |                                                  ^^^^ help: if this is intentional, prefix it with an underscore: `_stop`
+
+warning: unused variable: `stop`
+    --> src/birch/get_vehicle_trip_information.rs:1714:100
+     |
+1714 | ...                   StopPostgresOrAspen::Aspen(stop) => None
+     |                                                  ^^^^ help: if this is intentional, prefix it with an underscore: `_stop`
+
+warning: unused variable: `agency_id`
+   --> src/birch/get_vehicle_trip_information.rs:779:25
+    |
+779 |                     let agency_id = route.agency_id.clone();
+    |                         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_agency_id`
+
+warning: variable `shape_polyline` is assigned to, but never used
+   --> src/birch/get_vehicle_trip_information.rs:810:29
+    |
+810 |                     let mut shape_polyline = None;
+    |                             ^^^^^^^^^^^^^^
+    |
+    = note: consider using `_shape_polyline` instead
+
+warning: value assigned to `shape_polyline` is never read
+   --> src/birch/get_vehicle_trip_information.rs:819:33
+    |
+819 | ...                   shape_polyline = Some(shape_response);
+    |                       ^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `rt_shape` is never read
+   --> src/birch/get_vehicle_trip_information.rs:820:33
+    |
+820 | ...                   rt_shape = true;
+    |                       ^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unused variable: `tz_parsing_error`
+    --> src/birch/get_vehicle_trip_information.rs:1056:16
+     |
+1056 |     if let Err(tz_parsing_error) = &tz {
+     |                ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tz_parsing_error`
+
+warning: value assigned to `before_start_selector` is never read
+    --> src/birch/get_vehicle_trip_information.rs:1491:53
+     |
+1491 | ...                   let mut before_start_selector: Vec<
+     |                               ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: value assigned to `after_end_selector` is never read
+    --> src/birch/get_vehicle_trip_information.rs:1496:53
+     |
+1496 | ...                   let mut after_end_selector: Vec<StopTimeIntroduction> =
+     |                               ^^^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: value assigned to `start_stop_selector_idx` is never read
+    --> src/birch/get_vehicle_trip_information.rs:1501:53
+     |
+1501 | ...                   let mut start_stop_selector_idx = None;
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: unused variable: `reference_stop_id`
+    --> src/birch/get_vehicle_trip_information.rs:1579:61
+     |
+1579 | ...                   let reference_stop_id =
+     |                           ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_stop_id`
+
+warning: unused variable: `response_replacement_stops`
+    --> src/birch/get_vehicle_trip_information.rs:1639:61
+     |
+1639 | ...                   let response_replacement_stops = modification.replacement_stops.iter()
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_response_replacement_stops`
+
+warning: variable does not need to be mutable
+   --> src/birch/get_vehicle_trip_information.rs:535:9
+    |
+535 |     let mut conn2: &mut bb8::PooledConnection<
+    |         ----^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/birch/get_vehicle_trip_information.rs:541:9
+    |
+541 |     let mut conn3: &mut bb8::PooledConnection<
+    |         ----^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> src/birch/get_vehicle_trip_information.rs:1494:49
+     |
+1494 | ...                   let mut replacement_stops: Vec<StopTimeIntroduction> =
+     |                           ----^^^^^^^^^^^^^^^^^
+     |                           |
+     |                           help: remove this `mut`
+
+warning: unused variable: `alert_id`
+    --> src/birch/get_vehicle_trip_information.rs:2213:23
+     |
+2213 |             .filter(|(alert_id, alert)| {
+     |                       ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_alert_id`
+
+warning: unused variable: `worker_id`
+  --> src/birch/gtfs_rt_api.rs:51:17
+   |
+51 |             let worker_id = data.worker_id;
+   |                 ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_worker_id`
+
+warning: use of deprecated method `geo::HaversineDistance::haversine_distance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+   --> src/birch/nearby_departuresv2.rs:442:22
+    |
+442 |                     .haversine_distance(&input_point),
+    |                      ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `geo::HaversineDistance::haversine_distance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+   --> src/birch/nearby_departuresv2.rs:529:46
+    |
+529 |         let haversine_distance = input_point.haversine_distance(&stop_point_geo);
+    |                                              ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `chrono::TimeZone::timestamp`: use `timestamp_opt()` instead
+    --> src/birch/nearby_departuresv2.rs:1466:94
+     |
+1466 | ...                   let rt_least_naive_date = tz.timestamp(least_num as i64, 0);
+     |                                                    ^^^^^^^^^
+
+warning: use of deprecated method `chrono::DateTime::<Tz>::date`: Use `date_naive()` instead
+    --> src/birch/nearby_departuresv2.rs:1470:117
+     |
+1470 | ...                   let approx_service_date = approx_service_date_start.date();
+     |                                                                           ^^^^
+
+warning: use of deprecated method `chrono::NaiveDate::and_hms`: use `and_hms_opt()` instead
+    --> src/birch/nearby_departuresv2.rs:1488:106
+     |
+1488 | ...                   let day_in_tz_midnight = day.and_hms(12, 0, 0).and_local_timezone(*tz).unwrap() - chrono::Duration::hours(12);
+     |                                                    ^^^^^^^
+
+warning: use of deprecated method `chrono::DateTime::<Tz>::date`: Use `date_naive()` instead
+    --> src/birch/nearby_departuresv2.rs:1492:121
+     |
+1492 | ...                   vec_possible_dates.push((day_in_tz_midnight.date(), time_delta.num_seconds().abs()));
+     |                                                                   ^^^^
+
+warning: use of deprecated method `chrono::DateTime::<Tz>::date`: Use `date_naive()` instead
+    --> src/birch/nearby_departuresv2.rs:1845:121
+     |
+1845 | ...                   let approx_service_date = approx_service_date_start.date();
+     |                                                                           ^^^^
+
+warning: use of deprecated method `chrono::NaiveDate::and_hms`: use `and_hms_opt()` instead
+    --> src/birch/nearby_departuresv2.rs:1863:110
+     |
+1863 | ...                   let day_in_tz_midnight = day.and_hms(12, 0, 0).and_local_timezone(*tz).unwrap() - chrono::Duration::hours(12);
+     |                                                    ^^^^^^^
+
+warning: use of deprecated method `chrono::DateTime::<Tz>::date`: Use `date_naive()` instead
+    --> src/birch/nearby_departuresv2.rs:1867:125
+     |
+1867 | ...                   vec_possible_dates.push((day_in_tz_midnight.date(), time_delta.num_seconds().abs()));
+     |                                                                   ^^^^
+
+warning: unused variable: `x`
+    --> src/birch/nearby_departuresv2.rs:1432:51
+     |
+1432 | ...                   |(x, trip_update)| match does_trip_set_use_dates {
+     |                         ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `x`
+    --> src/birch/nearby_departuresv2.rs:1789:59
+     |
+1789 | ...                   .filter(|(x, trip_update)| 
+     |                                 ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `x`
+    --> src/birch/nearby_departuresv2.rs:1807:55
+     |
+1807 | ...                   |(x, trip_update)| match does_trip_set_use_dates {
+     |                         ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `req`
+   --> src/birch/nearby_departuresv2.rs:288:5
+    |
+288 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `sqlx_pool_ref`
+   --> src/birch/nearby_departuresv2.rs:348:9
+    |
+348 |     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+    |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_sqlx_pool_ref`
+
+warning: unused variable: `departure_time`
+   --> src/birch/nearby_departuresv2.rs:350:9
+    |
+350 |     let departure_time = match query.departure_time {
+    |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_departure_time`
+
+warning: unused variable: `direction`
+   --> src/birch/nearby_departuresv2.rs:380:9
+    |
+380 |     let direction = match input_point.x() > 0. {
+    |         ^^^^^^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+380 |     let _direction = match input_point.x() > 0. {
+    |         +
+help: you might have meant to pattern match on the similarly named constant `TRANSFER_SEARCH_RADIUS_DEGREES`
+    |
+380 -     let direction = match input_point.x() > 0. {
+380 +     let connections_lookup::TRANSFER_SEARCH_RADIUS_DEGREES = match input_point.x() > 0. {
+    |
+
+warning: unused variable: `distance_m`
+   --> src/birch/nearby_departuresv2.rs:545:30
+    |
+545 |     for ((chateau, stop_id), distance_m) in sorted_order_stops.iter() {
+    |                              ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_distance_m`
+
+warning: unused variable: `oe`
+   --> src/birch/nearby_departuresv2.rs:635:41
+    |
+635 |                     Entry::Occupied(mut oe) => {}
+    |                                         ^^ help: if this is intentional, prefix it with an underscore: `_oe`
+
+warning: unused variable: `err`
+    --> src/birch/nearby_departuresv2.rs:1092:13
+     |
+1092 |         Err(err) => HttpResponse::InternalServerError().body("CANNOT FIND CALENDARS"),
+     |             ^^^ help: if this is intentional, prefix it with an underscore: `_err`
+
+warning: unused variable: `itinerary`
+    --> src/birch/nearby_departuresv2.rs:1111:21
+     |
+1111 |                 let itinerary = itins_per_chateau.get(chateau_id).unwrap();
+     |                     ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_itinerary`
+
+warning: unused variable: `trip_id`
+    --> src/birch/nearby_departuresv2.rs:1296:22
+     |
+1296 |                 for (trip_id, trip_grouping) in valid_trips {
+     |                      ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip_update_id`
+    --> src/birch/nearby_departuresv2.rs:1523:53
+     |
+1523 | ...                   let trip_update_id = trip_updates[0].0;
+     |                           ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_update_id`
+
+warning: unused variable: `group_id`
+    --> src/birch/nearby_departuresv2.rs:2088:26
+     |
+2088 |                     for (group_id, group) in route_group.directions.iter_mut() {
+     |                          ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_group_id`
+
+warning: unused variable: `route_id`
+    --> src/birch/nearby_departuresv2.rs:2123:22
+     |
+2123 |                 for (route_id, route_group) in directions_route_group_for_this_chateau {
+     |                      ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
+
+warning: unused variable: `i`
+    --> src/birch/nearby_departuresv2.rs:2151:34
+     |
+2151 | ...                   for (i, trip) in departing_headsign_group.trips.iter().enumerate() {
+     |                            ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: variable does not need to be mutable
+   --> src/birch/nearby_departuresv2.rs:501:27
+    |
+501 |             Entry::Vacant(mut ve) => {
+    |                           ----^^
+    |                           |
+    |                           help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/birch/nearby_departuresv2.rs:512:27
+    |
+512 |             Entry::Vacant(mut ve) => {
+    |                           ----^^
+    |                           |
+    |                           help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/birch/nearby_departuresv2.rs:582:27
+    |
+582 |             Entry::Vacant(mut ve) => {
+    |                           ----^^
+    |                           |
+    |                           help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/birch/nearby_departuresv2.rs:635:37
+    |
+635 |                     Entry::Occupied(mut oe) => {}
+    |                                     ----^^
+    |                                     |
+    |                                     help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/birch/nearby_departuresv2.rs:636:35
+    |
+636 |                     Entry::Vacant(mut ve) => {
+    |                                   ----^^
+    |                                   |
+    |                                   help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/birch/nearby_departuresv2.rs:716:51
+    |
+716 | ...                   Entry::Vacant(mut ve) => {
+    |                                     ----^^
+    |                                     |
+    |                                     help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/birch/nearby_departuresv2.rs:723:43
+    |
+723 | ...                   Entry::Vacant(mut ve) => {
+    |                                     ----^^
+    |                                     |
+    |                                     help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/birch/nearby_departuresv2.rs:739:39
+    |
+739 |                         Entry::Vacant(mut ve) => {
+    |                                       ----^^
+    |                                       |
+    |                                       help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/birch/nearby_departuresv2.rs:856:35
+    |
+856 |                     Entry::Vacant(mut ve) => {
+    |                                   ----^^
+    |                                   |
+    |                                   help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/birch/nearby_departuresv2.rs:897:39
+    |
+897 |                         Entry::Vacant(mut ve) => {
+    |                                       ----^^
+    |                                       |
+    |                                       help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> src/birch/nearby_departuresv2.rs:1185:51
+     |
+1185 | ...                   Entry::Vacant(mut ve) => {
+     |                                     ----^^
+     |                                     |
+     |                                     help: remove this `mut`
+
+warning: unused variable: `alert`
+   --> src/birch/route_info.rs:472:36
+    |
+472 |                     for (alert_id, alert) in alerts_for_stops.alerts {
+    |                                    ^^^^^ help: if this is intentional, prefix it with an underscore: `_alert`
+
+warning: unused variable: `req`
+  --> src/birch/terrain_tiles_proxy.rs:10:5
+   |
+10 |     req: HttpRequest,
+   |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+  --> src/birch/terrain_tiles_proxy.rs:67:5
+   |
+67 |     req: HttpRequest,
+   |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+  --> src/birch/block_api.rs:59:5
+   |
+59 |     req: HttpRequest,
+   |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: use of deprecated method `geo::HaversineDistance::haversine_distance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+   --> src/birch/connections_lookup.rs:192:45
+    |
+192 |                 let distance_m = base_point.haversine_distance(&conn_point);
+    |                                             ^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src/birch/connections_lookup.rs:301:33
+    |
+301 | ...                   let mut oe_value = oe.get_mut();
+    |                           ----^^^^^^^^
+    |                           |
+    |                           help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/birch/connections_lookup.rs:308:41
+    |
+308 | ...                   let mut oe_value = oe2.get_mut();
+    |                           ----^^^^^^^^
+    |                           |
+    |                           help: remove this `mut`
+
+warning: unused variable: `req`
+  --> src/birch/stop_preview.rs:48:5
+   |
+48 |     req: HttpRequest,
+   |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `e`
+  --> src/birch/vehicle_api.rs:43:21
+   |
+43 |                 Err(e) => HttpResponse::InternalServerError().json(ResponseVehicleIndividual {
+   |                     ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `req`
+  --> src/birch/vehicle_api.rs:60:5
+   |
+60 |     req: HttpRequest,
+   |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `e`
+  --> src/birch/vehicle_api.rs:80:29
+   |
+80 |                         Err(e) => {
+   |                             ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+   --> src/birch/vehicle_api.rs:110:29
+    |
+110 |                         Err(e) => {
+    |                             ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+   --> src/birch/vehicle_api.rs:230:41
+    |
+230 | ...                   Err(e) => {
+    |                           ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+   --> src/birch/vehicle_api.rs:242:49
+    |
+242 | ...                   Err(e) => {
+    |                           ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+   --> src/birch/vehicle_api.rs:254:57
+    |
+254 | ...                   Err(e) => {
+    |                           ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:124:16
+    |
+124 | async fn index(req: HttpRequest) -> impl Responder {
+    |                ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:130:17
+    |
+130 | async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
+    |                 ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:188:24
+    |
+188 | pub async fn microtime(req: HttpRequest) -> impl Responder {
+    |                        ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:201:23
+    |
+201 | pub async fn nanotime(req: HttpRequest) -> impl Responder {
+    |                       ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:217:5
+    |
+217 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:250:5
+    |
+250 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:320:5
+    |
+320 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:381:34
+    |
+381 | pub async fn metrolinktrackproxy(req: HttpRequest) -> impl Responder {
+    |                                  ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `error`
+   --> src/birch/server.rs:392:21
+    |
+392 |                 Err(error) => HttpResponse::InternalServerError()
+    |                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_error`
+
+warning: unused variable: `error`
+   --> src/birch/server.rs:397:13
+    |
+397 |         Err(error) => HttpResponse::InternalServerError()
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_error`
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:404:27
+    |
+404 | pub async fn calfireproxy(req: HttpRequest) -> impl Responder {
+    |                           ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `err`
+   --> src/birch/server.rs:418:13
+    |
+418 |         Err(err) => HttpResponse::InternalServerError()
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_err`
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:425:26
+    |
+425 | pub async fn amtrakproxy(req: HttpRequest) -> impl Responder {
+    |                          ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `err`
+   --> src/birch/server.rs:437:21
+    |
+437 |                 Err(err) => HttpResponse::InternalServerError()
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_err`
+
+warning: unused variable: `error`
+   --> src/birch/server.rs:442:13
+    |
+442 |         Err(error) => HttpResponse::InternalServerError()
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_error`
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:492:5
+    |
+492 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: variable `chateau_mut_ref` is assigned to, but never used
+   --> src/birch/server.rs:623:13
+    |
+623 |     let mut chateau_mut_ref = chateau_lock.as_mut();
+    |             ^^^^^^^^^^^^^^^
+    |
+    = note: consider using `_chateau_mut_ref` instead
+
+warning: value assigned to `chateau_mut_ref` is never read
+   --> src/birch/server.rs:625:5
+    |
+625 |     chateau_mut_ref = Some(&mut ChateauCache {
+    |     ^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unused variable: `req`
+   --> src/birch/server.rs:644:5
+    |
+644 |     req: HttpRequest,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `ip_addr_v4`
+   --> src/birch/server.rs:711:47
+    |
+711 |                         core::net::IpAddr::V4(ip_addr_v4) => {
+    |                                               ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ip_addr_v4`
+
+warning: unused variable: `ip_addr_v6`
+   --> src/birch/server.rs:714:47
+    |
+714 |                         core::net::IpAddr::V6(ip_addr_v6) => {
+    |                                               ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ip_addr_v6`
+
+warning: unused variable: `e`
+    --> src/birch/server.rs:1007:21
+     |
+1007 |                 Err(e) => HttpResponse::InternalServerError().body("Could not reach Nominatim"),
+     |                     ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+    --> src/birch/server.rs:1027:37
+     |
+1027 | ...                   Err(e) => HttpResponse::InternalServerError()
+     |                           ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+    --> src/birch/server.rs:1050:53
+     |
+1050 | ...                   Err(e) => HttpResponse::InternalServerError()
+     |                           ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+    --> src/birch/server.rs:1087:21
+     |
+1087 |                 Err(e) => HttpResponse::InternalServerError().body("Could not reach Nominatim"),
+     |                     ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `req`
+    --> src/birch/server.rs:1107:5
+     |
+1107 |     req: HttpRequest,
+     |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+warning: unused variable: `req`
+    --> src/birch/server.rs:1133:5
+     |
+1133 |     req: HttpRequest,
+     |     ^^^ help: if this is intentional, prefix it with an underscore: `_req`
+
+error[E0277]: the trait bound `catenary::models::Stop: serde::Serialize` is not satisfied
+    --> src/birch/alerts.rs:17:10
+     |
+  17 | #[derive(Serialize, Deserialize)]
+     |          ^^^^^^^^^ the trait `_::_serde::Serialize` is not implemented for `catenary::models::Stop`
+...
+  21 |     pub stops: HashMap<String, catenary::models::Stop>,
+     |     --- required by a bound introduced by this call
+     |
+     = note: for local types consider adding `#[derive(serde::Serialize)]` to your `catenary::models::Stop` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `_::_serde::Serialize`:
+               &'a T
+               &'a mut T
+               ()
+               (T,)
+               (T0, T1)
+               (T0, T1, T2)
+               (T0, T1, T2, T3)
+               (T0, T1, T2, T3, T4)
+             and 773 others
+     = note: required for `std::collections::HashMap<std::string::String, catenary::models::Stop>` to implement `_::_serde::Serialize`
+note: required by a bound in `_::_serde::ser::SerializeStruct::serialize_field`
+    --> /home/kyler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.228/src/ser/mod.rs:1917:21
+     |
+1915 |     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
+     |        --------------- required by a bound in this associated function
+1916 |     where
+1917 |         T: ?Sized + Serialize;
+     |                     ^^^^^^^^^ required by this bound in `SerializeStruct::serialize_field`
+     = note: this error originates in the derive macro `Serialize` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `catenary::models::Stop: serde::Deserialize<'de>` is not satisfied
+    --> src/birch/alerts.rs:21:16
+     |
+  21 |     pub stops: HashMap<String, catenary::models::Stop>,
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `_::_serde::Deserialize<'_>` is not implemented for `catenary::models::Stop`
+     |
+     = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `catenary::models::Stop` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `_::_serde::Deserialize<'de>`:
+               `&'a JsonRawValue` implements `_::_serde::Deserialize<'de>`
+               `&'a [u8]` implements `_::_serde::Deserialize<'de>`
+               `&'a ron::value::RawValue` implements `_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::ByteArray<N>` implements `_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::Bytes` implements `_::_serde::Deserialize<'de>`
+               `&'a std::path::Path` implements `_::_serde::Deserialize<'de>`
+               `&'a str` implements `_::_serde::Deserialize<'de>`
+               `()` implements `_::_serde::Deserialize<'de>`
+             and 771 others
+     = note: required for `std::collections::HashMap<std::string::String, catenary::models::Stop>` to implement `_::_serde::Deserialize<'_>`
+note: required by a bound in `next_element`
+    --> /home/kyler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.228/src/de/mod.rs:1771:12
+     |
+1769 |     fn next_element<T>(&mut self) -> Result<Option<T>, Self::Error>
+     |        ------------ required by a bound in this associated function
+1770 |     where
+1771 |         T: Deserialize<'de>,
+     |            ^^^^^^^^^^^^^^^^ required by this bound in `SeqAccess::next_element`
+
+error[E0277]: the trait bound `catenary::models::Stop: serde::Deserialize<'de>` is not satisfied
+    --> src/birch/alerts.rs:21:16
+     |
+  21 |     pub stops: HashMap<String, catenary::models::Stop>,
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `_::_serde::Deserialize<'_>` is not implemented for `catenary::models::Stop`
+     |
+     = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `catenary::models::Stop` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `_::_serde::Deserialize<'de>`:
+               `&'a JsonRawValue` implements `_::_serde::Deserialize<'de>`
+               `&'a [u8]` implements `_::_serde::Deserialize<'de>`
+               `&'a ron::value::RawValue` implements `_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::ByteArray<N>` implements `_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::Bytes` implements `_::_serde::Deserialize<'de>`
+               `&'a std::path::Path` implements `_::_serde::Deserialize<'de>`
+               `&'a str` implements `_::_serde::Deserialize<'de>`
+               `()` implements `_::_serde::Deserialize<'de>`
+             and 771 others
+     = note: required for `std::collections::HashMap<std::string::String, catenary::models::Stop>` to implement `_::_serde::Deserialize<'_>`
+note: required by a bound in `next_value`
+    --> /home/kyler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.228/src/de/mod.rs:1916:12
+     |
+1914 |     fn next_value<V>(&mut self) -> Result<V, Self::Error>
+     |        ---------- required by a bound in this associated function
+1915 |     where
+1916 |         V: Deserialize<'de>,
+     |            ^^^^^^^^^^^^^^^^ required by this bound in `MapAccess::next_value`
+
+error[E0277]: the trait bound `catenary::models::Stop: serde::Deserialize<'de>` is not satisfied
+  --> src/birch/alerts.rs:17:21
+   |
+17 | #[derive(Serialize, Deserialize)]
+   |                     ^^^^^^^^^^^ the trait `_::_serde::Deserialize<'_>` is not implemented for `catenary::models::Stop`
+   |
+   = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `catenary::models::Stop` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `_::_serde::Deserialize<'de>`:
+             `&'a JsonRawValue` implements `_::_serde::Deserialize<'de>`
+             `&'a [u8]` implements `_::_serde::Deserialize<'de>`
+             `&'a ron::value::RawValue` implements `_::_serde::Deserialize<'de>`
+             `&'a serde_bytes::ByteArray<N>` implements `_::_serde::Deserialize<'de>`
+             `&'a serde_bytes::Bytes` implements `_::_serde::Deserialize<'de>`
+             `&'a std::path::Path` implements `_::_serde::Deserialize<'de>`
+             `&'a str` implements `_::_serde::Deserialize<'de>`
+             `()` implements `_::_serde::Deserialize<'de>`
+           and 771 others
+   = note: required for `std::collections::HashMap<std::string::String, catenary::models::Stop>` to implement `_::_serde::Deserialize<'_>`
+note: required by a bound in `_::_serde::__private228::de::missing_field`
+  --> /home/kyler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:26:8
+   |
+24 | pub fn missing_field<'de, V, E>(field: &'static str) -> Result<V, E>
+   |        ------------- required by a bound in this function
+25 | where
+26 |     V: Deserialize<'de>,
+   |        ^^^^^^^^^^^^^^^^ required by this bound in `missing_field`
+   = note: this error originates in the derive macro `Deserialize` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused import: `rayon::prelude`
+  --> src/birch/aspenised_data_over_https.rs:15:5
+   |
+15 | use rayon::prelude::*;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused import: `sqlx::Row`
+  --> src/birch/get_agencies.rs:14:5
+   |
+14 | use sqlx::Row;
+   |     ^^^^^^^^^
+
+warning: unused import: `itertools::Itertools`
+  --> src/birch/get_vehicle_trip_information.rs:38:5
+   |
+38 | use itertools::Itertools;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `sqlx::Row`
+  --> src/birch/server.rs:63:5
+   |
+63 | use sqlx::Row;
+   |     ^^^^^^^^^
+
+Some errors have detailed explanations: E0277, E0425.
+For more information about an error, try `rustc --explain E0277`.
+warning: `catenary-backend` (bin "birch") generated 261 warnings
+error: could not compile `catenary-backend` (bin "birch") due to 5 previous errors; 261 warnings emitted
