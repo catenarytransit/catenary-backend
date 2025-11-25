@@ -2094,6 +2094,7 @@ pub async fn get_trip_init(
         route.route_type,
         stop_positions,
         additional_routes_to_lookup,
+        None,
         pool.clone(),
     )
     .await;

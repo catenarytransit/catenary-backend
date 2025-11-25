@@ -2,6 +2,7 @@ use crate::CatenaryPostgresPool;
 use actix_web::HttpResponse;
 use actix_web::Responder;
 use actix_web::web;
+use ahash::AHashMap;
 use catenary::EtcdConnectionIps;
 use catenary::SerializableStop;
 use catenary::aspen::lib::ChateauMetadataEtcd;
@@ -269,6 +270,20 @@ pub async fn route_info(
         .await
         .unwrap();
 
+    let known_transfers_same_stop: AHashMap<String, Vec<String>> = stops_pg
+        .iter()
+        .map(|stop| {
+            (
+                stop.gtfs_id.clone(),
+                stop.routes
+                    .clone()
+                    .into_iter()
+                    .map(|x| x.unwrap())
+                    .collect::<Vec<String>>(),
+            )
+        })
+        .collect::<AHashMap<String, Vec<String>>>();
+
     let mut stops_hashmap: HashMap<String, SerializableStop> = HashMap::new();
 
     let parent_stops: HashSet<String> = stops_pg
@@ -377,6 +392,7 @@ pub async fn route_info(
             route.route_type,
             stop_positions,
             additional_routes_to_lookup,
+            Some(known_transfers_same_stop),
             pool_arc,
         )
         .await;

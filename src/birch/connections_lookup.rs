@@ -31,6 +31,7 @@ pub async fn connections_lookup(
     input_route_type: i16,
     stop_positions: Vec<(String, f64, f64)>,
     additional_routes_to_lookup: BTreeMap<String, BTreeSet<String>>,
+    known_transfers_same_stop: Option<AHashMap<String, Vec<String>>>,
     pool: Arc<CatenaryPostgresPool>,
 ) -> ConnectionsInfo {
     let conn_pool = pool.as_ref();
@@ -246,6 +247,38 @@ pub async fn connections_lookup(
                 .entry(connection_chateau.clone())
                 .or_insert_with(BTreeSet::new)
                 .extend(routes_for_connection);
+        }
+
+        if let Some(known_transfers_same_stop) = known_transfers_same_stop {
+            for (stop_id, known_transfers_at_stop) in known_transfers_same_stop {
+                for route_id in known_transfers_at_stop {
+                    match connections_per_stop.entry(stop_id.clone()) {
+                        std::collections::btree_map::Entry::Vacant(ve) => {
+                            let mut starting_insert = BTreeMap::new();
+
+                            starting_insert.insert(input_chateau.to_string(), vec![route_id]);
+
+                            ve.insert(starting_insert);
+                        }
+                        std::collections::btree_map::Entry::Occupied(mut oe) => {
+                            let mut oe_value = oe.get_mut();
+
+                            match oe_value.entry(input_chateau.to_string()) {
+                                std::collections::btree_map::Entry::Vacant(ve2) => {
+                                    ve2.insert(vec![route_id]);
+                                }
+                                std::collections::btree_map::Entry::Occupied(mut oe2) => {
+                                    let mut oe_value = oe2.get_mut();
+
+                                    if !oe_value.contains(&stop_id) {
+                                        oe_value.push(route_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Remove this route itself from transfer connections
