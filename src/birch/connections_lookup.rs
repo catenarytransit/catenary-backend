@@ -307,7 +307,7 @@ pub async fn connections_lookup(
                                 std::collections::btree_map::Entry::Occupied(mut oe2) => {
                                     let mut oe_value = oe2.get_mut();
 
-                                    if !oe_value.contains(&stop_id) {
+                                    if !oe_value.contains(&route_id) {
                                         oe_value.push(route_id);
                                     }
                                 }
