@@ -249,38 +249,6 @@ pub async fn connections_lookup(
                 .extend(routes_for_connection);
         }
 
-        if let Some(known_transfers_same_stop) = known_transfers_same_stop {
-            for (stop_id, known_transfers_at_stop) in known_transfers_same_stop {
-                for route_id in known_transfers_at_stop {
-                    match connections_per_stop.entry(stop_id.clone()) {
-                        std::collections::btree_map::Entry::Vacant(ve) => {
-                            let mut starting_insert = BTreeMap::new();
-
-                            starting_insert.insert(input_chateau.to_string(), vec![route_id]);
-
-                            ve.insert(starting_insert);
-                        }
-                        std::collections::btree_map::Entry::Occupied(mut oe) => {
-                            let mut oe_value = oe.get_mut();
-
-                            match oe_value.entry(input_chateau.to_string()) {
-                                std::collections::btree_map::Entry::Vacant(ve2) => {
-                                    ve2.insert(vec![route_id]);
-                                }
-                                std::collections::btree_map::Entry::Occupied(mut oe2) => {
-                                    let mut oe_value = oe2.get_mut();
-
-                                    if !oe_value.contains(&stop_id) {
-                                        oe_value.push(route_id);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         // Remove this route itself from transfer connections
         for (_stop_id, per_chateau) in connections_per_stop.iter_mut() {
             if let Some(routes) = per_chateau.get_mut(input_chateau) {
@@ -316,6 +284,38 @@ pub async fn connections_lookup(
             }
 
             response_connecting_routes.insert(chateau_key, connecting_routes_map);
+        }
+
+        if let Some(known_transfers_same_stop) = known_transfers_same_stop {
+            for (stop_id, known_transfers_at_stop) in known_transfers_same_stop {
+                for route_id in known_transfers_at_stop {
+                    match connections_per_stop.entry(stop_id.clone()) {
+                        std::collections::btree_map::Entry::Vacant(ve) => {
+                            let mut starting_insert = BTreeMap::new();
+
+                            starting_insert.insert(input_chateau.to_string(), vec![route_id]);
+
+                            ve.insert(starting_insert);
+                        }
+                        std::collections::btree_map::Entry::Occupied(mut oe) => {
+                            let mut oe_value = oe.get_mut();
+
+                            match oe_value.entry(input_chateau.to_string()) {
+                                std::collections::btree_map::Entry::Vacant(ve2) => {
+                                    ve2.insert(vec![route_id]);
+                                }
+                                std::collections::btree_map::Entry::Occupied(mut oe2) => {
+                                    let mut oe_value = oe2.get_mut();
+
+                                    if !oe_value.contains(&stop_id) {
+                                        oe_value.push(route_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
