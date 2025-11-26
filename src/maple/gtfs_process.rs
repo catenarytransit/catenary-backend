@@ -310,6 +310,10 @@ pub async fn gtfs_process_feed(
                     trip.trip_short_name = Some(trip_id.to_string());
                     trip.trip_headsign = None;
                 }
+
+                for stoptime in trip.stop_times.iter_mut() {
+                    stoptime.stop_headsign = None;
+                }
             }
 
             gtfs
