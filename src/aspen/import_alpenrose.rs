@@ -1286,13 +1286,21 @@ pub async fn new_rt_data(
                                 old_rt_data: false,
                                 arrival: stu.arrival.clone().map(|arrival| AspenStopTimeEvent {
                                     delay: None,
-                                    time: arrival.time,
+                                    time: match arrival.time {
+                                        Some(time) if time <= 0 => None,
+                                        Some(time) => Some(time),
+                                        None => None,
+                                    },
                                     uncertainty: arrival.uncertainty,
                                 }),
                                 departure: stu.departure.clone().map(|departure| {
                                     AspenStopTimeEvent {
                                         delay: None,
-                                        time: departure.time,
+                                        time: match departure.time {
+                                            Some(time) if time <= 0 => None,
+                                            Some(time) => Some(time),
+                                            None => None,
+                                        },
                                         uncertainty: departure.uncertainty,
                                     }
                                 }),
