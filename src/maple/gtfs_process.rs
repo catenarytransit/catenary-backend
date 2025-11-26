@@ -308,6 +308,7 @@ pub async fn gtfs_process_feed(
             for (trip_id, trip) in gtfs.trips.iter_mut() {
                 if trip.trip_short_name.as_deref() == Some("AMSJ") {
                     trip.trip_short_name = Some(trip_id.to_string());
+                    trip.trip_headsign = None;
                 }
             }
 
