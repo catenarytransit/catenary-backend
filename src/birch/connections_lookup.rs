@@ -37,6 +37,8 @@ pub async fn connections_lookup(
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
 
+    let start_timer = std::time::Instant::now();
+
     let mut additional_routes_to_lookup = additional_routes_to_lookup;
 
     // Fetch metadata for connecting routes
@@ -318,6 +320,13 @@ pub async fn connections_lookup(
             }
         }
     }
+
+    let end_timer = std::time::Instant::now();
+    let duration = end_timer.duration_since(start_timer);
+    println!(
+        "connections_lookup took {:?} ms",
+        duration.as_micros() / 1000
+    );
 
     ConnectionsInfo {
         connecting_routes: response_connecting_routes,
