@@ -39,6 +39,7 @@ lazy_static! {
         "f-metrolinktrains~extra~rt",
         "f-rtcquebec~rt",
         "f-f244-sto~rt",
+        "f-northern~indiana~commuter~transportation~district~catenary~alerts~rt",
     ]);
 }
 
@@ -505,6 +506,7 @@ pub async fn single_fetch_time(
                                 )
                                 .await;
                             }
+
                             "f-viarail~rt" => {
                                 custom_rt_feeds::viarail::fetch_via_data(
                                     &mut kv_client,
@@ -589,9 +591,14 @@ pub async fn single_fetch_time(
                                 )
                                 .await;
                             }
-                            //    "f-uc~irvine~anteater~express~rt" => {
-                            //       custom_rt_feeds::uci::fetch_uci_data(&mut etcd, feed_id).await;
-                            //   }
+                            "f-northern~indiana~commuter~transportation~district~catenary~alerts~rt" => {
+                                let _ = custom_rt_feeds::northern_indiana::fetch_northern_indiana_data(
+                                    &mut kv_client,
+                                    &feed_id,
+                                    &client,
+                                )
+                                .await;
+                            }
                             _ => {}
                         }
                     }

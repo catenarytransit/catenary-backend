@@ -160,6 +160,7 @@ bytefmt = "0.1.7"
 redis = { version = "0.32.7" }
 hex = { version = "0.4.3", features = ["serde"] }
 sha2 = "0.10.9"
+nictd-gtfs-rt = "0.3.2"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
