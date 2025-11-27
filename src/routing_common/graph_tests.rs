@@ -14,7 +14,20 @@ fn test_transit_partition_serialization() {
             lat: 34.0,
             lon: -118.0,
         }],
-        trip_patterns: vec![],
+        trip_patterns: vec![TripPattern {
+            chateau: "test_chateau".to_string(),
+            route_id: "route_1".to_string(),
+            stop_indices: vec![0],
+            trips: vec![CompressedTrip {
+                gtfs_trip_id: "trip_1".to_string(),
+                service_mask: 1,
+                start_time: 3600,
+                delta_pointer: 0,
+                service_idx: 0,
+                bikes_allowed: 1,
+                wheelchair_accessible: 1,
+            }],
+        }],
         time_deltas: vec![],
         internal_transfers: vec![],
         osm_links: vec![],
@@ -34,6 +47,9 @@ fn test_transit_partition_serialization() {
     assert_eq!(decoded.service_ids[0], "c_12345");
     assert_eq!(decoded.service_exceptions.len(), 1);
     assert_eq!(decoded.service_exceptions[0].added_dates[0], 20231225);
+    assert_eq!(decoded.trip_patterns.len(), 1);
+    assert_eq!(decoded.trip_patterns[0].trips[0].bikes_allowed, 1);
+    assert_eq!(decoded.trip_patterns[0].trips[0].wheelchair_accessible, 1);
 }
 
 #[test]

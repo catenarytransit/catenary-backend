@@ -98,19 +98,19 @@ pub struct TransitStop {
 /// sequence of stops. This is the primary unit of Trip-Based Routing.
 #[derive(Clone, PartialEq, Message)]
 pub struct TripPattern {
-    #[prost(string, tag = "0")]
+    #[prost(string, tag = "1")]
     pub chateau: String,
 
-    #[prost(string, tag = "1")]
+    #[prost(string, tag = "2")]
     pub route_id: String,
 
     /// The sequence of Stop Indices (referencing `stops` vector) for this pattern.
-    #[prost(uint32, repeated, tag = "2")]
+    #[prost(uint32, repeated, tag = "3")]
     pub stop_indices: Vec<u32>,
 
     /// The list of trips executing this pattern, SORTED by departure time.
     /// This sorting allows for binary search or linear scan during routing.
-    #[prost(message, repeated, tag = "3")]
+    #[prost(message, repeated, tag = "4")]
     pub trips: Vec<CompressedTrip>,
 }
 
@@ -143,6 +143,14 @@ pub struct CompressedTrip {
     /// Allows looking up the specific Service ID for this trip.
     #[prost(uint32, tag = "5")]
     pub service_idx: u32,
+
+    /// Bikes Allowed (0=Unknown, 1=Yes, 2=No)
+    #[prost(uint32, tag = "6")]
+    pub bikes_allowed: u32,
+
+    /// Wheelchair Accessible (0=Unknown, 1=Accessible, 2=Not Accessible)
+    #[prost(uint32, tag = "7")]
+    pub wheelchair_accessible: u32,
 }
 
 /// Exception dates for a service (Calendar Dates).
