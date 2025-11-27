@@ -2,7 +2,7 @@ Algorithm Authors: Wen, Chelsea; Chin, Kyler
 
 # Algorithm Overview
 
-The Catenary routing algorithm is based on Scalable Transfer Patterns by Hannah Bast, PhD, with GTFS Realtime integration.
+The Catenary routing algorithm is based on Transfer Patterns[1] and Scalable Transfer Patterns[2] with support for multimodal travel, additional data compression methods, and GTFS Realtime integration.
 
 - OSM ("road network") and transit ("transit network") data are stored as separate graphs, but linked in memory and in practice
 - Multimodality is supported through free-pathing through OSM, which will support pedestrian, cyclist, and motorist legs (anything based on the road network as opposed to transit network)
@@ -45,7 +45,7 @@ To avoid memory exhaustion (e.g., processing `planet.pbf`), generation is perfor
         - A **Quadtree** or **Tile Index** maps Lat/Lon coordinates to specific `chunk_x_y_z.pbf` files.
         - This significantly reduces the file count compared to a fixed-grid approach while maintaining performance in dense zones.
     - **Boundary Handling**:
-        - **Flags**: Edges crossing tile boundaries are NOT cut. Taking inspiration from the [original Arc-Flags paper](https://www.gor-ev.de/wp-content/uploads/2016/08/LAUTHER.pdf), these "crossings" are marked with a special `EDGE_FLAG_BORDER` flag, so when the routing algorithm encounters an edge with this flag, it knows to fetch the next chunk to continue traversal.
+        - **Flags**: Edges crossing tile boundaries are NOT cut. Taking inspiration from the Arc-Flags[3] methodology, these "crossings" are marked with a special `EDGE_FLAG_BORDER` flag, such that when the routing algorithm encounters an edge with this flag, it knows to fetch the next chunk to continue traversal.
         - **Avoid Overhang**: We do *not* use a bounding box with overhang, as this creates duplicate data and complicates graph connectivity.
 
 ### Public Transport Graph
@@ -82,7 +82,7 @@ A variant of Trip-Based Routing data structures, organized by **Trip Patterns**.
 
 # Routing Hierarchy
 
-We follow the hierarchy approach given by Bast et al. in Transfer Patterns: 
+We follow the hierarchy approach given by Bast et al. in Transfer Patterns[1]: 
 
 1. **Local Route**: Within a single partition (chunk), a simple local query is used to find the short path from source to destination, if no hub stations (central transfer points) are detected.
 2. **Global Route**: Computed only between high-frequency stations (for example, a central station in a city or otherwise often-visted node) and simple query-rechable distances.
@@ -158,7 +158,13 @@ Transfer Patterns are expensive to compute and cannot be re-run frequently. Howe
 3. **On-the-Fly Re-routing**: If a delay breaks a connection in the pre-computed pattern, the algorithm naturally "falls through" to the next available trip in the sequence. If all patterns fail, it falls back to a standard A* search on the local graph.
 
 ### Additional notes
+"The graph partitioning problem asks for a balanced partition that minimizes the weighted sum of all cut edges." [4]
 
-"The graph partitioning problem asks for a balanced partition that minimizes the weighted sum of all cut edges." [1]
+# Bibliography
+[1]: H. Bast et al., “Fast Routing in Very Large Public Transportation Networks Using Transfer Patterns,” ESA 2010, pp. 290–301, Sep. 2010, doi: https://doi.org/10.1007/978-3-642-15775-2_25.
+[2]: H. Bast, M. Hertel, and S. Storandt, “Scalable Transfer Patterns,” 2016 Proceedings of the Eighteenth Workshop on Algorithm Engineering and Experiments (ALENEX), Dec. 2015, doi: https://doi.org/10.1137/1.9781611974317.2.
+[3]: U. Lauther, “An Extremely Fast, Exact Algorithm for Finding Shortest Paths in Static Networks with Geographical Background,” Siemens AG, Corporate Technology Software & Engineering, vol. 6, pp. 219–230, May 2004.
+[4]: E. Großmann, J. Sauer, C. Schulz, and P. Steil, “Arc-Flags Meet Trip-Based Public Transit Routing,” arXiv (Cornell University), Feb. 2023, doi: https://doi.org/10.48550/arxiv.2302.07168.
 
-[1]: Arc-Flags Meet Trip-Based Public Transit Routing
+
+Arc-Flags Meet Trip-Based Public Transit Routing
