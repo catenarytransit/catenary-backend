@@ -4,7 +4,7 @@ Catenary Backend is a distributed system comprised of microservices operating in
 
 - **Maple**: GTFS Downloader and ingestion engine
 - **Edelweiss**: Routing execution engine (In progress, see also https://github.com/catenarytransit/routing)
-- **Avens**: Osm Preprocessor for rotuing
+- **Avens**: Osm Preprocessor for routing
 - **Alpenrose**: Distributed system to ingest GTFS-rt and other realtime data (Rose des Alpes), successor to Kactus.
 - **Aspen**: Processing of realtime data and dynamic insertion into other engines
 - **Foxglove**: Map tile geometry server, will serve line ordering optimised graph maps (LOOM) in the future. [not started yet]

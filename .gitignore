@@ -91,3 +91,9 @@ reduced.gtfs.zip
 
 data/
 routing-git-copy/
+
+# Chunk and Test Folders
+chunks/
+test_osm_chunks/
+test_osm_temp/
+test_data/

@@ -181,6 +181,10 @@ path = "src/aspen/main.rs"
 name = "aspenleader"
 path = "src/aspen/spawn_leader.rs"
 
+[[bin]]
+name = "avens"
+path = "src/avens/main.rs"
+
 [lib]
 name = "catenary"
 path = "src/lib.rs"

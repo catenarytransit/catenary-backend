@@ -44,6 +44,7 @@ fn test_osm_partition_serialization() {
             lon: -118.0,
             elevation: 100.0,
             first_edge_idx: 0,
+            flags: 0,
         }],
         edges: vec![],
         geometries: vec![],

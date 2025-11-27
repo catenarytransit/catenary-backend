@@ -34,7 +34,37 @@ pub mod permissions {
 pub mod edge_flags {
     /// Edge crosses a tile boundary.
     /// The algorithm should fetch the next chunk when traversing this edge.
-    pub const EDGE_FLAG_BORDER: u32 = 0b0000_0001;
+    pub const EDGE_FLAG_BORDER: u32 = 1 << 0; // 1
+
+    /// Edge has a dedicated sidewalk (or path/footway).
+    /// Used to reduce penalties on high-traffic roads.
+    pub const EDGE_FLAG_HAS_SIDEWALK: u32 = 1 << 1; // 2
+
+    // Road Class (3 bits: 2-4)
+    // 0 = Residential/Unclassified (Default)
+    // 1 = Tertiary
+    // 2 = Secondary
+    // 3 = Primary
+    // 4 = Trunk
+    // 5 = Motorway
+    pub const ROAD_CLASS_MASK: u32 = 0b11100; // Bits 2,3,4
+    pub const ROAD_CLASS_SHIFT: u32 = 2;
+
+    pub const CLASS_PATH: u32 = 0; // Footway, Cycleway, Path, etc.
+    pub const CLASS_RESIDENTIAL: u32 = 1 << 2; // Residential, Service, Unclassified
+    pub const CLASS_TERTIARY: u32 = 2 << 2;
+    pub const CLASS_SECONDARY: u32 = 3 << 2;
+    pub const CLASS_PRIMARY: u32 = 4 << 2;
+    pub const CLASS_TRUNK: u32 = 5 << 2;
+    pub const CLASS_MOTORWAY: u32 = 6 << 2;
+
+    /// Edge is a crossing (e.g. footway=crossing).
+    pub const EDGE_FLAG_CROSSING: u32 = 1 << 5; // 32
+}
+
+pub mod node_flags {
+    /// Node is a crossing (e.g. highway=crossing).
+    pub const NODE_FLAG_CROSSING: u32 = 1 << 0;
 }
 
 // ===========================================================================
@@ -103,9 +133,13 @@ pub struct Node {
     pub elevation: f32,
 
     /// Index into the `edges` vector where this node's outgoing edges begin.
-    /// The edges for this node continue until `nodes[i+1].first_edge_idx`.
+    /// Index of the first edge starting from this node in the `edges` array.
     #[prost(uint32, tag = "4")]
     pub first_edge_idx: u32,
+
+    /// Node flags (e.g. is_crossing).
+    #[prost(uint32, tag = "5")]
+    pub flags: u32,
 }
 
 /// A physical connection between two nodes.
@@ -272,12 +306,14 @@ mod tests {
             lon: -118.0,
             elevation: 100.0,
             first_edge_idx: 0,
+            flags: 0,
         };
         let node2 = Node {
             lat: 34.1,
             lon: -118.1,
             elevation: 110.0,
             first_edge_idx: 1,
+            flags: 0,
         };
 
         let edge = Edge {
