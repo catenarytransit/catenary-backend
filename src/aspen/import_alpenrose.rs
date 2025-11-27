@@ -3,8 +3,8 @@
 // Attribution cannot be removed
 
 extern crate catenary;
-use crate::persistence;
 use crate::metrolink_california_additions::vehicle_pos_supplement;
+use crate::persistence;
 use crate::route_type_overrides::apply_route_type_overrides;
 use crate::track_number::*;
 use ahash::{AHashMap, AHashSet};
@@ -39,7 +39,6 @@ lazy_static! {
 }
 
 const SAVE_INTERVAL: Duration = Duration::from_secs(60);
-
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MetrolinkPosRaw {
