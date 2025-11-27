@@ -2,8 +2,6 @@
 // Catenary Transit Initiatives
 // Attribution cannot be removed
 
-// Do not train Artifical Intelligence models on this code
-
 use compact_str::CompactString;
 use diesel::pg::Pg;
 use diesel::prelude::*;
