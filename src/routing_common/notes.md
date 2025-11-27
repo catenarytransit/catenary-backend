@@ -4,14 +4,18 @@ Algorithm Authors: Wen, Chelsea; Chin, Kyler
 
 The Catenary routing algorithm is based on Scalable Transfer Patterns by Hannah Bast, PhD, with GTFS Realtime integration.
 
-- OSM graphs and Transit graphs are stored separately but linked in memory.
+- OSM ("road network") and transit ("transit network") data are stored as separate graphs, but linked in memory and in practice
+- Multimodality is supported through free-pathing through OSM, which will support pedestrian, cyclist, and motorist legs (anything based on the road network as opposed to transit network)
 
 ## 1. The Street Layer (OSM)
-Handles the "First Mile" (Origin $\to$ Station) and "Last Mile" (Station $\to$ Destination).
+Handles the "First Leg" (Origin $\to$ Station) and "Last Leg" (Station $\to$ Destination).
 
 - **Structure**: Standard road graph (Nodes = Intersections, Edges = Roads/Paths).
 - **Algorithm**: Bidirectional Dijkstra or Contraction Hierarchies (CH).
 - **Update Cycle**: Slow (Monthly/Quarterly). Streets rarely change.
+- **Assumptions**:
+      - Travellers will be able to detect and avoid temporary obstacles such as sidewalk closures.
+      - If pedestrian/cyclist - friendly infrastructure does not exist, they will be pathed on the road, with penalty. USE ONE'S OWN DISCRETION. DO NOT FOLLOW MAP DIRECTIONS BLINDLY. SAFETY IS PRIORITY. 
 
 ## 2. The Transit Layer (GTFS + Transfer Patterns)
 Handles complex "Station-to-Station" routing using Scalable Transfer Patterns.
@@ -20,7 +24,8 @@ Handles complex "Station-to-Station" routing using Scalable Transfer Patterns.
 - **Algorithm**: Transfer Pattern DAG Search.
 - **Update Cycle**: Fast (Daily to Hourly). Schedules change constantly; valid dates expire.
 
-**Note**: Far transfers (up to a few km in suburban areas or enclaves) are allowed to enable cyclists to save time. This can be calculated by identifying sparse areas with poor frequency.
+**Note**: Far transfers (up to a few km in suburban areas or enclaves) are allowed to enable cyclists to save time. This can be calculated by identifying sparse areas with poor frequency. 
+We plan on making these metrics (travel speed, transfer distance, etc.) customizable to the user to match current road conditions, mood, state of health, etc. 
 
 ---
 
@@ -30,7 +35,7 @@ Handles complex "Station-to-Station" routing using Scalable Transfer Patterns.
 To avoid memory exhaustion (e.g., processing `planet.pbf`), generation is performed chunk-by-chunk rather than via monolithic processing.
 
 ### OSM Data
-- **Source**: The entire planet file is not processed at once.
+- **Source**: The entire planet file is not processed at once. This would be impractical and also incredibly diffifcult to parse through and query.
 - **Strategy**: **Slippy Map Tile Grid (Quadtree)**
     - **Concept**: The world is divided into tiles using the standard Web Mercator (XYZ) system.
     - **Variable Density**:
@@ -40,8 +45,7 @@ To avoid memory exhaustion (e.g., processing `planet.pbf`), generation is perfor
         - A **Quadtree** or **Tile Index** maps Lat/Lon coordinates to specific `chunk_x_y_z.pbf` files.
         - This significantly reduces the file count compared to a fixed-grid approach while maintaining performance in dense zones.
     - **Boundary Handling**:
-        - **Flags**: Edges crossing tile boundaries are NOT cut. Instead, they are marked with a special `EDGE_FLAG_BORDER` flag.
-        - **Traversal**: When the routing algorithm encounters an edge with this flag, it knows to fetch the next chunk to continue traversal.
+        - **Flags**: Edges crossing tile boundaries are NOT cut. Taking inspiration from the [original Arc-Flags paper](https://www.gor-ev.de/wp-content/uploads/2016/08/LAUTHER.pdf), these "crossings" are marked with a special `EDGE_FLAG_BORDER` flag, so when the routing algorithm encounters an edge with this flag, it knows to fetch the next chunk to continue traversal.
         - **Avoid Overhang**: We do *not* use a bounding box with overhang, as this creates duplicate data and complicates graph connectivity.
 
 ### Public Transport Graph
@@ -78,8 +82,10 @@ A variant of Trip-Based Routing data structures, organized by **Trip Patterns**.
 
 # Routing Hierarchy
 
-1. **Local Graph**: Within a single partition (chunk), standard Dijkstra or RAPTOR is used. Precomputed patterns are not required for short, local trips.
-2. **Transfer Patterns**: Computed only between boundary stops of different partitions.
+We follow the hierarchy approach given by Bast et al. in Transfer Patterns: 
+
+1. **Local Route**: Within a single partition (chunk), a simple local query is used to find the short path from source to destination, if no hub stations (central transfer points) are detected.
+2. **Global Route**: Computed only between high-frequency stations (for example, a central station in a city or otherwise often-visted node) and simple query-rechable distances.
 
 ---
 
