@@ -18,7 +18,9 @@ use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
+// degrees
 const TRANSFER_SEARCH_RADIUS_DEGREES: f64 = 0.006;
+const MAX_CLUSTER_EXTENT: f64 = 0.02;
 
 pub struct ConnectionsInfo {
     pub connecting_routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>>, // chateau -> route_id -> Route
@@ -66,12 +68,44 @@ pub async fn connections_lookup(
     if !stop_positions.is_empty() {
         let pool_for_transfers = pool.clone();
 
-        // one async query per stop, all awaited concurrently
-        let transfer_futures = stop_positions.iter().map(|(stop_id, lat, lon)| {
+        // Group stops into clusters to reduce DB queries
+        let mut clusters: Vec<Vec<(String, f64, f64)>> = Vec::new();
+        let mut current_cluster: Vec<(String, f64, f64)> = Vec::new();
+        let mut cluster_bounds: Option<(f64, f64, f64, f64)> = None; // min_lon, min_lat, max_lon, max_lat
+
+        for stop in stop_positions {
+            let (ref _id, lat, lon) = stop;
+
+            match cluster_bounds {
+                None => {
+                    current_cluster.push(stop.clone());
+                    cluster_bounds = Some((lon, lat, lon, lat));
+                }
+                Some((min_lon, min_lat, max_lon, max_lat)) => {
+                    let new_min_lon = min_lon.min(lon);
+                    let new_min_lat = min_lat.min(lat);
+                    let new_max_lon = max_lon.max(lon);
+                    let new_max_lat = max_lat.max(lat);
+
+                    if (new_max_lon - new_min_lon) < MAX_CLUSTER_EXTENT
+                        && (new_max_lat - new_min_lat) < MAX_CLUSTER_EXTENT
+                    {
+                        current_cluster.push(stop.clone());
+                        cluster_bounds = Some((new_min_lon, new_min_lat, new_max_lon, new_max_lat));
+                    } else {
+                        clusters.push(current_cluster);
+                        current_cluster = vec![stop.clone()];
+                        cluster_bounds = Some((lon, lat, lon, lat));
+                    }
+                }
+            }
+        }
+        if !current_cluster.is_empty() {
+            clusters.push(current_cluster);
+        }
+
+        let transfer_futures = clusters.into_iter().map(|cluster| {
             let pool_for_transfers = pool_for_transfers.clone();
-            let stop_id = stop_id.clone();
-            let lat = *lat;
-            let lon = *lon;
 
             async move {
                 let conn_pre = pool_for_transfers.get().await;
@@ -85,10 +119,17 @@ pub async fn connections_lookup(
 
                 let mut conn = conn_pre.unwrap();
 
+                let points_str = cluster
+                    .iter()
+                    .map(|(_, lat, lon)| format!("{} {}", lon, lat))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let multipoint_wkt = format!("SRID=4326;MULTIPOINT({})", points_str);
+
                 let where_query_for_stops = format!(
-                    "ST_DWithin(gtfs.stops.point, 'SRID=4326;POINT({} {})', {}) \
+                    "ST_DWithin(gtfs.stops.point, '{}', {}) \
                          AND allowed_spatial_query = TRUE",
-                    lon, lat, TRANSFER_SEARCH_RADIUS_DEGREES
+                    multipoint_wkt, TRANSFER_SEARCH_RADIUS_DEGREES
                 );
 
                 let nearby: Vec<catenary::models::Stop> = stops_pg_schema::dsl::stops
@@ -98,16 +139,35 @@ pub async fn connections_lookup(
                     .await
                     .unwrap_or_else(|e| {
                         eprintln!(
-                            "error computing transfers for stop {} (trip endpoint): {}",
-                            stop_id, e
+                            "error computing transfers for cluster (trip endpoint): {}",
+                            e
                         );
                         Vec::new()
                     });
 
-                nearby
-                    .into_iter()
-                    .map(|s| (stop_id.clone(), lat, lon, s))
-                    .collect::<Vec<_>>()
+                let mut results = Vec::new();
+                for found_stop in nearby {
+                    let found_point = match found_stop.point {
+                        Some(p) => p,
+                        None => continue,
+                    };
+
+                    for (base_id, base_lat, base_lon) in &cluster {
+                        let dx = base_lon - found_point.x;
+                        let dy = base_lat - found_point.y;
+                        if dx * dx + dy * dy
+                            <= TRANSFER_SEARCH_RADIUS_DEGREES * TRANSFER_SEARCH_RADIUS_DEGREES
+                        {
+                            results.push((
+                                base_id.clone(),
+                                *base_lat,
+                                *base_lon,
+                                found_stop.clone(),
+                            ));
+                        }
+                    }
+                }
+                results
             }
         });
 
