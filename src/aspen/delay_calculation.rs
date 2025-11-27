@@ -1,10 +1,10 @@
 use ahash::AHashSet;
-use catenary::aspen_dataset::{
-    AspenisedStopTimeUpdate, CompressedTrip, ItineraryPatternMeta, ItineraryPatternRow, Service,
-};
+use catenary::aspen_dataset::AspenisedStopTimeUpdate;
+use catenary::models::{CompressedTrip, ItineraryPatternMeta, ItineraryPatternRow};
+use catenary::CalendarUnified;
 use chrono::{Datelike, TimeZone, Utc};
 use chrono_tz::Tz;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 pub fn calculate_delay(
     trip_update_delay: Option<i32>,
@@ -15,7 +15,7 @@ pub fn calculate_delay(
     stop_time_update: &Vec<AspenisedStopTimeUpdate>,
     current_time_unix_timestamp: u64,
     compressed_trip: Option<&CompressedTrip>,
-    calendar_structure: &HashMap<String, Service>,
+    calendar_structure: &BTreeMap<String, CalendarUnified>,
     timezone: Option<Tz>,
 ) -> Option<i32> {
     match trip_update_delay {
@@ -317,15 +317,26 @@ pub fn calculate_delay(
                                                 .flatten()
                                                 .flatten();
 
-                                            match delay_arrival {
-                                                Some(delay_arrival) => Some(delay_arrival as i32),
-                                                None => match delay_departure {
-                                                    Some(delay_departure) => {
-                                                        Some(delay_departure as i32)
+                                            let mut delay = match delay_arrival {
+                                                Some(delay_arrival) => Some(delay_arrival),
+                                                None => delay_departure,
+                                            };
+
+                                            if let Some(d) = delay {
+                                                if d > 43200 {
+                                                    let candidate = d - 86400;
+                                                    if candidate.abs() < d.abs() {
+                                                        delay = Some(candidate);
                                                     }
-                                                    None => None,
-                                                },
+                                                } else if d < -43200 {
+                                                    let candidate = d + 86400;
+                                                    if candidate.abs() < d.abs() {
+                                                        delay = Some(candidate);
+                                                    }
+                                                }
                                             }
+
+                                            delay.map(|d| d as i32)
                                         }
                                     }
                                 }

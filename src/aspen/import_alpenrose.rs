@@ -4,7 +4,7 @@
 
 extern crate catenary;
 use crate::metrolink_california_additions::vehicle_pos_supplement;
-use crate::aspen::delay_calculation::calculate_delay;
+use crate::delay_calculation::calculate_delay;
 use crate::persistence;
 use crate::route_type_overrides::apply_route_type_overrides;
 use crate::track_number::*;
