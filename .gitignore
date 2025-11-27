@@ -88,3 +88,5 @@ reduced.gtfs.zip
 #Ignore osm files
 *.osm
 *.osm.pbf
+
+data/
