@@ -59,6 +59,7 @@ use crate::aspen::lib::RealtimeFeedMetadataEtcd;
 pub mod custom_alerts;
 pub mod elasticutils;
 pub mod hashfolder;
+pub mod routing_common;
 pub mod shape_fetcher;
 pub mod travic_types;
 use ahash::AHasher;

@@ -50,6 +50,7 @@ mod tests {
                 gtfs_realtime_version: "2.0".to_string(),
                 incrementality: None,
                 timestamp: Some(1678886400),
+                feed_version: None,
             },
             entity: vec![],
         };

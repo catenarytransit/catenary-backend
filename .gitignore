@@ -90,3 +90,4 @@ reduced.gtfs.zip
 *.osm.pbf
 
 data/
+routing-git-copy/
