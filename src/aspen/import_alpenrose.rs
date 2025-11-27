@@ -3,6 +3,7 @@
 // Attribution cannot be removed
 
 extern crate catenary;
+use crate::persistence;
 use crate::metrolink_california_additions::vehicle_pos_supplement;
 use crate::route_type_overrides::apply_route_type_overrides;
 use crate::track_number::*;
@@ -30,7 +31,15 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
+
+lazy_static! {
+    static ref LAST_SAVE_TIME: SccHashMap<String, Instant> = SccHashMap::new();
+}
+
+const SAVE_INTERVAL: Duration = Duration::from_secs(60);
+
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MetrolinkPosRaw {
@@ -2068,61 +2077,53 @@ pub async fn new_rt_data(
     let fast_hash_of_routes =
         catenary::fast_hash(&vehicle_routes_cache.iter().collect::<BTreeMap<_, _>>());
 
-    match authoritative_data_store.entry_sync(chateau_id.to_string()) {
-        scc::hash_map::Entry::Occupied(mut oe) => {
-            let mut data = oe.get_mut();
-            *data = AspenisedData {
-                vehicle_positions: aspenised_vehicle_positions,
-                vehicle_routes_cache: vehicle_routes_cache,
-                vehicle_routes_cache_hash: fast_hash_of_routes,
-                trip_updates: trip_updates,
-                trip_updates_lookup_by_trip_id_to_trip_update_ids:
-                    trip_updates_lookup_by_trip_id_to_trip_update_ids,
-                aspenised_alerts: alerts,
-                impacted_routes_alerts: impacted_route_id_to_alert_ids,
-                impacted_stops_alerts: AHashMap::new(),
-                vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
-                impacted_trips_alerts: impact_trip_id_to_alert_ids,
-                compressed_trip_internal_cache,
-                itinerary_pattern_internal_cache: ItineraryPatternInternalCache::new(),
-                last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
-                trip_updates_lookup_by_route_id_to_trip_update_ids:
-                    trip_updates_lookup_by_route_id_to_trip_update_ids,
-                trip_id_to_vehicle_gtfs_rt_id: trip_id_to_vehicle_gtfs_rt_id,
-                stop_id_to_stop,
-                shape_id_to_shape,
-                trip_modifications: trip_modifications,
-                trip_id_to_trip_modification_ids,
-                stop_id_to_trip_modification_ids,
-                stop_id_to_non_scheduled_trip_ids,
-            }
-        }
-        scc::hash_map::Entry::Vacant(ve) => {
-            ve.insert_entry(AspenisedData {
-                vehicle_positions: aspenised_vehicle_positions,
-                vehicle_routes_cache: vehicle_routes_cache,
-                vehicle_routes_cache_hash: fast_hash_of_routes,
-                trip_updates: trip_updates,
-                trip_updates_lookup_by_trip_id_to_trip_update_ids:
-                    trip_updates_lookup_by_trip_id_to_trip_update_ids,
-                aspenised_alerts: alerts,
-                impacted_routes_alerts: impacted_route_id_to_alert_ids,
-                impacted_stops_alerts: AHashMap::new(),
-                vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
-                impacted_trips_alerts: impact_trip_id_to_alert_ids,
-                compressed_trip_internal_cache,
-                trip_id_to_vehicle_gtfs_rt_id: trip_id_to_vehicle_gtfs_rt_id,
-                itinerary_pattern_internal_cache: ItineraryPatternInternalCache::new(),
-                last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
-                trip_updates_lookup_by_route_id_to_trip_update_ids:
-                    trip_updates_lookup_by_route_id_to_trip_update_ids,
-                stop_id_to_stop,
-                shape_id_to_shape,
-                trip_modifications: trip_modifications,
-                trip_id_to_trip_modification_ids,
-                stop_id_to_trip_modification_ids,
-                stop_id_to_non_scheduled_trip_ids,
-            });
+    let aspenised_data = AspenisedData {
+        vehicle_positions: aspenised_vehicle_positions,
+        vehicle_routes_cache: vehicle_routes_cache,
+        vehicle_routes_cache_hash: fast_hash_of_routes,
+        trip_updates: trip_updates,
+        trip_updates_lookup_by_trip_id_to_trip_update_ids:
+            trip_updates_lookup_by_trip_id_to_trip_update_ids,
+        aspenised_alerts: alerts,
+        impacted_routes_alerts: impacted_route_id_to_alert_ids,
+        impacted_stops_alerts: AHashMap::new(),
+        vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
+        impacted_trips_alerts: impact_trip_id_to_alert_ids,
+        compressed_trip_internal_cache,
+        itinerary_pattern_internal_cache: ItineraryPatternInternalCache::new(),
+        last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
+        trip_updates_lookup_by_route_id_to_trip_update_ids:
+            trip_updates_lookup_by_route_id_to_trip_update_ids,
+        trip_id_to_vehicle_gtfs_rt_id: trip_id_to_vehicle_gtfs_rt_id,
+        stop_id_to_stop,
+        shape_id_to_shape,
+        trip_modifications: trip_modifications,
+        trip_id_to_trip_modification_ids,
+        stop_id_to_trip_modification_ids,
+        stop_id_to_non_scheduled_trip_ids,
+    };
+
+    authoritative_data_store
+        .entry_async(chateau_id.to_string())
+        .await
+        .and_modify(|d| *d = aspenised_data.clone())
+        .or_insert(aspenised_data.clone());
+
+    // Persistence Logic
+    let should_save = match LAST_SAVE_TIME.get_async(chateau_id).await {
+        Some(last_save) => Instant::now().duration_since(*last_save.get()) > SAVE_INTERVAL,
+        None => true,
+    };
+
+    if should_save {
+        if let Err(e) = persistence::save_chateau_data(chateau_id, &aspenised_data) {
+            eprintln!("Failed to save chateau data for {}: {}", chateau_id, e);
+        } else {
+            LAST_SAVE_TIME
+                .entry_async(chateau_id.to_string())
+                .await
+                .and_modify(|t| *t = Instant::now())
+                .or_insert(Instant::now());
         }
     }
 

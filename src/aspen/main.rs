@@ -42,7 +42,9 @@ use rand::prelude::*;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::{
+    fs,
     net::{IpAddr, SocketAddr},
+    path::Path,
     time::Duration,
 };
 use tarpc::{
@@ -86,6 +88,7 @@ use std::io::Read;
 use std::io::Write;
 use std::time::Instant;
 
+mod persistence;
 mod track_number;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -1559,6 +1562,47 @@ async fn main() -> anyhow::Result<()> {
     let b_authoritative_data_store = Arc::clone(&authoritative_data_store);
     let b_conn_pool = Arc::clone(&arc_conn_pool);
     let b_thread_count = alpenrosethreadcount;
+
+    // Load persisted data
+    println!("Loading persisted data...");
+    let data_dir = Path::new("data/aspen_data");
+    if data_dir.exists() {
+        if let Ok(entries) = fs::read_dir(data_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(extension) = path.extension() {
+                    if extension == "zlib" {
+                        if let Some(file_stem) = path.file_stem() {
+                            if let Some(stem_str) = file_stem.to_str() {
+                                if let Some(chateau_id) = stem_str.strip_suffix(".bin") {
+                                    println!("Loading data for chateau: {}", chateau_id);
+                                    match persistence::load_chateau_data(chateau_id) {
+                                        Ok(Some(data)) => {
+                                            authoritative_data_store
+                                                .entry_async(chateau_id.to_string())
+                                                .await
+                                                .or_insert(data);
+                                            println!("Successfully loaded data for {}", chateau_id);
+                                        }
+                                        Ok(None) => {
+                                            eprintln!("No data found for {}", chateau_id);
+                                        }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "Failed to load data for {}: {}",
+                                                chateau_id, e
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println!("Finished loading persisted data.");
 
     let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
         Result<(), Box<dyn Error + Sync + Send>>,
