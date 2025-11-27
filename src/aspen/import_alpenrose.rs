@@ -36,9 +36,11 @@ use std::time::Instant;
 
 lazy_static! {
     static ref LAST_SAVE_TIME: SccHashMap<String, Instant> = SccHashMap::new();
+    static ref START_TIME: SccHashMap<String, Instant> = SccHashMap::new();
 }
 
 const SAVE_INTERVAL: Duration = Duration::from_secs(60);
+const DROP_OLD_TRIPS_GRACE_PERIOD: Duration = Duration::from_secs(60);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MetrolinkPosRaw {
@@ -129,6 +131,11 @@ pub async fn new_rt_data(
         chateau_id, realtime_feed_id
     );
     let start = std::time::Instant::now();
+
+    START_TIME
+        .entry_async(chateau_id.to_string())
+        .await
+        .or_insert(Instant::now());
 
     //either fetch the mutable reference to trip compressed cache or make an empty one
 
@@ -1705,6 +1712,7 @@ pub async fn new_rt_data(
                             timestamp: trip_update.timestamp,
                             delay: delay,
                             trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),
+                            last_seen: catenary::duration_since_unix_epoch().as_millis() as u64,
                         };
 
                         let trip_update = match REALTIME_FEEDS_TO_USE_VEHICLE_IDS
@@ -2070,6 +2078,79 @@ pub async fn new_rt_data(
     compressed_trip_internal_cache
         .compressed_trips
         .shrink_to_fit();
+
+    // Grace period logic for trip updates
+    if let Some(previous_data) = &previous_authoritative_data_store {
+        let current_time = catenary::duration_since_unix_epoch().as_millis() as u64;
+        let start_time = START_TIME.get_async(chateau_id).await.map(|t| *t.get());
+
+        if let Some(start_time) = start_time {
+            if start_time.elapsed() > DROP_OLD_TRIPS_GRACE_PERIOD {
+                // If we are past the grace period, we don't need to do anything special
+                // The new data is authoritative
+            } else {
+                // We are within the grace period, so we should preserve old trip updates
+                // that are not in the new data
+                for (trip_update_id, old_trip_update) in &previous_data.trip_updates {
+                    if !trip_updates.contains_key(trip_update_id) {
+                        // Check if the old trip update is still valid based on its own last_seen
+                        // (This is a secondary check, the primary one is the chateau start time)
+                        // Actually, if we are in the grace period, we should keep everything that hasn't expired naturally
+                        // But for now, let's just keep everything that was there before
+
+                        // Insert the old trip update
+                        trip_updates.insert(trip_update_id.clone(), old_trip_update.clone());
+
+                        // Update lookups
+                        if let Some(trip_id) = &old_trip_update.trip.trip_id {
+                            trip_updates_lookup_by_trip_id_to_trip_update_ids
+                                .entry(trip_id.clone().into())
+                                .and_modify(|x| x.push(trip_update_id.clone()))
+                                .or_insert(vec![trip_update_id.clone()]);
+                        }
+
+                        if let Some(trip_properties) = &old_trip_update.trip_properties {
+                            if let Some(trip_id) = &trip_properties.trip_id {
+                                trip_updates_lookup_by_trip_id_to_trip_update_ids
+                                    .entry(trip_id.clone().into())
+                                    .and_modify(|x| x.push(trip_update_id.clone()))
+                                    .or_insert(vec![trip_update_id.clone()]);
+                            }
+                        }
+
+                        if let Some(trip_id_modified) = &old_trip_update.trip.modified_trip {
+                            if let Some(trip_id_modified) = &trip_id_modified.affected_trip_id {
+                                trip_updates_lookup_by_trip_id_to_trip_update_ids
+                                    .entry(trip_id_modified.clone().into())
+                                    .and_modify(|x| x.push(trip_update_id.clone()))
+                                    .or_insert(vec![trip_update_id.clone()]);
+                            }
+                        }
+
+                        if let Some(route_id) = &old_trip_update.trip.route_id {
+                            trip_updates_lookup_by_route_id_to_trip_update_ids
+                                .entry(route_id.clone().into())
+                                .and_modify(|x| x.push(trip_update_id.clone()))
+                                .or_insert(vec![trip_update_id.clone()]);
+                        }
+
+                        if !old_trip_update.found_schedule_trip_id {
+                            for stop_time_update in &old_trip_update.stop_time_update {
+                                if let Some(stop_id) = &stop_time_update.stop_id {
+                                    stop_id_to_non_scheduled_trip_ids
+                                        .entry(CompactString::new(stop_id))
+                                        .and_modify(|x| {
+                                            x.push(EcoString::from(trip_update_id.as_str()))
+                                        })
+                                        .or_insert(vec![EcoString::from(trip_update_id.as_str())]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     //Insert data back into process-wide authoritative_data_store
 

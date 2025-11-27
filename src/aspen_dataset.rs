@@ -58,7 +58,9 @@ pub struct AspenisedData {
     pub impacted_trips_alerts: AHashMap<String, Vec<String>>,
     pub trip_id_to_vehicle_gtfs_rt_id: AHashMap<String, Vec<String>>,
     pub last_updated_time_ms: u64,
+    #[serde(skip, default = "ItineraryPatternInternalCache::new")]
     pub itinerary_pattern_internal_cache: ItineraryPatternInternalCache,
+    #[serde(skip, default = "CompressedTripInternalCache::new")]
     pub compressed_trip_internal_cache: CompressedTripInternalCache,
     pub stop_id_to_stop: AHashMap<CompactString, AspenisedStop>,
     pub shape_id_to_shape: AHashMap<CompactString, Option<EcoString>>,
@@ -367,6 +369,8 @@ pub struct AspenisedTripUpdate {
     pub trip_properties: Option<AspenTripProperties>,
     pub trip_headsign: Option<CompactString>,
     pub found_schedule_trip_id: bool,
+    #[serde(default)]
+    pub last_seen: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
