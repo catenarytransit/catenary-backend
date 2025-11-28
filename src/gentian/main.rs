@@ -8,8 +8,9 @@ use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use catenary::models::{Stop, Chateau, ItineraryPatternRow, CompressedTrip as DbCompressedTrip, Calendar, CalendarDate};
 use catenary::routing_common::transit_graph::{TransitPartition, TransitStop, TripPattern, CompressedTrip, OsmLink, ExternalTransfer, GlobalPatternIndex, PartitionDag, GlobalHub, DagEdge, StaticTransfer, ServiceException, LocalTransferPattern, TransferChunk};
 use catenary::routing_common::osm_graph::{StreetData, load_pbf, save_pbf};
-use std::collections::{HashSet, BinaryHeap};
+use std::collections::{BinaryHeap};
 use ahash::AHashMap as HashMap;
+use ahash::AHashSet as HashSet;
 use std::cmp::Ordering;
 
 
