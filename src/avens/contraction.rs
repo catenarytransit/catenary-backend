@@ -3,7 +3,8 @@ use catenary::routing_common::osm_graph::{
     self, ContractionHierarchy, Edge, Node, Shortcut, StreetData,
 };
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
+use ahash::AHashMap as HashMap;
 
 /// Builder for Contraction Hierarchies.
 ///
@@ -20,6 +21,12 @@ pub struct ContractedGraphBuilder<'a> {
     augmented_edges: Vec<Vec<AugmentedEdge>>,
     /// Current "contracted" state of nodes. True if node is already contracted.
     is_contracted: Vec<bool>,
+}
+
+struct ContractionWorkspace {
+    dists: HashMap<u32, u32>,
+    pq: BinaryHeap<Reverse<(u32, u32)>>,
+    shortcuts: Vec<(u32, AugmentedEdge)>,
 }
 
 #[derive(Clone, Debug)]
@@ -142,8 +149,15 @@ impl<'a> ContractedGraphBuilder<'a> {
         // Importance = Edge Difference + Contracted Neighbors + ...
         let mut pq = BinaryHeap::new();
 
+        // Workspace for reuse
+        let mut workspace = ContractionWorkspace {
+            dists: HashMap::new(),
+            pq: BinaryHeap::new(),
+            shortcuts: Vec::new(),
+        };
+
         for i in 0..num_nodes {
-            let importance = self.calculate_importance(i as u32);
+            let importance = self.calculate_importance(i as u32, &mut workspace);
             pq.push(Reverse((importance, i as u32)));
         }
 
@@ -156,14 +170,14 @@ impl<'a> ContractedGraphBuilder<'a> {
             }
 
             // Lazy update: re-calculate importance. If it's higher, push back and skip.
-            let current_importance = self.calculate_importance(u);
+            let current_importance = self.calculate_importance(u, &mut workspace);
             if current_importance > expected_importance {
                 pq.push(Reverse((current_importance, u)));
                 continue;
             }
 
             // Contract the node!
-            self.contract_node(u, rank);
+            self.contract_node(u, rank, &mut workspace);
             rank += 1;
 
             if rank % 1000 == 0 {
@@ -179,12 +193,13 @@ impl<'a> ContractedGraphBuilder<'a> {
         self.build_result()
     }
 
-    fn calculate_importance(&self, u: u32) -> i32 {
+    fn calculate_importance(&self, u: u32, workspace: &mut ContractionWorkspace) -> i32 {
         // Simple heuristic: Edge Difference
         // ED = (Number of shortcuts introduced) - (Number of incoming edges + Number of outgoing edges)
         // We simulate contraction to count shortcuts.
 
-        let (shortcuts, _original_edges_removed) = self.simulate_contraction(u);
+        self.simulate_contraction(u, workspace);
+        let shortcuts_len = workspace.shortcuts.len();
 
         // Count incident edges (degree)
         // Since graph is undirected for walking usually, in/out degree is roughly same.
@@ -201,16 +216,15 @@ impl<'a> ContractedGraphBuilder<'a> {
         // Our StreetData is technically directed storage, but represents bidirectional streets usually.
         // We'll assume symmetric for now or just use out-degree as proxy.
 
-        let edge_difference = (shortcuts.len() as i32) - (degree as i32);
+        let edge_difference = (shortcuts_len as i32) - (degree as i32);
 
         // Add other heuristics if needed (e.g. depth, contracted neighbors)
         edge_difference
     }
 
-    /// Simulates contracting node `u` and returns the shortcuts that would be created.
-    /// Returns a list of (source_node, shortcut_edge).
-    fn simulate_contraction(&self, u: u32) -> (Vec<(u32, AugmentedEdge)>, i32) {
-        let mut shortcuts = Vec::new();
+    /// Simulates contracting node `u` and populates `workspace.shortcuts` with the shortcuts that would be created.
+    fn simulate_contraction(&self, u: u32, workspace: &mut ContractionWorkspace) {
+        workspace.shortcuts.clear();
 
         // Identify neighbors
         // Incoming: v -> u
@@ -266,11 +280,11 @@ impl<'a> ContractedGraphBuilder<'a> {
 
                 // Check if there is a path v->...->w that is shorter or equal to cost_via_u
                 // WITHOUT going through u.
-                if self.is_witness_path_shorter(v, w, u, cost_via_u, max_settled_nodes) {
+                if self.is_witness_path_shorter(v, w, u, cost_via_u, max_settled_nodes, workspace) {
                     // Witness exists, no shortcut needed
                 } else {
                     // No witness, need shortcut
-                    shortcuts.push((
+                    workspace.shortcuts.push((
                         v,
                         AugmentedEdge {
                             target: w,
@@ -285,8 +299,6 @@ impl<'a> ContractedGraphBuilder<'a> {
                 }
             }
         }
-
-        (shortcuts, 0)
     }
 
     /// Returns true if there is a path from `source` to `target` with length <= `limit_cost`
@@ -298,16 +310,17 @@ impl<'a> ContractedGraphBuilder<'a> {
         avoid_node: u32,
         limit_cost: u32,
         max_settled: usize,
+        workspace: &mut ContractionWorkspace,
     ) -> bool {
-        let mut dists = HashMap::new();
-        let mut pq = BinaryHeap::new();
+        workspace.dists.clear();
+        workspace.pq.clear();
 
-        dists.insert(source, 0);
-        pq.push(Reverse((0, source)));
+        workspace.dists.insert(source, 0);
+        workspace.pq.push(Reverse((0, source)));
 
         let mut settled_count = 0;
 
-        while let Some(Reverse((d, u))) = pq.pop() {
+        while let Some(Reverse((d, u))) = workspace.pq.pop() {
             if d > limit_cost {
                 return false;
             }
@@ -319,7 +332,7 @@ impl<'a> ContractedGraphBuilder<'a> {
             }
 
             // Lazy check
-            if let Some(&best) = dists.get(&u) {
+            if let Some(&best) = workspace.dists.get(&u) {
                 if d > best {
                     continue;
                 }
@@ -334,9 +347,9 @@ impl<'a> ContractedGraphBuilder<'a> {
 
                 let new_dist = d + edge.weight;
                 if new_dist <= limit_cost {
-                    if new_dist < *dists.get(&edge.target).unwrap_or(&u32::MAX) {
-                        dists.insert(edge.target, new_dist);
-                        pq.push(Reverse((new_dist, edge.target)));
+                    if new_dist < *workspace.dists.get(&edge.target).unwrap_or(&u32::MAX) {
+                        workspace.dists.insert(edge.target, new_dist);
+                        workspace.pq.push(Reverse((new_dist, edge.target)));
                     }
                 }
             }
@@ -345,14 +358,14 @@ impl<'a> ContractedGraphBuilder<'a> {
         false
     }
 
-    fn contract_node(&mut self, u: u32, rank: u32) {
+    fn contract_node(&mut self, u: u32, rank: u32, workspace: &mut ContractionWorkspace) {
         self.is_contracted[u as usize] = true;
         self.node_ranks[u as usize] = rank;
 
         // Real contraction: generate shortcuts and add them to the graph
-        let (shortcuts, _) = self.simulate_contraction(u);
+        self.simulate_contraction(u, workspace);
 
-        for (source, sc) in shortcuts {
+        for (source, sc) in workspace.shortcuts.drain(..) {
             // Add to augmented graph so neighbors can use it
             // `AugmentedEdge` is what we use for graph traversal.
             // `Shortcut` is what we save to disk.
@@ -799,10 +812,17 @@ mod tests {
             "Path-Path crossing edge should have NO penalty"
         );
 
+        // Create workspace for tests
+        let mut workspace = ContractionWorkspace {
+            dists: HashMap::new(),
+            pq: BinaryHeap::new(),
+            shortcuts: Vec::new(),
+        };
+
         // Node 1 contraction (Path-Path)
-        let (shortcuts_1, _) = builder.simulate_contraction(1);
+        builder.simulate_contraction(1, &mut workspace);
         // Should have shortcut 0->2 with weight 72 + 72 = 144 (No node penalty)
-        let sc_0_2 = shortcuts_1
+        let sc_0_2 = workspace.shortcuts
             .iter()
             .find(|s| s.1.target == 2)
             .expect("Shortcut 0->2");
@@ -822,9 +842,9 @@ mod tests {
         );
 
         // Node 4 contraction (Path-Road)
-        let (shortcuts_4, _) = builder.simulate_contraction(4);
+        builder.simulate_contraction(4, &mut workspace);
         // Should have shortcut 3->5 with weight (72+30) + 72 + 30 (node penalty) = 204
-        let sc_3_5 = shortcuts_4
+        let sc_3_5 = workspace.shortcuts
             .iter()
             .find(|s| s.1.target == 5)
             .expect("Shortcut 3->5");

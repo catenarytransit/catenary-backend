@@ -9,6 +9,8 @@ Example of running a task:
 
 ingest 1 feed
  `ONLY_FEED_ID = f~myfeedid`
+ ingest multiple feeds
+ `ONLY_FEED_IDS = f~myfeedid,f~myotherfeedid`
 
 ingest all feeds
 `FORCE_INGEST_ALL=true`

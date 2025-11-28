@@ -325,7 +325,7 @@ pub async fn download_return_eligible_feeds(
     transitland_meta: &ReturnDmfrAnalysis,
     pool: &Arc<CatenaryPostgresPool>,
     feeds_to_discard: &HashSet<String>,
-    restrict_to_feed_id: &Option<String>,
+    restrict_to_feed_ids: &Option<HashSet<String>>,
     transitland_path: &str,
     girolle_data: &Option<BTreeMap<String, GirolleFeedDownloadResult>>,
     use_girolle: bool,
@@ -359,8 +359,8 @@ pub async fn download_return_eligible_feeds(
                         && !feed.id.ends_with("~flex")
                 })
                 .filter(|(_, feed)| {
-                    if let Some(restrict_to_feed_id) = restrict_to_feed_id {
-                        feed.id == *restrict_to_feed_id
+                    if let Some(restrict_to_feed_ids) = restrict_to_feed_ids {
+                        restrict_to_feed_ids.contains(&feed.id)
                     } else {
                         true
                     }
@@ -554,7 +554,7 @@ pub async fn download_return_eligible_feeds(
                                             Ok(download_attempts_postgres_lookup) => {
                                                 answer.operation_success = true;
 
-                                                if std::env::var("ONLY_FEED_ID").is_ok() || std::env::var("FORCE_INGEST_ALL").is_ok() {
+                                                if std::env::var("ONLY_FEED_IDS").is_ok() || std::env::var("ONLY_FEED_ID").is_ok() || std::env::var("FORCE_INGEST_ALL").is_ok() {
                                                     answer.ingest = true;
                                                 } else {
                                                      // this zip file has never been seen before! Insert it!

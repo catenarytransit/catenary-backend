@@ -843,7 +843,7 @@ pub async fn gtfs_process_feed(
         &stop_ids_to_children_route_types,
         gtfs_translations.as_ref(),
         &default_lang,
-        &elasticclient,
+        elasticclient,
     )
     .await?;
 

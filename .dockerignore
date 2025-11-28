@@ -1,0 +1,4 @@
+target/
+.git/
+osm_chunks/
+output/

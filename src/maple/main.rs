@@ -181,9 +181,12 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
     println!("Initializing database connection");
 
-    let restrict_to_feed_id = match std::env::var("ONLY_FEED_ID") {
-        Ok(feed_id) => Some(feed_id),
-        Err(_) => None,
+    let restrict_to_feed_ids: Option<HashSet<String>> = match std::env::var("ONLY_FEED_IDS") {
+        Ok(feed_ids) => Some(feed_ids.split(',').map(|s| s.trim().to_string()).collect()),
+        Err(_) => match std::env::var("ONLY_FEED_ID") {
+            Ok(feed_id) => Some(HashSet::from([feed_id])),
+            Err(_) => None,
+        },
     };
 
     let gtfs_temp_storage = std::env::var("GTFS_ZIP_TEMP")
@@ -270,7 +273,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             &dmfr_result,
             &arc_conn_pool,
             &feeds_to_discard,
-            &restrict_to_feed_id,
+            &restrict_to_feed_ids,
             &args.transitland,
             &girolle_data,
             use_girolle,
@@ -838,7 +841,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         .execute(conn).await;
                                         }
 
-                                        let delete_from_elastic_search = delete_attempt_objects_elasticsearch(&feed_id, &attempt_id, &elasticclient).await;
+                                        let delete_from_elastic_search = if let Some(elasticclient) = &elasticclient {
+                                            delete_attempt_objects_elasticsearch(&feed_id, &attempt_id, elasticclient).await
+                                        } else {
+                                            Ok(())
+                                        };
 
                                         if let Err(delete_from_elastic_search) = delete_from_elastic_search.as_ref() {
                                             eprintln!("delete from elastic failed {:?}", delete_from_elastic_search);
@@ -915,8 +922,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                         eprintln!("Failed to delete whole feed {}", feed.onestop_feed_id);
                     }
 
-                    let delete_feed_from_elasticsearch =
-                        delete_feed_elasticsearch(&feed.onestop_feed_id, &elasticclient).await;
+                    let delete_feed_from_elasticsearch = if let Some(elasticclient) = &elasticclient {
+                        delete_feed_elasticsearch(&feed.onestop_feed_id, elasticclient).await
+                    } else {
+                        Ok(())
+                    };
                 }
             }
 

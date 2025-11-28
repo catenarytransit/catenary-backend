@@ -103,8 +103,8 @@ async fn main() -> Result<()> {
     let file = File::open(&pbf_path)?;
     let mut reader = osmpbfreader::OsmPbfReader::new(file);
 
-    let mut chunk_buffers: std::collections::HashMap<(u32, u32), ChunkBuffer> =
-        std::collections::HashMap::new();
+    let mut chunk_buffers: ahash::AHashMap<(u32, u32), ChunkBuffer> =
+        ahash::AHashMap::new();
 
     println!("Distributing ways to chunks...");
     for obj in reader.iter() {
@@ -230,7 +230,7 @@ fn convert_to_street_data(
     };
     use geo::HaversineDistance;
     use geo::prelude::*;
-    use std::collections::HashMap;
+    use ahash::AHashMap as HashMap;
 
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
