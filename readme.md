@@ -2,11 +2,13 @@
 
 Catenary Backend is a distributed system comprised of microservices operating in Kubernetes. The system is designed for fault tolerance, high-avaliability, and native execution speed in x86-64 using the Rust systems programming language.
 
-- **Maple**: GTFS Downloader and ingestion engine
+- **Maple**: GTFS Downloader and ingestion engine into postgres
 - **Edelweiss**: Routing execution engine (In progress, see also https://github.com/catenarytransit/routing)
-- **Avens**: Osm Preprocessor for routing
+- **Avens**: Osm Preprocessor and graph generator for routing
 - **Alpenrose**: Distributed system to ingest GTFS-rt and other realtime data (Rose des Alpes), successor to Kactus.
 - **Aspen**: Processing of realtime data and dynamic insertion into other engines
+   Submodule Pando is used for distribution management
+- **
 - **Foxglove**: Map tile geometry server, will serve line ordering optimised graph maps (LOOM) in the future. [not started yet]
 - **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times (not started yet)
 - **Birch**: HTTP API server
@@ -110,3 +112,9 @@ The following `cargo clippy` rules are enforced.
     clippy::module_inception
 )]
 ```
+
+### Future potential submodule names
+
+- **Truffle** reachability analysis
+- **Cypress**
+- **Chinese plum** (needs to pick better syonym for it)
