@@ -263,6 +263,8 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     let mut all_border_nodes: HashMap<u32, Vec<TransitStop>> = HashMap::new();
 
+    let mut chunk_cache = ChunkCache::new(50);
+
     for (cluster_id, cluster_stop_indices) in clusters.iter().enumerate() {
         let mut relevant_patterns = Vec::new();
         let mut relevant_stop_indices: HashSet<u32> = HashSet::new();
@@ -307,7 +309,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             };
             chunk_stops.push(t_stop);
 
-            if let Some(link) = find_osm_link(stop.point.as_ref().unwrap().x, stop.point.as_ref().unwrap().y, local_idx as u32, &args.osm_chunks).await {
+            if let Some(link) = find_osm_link(stop.point.as_ref().unwrap().x, stop.point.as_ref().unwrap().y, local_idx as u32, &args.osm_chunks, &mut chunk_cache).await {
                 osm_links.push(link);
             }
         }
@@ -413,6 +415,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         };
         let transfer_filename = format!("transfers_chunk_{}_{}.pbf", args.chateau, cluster_id);
         let transfer_path = args.output.join(transfer_filename);
+        println!("Saving transfer chunk to {}", transfer_path.display());
         save_pbf(&transfer_chunk, transfer_path.to_str().unwrap())?;
 
         // Collect border nodes for global graph
@@ -431,6 +434,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
         let filename = format!("transit_chunk_{}_{}.pbf", args.chateau, cluster_id);
         let path = args.output.join(filename);
+        println!("Saving transit chunk to {}", path.display());
         save_pbf(&partition, path.to_str().unwrap())?;
     }
 
@@ -802,40 +806,86 @@ fn reindex_deltas(mut patterns: Vec<TripPattern>, global_deltas: &[u32]) -> (Vec
     (new_deltas, patterns)
 }
 
-async fn find_osm_link(lon: f64, lat: f64, stop_idx: u32, osm_dir: &PathBuf) -> Option<OsmLink> {
-    let (x, y) = lon_lat_to_tile(lon, lat, 10);
-    let chunk_filename = format!("chunk_{}_{}_{}.pbf", x, y, 10);
-    let chunk_path = osm_dir.join(chunk_filename);
-    
-    if !chunk_path.exists() { return None; }
+use rstar::{RTree, PointDistance};
+use rstar::primitives::GeomWithData;
+use std::collections::VecDeque;
 
-    let street_data: StreetData = load_pbf(chunk_path.to_str().unwrap()).ok()?;
+struct ChunkCache {
+    capacity: usize,
+    map: HashMap<(u32, u32), (StreetData, RTree<GeomWithData<[f64; 2], u32>>)>,
+    queue: VecDeque<(u32, u32)>,
+}
 
-    let mut min_dist = f64::MAX;
-    let mut nearest_node_idx = None;
-
-    for (i, node) in street_data.nodes.iter().enumerate() {
-        let dist = haversine_distance(lat, lon, node.lat, node.lon);
-        if dist < min_dist {
-            min_dist = dist;
-            nearest_node_idx = Some(i as u32);
+impl ChunkCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            map: HashMap::new(),
+            queue: VecDeque::new(),
         }
     }
 
-    if min_dist > 200.0 { return None; }
+    fn get_or_load(&mut self, x: u32, y: u32, osm_dir: &PathBuf) -> Option<&(StreetData, RTree<GeomWithData<[f64; 2], u32>>)> {
+        if self.map.contains_key(&(x, y)) {
+            // Promote to back (recently used)
+            if let Some(pos) = self.queue.iter().position(|&k| k == (x, y)) {
+                self.queue.remove(pos);
+                self.queue.push_back((x, y));
+            }
+            return self.map.get(&(x, y));
+        }
 
-    if let Some(node_idx) = nearest_node_idx {
-        let walk_seconds = (min_dist / 1.4) as u32;
-        Some(OsmLink {
-            stop_idx,
-            osm_node_id: node_idx,
-            walk_seconds,
-            distance_meters: min_dist as u32,
-            wheelchair_accessible: true, // Default to true for now, as we don't have node accessibility flags
-        })
-    } else {
-        None
+        // Load
+        let chunk_filename = format!("chunk_{}_{}_{}.pbf", x, y, 10);
+        let chunk_path = osm_dir.join(chunk_filename);
+        
+        if !chunk_path.exists() { return None; }
+
+        let street_data: StreetData = load_pbf(chunk_path.to_str().unwrap()).ok()?;
+        
+        // Build RTree
+        let points: Vec<GeomWithData<[f64; 2], u32>> = street_data.nodes.iter().enumerate()
+            .map(|(i, node)| GeomWithData::new([node.lon, node.lat], i as u32))
+            .collect();
+        
+        let rtree = RTree::bulk_load(points);
+
+        // Insert
+        if self.map.len() >= self.capacity {
+            if let Some(old_key) = self.queue.pop_front() {
+                self.map.remove(&old_key);
+            }
+        }
+
+        self.map.insert((x, y), (street_data, rtree));
+        self.queue.push_back((x, y));
+
+        self.map.get(&(x, y))
     }
+}
+
+async fn find_osm_link(lon: f64, lat: f64, stop_idx: u32, osm_dir: &PathBuf, cache: &mut ChunkCache) -> Option<OsmLink> {
+    let (x, y) = lon_lat_to_tile(lon, lat, 10);
+    
+    let (street_data, rtree) = cache.get_or_load(x, y, osm_dir)?;
+
+    // Use RTree to find nearest neighbor
+    let nearest = rtree.nearest_neighbor(&[lon, lat])?;
+    let node_idx = nearest.data;
+    let node = &street_data.nodes[node_idx as usize];
+
+    let dist = haversine_distance(lat, lon, node.lat, node.lon);
+
+    if dist > 200.0 { return None; }
+
+    let walk_seconds = (dist / 1.4) as u32;
+    Some(OsmLink {
+        stop_idx,
+        osm_node_id: node_idx,
+        walk_seconds,
+        distance_meters: dist as u32,
+        wheelchair_accessible: true, // Default to true for now
+    })
 }
 
 fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
