@@ -20,6 +20,8 @@ The code is heavily commented, go to each folder in src for more information.
 ### Submodules maintained 
 - **Dmfr dataset reader**: reads data from transitland-atlas into raw structs https://docs.rs/dmfr-dataset-reader/latest/dmfr_dataset_reader/
 - **[Château](https://github.com/catenarytransit/chateau)**: Associates feeds with operators and vise versa using depth first search in knowledge graph
+
+#### Agency specific submodules
 - **[Amtrak GTFS rt](https://github.com/catenarytransit/amtrak-gtfs-rt)**: Conversion of proprietary realtime data from amtrak's website into gtfs-rt.
 - **Chicago GTFS Rt**: conversion of proprietary Chicago CTA data to GTFS realtime
 - **Rtc Québec GTFS RT**: conversion of proprietary app RTC Nomade to GTFS realtime
