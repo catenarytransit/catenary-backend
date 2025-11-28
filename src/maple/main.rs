@@ -88,6 +88,8 @@ struct Args {
     transitland: String,
     #[arg(long)]
     use_girolle: Option<bool>,
+    #[arg(long)]
+    no_elastic: bool,
 }
 
 fn get_threads_gtfs() -> usize {
@@ -104,15 +106,19 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
     let discord_log_env = std::env::var("DISCORD_LOG");
 
-    let elastic_url = std::env::var("ELASTICSEARCH_URL").unwrap();
+    let elasticclient = if !args.no_elastic {
+        let elastic_url = std::env::var("ELASTICSEARCH_URL").unwrap();
 
-    let elasticclient = catenary::elasticutils::single_elastic_connect(elastic_url.as_str())?;
+        let elasticclient = catenary::elasticutils::single_elastic_connect(elastic_url.as_str())?;
 
-    //catenary::elasticutils::wipe_db(&elasticclient).await?;
+        //catenary::elasticutils::wipe_db(&elasticclient).await?;
 
-    catenary::elasticutils::make_index_and_mappings(&elasticclient).await?;
+        catenary::elasticutils::make_index_and_mappings(&elasticclient).await?;
 
-    let elasticclient = Arc::new(elasticclient);
+        Some(Arc::new(elasticclient))
+    } else {
+        None
+    };
 
     let use_girolle = args.use_girolle.unwrap_or(false);
 
@@ -653,7 +659,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                             let arc_conn_pool = Arc::clone(&arc_conn_pool);
                             let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
                             let ingest_progress = Arc::clone(&ingest_progress);
-                            let elasticclient = Arc::clone(&elasticclient);
+                            let elasticclient = elasticclient.clone();
 
                             let discord_log_env = discord_log_env.clone();
 
@@ -718,7 +724,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         &chateau_id,
                                         &attempt_id,
                                         this_download_data,
-                                        &elasticclient
+                                        elasticclient.as_deref()
                                     )
                                     .await;
 

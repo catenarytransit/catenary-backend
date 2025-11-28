@@ -35,7 +35,7 @@ pub async fn stops_into_postgres_and_elastic(
     stop_id_to_children_route: &HashMap<String, HashSet<i16>>,
     gtfs_translations: Option<&TranslationResult>,
     default_lang: &Option<String>,
-    elasticclient: &elasticsearch::Elasticsearch,
+    elasticclient: Option<&elasticsearch::Elasticsearch>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
@@ -397,23 +397,25 @@ pub async fn stops_into_postgres_and_elastic(
         })
         .await?;
 
-    for chunk in stops_finished_chunks_arrays_array_elasticsearch {
-        let response = elasticclient
-            .bulk(elasticsearch::BulkParts::Index("stops"))
-            .body(chunk)
-            .send()
-            .await?;
+    if let Some(elasticclient) = elasticclient {
+        for chunk in stops_finished_chunks_arrays_array_elasticsearch {
+            let response = elasticclient
+                .bulk(elasticsearch::BulkParts::Index("stops"))
+                .body(chunk)
+                .send()
+                .await?;
 
-        let response_body = response.json::<serde_json::Value>().await?;
+            let response_body = response.json::<serde_json::Value>().await?;
 
-        let mut print_err = true;
+            let mut print_err = true;
 
-        if response_body.get("errors").map(|x| x.as_bool()).flatten() == Some(false) {
-            print_err = false;
-        }
+            if response_body.get("errors").map(|x| x.as_bool()).flatten() == Some(false) {
+                print_err = false;
+            }
 
-        if print_err {
-            println!("elastic stop response: {:#?}", response_body);
+            if print_err {
+                println!("elastic stop response: {:#?}", response_body);
+            }
         }
     }
 

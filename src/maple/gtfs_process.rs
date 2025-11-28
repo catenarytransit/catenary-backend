@@ -105,7 +105,7 @@ pub async fn gtfs_process_feed(
     chateau_id: &str,
     attempt_id: &str,
     this_download_data: &DownloadedFeedsInformation,
-    elasticclient: &elasticsearch::Elasticsearch,
+    elasticclient: Option<&elasticsearch::Elasticsearch>,
 ) -> Result<GtfsSummary, Box<dyn Error + Send + Sync>> {
     let regex_train_starting = regex::RegexBuilder::new(r"^(train)")
         .case_insensitive(true)
@@ -1467,23 +1467,25 @@ pub async fn gtfs_process_feed(
         })
         .await?;
 
-    for chunk in finished_route_chunks_elasticsearch {
-        let response = elasticclient
-            .bulk(elasticsearch::BulkParts::Index("routes"))
-            .body(chunk)
-            .send()
-            .await?;
+    if let Some(elasticclient) = elasticclient {
+        for chunk in finished_route_chunks_elasticsearch {
+            let response = elasticclient
+                .bulk(elasticsearch::BulkParts::Index("routes"))
+                .body(chunk)
+                .send()
+                .await?;
 
-        let response_body = response.json::<serde_json::Value>().await?;
+            let response_body = response.json::<serde_json::Value>().await?;
 
-        let mut print_err = true;
+            let mut print_err = true;
 
-        if response_body.get("errors").map(|x| x.as_bool()).flatten() == Some(false) {
-            print_err = false;
-        }
+            if response_body.get("errors").map(|x| x.as_bool()).flatten() == Some(false) {
+                print_err = false;
+            }
 
-        if print_err {
-            println!("elastic routes response: {:#?}", response_body);
+            if print_err {
+                println!("elastic routes response: {:#?}", response_body);
+            }
         }
     }
 
