@@ -6,10 +6,6 @@
 // 1. StreetData (streets_base.pbf):
 //    - The "Physical" layer. Contains nodes, edges, and detailed attributes.
 //    - Topology is stored as an Adjacency Array (CSR-like) for cache efficiency.
-//
-// 2. ContractionHierarchy (walk_profile.ch / cycle_profile.ch):
-//    - The "Logical" layer. Contains the node ordering (rank) and shortcuts.
-//    - Specific to a mode's cost function (e.g., Cycle penalizes hills).
 
 use prost::Message;
 use std::fs::File;
@@ -192,61 +188,7 @@ pub struct Geometry {
     pub coords: Vec<f32>,
 }
 
-// ===========================================================================
-// 2. CONTRACTION HIERARCHY PROFILES (walk_profile.ch, cycle_profile.ch)
-// ===========================================================================
 
-/// The Root container for a routing profile.
-/// This structure is identical for both Walk and Cycle files,
-/// but the *contents* (ranks and shortcuts) will differ.
-#[derive(Clone, PartialEq, Message)]
-pub struct ContractionHierarchy {
-    /// The "Level" or "Rank" of every node in the graph.
-    /// Index = NodeID, Value = Rank.
-    /// Used to determine if we are searching "Up" or "Down" the hierarchy.
-    #[prost(uint32, repeated, tag = "1")]
-    pub node_ranks: Vec<u32>,
-
-    /// The "Shortcuts" (Augmented edges) created during contraction.
-    /// Like `StreetData`, this is a flat list.
-    /// To find shortcuts starting at Node X, we need a separate index
-    /// (often built at load time) or we can store `first_shortcut_idx` in a separate array.
-    /// Here, we store a separate index array for simplicity in the file.
-    #[prost(message, repeated, tag = "2")]
-    pub shortcuts: Vec<Shortcut>,
-
-    /// Index into `shortcuts`.
-    /// `shortcut_index[node_id]` = start index in `shortcuts` vector.
-    #[prost(uint32, repeated, tag = "3")]
-    pub shortcut_index: Vec<u32>,
-}
-
-/// A shortcut represents a path skipping over a "contracted" node.
-#[derive(Clone, PartialEq, Message)]
-pub struct Shortcut {
-    /// The target Node ID of this shortcut.
-    #[prost(uint32, tag = "1")]
-    pub target_node: u32,
-
-    /// The pre-calculated weight (cost) of this shortcut.
-    /// For Walking: Time in seconds.
-    /// For Cycling: Time * Penalties.
-    #[prost(uint32, tag = "2")]
-    pub weight: u32,
-
-    /// The middle node that was skipped.
-    /// Required for "Unpacking" the path for the final itinerary.
-    #[prost(uint32, tag = "3")]
-    pub skipped_node: u32,
-
-    /// The ID of the first edge (outgoing from source)
-    #[prost(uint32, tag = "4")]
-    pub original_first_edge: u32,
-
-    /// The ID of the second edge (incoming to target)
-    #[prost(uint32, tag = "5")]
-    pub original_second_edge: u32,
-}
 
 // ===========================================================================
 // IO HELPERS

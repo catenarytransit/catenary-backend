@@ -21,7 +21,7 @@ struct Args {
     temp_dir: PathBuf,
 }
 
-mod contraction;
+
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -199,16 +199,6 @@ async fn main() -> Result<()> {
         }
 
         catenary::routing_common::osm_graph::save_pbf(&street_data, chunk_path.to_str().unwrap())?;
-
-        // 7. Generate and Save CH (Walk Profile)
-        // println!("Generating CH for chunk_{}_{}_{}...", x, y, zoom_level);
-        let mut builder = contraction::ContractedGraphBuilder::new(&street_data);
-        let ch = builder.contract();
-
-        let ch_path = args
-            .output_dir
-            .join(format!("chunk_{}_{}_{}_walk.ch", x, y, zoom_level));
-        catenary::routing_common::osm_graph::save_pbf(&ch, ch_path.to_str().unwrap())?;
     }
 
     Ok(())

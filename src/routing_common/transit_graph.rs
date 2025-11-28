@@ -64,8 +64,10 @@ pub struct TransitPartition {
     pub service_exceptions: Vec<ServiceException>,
 
     /// Transfers to other Chateaus (Inter-Chateau links).
+    /// MOVED to TransferChunk to save space in the main hot path.
+    /// This field is deprecated/unused in the main partition file.
     #[prost(message, repeated, tag = "9")]
-    pub external_transfers: Vec<ExternalTransfer>,
+    pub _deprecated_external_transfers: Vec<ExternalTransfer>,
 
     /// Local Transfer Patterns (LTPs).
     #[prost(message, repeated, tag = "10")]
@@ -90,6 +92,14 @@ pub struct ExternalTransfer {
     /// Walking time in seconds.
     #[prost(uint32, tag = "4")]
     pub walk_seconds: u32,
+
+    /// Distance in meters.
+    #[prost(uint32, tag = "5")]
+    pub distance_meters: u32,
+
+    /// Is this transfer wheelchair accessible?
+    #[prost(bool, tag = "6")]
+    pub wheelchair_accessible: bool,
 }
 
 /// A Transit Stop (Platform, Station, or Pole).
@@ -206,6 +216,10 @@ pub struct StaticTransfer {
     pub to_stop_idx: u32,
     #[prost(uint32, tag = "3")]
     pub duration_seconds: u32,
+    #[prost(uint32, tag = "4")]
+    pub distance_meters: u32,
+    #[prost(bool, tag = "5")]
+    pub wheelchair_accessible: bool,
 }
 
 /// Bridges the separate "Transit" and "Street" graph files.
@@ -217,6 +231,23 @@ pub struct OsmLink {
     pub osm_node_id: u32, // Index in `StreetData.nodes` (from graph_format.rs)
     #[prost(uint32, tag = "3")]
     pub walk_seconds: u32, // Time to walk from Stop to Street Node
+    #[prost(uint32, tag = "4")]
+    pub distance_meters: u32,
+    #[prost(bool, tag = "5")]
+    pub wheelchair_accessible: bool,
+}
+
+/// A separate chunk for storing large transfer graphs (e.g. cycling transfers).
+/// Loaded on demand.
+#[derive(Clone, PartialEq, Message)]
+pub struct TransferChunk {
+    /// Unique ID of this partition (matches TransitPartition).
+    #[prost(uint32, tag = "1")]
+    pub partition_id: u32,
+
+    /// Transfers to other Chateaus (Inter-Chateau links).
+    #[prost(message, repeated, tag = "2")]
+    pub external_transfers: Vec<ExternalTransfer>,
 }
 
 // ===========================================================================

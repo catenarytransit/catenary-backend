@@ -97,3 +97,6 @@ chunks/
 test_osm_chunks/
 test_osm_temp/
 test_data/
+osm_data_chunks/
+osm_data_temp/
+osm_chunks/

@@ -11,7 +11,7 @@ The Catenary routing algorithm is based on Transfer Patterns[1] and Scalable Tra
 Handles the "First Leg" (Origin $\to$ Station) and "Last Leg" (Station $\to$ Destination).
 
 - **Structure**: Standard road graph (Nodes = Intersections, Edges = Roads/Paths).
-- **Algorithm**: Bidirectional Dijkstra or Contraction Hierarchies (CH).
+- **Algorithm**: Bidirectional Dijkstra.
 - **Update Cycle**: Slow (Monthly/Quarterly). Streets rarely change.
 - **Assumptions**:
       - Travellers will be able to detect and avoid temporary obstacles such as sidewalk closures.

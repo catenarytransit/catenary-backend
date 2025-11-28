@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use catenary::models::{Stop, Chateau, ItineraryPatternRow, CompressedTrip as DbCompressedTrip, Calendar, CalendarDate};
-use catenary::routing_common::transit_graph::{TransitPartition, TransitStop, TripPattern, CompressedTrip, OsmLink, ExternalTransfer, GlobalPatternIndex, PartitionDag, GlobalHub, DagEdge, StaticTransfer, ServiceException, LocalTransferPattern};
+use catenary::routing_common::transit_graph::{TransitPartition, TransitStop, TripPattern, CompressedTrip, OsmLink, ExternalTransfer, GlobalPatternIndex, PartitionDag, GlobalHub, DagEdge, StaticTransfer, ServiceException, LocalTransferPattern, TransferChunk};
 use catenary::routing_common::osm_graph::{StreetData, load_pbf, save_pbf};
 use std::collections::{HashSet, BinaryHeap};
 use ahash::AHashMap as HashMap;
@@ -348,19 +348,30 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
              let ext_lat = ext_stop.point.as_ref().map(|p| p.y).unwrap_or(0.0);
              let ext_lon = ext_stop.point.as_ref().map(|p| p.x).unwrap_or(0.0);
 
-             // Find nearest local stops (within 500m)
+             // Find nearest local stops (within 3km for cycling)
              for (local_idx, stop) in chunk_stops.iter_mut().enumerate() {
                  let dist = haversine_distance(stop.lat, stop.lon, ext_lat, ext_lon);
-                 if dist <= 500.0 {
+                 if dist <= 3000.0 {
                      // Create transfer
                      let walk_seconds = (dist / 1.4) as u32; // ~1.4 m/s walking speed
+                     
+                     // Check accessibility (1 = some accessibility, 2 = none, 0 = unknown)
+                     // We consider 1 as accessible.
+                     let is_accessible = ext_stop.wheelchair_boarding == 1;
+
                      external_transfers.push(ExternalTransfer {
                          from_stop_idx: stop.id as u32, // stop.id is local_idx as u64
                          to_chateau: ext_stop.chateau.clone(),
                          to_stop_gtfs_id: ext_stop.gtfs_id.clone(),
                          walk_seconds,
+                         distance_meters: dist as u32,
+                         wheelchair_accessible: is_accessible,
                      });
-                     stop.is_hub = true;
+                     
+                     // Only mark as hub if it's a close transfer (e.g. < 1km) to avoid exploding the hub graph
+                     if dist <= 1000.0 {
+                        stop.is_hub = true;
+                     }
                  }
              }
         }
@@ -390,9 +401,18 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             osm_links,
             service_ids: service_ids.clone(),
             service_exceptions: Vec::new(),
-            external_transfers,
+            _deprecated_external_transfers: Vec::new(),
             local_transfer_patterns: Vec::new(),
         };
+
+        // Save Transfer Chunk
+        let transfer_chunk = TransferChunk {
+            partition_id: cluster_id as u32,
+            external_transfers,
+        };
+        let transfer_filename = format!("transfers_chunk_{}_{}.pbf", args.chateau, cluster_id);
+        let transfer_path = args.output.join(transfer_filename);
+        save_pbf(&transfer_chunk, transfer_path.to_str().unwrap())?;
 
         // Collect border nodes for global graph
         for stop in &partition.stops {
@@ -809,6 +829,8 @@ async fn find_osm_link(lon: f64, lat: f64, stop_idx: u32, osm_dir: &PathBuf) -> 
             stop_idx,
             osm_node_id: node_idx,
             walk_seconds,
+            distance_meters: min_dist as u32,
+            wheelchair_accessible: true, // Default to true for now, as we don't have node accessibility flags
         })
     } else {
         None
