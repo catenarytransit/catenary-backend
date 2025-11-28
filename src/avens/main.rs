@@ -347,11 +347,38 @@ fn convert_to_street_data(
                     ],
                 });
 
+                let mut permissions_val = permissions::WALK_FWD | permissions::CYCL_FWD;
+
+                if let Some(highway) = way.tags.get("highway").map(|s| s.as_str()) {
+                    if highway == "motorway" || highway == "motorway_link" {
+                        permissions_val = 0;
+                        if has_sidewalk {
+                            permissions_val |= permissions::WALK_FWD;
+                        }
+
+                        let has_cycleway =
+                            way.tags.get("cycleway").map(|s| s.as_str()).unwrap_or("no") != "no"
+                                && way.tags.get("cycleway").map(|s| s.as_str()).unwrap_or("no")
+                                    != "none";
+
+                        let bicycle_allowed = way
+                            .tags
+                            .get("bicycle")
+                            .map(|s| s.as_str())
+                            .map(|b| b != "no" && b != "none" && b != "dismount")
+                            .unwrap_or(false);
+
+                        if has_cycleway || bicycle_allowed {
+                            permissions_val |= permissions::CYCL_FWD;
+                        }
+                    }
+                }
+
                 let edge = Edge {
                     target_node: v_idx,
                     distance_mm: dist_mm,
                     geometry_id: geom_idx,
-                    permissions: permissions::WALK_FWD | permissions::CYCL_FWD,
+                    permissions: permissions_val,
                     surface_type: 0,
                     grade_percent: 0,
                     flags,
@@ -364,7 +391,7 @@ fn convert_to_street_data(
                     target_node: u_idx,
                     distance_mm: dist_mm,
                     geometry_id: 0, // Placeholder
-                    permissions: permissions::WALK_FWD | permissions::CYCL_FWD,
+                    permissions: permissions_val,
                     surface_type: 0,
                     grade_percent: 0,
                     flags,
@@ -528,6 +555,13 @@ fn should_include_way(tags: &osmpbfreader::Tags) -> bool {
                 }
             }
 
+            // Check for bicycle
+            if let Some(bicycle) = tags.get("bicycle") {
+                if bicycle != "no" && bicycle != "none" && bicycle != "dismount" {
+                    return true;
+                }
+            }
+
             false
         }
         Some(_) => true,
@@ -577,6 +611,12 @@ mod tests {
         assert!(!should_include_way(&tags));
 
         tags.insert("sidewalk".into(), "yes".into());
+        assert!(should_include_way(&tags));
+
+        // Motorway with sidewalk=no but bicycle=yes
+        tags.insert("highway".into(), "motorway".into());
+        tags.insert("sidewalk".into(), "no".into());
+        tags.insert("bicycle".into(), "yes".into());
         assert!(should_include_way(&tags));
     }
 }
