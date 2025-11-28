@@ -8,7 +8,7 @@ Catenary Backend is a distributed system comprised of microservices operating in
 - **Alpenrose**: Distributed system to ingest GTFS-rt and other realtime data (Rose des Alpes), successor to Kactus.
 - **Aspen**: Processing of realtime data and dynamic insertion into other engines
    Submodule Pando is used for distribution management
-- **
+- **Gentian**: Transit graph generation task server
 - **Foxglove**: Map tile geometry server, will serve line ordering optimised graph maps (LOOM) in the future. [not started yet]
 - **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times (not started yet)
 - **Birch**: HTTP API server
