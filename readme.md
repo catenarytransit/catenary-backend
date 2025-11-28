@@ -3,11 +3,10 @@
 Catenary Backend is a distributed system comprised of microservices operating in Kubernetes. The system is designed for fault tolerance, high-avaliability, and native execution speed in x86-64 using the Rust systems programming language.
 
 - **Maple**: GTFS Downloader and ingestion engine into postgres
-- **Edelweiss**: Routing execution engine (In progress, see also https://github.com/catenarytransit/routing)
-- **Avens**: Osm Preprocessor and graph generator for routing
-- **Alpenrose**: Distributed system to ingest GTFS-rt and other realtime data (Rose des Alpes), successor to Kactus.
-- **Aspen**: Processing of realtime data and dynamic insertion into other engines
-   Submodule Pando is used for distribution management
+- **Edelweiss**: Routing execution engine (in progress, see also [our routing testbed](https://github.com/catenarytransit/routing)
+- **Avens**: OSM Preprocessor and graph generator for routing
+- **Alpenrose**: Distributed system to ingest GTFS-rt and other realtime data (Rose des Alpes); successor to Kactus.
+- **Aspen**: Processing of realtime data and dynamic insertion into other engines. Submodule Pando is used for distribution management
 - **Gentian**: Transit graph generation task server
 - **Foxglove**: Map tile geometry server, will serve line ordering optimised graph maps (LOOM) in the future. [not started yet]
 - **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times (not started yet)
@@ -18,14 +17,14 @@ The kubernetes configuration is generated using Helm templates. See Helm's docum
 The code is heavily commented, go to each folder in src for more information.
 
 ### Submodules maintained 
-- **Dmfr dataset reader**: reads data from transitland-atlas into raw structs https://docs.rs/dmfr-dataset-reader/latest/dmfr_dataset_reader/
+- **DMFR dataset reader**: reads data from transitland-atlas into raw structs https://docs.rs/dmfr-dataset-reader/latest/dmfr_dataset_reader/
 - **[Château](https://github.com/catenarytransit/chateau)**: Associates feeds with operators and vise versa using depth first search in knowledge graph
 
 #### Agency specific submodules
 - **[Amtrak GTFS rt](https://github.com/catenarytransit/amtrak-gtfs-rt)**: Conversion of proprietary realtime data from amtrak's website into gtfs-rt.
 - **Chicago GTFS Rt**: conversion of proprietary Chicago CTA data to GTFS realtime
 - **Rtc Québec GTFS RT**: conversion of proprietary app RTC Nomade to GTFS realtime
-- **[Via Rail GTFS rt](https://github.com/catenarytransit/via-rail-gtfsrt)**: Conversion of Via Rail tracking to GTFS Realtime.
+- **[Via Rail GTFS RT](https://github.com/catenarytransit/via-rail-gtfsrt)**: Conversion of Via Rail tracking to GTFS Realtime.
 
 ## Install Dependencies
 
