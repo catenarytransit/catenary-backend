@@ -1,0 +1,1068 @@
+use clap::Parser;
+use diesel::prelude::*;
+use diesel_async::{RunQueryDsl, AsyncPgConnection};
+use std::path::PathBuf;
+use std::sync::Arc;
+use anyhow::{Context, Result};
+use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
+use catenary::models::{Stop, Chateau, ItineraryPatternRow, CompressedTrip as DbCompressedTrip, Calendar, CalendarDate};
+use catenary::routing_common::transit_graph::{TransitPartition, TransitStop, TripPattern, CompressedTrip, OsmLink, ExternalTransfer, GlobalPatternIndex, PartitionDag, GlobalHub, DagEdge, StaticTransfer, ServiceException, LocalTransferPattern};
+use catenary::routing_common::osm_graph::{StreetData, load_pbf, save_pbf};
+use std::collections::{HashMap, HashSet, BinaryHeap};
+use std::cmp::Ordering;
+
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Chateau ID to process
+    #[arg(short, long)]
+    chateau: String,
+
+    /// Directory containing OSM chunks
+    #[arg(long)]
+    osm_chunks: PathBuf,
+
+    /// Output directory for generated GTFS chunks
+    #[arg(short, long)]
+    output: PathBuf,
+
+    /// Target cluster size (number of stops)
+    #[arg(long, default_value = "500")]
+    cluster_size: usize,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Initialize logging
+    tracing_subscriber::fmt::init();
+    
+    let args = Args::parse();
+    println!("Starting Gentian for Chateau: {}", args.chateau);
+
+    // Create output directory
+    tokio::fs::create_dir_all(&args.output).await.context("Failed to create output dir")?;
+
+    // Connect to DB
+    let pool = make_async_pool().await.map_err(|e| anyhow::anyhow!(e)).context("Failed to create DB pool")?;
+    let pool = Arc::new(pool);
+
+    // Run generation
+    generate_chunks(&args, pool).await?;
+
+    Ok(())
+}
+
+async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result<()> {
+    let mut conn = pool.get().await.context("Failed to get DB connection")?;
+
+    // 1. Fetch Chateau info
+    use catenary::schema::gtfs::chateaus::dsl::*;
+    let _chateau_row: Chateau = chateaus
+        .filter(chateau.eq(&args.chateau))
+        .select(Chateau::as_select())
+        .first(&mut conn)
+        .await
+        .context("Chateau not found")?;
+
+    println!("Found Chateau: {}", args.chateau);
+    
+    // 2. Fetch All Data for Chateau
+    println!("Fetching data...");
+    
+    // Stops
+    use catenary::schema::gtfs::stops::dsl::{stops, chateau as stop_chateau};
+    let db_stops: Vec<Stop> = stops
+        .filter(stop_chateau.eq(&args.chateau))
+        .select(Stop::as_select())
+        .load(&mut conn)
+        .await?;
+    println!("Fetched {} stops", db_stops.len());
+
+    // Trips
+    use catenary::schema::gtfs::trips_compressed::dsl::{trips_compressed, chateau as trip_chateau};
+    let db_trips: Vec<DbCompressedTrip> = trips_compressed
+        .filter(trip_chateau.eq(&args.chateau))
+        .select(DbCompressedTrip::as_select())
+        .load(&mut conn)
+        .await?;
+    println!("Fetched {} trips", db_trips.len());
+
+    // Itinerary Patterns
+    use catenary::schema::gtfs::itinerary_pattern::dsl::{itinerary_pattern, chateau as pattern_chateau};
+    let db_patterns: Vec<ItineraryPatternRow> = itinerary_pattern
+        .filter(pattern_chateau.eq(&args.chateau))
+        .select(ItineraryPatternRow::as_select())
+        .load(&mut conn)
+        .await?;
+    println!("Fetched {} pattern rows", db_patterns.len());
+
+    // Calendar
+    use catenary::schema::gtfs::calendar::dsl::{calendar, chateau as cal_chateau};
+    let db_calendar: Vec<Calendar> = calendar
+        .filter(cal_chateau.eq(&args.chateau))
+        .select(Calendar::as_select())
+        .load(&mut conn)
+        .await?;
+    
+    // 3. Process Data
+    let stop_id_map: HashMap<String, usize> = db_stops
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.gtfs_id.clone(), i))
+        .collect();
+
+    let mut pattern_rows_map: HashMap<String, Vec<&ItineraryPatternRow>> = HashMap::new();
+    for row in &db_patterns {
+        pattern_rows_map.entry(row.itinerary_pattern_id.clone()).or_default().push(row);
+    }
+    for rows in pattern_rows_map.values_mut() {
+        rows.sort_by_key(|r| r.stop_sequence);
+    }
+
+    let mut global_time_deltas: Vec<u32> = Vec::new();
+    let mut time_deltas_map: HashMap<Vec<u32>, u32> = HashMap::new();
+
+    struct ProcessedPattern {
+        route_id: String,
+        stop_indices: Vec<u32>,
+        trips: Vec<CompressedTrip>,
+    }
+    let mut processed_patterns: Vec<ProcessedPattern> = Vec::new();
+
+    let mut trips_by_pattern: HashMap<String, Vec<&DbCompressedTrip>> = HashMap::new();
+    for trip in &db_trips {
+        trips_by_pattern.entry(trip.itinerary_pattern_id.clone()).or_default().push(trip);
+    }
+
+    let mut service_ids: Vec<String> = Vec::new();
+    let mut service_id_map: HashMap<String, u32> = HashMap::new();
+
+    // Build Adjacency Graph for Clustering
+    // Edge weight = Number of trips passing between two stops
+    let mut adjacency: HashMap<(usize, usize), u32> = HashMap::new();
+
+    for (pattern_id, trips) in trips_by_pattern {
+        if let Some(rows) = pattern_rows_map.get(&pattern_id) {
+            let stop_indices: Vec<u32> = rows.iter().filter_map(|r| {
+                stop_id_map.get(r.stop_id.as_str()).map(|&i| i as u32)
+            }).collect();
+
+            if stop_indices.len() != rows.len() { continue; }
+
+            // Add to Adjacency Graph
+            let trip_count = trips.len() as u32;
+            for i in 0..stop_indices.len() - 1 {
+                let u = stop_indices[i] as usize;
+                let v = stop_indices[i+1] as usize;
+                let (min, max) = if u < v { (u, v) } else { (v, u) };
+                *adjacency.entry((min, max)).or_default() += trip_count;
+            }
+
+            // Calculate Time Deltas
+            let mut deltas: Vec<u32> = Vec::new();
+            deltas.push(0);
+            for i in 1..rows.len() {
+                let curr = rows[i].arrival_time_since_start.unwrap_or(0);
+                deltas.push(curr as u32);
+            }
+
+            let delta_ptr = if let Some(&ptr) = time_deltas_map.get(&deltas) {
+                ptr
+            } else {
+                let ptr = global_time_deltas.len() as u32;
+                time_deltas_map.insert(deltas.clone(), ptr);
+                global_time_deltas.extend(&deltas);
+                ptr
+            };
+
+            let mut p_trips = Vec::new();
+            for trip in &trips {
+                let s_idx = if let Some(&idx) = service_id_map.get(trip.service_id.as_str()) {
+                    idx
+                } else {
+                    let idx = service_ids.len() as u32;
+                    service_ids.push(trip.service_id.to_string());
+                    service_id_map.insert(trip.service_id.to_string(), idx);
+                    idx
+                };
+
+                let service_mask = calculate_service_mask(trip.service_id.as_str(), &db_calendar);
+
+                p_trips.push(CompressedTrip {
+                    gtfs_trip_id: trip.trip_id.clone(),
+                    service_mask,
+                    start_time: trip.start_time,
+                    delta_pointer: delta_ptr,
+                    service_idx: s_idx,
+                    bikes_allowed: trip.bikes_allowed as u32,
+                    wheelchair_accessible: trip.wheelchair_accessible as u32,
+                });
+            }
+            
+            p_trips.sort_by_key(|t| t.start_time);
+
+            processed_patterns.push(ProcessedPattern {
+                route_id: trips[0].route_id.clone(),
+                stop_indices,
+                trips: p_trips,
+            });
+        }
+    }
+
+    println!("Processed {} patterns", processed_patterns.len());
+
+    // 4. Merge-Based Clustering
+    println!("Clustering stops (Merge-Based)...");
+    let clusters = merge_based_clustering(db_stops.len(), &adjacency, args.cluster_size);
+    println!("Created {} clusters", clusters.len());
+
+    // 5. Generate Chunks per Cluster
+    // Identify Intra-Cluster Border Nodes
+    let mut stop_to_cluster: Vec<usize> = vec![0; db_stops.len()];
+    for (c_idx, c_stops) in clusters.iter().enumerate() {
+        for &s_idx in c_stops {
+            stop_to_cluster[s_idx] = c_idx;
+        }
+    }
+
+    // Build Global Adjacency Signatures (Directed)
+    let mut global_adjacency_signatures: HashMap<(usize, usize), String> = HashMap::new();
+    for pat in &processed_patterns {
+        for i in 0..pat.stop_indices.len() - 1 {
+            let u = pat.stop_indices[i] as usize;
+            let v = pat.stop_indices[i+1] as usize;
+            // Keep the first route ID found for simplicity
+            global_adjacency_signatures.entry((u, v)).or_insert_with(|| pat.route_id.clone());
+        }
+    }
+
+    let mut border_stops: HashSet<usize> = HashSet::new();
+    let mut cross_partition_edges: Vec<((usize, usize), String)> = Vec::new();
+
+    for ((u, v), _) in &adjacency {
+        if stop_to_cluster[*u] != stop_to_cluster[*v] {
+            border_stops.insert(*u);
+            border_stops.insert(*v);
+            
+            // Check for directed edges in both directions
+            if let Some(sig) = global_adjacency_signatures.get(&(*u, *v)) {
+                cross_partition_edges.push(((*u, *v), sig.clone()));
+            }
+            if let Some(sig) = global_adjacency_signatures.get(&(*v, *u)) {
+                cross_partition_edges.push(((*v, *u), sig.clone()));
+            }
+        }
+    }
+    println!("Identified {} intra-cluster border nodes", border_stops.len());
+
+    let mut intra_partition_edges: Vec<((usize, usize), String)> = Vec::new();
+    let mut global_to_partition_map: HashMap<usize, (u32, u32)> = HashMap::new();
+
+    let mut all_border_nodes: HashMap<u32, Vec<TransitStop>> = HashMap::new();
+
+    for (cluster_id, cluster_stop_indices) in clusters.iter().enumerate() {
+        let mut relevant_patterns = Vec::new();
+        let mut relevant_stop_indices: HashSet<u32> = HashSet::new();
+        
+        for &idx in cluster_stop_indices {
+            relevant_stop_indices.insert(idx as u32);
+        }
+
+        for pat in &processed_patterns {
+            let touches_cluster = pat.stop_indices.iter().any(|idx| relevant_stop_indices.contains(idx));
+            if touches_cluster {
+                relevant_patterns.push(pat);
+                for &idx in &pat.stop_indices {
+                    relevant_stop_indices.insert(idx);
+                }
+            }
+        }
+
+        let mut local_stop_map: HashMap<u32, u64> = HashMap::new();
+        let mut chunk_stops: Vec<TransitStop> = Vec::new();
+        let mut osm_links: Vec<OsmLink> = Vec::new();
+
+        let mut sorted_relevant_stops: Vec<u32> = relevant_stop_indices.into_iter().collect();
+        sorted_relevant_stops.sort();
+
+        for (local_idx, &global_idx) in sorted_relevant_stops.iter().enumerate() {
+            local_stop_map.insert(global_idx, local_idx as u64);
+            
+            // If this partition owns the stop, record it in the map
+            if stop_to_cluster[global_idx as usize] == cluster_id {
+                global_to_partition_map.insert(global_idx as usize, (cluster_id as u32, local_idx as u32));
+            }
+            
+            let stop = &db_stops[global_idx as usize];
+            let t_stop = TransitStop {
+                id: local_idx as u64,
+                chateau: stop.chateau.clone(),
+                gtfs_original_id: stop.gtfs_id.clone(),
+                is_hub: border_stops.contains(&(global_idx as usize)),
+                lat: stop.point.as_ref().map(|p| p.y).unwrap_or(0.0),
+                lon: stop.point.as_ref().map(|p| p.x).unwrap_or(0.0),
+            };
+            chunk_stops.push(t_stop);
+
+            if let Some(link) = find_osm_link(stop.point.as_ref().unwrap().x, stop.point.as_ref().unwrap().y, local_idx as u32, &args.osm_chunks).await {
+                osm_links.push(link);
+            }
+        }
+
+        // Inter-Chateau Transfers
+        // Find stops from OTHER chateaus that are close to stops in this chunk.
+        // Optimization: We query the DB for all stops in the BBox of this cluster.
+        let mut external_transfers = Vec::new();
+        
+        // Calculate Cluster BBox
+        let mut min_lat = f64::MAX; let mut max_lat = f64::MIN;
+        let mut min_lon = f64::MAX; let mut max_lon = f64::MIN;
+        for &idx in cluster_stop_indices {
+            let s = &db_stops[idx];
+            let lat = s.point.as_ref().map(|p| p.y).unwrap_or(0.0);
+            let lon = s.point.as_ref().map(|p| p.x).unwrap_or(0.0);
+            if lat < min_lat { min_lat = lat; }
+            if lat > max_lat { max_lat = lat; }
+            if lon < min_lon { min_lon = lon; }
+            if lon > max_lon { max_lon = lon; }
+        }
+        
+        // Expand BBox by ~500m (approx 0.005 deg)
+        let expansion = 0.005;
+        let search_min_lat = min_lat - expansion;
+        let search_max_lat = max_lat + expansion;
+        let search_min_lon = min_lon - expansion;
+        let search_max_lon = max_lon + expansion;
+
+        // Query DB for external stops
+        let external_stops = fetch_stops_in_bbox(
+            search_min_lat, search_max_lat, search_min_lon, search_max_lon,
+            &args.chateau, &mut conn
+        ).await?;
+
+        println!("  - Found {} external stops in BBox", external_stops.len());
+
+        for ext_stop in external_stops {
+             let ext_lat = ext_stop.point.as_ref().map(|p| p.y).unwrap_or(0.0);
+             let ext_lon = ext_stop.point.as_ref().map(|p| p.x).unwrap_or(0.0);
+
+             // Find nearest local stops (within 500m)
+             for (local_idx, stop) in chunk_stops.iter_mut().enumerate() {
+                 let dist = haversine_distance(stop.lat, stop.lon, ext_lat, ext_lon);
+                 if dist <= 500.0 {
+                     // Create transfer
+                     let walk_seconds = (dist / 1.4) as u32; // ~1.4 m/s walking speed
+                     external_transfers.push(ExternalTransfer {
+                         from_stop_idx: stop.id as u32, // stop.id is local_idx as u64
+                         to_chateau: ext_stop.chateau.clone(),
+                         to_stop_gtfs_id: ext_stop.gtfs_id.clone(),
+                         walk_seconds,
+                     });
+                     stop.is_hub = true;
+                 }
+             }
+        }
+
+        let mut chunk_patterns = Vec::new();
+        for pat in relevant_patterns {
+            let local_indices: Vec<u32> = pat.stop_indices.iter().map(|idx| {
+                *local_stop_map.get(idx).unwrap() as u32
+            }).collect();
+
+            chunk_patterns.push(TripPattern {
+                chateau: args.chateau.clone(),
+                route_id: pat.route_id.clone(),
+                stop_indices: local_indices,
+                trips: pat.trips.clone(),
+            });
+        }
+
+        let (local_deltas, reindexed_patterns) = reindex_deltas(chunk_patterns, &global_time_deltas);
+
+        let mut partition = TransitPartition {
+            partition_id: cluster_id as u32,
+            stops: chunk_stops,
+            trip_patterns: reindexed_patterns,
+            time_deltas: local_deltas,
+            internal_transfers: Vec::new(),
+            osm_links,
+            service_ids: service_ids.clone(),
+            service_exceptions: Vec::new(),
+            external_transfers,
+            local_transfer_patterns: Vec::new(),
+        };
+
+        // Collect border nodes for global graph
+        for stop in &partition.stops {
+            if stop.is_hub {
+                all_border_nodes.entry(partition.partition_id).or_default().push(stop.clone());
+            }
+        }
+
+        // Compute Intra-Partition Connectivity
+        let local_edges = compute_intra_partition_connectivity(&partition, &sorted_relevant_stops);
+        intra_partition_edges.extend(local_edges);
+
+        // Compute Local Transfer Patterns
+        compute_local_patterns_for_partition(&mut partition);
+
+        let filename = format!("transit_chunk_{}_{}.pbf", args.chateau, cluster_id);
+        let path = args.output.join(filename);
+        save_pbf(&partition, path.to_str().unwrap())?;
+    }
+
+    // 6. Transfer Pattern Precomputation (Stubs)
+    // 6. Transfer Pattern Precomputation
+    println!("Computing Transfer Patterns...");
+    // Local patterns computed per partition above.
+    compute_border_patterns(&all_border_nodes);
+
+    compute_global_patterns(&all_border_nodes, &cross_partition_edges, &intra_partition_edges, &global_to_partition_map, &args.output);
+
+    Ok(())
+}
+
+fn compute_border_patterns(border_nodes: &HashMap<u32, Vec<TransitStop>>) {
+    // Identify connections between border nodes within the same partition.
+    // This is handled by `compute_intra_partition_connectivity` and stored in `intra_partition_edges`.
+    // We just log the stats here.
+    let total_border_nodes: usize = border_nodes.values().map(|v| v.len()).sum();
+    println!("  - Border Patterns: Identified {} border nodes across {} partitions (Connectivity computed)", total_border_nodes, border_nodes.len());
+}
+
+fn compute_global_patterns(
+    border_nodes: &HashMap<u32, Vec<TransitStop>>, 
+    cross_edges: &[((usize, usize), String)],
+    intra_edges: &[((usize, usize), String)],
+    global_to_partition_map: &HashMap<usize, (u32, u32)>,
+    output_dir: &PathBuf
+) {
+    println!("  - Building Global Hub Graph...");
+
+    // 1. Build the Global Hub Graph
+    // Nodes: Global Stop Indices (usize)
+    // Edges: Adjacency List
+    let mut graph: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut reverse_graph: HashMap<usize, Vec<usize>> = HashMap::new();
+    
+    let mut all_edges = Vec::new();
+    all_edges.extend_from_slice(cross_edges);
+    all_edges.extend_from_slice(intra_edges);
+
+    let mut edge_signatures: HashMap<(usize, usize), String> = HashMap::new();
+
+    for &((u, v), ref sig) in &all_edges {
+        graph.entry(u).or_default().push(v);
+        reverse_graph.entry(v).or_default().push(u);
+        edge_signatures.insert((u, v), sig.clone());
+    }
+
+    // 2. Compute All-Pairs Reachability between Partitions (DAGs)
+    let partition_ids: Vec<u32> = border_nodes.keys().cloned().collect();
+    let mut partition_dags: Vec<PartitionDag> = Vec::new();
+
+    // Pre-compute hubs per partition (as global indices)
+    // We need to know which global indices belong to which partition (as hubs)
+    // border_nodes gives us the hubs, but we need their global indices.
+    // We can't easily get global index from TransitStop.
+    // But we know that `global_to_partition_map` gives us the OWNER partition.
+    // A hub might be owned by P1 but used in P2.
+    // For the purpose of "Path from P_A to P_B", we consider hubs "in" P_A if they are border nodes of P_A.
+    // But `border_nodes` map doesn't have global indices.
+    // 
+    // Workaround: Invert `global_to_partition_map` to get `partition -> Vec<global_idx>`?
+    // No, that only gives owned stops.
+    // 
+    // Better: We iterate `graph` keys. If a node is in `border_stops` (which we don't have here), it's a hub.
+    // Actually, ALL nodes in `graph` are hubs (border nodes), because `intra_edges` and `cross_edges` are only between border nodes.
+    // (intra_edges were computed using BFS between hubs).
+    // So every node in `graph` is a hub.
+    
+    // We need to assign nodes to partitions.
+    // A node u belongs to partition P if `stop_to_cluster[u] == P`.
+    // We can use `global_to_partition_map` for this.
+    
+    let mut partition_hubs: HashMap<u32, Vec<usize>> = HashMap::new();
+    for &u in graph.keys() {
+        if let Some(&(pid, _)) = global_to_partition_map.get(&u) {
+            partition_hubs.entry(pid).or_default().push(u);
+        }
+    }
+
+    println!("  - Computing DAGs for {} partitions...", partition_ids.len());
+    let mut dag_count = 0;
+
+    for &p_start in &partition_ids {
+        for &p_end in &partition_ids {
+            if p_start == p_end { continue; }
+
+            let start_hubs = partition_hubs.get(&p_start).map(|v| v.as_slice()).unwrap_or(&[]);
+            let end_hubs = partition_hubs.get(&p_end).map(|v| v.as_slice()).unwrap_or(&[]);
+
+            if start_hubs.is_empty() || end_hubs.is_empty() { continue; }
+
+            // Forward BFS from start_hubs
+            let mut forward_reachable = HashSet::new();
+            let mut queue = std::collections::VecDeque::new();
+            for &h in start_hubs {
+                if forward_reachable.insert(h) {
+                    queue.push_back(h);
+                }
+            }
+            while let Some(u) = queue.pop_front() {
+                if let Some(neighbors) = graph.get(&u) {
+                    for &v in neighbors {
+                        if forward_reachable.insert(v) {
+                            queue.push_back(v);
+                        }
+                    }
+                }
+            }
+
+            // Backward BFS from end_hubs
+            let mut backward_reachable = HashSet::new();
+            queue.clear();
+            for &h in end_hubs {
+                if backward_reachable.insert(h) {
+                    queue.push_back(h);
+                }
+            }
+            while let Some(u) = queue.pop_front() {
+                if let Some(neighbors) = reverse_graph.get(&u) {
+                    for &v in neighbors {
+                        if backward_reachable.insert(v) {
+                            queue.push_back(v);
+                        }
+                    }
+                }
+            }
+
+            // Intersection
+            let valid_nodes: HashSet<usize> = forward_reachable.intersection(&backward_reachable).cloned().collect();
+
+            if valid_nodes.is_empty() { continue; }
+
+            // Build DAG
+            let mut dag_hubs: Vec<usize> = valid_nodes.iter().cloned().collect();
+            dag_hubs.sort(); // Deterministic order
+            
+            let mut node_to_idx: HashMap<usize, u32> = HashMap::new();
+            for (i, &u) in dag_hubs.iter().enumerate() {
+                node_to_idx.insert(u, i as u32);
+            }
+
+            let mut dag_edges = Vec::new();
+            for &u in &dag_hubs {
+                if let Some(neighbors) = graph.get(&u) {
+                    for &v in neighbors {
+                        if valid_nodes.contains(&v) {
+                            dag_edges.push(DagEdge {
+                                from_hub_idx: *node_to_idx.get(&u).unwrap(),
+                                to_hub_idx: *node_to_idx.get(&v).unwrap(),
+                                pattern_signature: edge_signatures.get(&(u, v)).cloned().unwrap_or_default(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Convert dag_hubs to GlobalHub
+            let global_hubs: Vec<GlobalHub> = dag_hubs.iter().map(|&u| {
+                let (pid, idx) = global_to_partition_map.get(&u).cloned().unwrap_or((0, 0));
+                GlobalHub {
+                    original_partition_id: pid,
+                    stop_idx_in_partition: idx,
+                }
+            }).collect();
+
+            partition_dags.push(PartitionDag {
+                from_partition: p_start,
+                to_partition: p_end,
+                hubs: global_hubs,
+                edges: dag_edges,
+            });
+            dag_count += 1;
+        }
+    }
+    
+    println!("  - Generated {} Partition DAGs", dag_count);
+
+    let global_index = GlobalPatternIndex {
+        partition_dags,
+    };
+
+    let path = output_dir.join("global_patterns.pbf");
+    if let Err(e) = save_pbf(&global_index, path.to_str().unwrap()) {
+        eprintln!("Failed to save global patterns: {}", e);
+    } else {
+        println!("  - Global Patterns: Saved index to {:?}", path);
+    }
+}
+
+fn compute_intra_partition_connectivity(partition: &TransitPartition, global_indices: &[u32]) -> Vec<((usize, usize), String)> {
+    let mut edges = Vec::new();
+    
+    // Map local_idx -> global_idx
+    let local_to_global: Vec<usize> = global_indices.iter().map(|&i| i as usize).collect();
+
+    // Build Local Adjacency with signatures
+    let mut adj: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
+    for pattern in &partition.trip_patterns {
+        let stops = &pattern.stop_indices;
+        for i in 0..stops.len() - 1 {
+            let u = stops[i];
+            let v = stops[i+1];
+            adj.entry(u).or_default().push((v, pattern.route_id.clone()));
+        }
+    }
+
+    // Identify Hubs (Local Indices)
+    let hubs: Vec<u32> = partition.stops.iter()
+        .filter(|s| s.is_hub)
+        .map(|s| s.id as u32)
+        .collect();
+    
+    let hubs_set: HashSet<u32> = hubs.iter().cloned().collect();
+
+    // BFS from each Hub
+    for &start_node in &hubs {
+        let mut visited = HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        // Store (node, signature_path)
+        queue.push_back((start_node, String::new()));
+        visited.insert(start_node);
+
+        while let Some((u, path_sig)) = queue.pop_front() {
+            if u != start_node && hubs_set.contains(&u) {
+                // Found a path to another hub
+                edges.push(((local_to_global[start_node as usize], local_to_global[u as usize]), path_sig.clone()));
+                // Do not continue BFS through this hub for direct edges
+                continue;
+            }
+
+            if let Some(neighbors) = adj.get(&u) {
+                for (v, route_id) in neighbors {
+                    if visited.insert(*v) {
+                        let new_sig = if path_sig.is_empty() {
+                            route_id.clone()
+                        } else if path_sig.ends_with(route_id) {
+                             path_sig.clone() 
+                        } else {
+                            format!("{}|{}", path_sig, route_id)
+                        };
+                        queue.push_back((*v, new_sig));
+                    }
+                }
+            }
+        }
+    }
+
+    edges
+}
+
+// Merge-Based Clustering
+fn merge_based_clustering(num_stops: usize, adjacency: &HashMap<(usize, usize), u32>, max_size: usize) -> Vec<Vec<usize>> {
+    // Initial clusters: each stop is a cluster
+    let mut clusters: Vec<Vec<usize>> = (0..num_stops).map(|i| vec![i]).collect();
+    let mut cluster_map: Vec<usize> = (0..num_stops).collect(); // Stop -> Cluster Index
+    let mut active_clusters: HashSet<usize> = (0..num_stops).collect();
+
+    // Edge Priority Queue (Weight, Cluster A, Cluster B)
+    #[derive(Eq, PartialEq)]
+    struct Edge {
+        weight: u32,
+        c1: usize,
+        c2: usize,
+    }
+    impl Ord for Edge {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.weight.cmp(&other.weight)
+        }
+    }
+    impl PartialOrd for Edge {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    let mut pq = BinaryHeap::new();
+
+    // Initialize PQ with stop-stop edges
+    for (&(u, v), &w) in adjacency {
+        pq.push(Edge { weight: w, c1: u, c2: v });
+    }
+
+    // We need to track cluster connectivity dynamically.
+    // Re-calculating all edges after merge is expensive.
+    // Optimization: Lazy deletion?
+    // Or just use a simpler greedy approach:
+    // 1. Pick best edge.
+    // 2. If valid merge, merge.
+    // 3. Update edges connected to merged cluster?
+    
+    // For simplicity in this V1, we will use a simplified approach:
+    // We maintain a "Cluster Adjacency" map.
+    let _cluster_adj: HashMap<(usize, usize), u32> = adjacency.clone();
+    
+    // Rebuild PQ from cluster_adj? No, that's slow.
+    // Let's just iterate until no merges possible.
+    // Since N is small (<10k), maybe O(N^2) loop is fine?
+    // Actually, let's use the PQ but check validity.
+    
+    while let Some(edge) = pq.pop() {
+        let c1 = cluster_map[edge.c1]; // Get current cluster ID for original node
+        let c2 = cluster_map[edge.c2];
+
+        if c1 == c2 { continue; } // Already merged
+        
+        // Check size constraint
+        let size1 = clusters[c1].len();
+        let size2 = clusters[c2].len();
+        
+        if size1 + size2 <= max_size {
+            // Merge c2 into c1
+            let stops_to_move = clusters[c2].clone();
+            for &stop in &stops_to_move {
+                cluster_map[stop] = c1;
+            }
+            clusters[c1].extend(stops_to_move);
+            clusters[c2].clear();
+            active_clusters.remove(&c2);
+            
+            // We don't update PQ weights here (Lazy).
+            // This means we might merge based on "old" weights (single edge) rather than "aggregate" weights.
+            // But for "Convex" clusters, single strong edge is often enough to start.
+            // To be more accurate, we should aggregate weights.
+            // But let's stick to this for V1.
+        }
+    }
+
+    clusters.into_iter().filter(|c| !c.is_empty()).collect()
+}
+
+fn calculate_service_mask(service_id: &str, calendar: &[Calendar]) -> u32 {
+    if let Some(cal) = calendar.iter().find(|c| c.service_id == service_id) {
+        let mut mask = 0;
+        if cal.monday { mask |= 1 << 0; }
+        if cal.tuesday { mask |= 1 << 1; }
+        if cal.wednesday { mask |= 1 << 2; }
+        if cal.thursday { mask |= 1 << 3; }
+        if cal.friday { mask |= 1 << 4; }
+        if cal.saturday { mask |= 1 << 5; }
+        if cal.sunday { mask |= 1 << 6; }
+        mask
+    } else {
+        0
+    }
+}
+
+fn reindex_deltas(mut patterns: Vec<TripPattern>, global_deltas: &[u32]) -> (Vec<u32>, Vec<TripPattern>) {
+    let mut new_deltas = Vec::new();
+    let mut delta_map = HashMap::new();
+
+    for pat in &mut patterns {
+        for trip in &mut pat.trips {
+            let old_ptr = trip.delta_pointer;
+            if let Some(&new_ptr) = delta_map.get(&old_ptr) {
+                trip.delta_pointer = new_ptr;
+            } else {
+                let new_ptr = new_deltas.len() as u32;
+                let len = pat.stop_indices.len();
+                let slice = &global_deltas[old_ptr as usize .. old_ptr as usize + len];
+                new_deltas.extend_from_slice(slice);
+                
+                delta_map.insert(old_ptr, new_ptr);
+                trip.delta_pointer = new_ptr;
+            }
+        }
+    }
+    (new_deltas, patterns)
+}
+
+async fn find_osm_link(lon: f64, lat: f64, stop_idx: u32, osm_dir: &PathBuf) -> Option<OsmLink> {
+    let (x, y) = lon_lat_to_tile(lon, lat, 10);
+    let chunk_filename = format!("chunk_{}_{}_{}.pbf", x, y, 10);
+    let chunk_path = osm_dir.join(chunk_filename);
+    
+    if !chunk_path.exists() { return None; }
+
+    let street_data: StreetData = load_pbf(chunk_path.to_str().unwrap()).ok()?;
+
+    let mut min_dist = f64::MAX;
+    let mut nearest_node_idx = None;
+
+    for (i, node) in street_data.nodes.iter().enumerate() {
+        let dist = haversine_distance(lat, lon, node.lat, node.lon);
+        if dist < min_dist {
+            min_dist = dist;
+            nearest_node_idx = Some(i as u32);
+        }
+    }
+
+    if min_dist > 200.0 { return None; }
+
+    if let Some(node_idx) = nearest_node_idx {
+        let walk_seconds = (min_dist / 1.4) as u32;
+        Some(OsmLink {
+            stop_idx,
+            osm_node_id: node_idx,
+            walk_seconds,
+        })
+    } else {
+        None
+    }
+}
+
+fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
+    // println!("    - Computing LTPs for partition {} ({} stops)...", partition.partition_id, partition.stops.len());
+    
+    let hubs: Vec<u32> = partition.stops.iter()
+        .enumerate()
+        .filter(|(_, s)| s.is_hub)
+        .map(|(i, _)| i as u32)
+        .collect();
+
+    if hubs.is_empty() { return; }
+
+    // Precompute stop -> patterns map
+    let mut stop_to_patterns: Vec<Vec<usize>> = vec![Vec::new(); partition.stops.len()];
+    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
+        for &s_idx in &pattern.stop_indices {
+            stop_to_patterns[s_idx as usize].push(p_idx);
+        }
+    }
+
+    let mut ltps = Vec::new();
+
+    // For each stop, run profile search to hubs
+    // Optimization: Only run for stops that are NOT hubs? Or all stops?
+    // Text says "per station in the cluster".
+    for start_node in 0..partition.stops.len() {
+        let start_node = start_node as u32;
+        
+        // Run simplified Raptor at 8:00 AM (28800s)
+        let edges = run_raptor(partition, start_node, &hubs, 28800, &stop_to_patterns); 
+        
+        if !edges.is_empty() {
+            ltps.push(LocalTransferPattern {
+                from_stop_idx: start_node,
+                edges,
+            });
+        }
+    }
+    
+    partition.local_transfer_patterns = ltps;
+}
+
+fn run_raptor(
+    partition: &TransitPartition, 
+    start_node: u32, 
+    targets: &[u32], 
+    start_time: u32,
+    stop_to_patterns: &[Vec<usize>]
+) -> Vec<DagEdge> {
+    let num_stops = partition.stops.len();
+    let mut earliest_arrival = vec![u32::MAX; num_stops];
+    earliest_arrival[start_node as usize] = start_time;
+    
+    let mut marked_stops = HashSet::new();
+    marked_stops.insert(start_node);
+
+    // Track predecessors: stop_idx -> (prev_stop_idx, pattern_signature)
+    let mut predecessors: Vec<Option<(u32, String)>> = vec![None; num_stops];
+
+    for _round in 0..5 { // Max 5 transfers
+        if marked_stops.is_empty() { break; }
+        
+        let mut next_marked = HashSet::new();
+        
+        // 1. Route Scanning
+        let mut routes_to_scan: HashMap<usize, u32> = HashMap::new(); // pattern_idx -> min_stop_index_in_pattern
+        
+        for &stop in &marked_stops {
+            if let Some(patterns) = stop_to_patterns.get(stop as usize) {
+                for &p_idx in patterns {
+                    let pattern = &partition.trip_patterns[p_idx];
+                    // Find index of stop in pattern
+                    if let Some(idx_in_pattern) = pattern.stop_indices.iter().position(|&s| s == stop) {
+                         let current_min = routes_to_scan.entry(p_idx).or_insert(idx_in_pattern as u32);
+                         if (idx_in_pattern as u32) < *current_min {
+                             *current_min = idx_in_pattern as u32;
+                         }
+                    }
+                }
+            }
+        }
+
+        for (p_idx, start_idx) in routes_to_scan {
+            let pattern = &partition.trip_patterns[p_idx];
+            let mut current_trip: Option<&CompressedTrip> = None;
+            let mut boarded_at_stop = 0;
+
+            for i in (start_idx as usize)..pattern.stop_indices.len() {
+                let stop_idx = pattern.stop_indices[i];
+                
+                // Check if we can board a trip
+                if let Some(trip) = current_trip {
+                    // We are on a trip, check arrival
+                    // Calculate arrival time
+                    // Trip start time + delta from start
+                    // We need to sum deltas from trip.delta_pointer up to i
+                    // This is slow if we sum every time.
+                    // Optimization: Track current time on trip.
+                    
+                    // Let's re-calculate for simplicity
+                    let arrival = calculate_arrival_time(partition, trip, i);
+                    
+                    if arrival < earliest_arrival[stop_idx as usize] {
+                        earliest_arrival[stop_idx as usize] = arrival;
+                        predecessors[stop_idx as usize] = Some((boarded_at_stop, format!("Pattern:{}", pattern.route_id)));
+                        next_marked.insert(stop_idx);
+                    }
+                }
+
+                // Can we board an earlier trip?
+                // Or if we are not on a trip?
+                // Find earliest trip at this stop departing >= earliest_arrival[stop_idx]
+                if earliest_arrival[stop_idx as usize] != u32::MAX {
+                    // Find trip
+                    // Trips are sorted by start_time.
+                    // We need departure time at this stop.
+                    // Dep time = Trip Start + Delta(0..i)
+                    // This is complex with compressed deltas.
+                    // For V1, we iterate trips (linear scan).
+                    for trip in &pattern.trips {
+                        let dep_time = calculate_arrival_time(partition, trip, i); // Arr = Dep
+                        if dep_time >= earliest_arrival[stop_idx as usize] {
+                            // Found a trip
+                            if current_trip.is_none() || dep_time < calculate_arrival_time(partition, current_trip.unwrap(), i) {
+                                current_trip = Some(trip);
+                                boarded_at_stop = stop_idx;
+                            }
+                            break; // Trips are sorted
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Transfers (Footpaths)
+        // Internal transfers
+        // In this loop, we just check static transfers
+        // We should copy marked stops for transfers?
+        // Standard Raptor does transfers after routes.
+        
+        // We need to iterate stops marked in THIS round (by routes)
+        // `next_marked` contains stops updated by routes.
+        // We also need to consider transfers from stops updated by transfers? No, usually just route -> transfer.
+        
+        let stops_to_transfer: Vec<u32> = next_marked.iter().cloned().collect();
+        for stop in stops_to_transfer {
+             // Check internal transfers
+             for transfer in &partition.internal_transfers {
+                 if transfer.from_stop_idx == stop {
+                     let arrival = earliest_arrival[stop as usize] + transfer.duration_seconds;
+                     if arrival < earliest_arrival[transfer.to_stop_idx as usize] {
+                         earliest_arrival[transfer.to_stop_idx as usize] = arrival;
+                         predecessors[transfer.to_stop_idx as usize] = Some((stop, "Walk".to_string()));
+                         next_marked.insert(transfer.to_stop_idx);
+                     }
+                 }
+             }
+        }
+
+        marked_stops = next_marked;
+    }
+
+    // Reconstruct DAG (Path) for targets
+    let mut edges = Vec::new();
+    let mut visited_edges = HashSet::new();
+
+    for &target in targets {
+        if earliest_arrival[target as usize] != u32::MAX {
+            let mut curr = target;
+            while curr != start_node {
+                if let Some((prev, ref sig)) = predecessors[curr as usize] {
+                    let edge = DagEdge {
+                        from_hub_idx: prev, // Using local stop idx
+                        to_hub_idx: curr,   // Using local stop idx
+                        pattern_signature: sig.clone(),
+                    };
+                    // Avoid duplicates
+                    // Since DagEdge doesn't implement Hash/Eq fully (prost message), we check manually or use a key
+                    let key = (prev, curr, sig.clone());
+                    if visited_edges.insert(key) {
+                        edges.push(edge);
+                    }
+                    curr = prev;
+                } else {
+                    break; // Should not happen if reachable
+                }
+            }
+        }
+    }
+
+    edges
+}
+
+fn calculate_arrival_time(partition: &TransitPartition, trip: &CompressedTrip, stop_idx_in_pattern: usize) -> u32 {
+    let mut time = trip.start_time;
+    let ptr = trip.delta_pointer as usize;
+    // Sum deltas from 0 to stop_idx_in_pattern
+    // time_deltas[ptr] is delta for stop 0 (usually 0)
+    // time_deltas[ptr+1] is delta for stop 1
+    for k in 0..=stop_idx_in_pattern {
+        if ptr + k < partition.time_deltas.len() {
+             time += partition.time_deltas[ptr + k];
+        }
+    }
+    time
+}
+
+fn lon_lat_to_tile(lon: f64, lat: f64, zoom: u8) -> (u32, u32) {
+    let n = 2.0_f64.powi(zoom as i32);
+    let x = ((lon + 180.0) / 360.0 * n).floor() as u32;
+    let lat_rad = lat.to_radians();
+    let y = ((1.0 - lat_rad.tan().asinh() / std::f64::consts::PI) / 2.0 * n).floor() as u32;
+    (x, y)
+}
+
+fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let r = 6371000.0;
+    let d_lat = (lat2 - lat1).to_radians();
+    let d_lon = (lon2 - lon1).to_radians();
+    let a = (d_lat / 2.0).sin().powi(2) +
+            lat1.to_radians().cos() * lat2.to_radians().cos() *
+            (d_lon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+    r * c
+}
+
+async fn fetch_stops_in_bbox(
+    min_lat: f64,
+    max_lat: f64,
+    min_lon: f64,
+    max_lon: f64,
+    current_chateau: &str,
+    conn: &mut AsyncPgConnection,
+) -> Result<Vec<Stop>> {
+    use catenary::schema::gtfs::stops::dsl::*;
+    use diesel::dsl::sql;
+    use diesel::sql_types::Bool;
+
+    // ST_MakeEnvelope(xmin, ymin, xmax, ymax, srid)
+    let raw_sql = format!(
+        "stops.point && ST_MakeEnvelope({}, {}, {}, {}, 4326)",
+        min_lon, min_lat, max_lon, max_lat
+    );
+
+    let results = stops
+        .filter(chateau.ne(current_chateau))
+        .filter(sql::<Bool>(&raw_sql))
+        .select(Stop::as_select())
+        .load(conn)
+        .await?;
+
+    Ok(results)
+}

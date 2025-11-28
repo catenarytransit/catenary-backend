@@ -1,4 +1,4 @@
-Algorithm Authors: Wen, Chelsea; Chin, Kyler
+Algorithm Authors: Wen, Chelsea <chelsea@catenarymaps.org>; Chin, Kyler <kyler@catenarymaps.org>
 
 # Algorithm Overview
 
@@ -49,8 +49,15 @@ To avoid memory exhaustion (e.g., processing `planet.pbf`), generation is perfor
         - **Avoid Overhang**: We do *not* use a bounding box with overhang, as this creates duplicate data and complicates graph connectivity.
 
 ### Public Transport Graph
-- **Strategy**: Applies the same chunking logic as OSM.
+- **Strategy**: **Merge-Based Clustering**.
 - **Scope**: Graphs are generated per region/chateau to bound memory usage.
+- **Clustering**:
+    - Stops are partitioned into **Clusters** to minimize the number of cut edges (trips crossing boundaries) while maintaining a balanced cluster size (e.g., 500-1000 stops).
+    - **Algorithm**: Greedy Merge-Based Clustering.
+        1. Initialize each stop as a singleton cluster.
+        2. Calculate edge weights between clusters (number of trips connecting them).
+        3. Iteratively merge the pair of clusters with the highest connectivity, provided the merged size does not exceed the limit.
+        4. Result: Convex-like, highly connected clusters.
 
 ## Storage & Trigger Mechanism
 - **Concept**: Data is organized by **Chateau** (clusters of agencies sharing a GTFS feed).
@@ -82,10 +89,22 @@ A variant of Trip-Based Routing data structures, organized by **Trip Patterns**.
 
 # Routing Hierarchy
 
-We follow the hierarchy approach given by Bast et al. in Transfer Patterns[1]: 
+We follow the hierarchy approach given by Bast et al. in Transfer Patterns[1] and Scalable Transfer Patterns[2]: 
 
-1. **Local Route**: Within a single partition (chunk), a simple local query is used to find the short path from source to destination, if no hub stations (central transfer points) are detected.
-2. **Global Route**: Computed only between high-frequency stations (for example, a central station in a city or otherwise often-visted node) and simple query-rechable distances.
+1. **Local Route (Intra-Cluster)**:
+    - Computed using **Trip-Based Routing (TB)** on the local cluster graph.
+    - Used when Source and Destination are in the same cluster.
+2. **Border Route (Inter-Cluster / Inter-Chateau)**:
+    - **Inter-Chateau Transfers**: Pre-computed transfers between overlapping or nearby Chateaus (e.g., LA Metro $\leftrightarrow$ Metrolink $\leftrightarrow$ Amtrak).
+    - **Algorithm**: Spatial join on stops from different Chateaus. If distance < threshold (e.g., 500m), create a "Transfer Edge".
+    - **Border Nodes**: Stops with these external connections are marked as Border Nodes.
+3. **Global Route (Long-Distance / Continent Level)**:
+    - **Scope**: Computed per **Continent** (e.g., North America, Japan, Australia) to manage scale.
+    - **Structure**: A DAG connecting **Hub Stations** across the continent.
+    - **Pre-computation**:
+        - Identify Hubs (high centrality).
+        - Run Profile Search (CSA/Raptor) between Hubs on the continent-wide graph.
+        - Store optimal transfer sequences.
 
 ---
 

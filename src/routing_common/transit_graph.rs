@@ -62,6 +62,34 @@ pub struct TransitPartition {
     /// Used to handle "Added" or "Removed" service on specific dates.
     #[prost(message, repeated, tag = "8")]
     pub service_exceptions: Vec<ServiceException>,
+
+    /// Transfers to other Chateaus (Inter-Chateau links).
+    #[prost(message, repeated, tag = "9")]
+    pub external_transfers: Vec<ExternalTransfer>,
+
+    /// Local Transfer Patterns (LTPs).
+    #[prost(message, repeated, tag = "10")]
+    pub local_transfer_patterns: Vec<LocalTransferPattern>,
+}
+
+/// A transfer to a stop in a different Chateau.
+#[derive(Clone, PartialEq, Message)]
+pub struct ExternalTransfer {
+    /// Index of the local stop in this partition.
+    #[prost(uint32, tag = "1")]
+    pub from_stop_idx: u32,
+
+    /// The ID of the target Chateau.
+    #[prost(string, tag = "2")]
+    pub to_chateau: String,
+
+    /// The GTFS Stop ID in the target Chateau.
+    #[prost(string, tag = "3")]
+    pub to_stop_gtfs_id: String,
+
+    /// Walking time in seconds.
+    #[prost(uint32, tag = "4")]
+    pub walk_seconds: u32,
 }
 
 /// A Transit Stop (Platform, Station, or Pole).
@@ -247,4 +275,19 @@ pub struct DagEdge {
     /// trip pattern sequence.
     #[prost(string, tag = "3")]
     pub pattern_signature: String,
+}
+
+/// Local Transfer Patterns (LTPs).
+/// Precomputed DAGs for optimal routes within the cluster.
+/// Used to accelerate long-distance queries and for local queries.
+#[derive(Clone, PartialEq, Message)]
+pub struct LocalTransferPattern {
+    /// The source stop index (local) for this DAG.
+    #[prost(uint32, tag = "1")]
+    pub from_stop_idx: u32,
+
+    /// The edges of the DAG rooted at `from_stop_idx`.
+    /// These edges describe optimal paths to reach other stops (primarily border stops).
+    #[prost(message, repeated, tag = "2")]
+    pub edges: Vec<DagEdge>,
 }

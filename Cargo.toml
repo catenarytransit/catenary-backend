@@ -238,3 +238,7 @@ path = "src/update_vehicles_db/main.rs"
 [[bin]]
 name ="girolle"
 path = "src/maple/girolle/main.rs"
+
+[[bin]]
+name = "gentian"
+path = "src/gentian/main.rs"
