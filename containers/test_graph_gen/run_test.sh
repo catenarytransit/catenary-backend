@@ -74,7 +74,7 @@ echo "Running Avens (OSM Preprocessing)..."
 
 echo "Running Gentian (Graph Generation)..."
 export PGPASSWORD=catenary
-CHATEAUS=$(psql -h postgres -U catenary -d catenary -t -c "SELECT chateau FROM gtfs.chateaus;")
+CHATEAUS=$(psql -h postgres -U catenary -d catenary -t -c "SELECT c.chateau FROM gtfs.chateaus c WHERE EXISTS (SELECT 1 FROM gtfs.routes r WHERE r.chateau = c.chateau);")
 
 for chateau in $CHATEAUS; do
     # Trim whitespace

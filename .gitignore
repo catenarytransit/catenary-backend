@@ -100,3 +100,5 @@ test_data/
 osm_data_chunks/
 osm_data_temp/
 osm_chunks/
+containers/test_graph_gen/output
+containers/test_graph_gen/osm_chunks
