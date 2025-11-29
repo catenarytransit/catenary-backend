@@ -35,6 +35,13 @@ This document explains how to use the Docker container to test the graph generat
 -   **Graph Output**: Generated graph files (`.pbf`, `.ch`) will be in `containers/test_graph_gen/output`.
 -   **OSM Chunks**: Generated OSM chunks will be in `containers/test_graph_gen/osm_chunks`.
 
+## rerun only gentian
+
+```bash
+docker compose -f containers/test_graph_gen/docker-compose.yml run --rm test_runner /catenary/containers/test_graph_gen/run_gentian_only.sh
+```
+
+
 ## Cleanup
 
 To stop the containers and remove the postgres volume and output files:

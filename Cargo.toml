@@ -242,3 +242,7 @@ path = "src/maple/girolle/main.rs"
 [[bin]]
 name = "gentian"
 path = "src/gentian/main.rs"
+
+[[bin]]
+name = "linnaea"
+path = "src/linnaea/main.rs"

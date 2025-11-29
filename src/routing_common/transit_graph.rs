@@ -118,10 +118,20 @@ pub struct TransitStop {
     #[prost(string, tag = "3")]
     pub gtfs_original_id: String,
 
-    /// Is this a "Border Stop" or "Hub"?
-    /// If true, this stop is a node in the Global Transfer Pattern DAG.
+    /// Is this a "Hub" (High Centrality / Major Transfer Point)?
+    /// Used for Global Transfer Pattern DAGs.
     #[prost(bool, tag = "4")]
     pub is_hub: bool,
+
+    /// Is this a "Border Stop"?
+    /// If true, this stop has edges connecting to another cluster/partition.
+    #[prost(bool, tag = "7")]
+    pub is_border: bool,
+
+    /// Is this an "External Gateway"?
+    /// If true, this stop has transfers to another Chateau.
+    #[prost(bool, tag = "8")]
+    pub is_external_gateway: bool,
 
     /// Latitude (WGS84).
     #[prost(double, tag = "5")]

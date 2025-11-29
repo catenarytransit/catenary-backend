@@ -97,13 +97,15 @@ We follow the hierarchy approach given by Bast et al. in Transfer Patterns[1] an
 2. **Border Route (Inter-Cluster / Inter-Chateau)**:
     - **Inter-Chateau Transfers**: Pre-computed transfers between overlapping or nearby Chateaus (e.g., LA Metro $\leftrightarrow$ Metrolink $\leftrightarrow$ Amtrak).
     - **Algorithm**: Spatial join on stops from different Chateaus. If distance < threshold (e.g., 500m), create a "Transfer Edge".
-    - **Border Nodes**: Stops with these external connections are marked as Border Nodes.
+    - **Border Nodes**: Stops that connect different clusters (partitions). These are the "gates" between partitions.
+    - **Hubs**: Major transfer points (high centrality) used for global routing optimization.
 3. **Global Route (Long-Distance / Continent Level)**:
     - **Scope**: Computed per **Continent** (e.g., North America, Japan, Australia) to manage scale.
-    - **Structure**: A DAG connecting **Hub Stations** across the continent.
+    - **Structure**: A DAG connecting **Global Nodes** (Hubs + Border Nodes) across the continent.
     - **Pre-computation**:
-        - Identify Hubs (high centrality).
-        - Run Profile Search (CSA/Raptor) between Hubs on the continent-wide graph.
+        - Identify Hubs (high centrality via random shortest path sampling).
+        - Identify Border Nodes (cross-partition edges).
+        - Run Profile Search (CSA/Raptor) between Global Nodes on the continent-wide graph.
         - Store optimal transfer sequences.
 
 ---
