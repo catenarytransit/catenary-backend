@@ -60,7 +60,7 @@ To avoid memory exhaustion (e.g., processing `planet.pbf`), generation is perfor
         4. Result: Convex-like, highly connected clusters.
 
 ## Storage & Trigger Mechanism
-- **Concept**: Data is organized by **Chateau** (clusters of agencies sharing a GTFS feed).
+- **Concept**: Data is organized by **Chateau** (list of agencies sharing a GTFS feed).
 - **Persistence**: Raw data is stored in **Postgres** (refer to `models.rs`).
 - **Pipeline**:
     1. **Ingest**: Load GTFS/Realtime data into Postgres (maple submodule).

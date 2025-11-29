@@ -30,7 +30,7 @@ struct Args {
     output: PathBuf,
 
     /// Target cluster size (number of stops)
-    #[arg(long, default_value = "500")]
+    #[arg(long, default_value = "1000")]
     cluster_size: usize,
 }
 
@@ -719,23 +719,7 @@ fn merge_based_clustering(num_stops: usize, adjacency: &HashMap<(usize, usize), 
         pq.push(Edge { weight: w, c1: u, c2: v });
     }
 
-    // We need to track cluster connectivity dynamically.
-    // Re-calculating all edges after merge is expensive.
-    // Optimization: Lazy deletion?
-    // Or just use a simpler greedy approach:
-    // 1. Pick best edge.
-    // 2. If valid merge, merge.
-    // 3. Update edges connected to merged cluster?
-    
-    // For simplicity in this V1, we will use a simplified approach:
-    // We maintain a "Cluster Adjacency" map.
-    let _cluster_adj: HashMap<(usize, usize), u32> = adjacency.clone();
-    
-    // Rebuild PQ from cluster_adj? No, that's slow.
-    // Let's just iterate until no merges possible.
-    // Since N is small (<10k), maybe O(N^2) loop is fine?
-    // Actually, let's use the PQ but check validity.
-    
+    // PASS 1: Standard Greedy Merge (Respecting max_size)
     while let Some(edge) = pq.pop() {
         let c1 = cluster_map[edge.c1]; // Get current cluster ID for original node
         let c2 = cluster_map[edge.c2];
@@ -755,12 +739,70 @@ fn merge_based_clustering(num_stops: usize, adjacency: &HashMap<(usize, usize), 
             clusters[c1].extend(stops_to_move);
             clusters[c2].clear();
             active_clusters.remove(&c2);
-            
-            // We don't update PQ weights here (Lazy).
-            // This means we might merge based on "old" weights (single edge) rather than "aggregate" weights.
-            // But for "Convex" clusters, single strong edge is often enough to start.
-            // To be more accurate, we should aggregate weights.
-            // But let's stick to this for V1.
+        }
+    }
+
+    // PASS 2: Cleanup Orphans (Force merge small clusters)
+    // Definition of "Small": Less than 10% of max_size, or < 50 stops
+    let min_size = (max_size / 10).max(20); 
+    
+    // We need to iterate until no more merges happen, or just do one pass?
+    // One pass is probably enough to catch the worst offenders.
+    // We iterate through all active clusters.
+    
+    // To do this efficiently, we need to know which clusters are connected.
+    // Re-scanning adjacency is expensive but necessary.
+    // Let's build a Cluster Adjacency Graph.
+    
+    let mut cluster_adj: HashMap<(usize, usize), u32> = HashMap::new();
+    for (&(u, v), &w) in adjacency {
+        let c1 = cluster_map[u];
+        let c2 = cluster_map[v];
+        if c1 != c2 {
+            let (min, max) = if c1 < c2 { (c1, c2) } else { (c2, c1) };
+            *cluster_adj.entry((min, max)).or_default() += w;
+        }
+    }
+
+    let active_list: Vec<usize> = active_clusters.iter().cloned().collect();
+    let mut merged_in_pass2 = HashSet::new();
+
+    for &c_idx in &active_list {
+        if merged_in_pass2.contains(&c_idx) { continue; }
+        
+        let size = clusters[c_idx].len();
+        if size < min_size {
+            // Find best neighbor
+            let mut best_neighbor = None;
+            let mut max_weight = 0;
+
+            for &other_c in &active_list {
+                if c_idx == other_c { continue; }
+                if merged_in_pass2.contains(&other_c) { continue; } // Don't merge into something that's already gone (though we could chain)
+
+                let (min, max) = if c_idx < other_c { (c_idx, other_c) } else { (other_c, c_idx) };
+                if let Some(&w) = cluster_adj.get(&(min, max)) {
+                    if w > max_weight {
+                        max_weight = w;
+                        best_neighbor = Some(other_c);
+                    }
+                }
+            }
+
+            if let Some(target) = best_neighbor {
+                // Force Merge c_idx into target
+                // Note: This might exceed max_size, but that's acceptable to avoid orphans.
+                // println!("    - Merging orphan cluster {} (size {}) into {} (size {})", c_idx, size, target, clusters[target].len());
+                
+                let stops_to_move = clusters[c_idx].clone();
+                for &stop in &stops_to_move {
+                    cluster_map[stop] = target;
+                }
+                clusters[target].extend(stops_to_move);
+                clusters[c_idx].clear();
+                active_clusters.remove(&c_idx);
+                merged_in_pass2.insert(c_idx);
+            }
         }
     }
 
@@ -1139,4 +1181,51 @@ async fn fetch_stops_in_bbox(
         .await?;
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clustering_orphans() {
+        // Scenario:
+        // Cluster A: Nodes 0..100 (Size 100) - Fully connected clique
+        // Cluster B: Node 100 (Size 1) - Connected to Node 0
+        // Max Size: 100
+        //
+        // Pass 1: Should merge 0..99 into one cluster (Size 100).
+        //         Node 100 cannot merge because 100 + 1 > 100.
+        // Pass 2: Node 100 is orphan (Size 1 < 20). Should force merge into Cluster A.
+        
+        let mut adjacency = HashMap::new();
+        
+        // Create clique 0..99
+        for i in 0..100 {
+            for j in (i+1)..100 {
+                adjacency.insert((i, j), 1);
+            }
+        }
+        
+        // Connect 100 to 0
+        adjacency.insert((0, 100), 10); // Strong connection
+        
+        let clusters = merge_based_clustering(101, &adjacency, 100);
+        
+        // Expect 1 cluster
+        assert_eq!(clusters.len(), 1, "Should have merged orphan into main cluster");
+        assert_eq!(clusters[0].len(), 101, "Cluster should contain all nodes");
+    }
+    
+    #[test]
+    fn test_clustering_basic() {
+        // Simple case: 4 nodes, 0-1, 2-3. Max size 2.
+        // Should result in 2 clusters.
+        let mut adjacency = HashMap::new();
+        adjacency.insert((0, 1), 1);
+        adjacency.insert((2, 3), 1);
+        
+        let clusters = merge_based_clustering(4, &adjacency, 2);
+        assert_eq!(clusters.len(), 2);
+    }
 }
