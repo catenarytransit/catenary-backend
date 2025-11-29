@@ -922,7 +922,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                         eprintln!("Failed to delete whole feed {}", feed.onestop_feed_id);
                     }
 
-                    let delete_feed_from_elasticsearch = if let Some(elasticclient) = &elasticclient {
+                    let delete_feed_from_elasticsearch = if let Some(elasticclient) = &elasticclient
+                    {
                         delete_feed_elasticsearch(&feed.onestop_feed_id, elasticclient).await
                     } else {
                         Ok(())

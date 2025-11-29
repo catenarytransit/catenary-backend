@@ -1,7 +1,7 @@
 use ahash::AHashSet;
+use catenary::CalendarUnified;
 use catenary::aspen_dataset::AspenisedStopTimeUpdate;
 use catenary::models::{CompressedTrip, ItineraryPatternMeta, ItineraryPatternRow};
-use catenary::CalendarUnified;
 use chrono::{Datelike, TimeZone, Utc};
 use chrono_tz::Tz;
 use std::collections::BTreeMap;
@@ -21,11 +21,7 @@ pub fn calculate_delay(
     match trip_update_delay {
         Some(delay) => Some(delay),
         None => match (scheduled_stop_ids_hashset, itinerary_rows, itinerary_meta) {
-            (
-                Some(scheduled_stop_ids_hashset),
-                Some(itinerary_rows),
-                Some(itinerary_meta),
-            ) => {
+            (Some(scheduled_stop_ids_hashset), Some(itinerary_rows), Some(itinerary_meta)) => {
                 let filtered_stu = stop_time_update
                     .clone()
                     .into_iter()
@@ -95,15 +91,16 @@ pub fn calculate_delay(
                                 Some(compressed_trip) => {
                                     let start_date = match trip_start_date {
                                         None => {
-                                            let timeschedule_number_since_midnight = match itinerary_stop_row
-                                                .arrival_time_since_start
-                                            {
-                                                Some(x) => Some(x),
-                                                None => match itinerary_stop_row.departure_time_since_start {
+                                            let timeschedule_number_since_midnight =
+                                                match itinerary_stop_row.arrival_time_since_start {
                                                     Some(x) => Some(x),
-                                                    None => None,
-                                                },
-                                            };
+                                                    None => match itinerary_stop_row
+                                                        .departure_time_since_start
+                                                    {
+                                                        Some(x) => Some(x),
+                                                        None => None,
+                                                    },
+                                                };
 
                                             match timeschedule_number_since_midnight {
                                                 Some(timescheduled) => {
@@ -141,15 +138,18 @@ pub fn calculate_delay(
                                                                 compressed_trip.start_time as i64,
                                                             );
 
-                                                        let service = calendar_structure
-                                                            .get(compressed_trip.service_id.as_str());
+                                                        let service = calendar_structure.get(
+                                                            compressed_trip.service_id.as_str(),
+                                                        );
 
                                                         if let Some(service) = service {
                                                             if catenary::datetime_in_service(
                                                                 &service, d,
                                                             ) {
-                                                                guesses_date_times
-                                                                    .push((d, schedules.timestamp()));
+                                                                guesses_date_times.push((
+                                                                    d,
+                                                                    schedules.timestamp(),
+                                                                ));
                                                             }
                                                         }
                                                     }
@@ -188,11 +188,12 @@ pub fn calculate_delay(
                                             }
                                         }
                                         Some(start_date) => {
-                                            let chrono_start_date = chrono::NaiveDate::parse_from_str(
-                                                &start_date,
-                                                "%Y%m%d",
-                                            )
-                                            .unwrap();
+                                            let chrono_start_date =
+                                                chrono::NaiveDate::parse_from_str(
+                                                    &start_date,
+                                                    "%Y%m%d",
+                                                )
+                                                .unwrap();
 
                                             Some(chrono_start_date)
                                         }
@@ -242,14 +243,15 @@ pub fn calculate_delay(
                                                 });
 
                                             let scheduled_interpolated_datetime =
-                                                itinerary_stop_row.interpolated_time_since_start.map(
-                                                    |interpolated_time_since_start| {
+                                                itinerary_stop_row
+                                                    .interpolated_time_since_start
+                                                    .map(|interpolated_time_since_start| {
                                                         start_time
                                                             + chrono::Duration::seconds(
-                                                                interpolated_time_since_start.into(),
+                                                                interpolated_time_since_start
+                                                                    .into(),
                                                             )
-                                                    },
-                                                );
+                                                    });
 
                                             let delay_arrival = stu
                                                 .arrival

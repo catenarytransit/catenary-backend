@@ -1,15 +1,15 @@
 //cargo run --bin linnaea --release -- --input containers/test_graph_gen/output --output transit_viz.geojson
 
-use clap::Parser;
-use std::path::PathBuf;
-use std::fs::File;
-use std::io::Read;
-use catenary::routing_common::transit_graph::{TransitPartition, TransferChunk};
-use prost::Message;
-use geojson::{Feature, FeatureCollection, Geometry, Value, JsonObject};
 use ahash::{AHashMap, AHashSet};
-use std::hash::{Hash, Hasher};
+use catenary::routing_common::transit_graph::{TransferChunk, TransitPartition};
+use clap::Parser;
+use geojson::{Feature, FeatureCollection, Geometry, JsonObject, Value};
+use prost::Message;
 use std::collections::hash_map::DefaultHasher;
+use std::fs::File;
+use std::hash::{Hash, Hasher};
+use std::io::Read;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -72,19 +72,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut buffer = Vec::new();
                 file.read_to_end(&mut buffer)?;
                 let partition = TransitPartition::decode(&buffer[..])?;
-                
+
                 // Index stops
                 for (idx, stop) in partition.stops.iter().enumerate() {
                     let coords = (stop.lon, stop.lat);
-                    stop_lookup.insert((stop.chateau.clone(), stop.gtfs_original_id.clone()), coords);
+                    stop_lookup.insert(
+                        (stop.chateau.clone(), stop.gtfs_original_id.clone()),
+                        coords,
+                    );
                     partition_stops.insert((partition.partition_id, idx as u32), coords);
 
                     if stop.is_border {
                         let mut properties = JsonObject::new();
                         properties.insert("type".to_string(), "border_node".into());
                         properties.insert("chateau".to_string(), stop.chateau.clone().into());
-                        properties.insert("gtfs_id".to_string(), stop.gtfs_original_id.clone().into());
-                        properties.insert("partition_id".to_string(), partition.partition_id.into());
+                        properties
+                            .insert("gtfs_id".to_string(), stop.gtfs_original_id.clone().into());
+                        properties
+                            .insert("partition_id".to_string(), partition.partition_id.into());
 
                         features.push(Feature {
                             bbox: None,
@@ -99,8 +104,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let mut properties = JsonObject::new();
                         properties.insert("type".to_string(), "hub_node".into());
                         properties.insert("chateau".to_string(), stop.chateau.clone().into());
-                        properties.insert("gtfs_id".to_string(), stop.gtfs_original_id.clone().into());
-                        properties.insert("partition_id".to_string(), partition.partition_id.into());
+                        properties
+                            .insert("gtfs_id".to_string(), stop.gtfs_original_id.clone().into());
+                        properties
+                            .insert("partition_id".to_string(), partition.partition_id.into());
 
                         features.push(Feature {
                             bbox: None,
@@ -156,13 +163,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut seen_internal_transfers = AHashSet::new();
         for transfer in &partition.internal_transfers {
-             if !seen_internal_transfers.insert((transfer.from_stop_idx, transfer.to_stop_idx)) {
-                 continue;
-             }
-             let from_coords = partition_stops.get(&(partition.partition_id, transfer.from_stop_idx));
-             let to_coords = partition_stops.get(&(partition.partition_id, transfer.to_stop_idx));
+            if !seen_internal_transfers.insert((transfer.from_stop_idx, transfer.to_stop_idx)) {
+                continue;
+            }
+            let from_coords =
+                partition_stops.get(&(partition.partition_id, transfer.from_stop_idx));
+            let to_coords = partition_stops.get(&(partition.partition_id, transfer.to_stop_idx));
 
-             if let (Some(from), Some(to)) = (from_coords, to_coords) {
+            if let (Some(from), Some(to)) = (from_coords, to_coords) {
                 let mut properties = JsonObject::new();
                 properties.insert("type".to_string(), "internal_transfer".into());
 
@@ -176,7 +184,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     properties: Some(properties),
                     foreign_members: None,
                 });
-             }
+            }
         }
     }
 
@@ -184,21 +192,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for partition in &partitions {
         let mut seen_edges = AHashSet::new();
         for pattern in &partition.local_transfer_patterns {
-             for edge in &pattern.edges {
-                 // Edges in LTP use local stop indices (within the partition)
-                 // from_hub_idx and to_hub_idx are local indices
-                 if !seen_edges.insert((partition.partition_id, edge.from_hub_idx, edge.to_hub_idx)) {
-                     continue;
-                 }
+            for edge in &pattern.edges {
+                // Edges in LTP use local stop indices (within the partition)
+                // from_hub_idx and to_hub_idx are local indices
+                if !seen_edges.insert((partition.partition_id, edge.from_hub_idx, edge.to_hub_idx))
+                {
+                    continue;
+                }
 
-                 let from_coords = partition_stops.get(&(partition.partition_id, edge.from_hub_idx));
-                 let to_coords = partition_stops.get(&(partition.partition_id, edge.to_hub_idx));
+                let from_coords = partition_stops.get(&(partition.partition_id, edge.from_hub_idx));
+                let to_coords = partition_stops.get(&(partition.partition_id, edge.to_hub_idx));
 
-                 if let (Some(from), Some(to)) = (from_coords, to_coords) {
+                if let (Some(from), Some(to)) = (from_coords, to_coords) {
                     let mut properties = JsonObject::new();
                     properties.insert("type".to_string(), "transfer_pattern".into());
                     properties.insert("partition_id".to_string(), partition.partition_id.into());
-                    properties.insert("signature".to_string(), edge.pattern_signature.clone().into());
+                    properties.insert(
+                        "signature".to_string(),
+                        edge.pattern_signature.clone().into(),
+                    );
 
                     features.push(Feature {
                         bbox: None,
@@ -210,8 +222,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         properties: Some(properties),
                         foreign_members: None,
                     });
-                 }
-             }
+                }
+            }
         }
     }
 
@@ -219,11 +231,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for chunk in &transfer_chunks {
         let mut seen_external_transfers = AHashSet::new();
         for transfer in &chunk.external_transfers {
-            if !seen_external_transfers.insert((transfer.from_stop_idx, transfer.to_chateau.clone(), transfer.to_stop_gtfs_id.clone())) {
+            if !seen_external_transfers.insert((
+                transfer.from_stop_idx,
+                transfer.to_chateau.clone(),
+                transfer.to_stop_gtfs_id.clone(),
+            )) {
                 continue;
             }
             let from_coords = partition_stops.get(&(chunk.partition_id, transfer.from_stop_idx));
-            let to_coords = stop_lookup.get(&(transfer.to_chateau.clone(), transfer.to_stop_gtfs_id.clone()));
+            let to_coords = stop_lookup.get(&(
+                transfer.to_chateau.clone(),
+                transfer.to_stop_gtfs_id.clone(),
+            ));
 
             if let (Some(from), Some(to)) = (from_coords, to_coords) {
                 let mut properties = JsonObject::new();
@@ -240,8 +259,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     foreign_members: None,
                 });
             } else {
-                 println!("Warning: Could not resolve endpoints for external transfer from partition {} stop {} to {}/{}", 
-                     chunk.partition_id, transfer.from_stop_idx, transfer.to_chateau, transfer.to_stop_gtfs_id);
+                println!(
+                    "Warning: Could not resolve endpoints for external transfer from partition {} stop {} to {}/{}",
+                    chunk.partition_id,
+                    transfer.from_stop_idx,
+                    transfer.to_chateau,
+                    transfer.to_stop_gtfs_id
+                );
             }
         }
     }

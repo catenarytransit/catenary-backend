@@ -1,21 +1,27 @@
-use clap::Parser;
-use diesel::prelude::*;
-use diesel_async::{RunQueryDsl, AsyncPgConnection};
-use std::path::PathBuf;
-use std::sync::Arc;
-use anyhow::{Context, Result};
-use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
-use catenary::models::{Stop, Chateau, ItineraryPatternRow, CompressedTrip as DbCompressedTrip, Calendar, CalendarDate, Route};
-use catenary::routing_common::transit_graph::{TransitPartition, TransitStop, TripPattern, CompressedTrip, OsmLink, ExternalTransfer, GlobalPatternIndex, PartitionDag, GlobalHub, DagEdge, StaticTransfer, ServiceException, LocalTransferPattern, TransferChunk};
-use catenary::routing_common::osm_graph::{StreetData, load_pbf, save_pbf};
-use std::collections::{BinaryHeap};
 use ahash::AHashMap as HashMap;
 use ahash::AHashSet as HashSet;
-use std::cmp::Ordering;
+use anyhow::{Context, Result};
+use catenary::models::{
+    Calendar, CompressedTrip as DbCompressedTrip, ItineraryPatternRow, Route, Stop,
+};
+use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
+use catenary::routing_common::osm_graph::{StreetData, load_pbf, save_pbf};
+use catenary::routing_common::transit_graph::{
+    CompressedTrip, DagEdge, ExternalTransfer, GlobalHub, GlobalPatternIndex, LocalTransferPattern,
+    OsmLink, PartitionDag, StaticTransfer, TransferChunk, TransitPartition, TransitStop,
+    TripPattern,
+};
+use clap::Parser;
+use diesel::prelude::*;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use rand::prelude::*;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::BufReader;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 struct ProcessedPattern {
     chateau: String,
@@ -52,15 +58,20 @@ struct Args {
 async fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt::init();
-    
+
     let args = Args::parse();
     println!("Starting Gentian for Chateaux: {}", args.chateau);
 
     // Create output directory
-    tokio::fs::create_dir_all(&args.output).await.context("Failed to create output dir")?;
+    tokio::fs::create_dir_all(&args.output)
+        .await
+        .context("Failed to create output dir")?;
 
     // Connect to DB
-    let pool = make_async_pool().await.map_err(|e| anyhow::anyhow!(e)).context("Failed to create DB pool")?;
+    let pool = make_async_pool()
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to create DB pool")?;
     let pool = Arc::new(pool);
 
     // Run generation
@@ -77,12 +88,20 @@ async fn main() -> Result<()> {
 async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result<()> {
     let mut conn = pool.get().await.context("Failed to get DB connection")?;
 
-    let chateaux_list: Vec<String> = args.chateau.split(',').map(|s| s.trim().to_string()).collect();
-    println!("Processing {} chateaux: {:?}", chateaux_list.len(), chateaux_list);
+    let chateaux_list: Vec<String> = args
+        .chateau
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
+    println!(
+        "Processing {} chateaux: {:?}",
+        chateaux_list.len(),
+        chateaux_list
+    );
 
     // 2. Fetch All Data for ALL Chateaux
     println!("Fetching data...");
-    
+
     let mut db_stops: Vec<Stop> = Vec::new();
     let mut db_trips: Vec<DbCompressedTrip> = Vec::new();
     let mut db_patterns: Vec<ItineraryPatternRow> = Vec::new();
@@ -91,9 +110,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     for chateau_id in &chateaux_list {
         println!("  - Fetching data for {}", chateau_id);
-        
+
         // Stops
-        use catenary::schema::gtfs::stops::dsl::{stops, chateau as stop_chateau};
+        use catenary::schema::gtfs::stops::dsl::{chateau as stop_chateau, stops};
         let stops_chunk: Vec<Stop> = stops
             .filter(stop_chateau.eq(chateau_id))
             .select(Stop::as_select())
@@ -102,7 +121,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         db_stops.extend(stops_chunk);
 
         // Trips
-        use catenary::schema::gtfs::trips_compressed::dsl::{trips_compressed, chateau as trip_chateau};
+        use catenary::schema::gtfs::trips_compressed::dsl::{
+            chateau as trip_chateau, trips_compressed,
+        };
         let trips_chunk: Vec<DbCompressedTrip> = trips_compressed
             .filter(trip_chateau.eq(chateau_id))
             .select(DbCompressedTrip::as_select())
@@ -111,7 +132,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         db_trips.extend(trips_chunk);
 
         // Itinerary Patterns
-        use catenary::schema::gtfs::itinerary_pattern::dsl::{itinerary_pattern, chateau as pattern_chateau};
+        use catenary::schema::gtfs::itinerary_pattern::dsl::{
+            chateau as pattern_chateau, itinerary_pattern,
+        };
         let patterns_chunk: Vec<ItineraryPatternRow> = itinerary_pattern
             .filter(pattern_chateau.eq(chateau_id))
             .select(ItineraryPatternRow::as_select())
@@ -129,7 +152,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         db_calendar.extend(calendar_chunk);
 
         // Routes
-        use catenary::schema::gtfs::routes::dsl::{routes, chateau as route_chateau};
+        use catenary::schema::gtfs::routes::dsl::{chateau as route_chateau, routes};
         let routes_chunk: Vec<Route> = routes
             .filter(route_chateau.eq(chateau_id))
             .select(Route::as_select())
@@ -145,42 +168,52 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     println!("  - Routes: {}", db_routes.len());
 
     // 2b. Fetch Referenced External Stops
-    let mut loaded_stops: HashSet<(String, String)> = db_stops.iter()
+    let mut loaded_stops: HashSet<(String, String)> = db_stops
+        .iter()
         .map(|s| (s.chateau.clone(), s.gtfs_id.clone()))
         .collect();
-        
+
     let mut missing_stops: HashSet<(String, String)> = HashSet::new();
     for row in &db_patterns {
-        let key = (row.chateau.clone(), row.stop_id.clone());
+        let key = (row.chateau.clone(), row.stop_id.to_string());
         if !loaded_stops.contains(&key) {
             missing_stops.insert(key);
         }
     }
-    
+
     if !missing_stops.is_empty() {
-        println!("Fetching {} referenced external stops...", missing_stops.len());
+        println!(
+            "Fetching {} referenced external stops...",
+            missing_stops.len()
+        );
         let mut by_chateau: HashMap<String, Vec<String>> = HashMap::new();
         for (c, s) in missing_stops {
             by_chateau.entry(c).or_default().push(s);
         }
-        
+
         for (chateau_id, stop_ids) in by_chateau {
-             use catenary::schema::gtfs::stops::dsl::{stops, chateau, gtfs_id};
-             for chunk in stop_ids.chunks(1000) {
-                 let extra_stops: Vec<Stop> = stops
+            use catenary::schema::gtfs::stops::dsl::{chateau, gtfs_id, stops};
+            for chunk in stop_ids.chunks(1000) {
+                let extra_stops: Vec<Stop> = stops
                     .filter(chateau.eq(&chateau_id))
                     .filter(gtfs_id.eq_any(chunk))
                     .select(Stop::as_select())
                     .load(&mut conn)
                     .await?;
-                 db_stops.extend(extra_stops);
-             }
+                db_stops.extend(extra_stops);
+            }
         }
-        println!("  - Total Stops after fetching external: {}", db_stops.len());
+        println!(
+            "  - Total Stops after fetching external: {}",
+            db_stops.len()
+        );
     }
 
-    let route_map: HashMap<String, Route> = db_routes.into_iter().map(|r| (r.route_id.clone(), r)).collect();
-    
+    let route_map: HashMap<String, Route> = db_routes
+        .into_iter()
+        .map(|r| (r.route_id.clone(), r))
+        .collect();
+
     // 3. Process Data
     // Map (Chateau, GTFS_ID) -> Global Index
     let stop_id_map: HashMap<(String, String), usize> = db_stops
@@ -191,7 +224,10 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     let mut pattern_rows_map: HashMap<String, Vec<&ItineraryPatternRow>> = HashMap::new();
     for row in &db_patterns {
-        pattern_rows_map.entry(row.itinerary_pattern_id.clone()).or_default().push(row);
+        pattern_rows_map
+            .entry(row.itinerary_pattern_id.clone())
+            .or_default()
+            .push(row);
     }
     for rows in pattern_rows_map.values_mut() {
         rows.sort_by_key(|r| r.stop_sequence);
@@ -204,7 +240,10 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     let mut trips_by_pattern: HashMap<String, Vec<&DbCompressedTrip>> = HashMap::new();
     for trip in &db_trips {
-        trips_by_pattern.entry(trip.itinerary_pattern_id.clone()).or_default().push(trip);
+        trips_by_pattern
+            .entry(trip.itinerary_pattern_id.clone())
+            .or_default()
+            .push(trip);
     }
 
     let mut service_ids: Vec<String> = Vec::new();
@@ -216,17 +255,24 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     for (pattern_id, trips) in trips_by_pattern {
         if let Some(rows) = pattern_rows_map.get(&pattern_id) {
-            let stop_indices: Vec<u32> = rows.iter().filter_map(|r| {
-                stop_id_map.get(&(r.chateau.clone(), r.stop_id.to_string())).map(|&i| i as u32)
-            }).collect();
+            let stop_indices: Vec<u32> = rows
+                .iter()
+                .filter_map(|r| {
+                    stop_id_map
+                        .get(&(r.chateau.clone(), r.stop_id.to_string()))
+                        .map(|&i| i as u32)
+                })
+                .collect();
 
-            if stop_indices.len() != rows.len() { continue; }
+            if stop_indices.len() != rows.len() {
+                continue;
+            }
 
             // Add to Adjacency Graph
             let trip_count = trips.len() as u32;
             for i in 0..stop_indices.len() - 1 {
                 let u = stop_indices[i] as usize;
-                let v = stop_indices[i+1] as usize;
+                let v = stop_indices[i + 1] as usize;
                 let (min, max) = if u < v { (u, v) } else { (v, u) };
                 *adjacency.entry((min, max)).or_default() += trip_count;
             }
@@ -271,7 +317,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                     wheelchair_accessible: trip.wheelchair_accessible as u32,
                 });
             }
-            
+
             p_trips.sort_by_key(|t| t.start_time);
 
             processed_patterns.push(ProcessedPattern {
@@ -290,9 +336,6 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     let clusters = merge_based_clustering(db_stops.len(), &adjacency, args.cluster_size);
     println!("Created {} clusters", clusters.len());
 
-
-
-
     // 5. Generate Chunks per Cluster
     // Identify Intra-Cluster Border Nodes
     let mut stop_to_cluster: Vec<usize> = vec![0; db_stops.len()];
@@ -307,9 +350,11 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     for pat in &processed_patterns {
         for i in 0..pat.stop_indices.len() - 1 {
             let u = pat.stop_indices[i] as usize;
-            let v = pat.stop_indices[i+1] as usize;
+            let v = pat.stop_indices[i + 1] as usize;
             // Keep the first route ID found for simplicity
-            global_adjacency_signatures.entry((u, v)).or_insert_with(|| pat.route_id.clone());
+            global_adjacency_signatures
+                .entry((u, v))
+                .or_insert_with(|| pat.route_id.clone());
         }
     }
 
@@ -320,7 +365,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         if stop_to_cluster[*u] != stop_to_cluster[*v] {
             border_stops.insert(*u);
             border_stops.insert(*v);
-            
+
             // Check for directed edges in both directions
             if let Some(sig) = global_adjacency_signatures.get(&(*u, *v)) {
                 cross_partition_edges.push(((*u, *v), sig.clone()));
@@ -330,19 +375,21 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             }
         }
     }
-    println!("Identified {} intra-cluster border nodes", border_stops.len());
+    println!(
+        "Identified {} intra-cluster border nodes",
+        border_stops.len()
+    );
 
     // Identify Hubs (Time-Dependent Centrality)
     println!("Identifying Hubs (Hierarchical Approach)...");
     let mut hubs: HashSet<usize> = HashSet::new();
 
     // Helper to run identification on a subset
-    let run_hub_identification = |
-        subset_name: &str,
-        subset_stop_indices: &[usize],
-        subset_patterns: &[&ProcessedPattern],
-        sample_size_override: Option<usize>
-    | -> Result<HashSet<usize>> {
+    let run_hub_identification = |subset_name: &str,
+                                  subset_stop_indices: &[usize],
+                                  subset_patterns: &[&ProcessedPattern],
+                                  sample_size_override: Option<usize>|
+     -> Result<HashSet<usize>> {
         if subset_stop_indices.is_empty() || subset_patterns.is_empty() {
             println!("  - Skipping {} (No data)", subset_name);
             return Ok(HashSet::new());
@@ -351,7 +398,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         // 1. Map Global -> Local
         let mut global_to_local: HashMap<usize, u32> = HashMap::new();
         let mut local_stops: Vec<Stop> = Vec::with_capacity(subset_stop_indices.len());
-        
+
         for (local_idx, &global_idx) in subset_stop_indices.iter().enumerate() {
             global_to_local.insert(global_idx, local_idx as u32);
             local_stops.push(db_stops[global_idx].clone());
@@ -366,7 +413,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 if let Some(&local_idx) = global_to_local.get(&(global_idx as usize)) {
                     new_indices.push(local_idx);
                 } else {
-                    // This pattern uses a stop not in the subset? 
+                    // This pattern uses a stop not in the subset?
                     // This shouldn't happen if we filtered correctly, but if it does, we should probably skip or truncate?
                     // For Regional pass, all stops should be in chateau.
                     // For Global pass, we include all stops used by patterns.
@@ -388,22 +435,26 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         // 3. Determine Parameters
         let num_subset_stops = local_stops.len();
         let dynamic_top_k = (num_subset_stops / 50).max(10).min(500); // Adjusted min/max
-        
-        let sample_size = sample_size_override.unwrap_or_else(|| {
-            2000 + (num_subset_stops / 5)
-        });
 
-        println!("  - Pass: {} | Stops: {} | Patterns: {} | Samples: {} | Top-K: {}", 
-            subset_name, num_subset_stops, local_patterns.len(), sample_size, dynamic_top_k);
+        let sample_size = sample_size_override.unwrap_or_else(|| 2000 + (num_subset_stops / 5));
+
+        println!(
+            "  - Pass: {} | Stops: {} | Patterns: {} | Samples: {} | Top-K: {}",
+            subset_name,
+            num_subset_stops,
+            local_patterns.len(),
+            sample_size,
+            dynamic_top_k
+        );
 
         // 4. Run Identification
         let local_hubs = identify_hubs_time_dependent(
-            &local_stops, 
-            &local_patterns, 
-            &global_time_deltas, 
-            &db_calendar, 
-            sample_size, 
-            dynamic_top_k
+            &local_stops,
+            &local_patterns,
+            &global_time_deltas,
+            &db_calendar,
+            sample_size,
+            dynamic_top_k,
         );
 
         // 5. Map Local -> Global
@@ -413,18 +464,18 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 global_hubs.insert(subset_stop_indices[local_idx]);
             }
         }
-        
+
         Ok(global_hubs)
     };
 
     // --- PASS 1: Regional Hubs (Super-Clusters) ---
     println!("  > Building Super-Clusters (Regions)...");
-    
+
     // Build Super-Clusters
     // Target size ~50,000 stops? Or just group connected clusters?
     // Let's use a larger max_size for super-clustering.
     let super_cluster_target_size = 50_000;
-    
+
     // We need to cluster the CLUSTERS.
     // Build Cluster Adjacency
     let mut cluster_adj: HashMap<(usize, usize), u32> = HashMap::new();
@@ -447,12 +498,12 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     // Run clustering on clusters
     // We can reuse merge_based_clustering logic but adapted for "Cluster Nodes".
     // Or just implement a simple greedy merge here.
-    
+
     let num_clusters = clusters.len();
     let mut super_clusters: Vec<Vec<usize>> = (0..num_clusters).map(|i| vec![i]).collect(); // Indices into `clusters`
     let mut sc_map: Vec<usize> = (0..num_clusters).collect(); // Cluster -> SuperCluster
     let mut active_sc: HashSet<usize> = (0..num_clusters).collect();
-    
+
     // Priority Queue for merges
     #[derive(Eq, PartialEq)]
     struct ScEdge {
@@ -470,26 +521,36 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             Some(self.cmp(other))
         }
     }
-    
+
     let mut pq = BinaryHeap::new();
     for (&(c1, c2), &w) in &cluster_adj {
-        pq.push(ScEdge { weight: w, sc1: c1, sc2: c2 });
+        pq.push(ScEdge {
+            weight: w,
+            sc1: c1,
+            sc2: c2,
+        });
     }
-    
+
     // Helper to get size of super cluster (number of stops)
-    let get_sc_size = |sc_idx: usize, super_clusters: &Vec<Vec<usize>>, clusters: &Vec<Vec<usize>>| -> usize {
-        super_clusters[sc_idx].iter().map(|&c_idx| clusters[c_idx].len()).sum()
-    };
+    let get_sc_size =
+        |sc_idx: usize, super_clusters: &Vec<Vec<usize>>, clusters: &Vec<Vec<usize>>| -> usize {
+            super_clusters[sc_idx]
+                .iter()
+                .map(|&c_idx| clusters[c_idx].len())
+                .sum()
+        };
 
     while let Some(edge) = pq.pop() {
         let sc1 = sc_map[edge.sc1];
         let sc2 = sc_map[edge.sc2];
-        
-        if sc1 == sc2 { continue; }
-        
+
+        if sc1 == sc2 {
+            continue;
+        }
+
         let size1 = get_sc_size(sc1, &super_clusters, &clusters);
         let size2 = get_sc_size(sc2, &super_clusters, &clusters);
-        
+
         if size1 + size2 <= super_cluster_target_size {
             // Merge sc2 into sc1
             let to_move = super_clusters[sc2].clone();
@@ -501,9 +562,16 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             active_sc.remove(&sc2);
         }
     }
-    
-    let final_super_clusters: Vec<Vec<usize>> = super_clusters.into_iter().filter(|sc| !sc.is_empty()).collect();
-    println!("  > Created {} Super-Clusters (Regions) from {} base clusters", final_super_clusters.len(), num_clusters);
+
+    let final_super_clusters: Vec<Vec<usize>> = super_clusters
+        .into_iter()
+        .filter(|sc| !sc.is_empty())
+        .collect();
+    println!(
+        "  > Created {} Super-Clusters (Regions) from {} base clusters",
+        final_super_clusters.len(),
+        num_clusters
+    );
 
     println!("  > Starting Regional Pass (Super-Clusters)...");
     for (i, sc) in final_super_clusters.iter().enumerate() {
@@ -512,16 +580,18 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         for &c_idx in sc {
             region_stop_indices.extend(&clusters[c_idx]);
         }
-        
+
         // Filter Patterns
         // We need patterns that touch ANY stop in this region.
         // Optimization: Precompute pattern -> stop set? Or just iterate.
         // Iterating processed_patterns (which can be large) for every super cluster might be slow if many SCs.
         // But with 50k stops per SC, we have few SCs.
-        
-        let region_stop_set: HashSet<u32> = region_stop_indices.iter().map(|&idx| idx as u32).collect();
-        
-        let region_patterns: Vec<&ProcessedPattern> = processed_patterns.iter()
+
+        let region_stop_set: HashSet<u32> =
+            region_stop_indices.iter().map(|&idx| idx as u32).collect();
+
+        let region_patterns: Vec<&ProcessedPattern> = processed_patterns
+            .iter()
             .filter(|p| p.stop_indices.iter().any(|s| region_stop_set.contains(s)))
             .collect();
 
@@ -529,28 +599,29 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             &format!("Region {} ({} clusters)", i, sc.len()),
             &region_stop_indices,
             &region_patterns,
-            None
+            None,
         )?;
-        
+
         hubs.extend(region_hubs);
     }
 
     // --- PASS 2: Global Hubs (Long Distance / Rail) ---
     println!("  > Starting Global Pass...");
-    
+
     // Filter Patterns: Route Type 2 (Rail) or maybe others?
-    // Let's include Route Type 2 (Rail), 1 (Subway) if it crosses regions? 
+    // Let's include Route Type 2 (Rail), 1 (Subway) if it crosses regions?
     // User said: "interregion long distance travel of trains and perhaps long distance buses"
     // Route types: 2 (Rail), 3 (Bus), 1 (Subway/Metro).
     // Long distance bus is hard to distinguish from local bus by route_type alone (both 3).
-    // But we can check if a pattern spans multiple chateaux? 
+    // But we can check if a pattern spans multiple chateaux?
     // Or just rely on Rail (2) for now as a proxy for "Backbone".
     // Also include patterns that cross chateau boundaries?
-    // Let's stick to Route Type 2 (Rail) as the primary "Global" layer for now, 
+    // Let's stick to Route Type 2 (Rail) as the primary "Global" layer for now,
     // plus maybe patterns that have long average stop distances?
     // For simplicity: Route Type 2.
-    
-    let global_patterns: Vec<&ProcessedPattern> = processed_patterns.iter()
+
+    let global_patterns: Vec<&ProcessedPattern> = processed_patterns
+        .iter()
         .filter(|p| {
             if let Some(route) = route_map.get(&p.route_id) {
                 // Type 2 = Rail, Type 101-108 = various rails.
@@ -577,7 +648,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             "Global Layer (Rail)",
             &global_stop_indices,
             &global_patterns,
-            None // Use default scaling
+            None, // Use default scaling
         )?;
 
         println!("    -> Identified {} global hubs", global_layer_hubs.len());
@@ -587,7 +658,6 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     }
 
     println!("Total Unique Hubs Identified: {}", hubs.len());
-
 
     let mut intra_partition_edges: Vec<((usize, usize), String)> = Vec::new();
     let mut global_to_partition_map: HashMap<usize, (u32, u32)> = HashMap::new();
@@ -599,13 +669,16 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     for (cluster_id, cluster_stop_indices) in clusters.iter().enumerate() {
         let mut relevant_patterns = Vec::new();
         let mut relevant_stop_indices: HashSet<u32> = HashSet::new();
-        
+
         for &idx in cluster_stop_indices {
             relevant_stop_indices.insert(idx as u32);
         }
 
         for pat in &processed_patterns {
-            let touches_cluster = pat.stop_indices.iter().any(|idx| relevant_stop_indices.contains(idx));
+            let touches_cluster = pat
+                .stop_indices
+                .iter()
+                .any(|idx| relevant_stop_indices.contains(idx));
             if touches_cluster {
                 relevant_patterns.push(pat);
                 for &idx in &pat.stop_indices {
@@ -623,12 +696,13 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
         for (local_idx, &global_idx) in sorted_relevant_stops.iter().enumerate() {
             local_stop_map.insert(global_idx, local_idx as u64);
-            
+
             // If this partition owns the stop, record it in the map
             if stop_to_cluster[global_idx as usize] == cluster_id {
-                global_to_partition_map.insert(global_idx as usize, (cluster_id as u32, local_idx as u32));
+                global_to_partition_map
+                    .insert(global_idx as usize, (cluster_id as u32, local_idx as u32));
             }
-            
+
             let stop = &db_stops[global_idx as usize];
             let is_border = border_stops.contains(&(global_idx as usize));
             let is_hub = hubs.contains(&(global_idx as usize));
@@ -645,7 +719,15 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             };
             chunk_stops.push(t_stop);
 
-            if let Some(link) = find_osm_link(stop.point.as_ref().unwrap().x, stop.point.as_ref().unwrap().y, local_idx as u32, &args.osm_chunks, &mut chunk_cache).await {
+            if let Some(link) = find_osm_link(
+                stop.point.as_ref().unwrap().x,
+                stop.point.as_ref().unwrap().y,
+                local_idx as u32,
+                &args.osm_chunks,
+                &mut chunk_cache,
+            )
+            .await
+            {
                 osm_links.push(link);
             }
         }
@@ -654,20 +736,30 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         // Find stops from OTHER chateaus that are close to stops in this chunk.
         // Optimization: We query the DB for all stops in the BBox of this cluster.
         let mut external_transfers = Vec::new();
-        
+
         // Calculate Cluster BBox
-        let mut min_lat = f64::MAX; let mut max_lat = f64::MIN;
-        let mut min_lon = f64::MAX; let mut max_lon = f64::MIN;
+        let mut min_lat = f64::MAX;
+        let mut max_lat = f64::MIN;
+        let mut min_lon = f64::MAX;
+        let mut max_lon = f64::MIN;
         for &idx in cluster_stop_indices {
             let s = &db_stops[idx];
             let lat = s.point.as_ref().map(|p| p.y).unwrap_or(0.0);
             let lon = s.point.as_ref().map(|p| p.x).unwrap_or(0.0);
-            if lat < min_lat { min_lat = lat; }
-            if lat > max_lat { max_lat = lat; }
-            if lon < min_lon { min_lon = lon; }
-            if lon > max_lon { max_lon = lon; }
+            if lat < min_lat {
+                min_lat = lat;
+            }
+            if lat > max_lat {
+                max_lat = lat;
+            }
+            if lon < min_lon {
+                min_lon = lon;
+            }
+            if lon > max_lon {
+                max_lon = lon;
+            }
         }
-        
+
         // Expand BBox by ~500m (approx 0.005 deg)
         let expansion = 0.005;
         let search_min_lat = min_lat - expansion;
@@ -677,89 +769,95 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
         // Query DB for external stops
         let external_stops = fetch_stops_in_bbox(
-            search_min_lat, search_max_lat, search_min_lon, search_max_lon,
-            &chateaux_list, &mut conn
-        ).await?;
+            search_min_lat,
+            search_max_lat,
+            search_min_lon,
+            search_max_lon,
+            &chateaux_list,
+            &mut conn,
+        )
+        .await?;
 
         println!("  - Found {} external stops in BBox", external_stops.len());
 
         for ext_stop in external_stops {
-             let ext_lat = ext_stop.point.as_ref().map(|p| p.y).unwrap_or(0.0);
-             let ext_lon = ext_stop.point.as_ref().map(|p| p.x).unwrap_or(0.0);
+            let ext_lat = ext_stop.point.as_ref().map(|p| p.y).unwrap_or(0.0);
+            let ext_lon = ext_stop.point.as_ref().map(|p| p.x).unwrap_or(0.0);
 
-             // Find nearest local stops (within 3km for cycling)
-             for (local_idx, stop) in chunk_stops.iter_mut().enumerate() {
-                 let dist = haversine_distance(stop.lat, stop.lon, ext_lat, ext_lon);
-                 if dist <= 3000.0 {
-                     // Create transfer
-                     let walk_seconds = (dist / 1.4) as u32; // ~1.4 m/s walking speed
-                     
-                     // Check accessibility (1 = some accessibility, 2 = none, 0 = unknown)
-                     // We consider 1 as accessible.
-                     let is_accessible = ext_stop.wheelchair_boarding == 1;
+            // Find nearest local stops (within 3km for cycling)
+            for (local_idx, stop) in chunk_stops.iter_mut().enumerate() {
+                let dist = haversine_distance(stop.lat, stop.lon, ext_lat, ext_lon);
+                if dist <= 3000.0 {
+                    // Create transfer
+                    let walk_seconds = (dist / 1.4) as u32; // ~1.4 m/s walking speed
 
-                     external_transfers.push(ExternalTransfer {
-                         from_stop_idx: stop.id as u32, // stop.id is local_idx as u64
-                         to_chateau: ext_stop.chateau.clone(),
-                         to_stop_gtfs_id: ext_stop.gtfs_id.clone(),
-                         walk_seconds,
-                         distance_meters: dist as u32,
-                         wheelchair_accessible: is_accessible,
-                     });
-                     
-                     // Mark as External Gateway
-                     // If it's a train station (Route Type 1 or 2), allow larger radius (300m)
-                     // Otherwise 200m.
-                     // Actually, we already filtered by 3km for cycling.
-                     // But for "Gateway" status (which implies walking transfer usually), we want a tighter bound?
-                     // The user said: "Increase the hub distance threshold for train stations to 300m."
-                     // And: "I think we need to add a different type to mark overlapping stops between chateaus that are not hubs."
-                     
-                     // Let's check if this stop serves a train route.
-                     // We need to know if `stop` (local) serves a train.
-                     // This is expensive to check every time.
-                     // Optimization: Precompute `is_train_stop` map.
-                     
-                     // For now, let's just use the distance.
-                     // If dist <= 200m, it's a gateway.
-                     // If dist <= 300m AND it's a train station, it's a gateway.
-                     
-                     // Wait, we don't know if the LOCAL stop is a train station easily without checking trips.
-                     // But we can check `db_stops[global_idx]` against routes?
-                     // We have `trips` for this stop.
-                     
-                     let mut is_train = false;
-                     // Check patterns serving this stop
-                     // stop.id is local_idx.
-                     let global_idx = sorted_relevant_stops[stop.id as usize];
-                     
-                     // Check patterns
-                     for pat in &relevant_patterns {
-                         if pat.stop_indices.contains(&(global_idx as u32)) {
-                             if let Some(route) = route_map.get(&pat.route_id) {
-                                 if route.route_type == 1 || route.route_type == 2 {
-                                     is_train = true;
-                                     break;
-                                 }
-                             }
-                         }
-                     }
-                     
-                     let threshold = if is_train { 300.0 } else { 200.0 };
-                     
-                     if dist <= threshold {
+                    // Check accessibility (1 = some accessibility, 2 = none, 0 = unknown)
+                    // We consider 1 as accessible.
+                    let is_accessible = ext_stop.wheelchair_boarding == 1;
+
+                    external_transfers.push(ExternalTransfer {
+                        from_stop_idx: stop.id as u32, // stop.id is local_idx as u64
+                        to_chateau: ext_stop.chateau.clone(),
+                        to_stop_gtfs_id: ext_stop.gtfs_id.clone(),
+                        walk_seconds,
+                        distance_meters: dist as u32,
+                        wheelchair_accessible: is_accessible,
+                    });
+
+                    // Mark as External Gateway
+                    // If it's a train station (Route Type 1 or 2), allow larger radius (300m)
+                    // Otherwise 200m.
+                    // Actually, we already filtered by 3km for cycling.
+                    // But for "Gateway" status (which implies walking transfer usually), we want a tighter bound?
+                    // The user said: "Increase the hub distance threshold for train stations to 300m."
+                    // And: "I think we need to add a different type to mark overlapping stops between chateaus that are not hubs."
+
+                    // Let's check if this stop serves a train route.
+                    // We need to know if `stop` (local) serves a train.
+                    // This is expensive to check every time.
+                    // Optimization: Precompute `is_train_stop` map.
+
+                    // For now, let's just use the distance.
+                    // If dist <= 200m, it's a gateway.
+                    // If dist <= 300m AND it's a train station, it's a gateway.
+
+                    // Wait, we don't know if the LOCAL stop is a train station easily without checking trips.
+                    // But we can check `db_stops[global_idx]` against routes?
+                    // We have `trips` for this stop.
+
+                    let mut is_train = false;
+                    // Check patterns serving this stop
+                    // stop.id is local_idx.
+                    let global_idx = sorted_relevant_stops[stop.id as usize];
+
+                    // Check patterns
+                    for pat in &relevant_patterns {
+                        if pat.stop_indices.contains(&(global_idx as u32)) {
+                            if let Some(route) = route_map.get(&pat.route_id) {
+                                if route.route_type == 1 || route.route_type == 2 {
+                                    is_train = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    let threshold = if is_train { 300.0 } else { 200.0 };
+
+                    if dist <= threshold {
                         stop.is_external_gateway = true;
-                     }
-                 }
-             }
+                    }
+                }
+            }
         }
-
 
         let mut chunk_patterns = Vec::new();
         for pat in relevant_patterns {
-            let local_indices: Vec<u32> = pat.stop_indices.iter().map(|idx| {
-                *local_stop_map.get(idx).unwrap() as u32
-            }).collect();
+            let local_indices: Vec<u32> = pat
+                .stop_indices
+                .iter()
+                .map(|idx| *local_stop_map.get(idx).unwrap() as u32)
+                .collect();
 
             chunk_patterns.push(TripPattern {
                 chateau: pat.chateau.clone(),
@@ -769,7 +867,8 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             });
         }
 
-        let (local_deltas, reindexed_patterns) = reindex_deltas(chunk_patterns, &global_time_deltas);
+        let (local_deltas, reindexed_patterns) =
+            reindex_deltas(chunk_patterns, &global_time_deltas);
 
         let mut partition = TransitPartition {
             partition_id: cluster_id as u32,
@@ -797,7 +896,10 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         // Collect global nodes (Hubs + Border Nodes) for global graph
         for stop in &partition.stops {
             if stop.is_hub || stop.is_border {
-                all_global_nodes.entry(partition.partition_id).or_default().push(stop.clone());
+                all_global_nodes
+                    .entry(partition.partition_id)
+                    .or_default()
+                    .push(stop.clone());
             }
         }
 
@@ -817,49 +919,60 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     // 6. Transfer Pattern Precomputation (Stubs)
     // NEW: Save Manifest and Edges
     println!("Saving Manifest and Edge Files...");
-    
+
     // Manifest
     let mut chateau_to_partitions: HashMap<String, Vec<u32>> = HashMap::new();
     let mut partition_to_chateaux: HashMap<u32, Vec<String>> = HashMap::new();
-    
+
     for (s_idx, stop) in db_stops.iter().enumerate() {
         let pid = stop_to_cluster[s_idx] as u32;
-        chateau_to_partitions.entry(stop.chateau.clone()).or_default().push(pid);
-        partition_to_chateaux.entry(pid).or_default().push(stop.chateau.clone());
+        chateau_to_partitions
+            .entry(stop.chateau.clone())
+            .or_default()
+            .push(pid);
+        partition_to_chateaux
+            .entry(pid)
+            .or_default()
+            .push(stop.chateau.clone());
     }
-    
+
     for v in chateau_to_partitions.values_mut() {
-        v.sort(); v.dedup();
+        v.sort();
+        v.dedup();
     }
     for v in partition_to_chateaux.values_mut() {
-        v.sort(); v.dedup();
+        v.sort();
+        v.dedup();
     }
-    
+
     let manifest = Manifest {
         chateau_to_partitions,
         partition_to_chateaux,
     };
-    
+
     let manifest_file = File::create(args.output.join("manifest.json"))?;
     serde_json::to_writer(manifest_file, &manifest)?;
-    
+
     // Edges
     let mut edges_by_partition: HashMap<u32, Vec<EdgeEntry>> = HashMap::new();
-    
+
     for &((u, v), ref sig) in &cross_partition_edges {
         let p_from = stop_to_cluster[u] as u32;
         let s_from = &db_stops[u];
         let s_to = &db_stops[v];
-        
-        edges_by_partition.entry(p_from).or_default().push(EdgeEntry {
-            from_chateau: s_from.chateau.clone(),
-            from_id: s_from.gtfs_id.clone(),
-            to_chateau: s_to.chateau.clone(),
-            to_id: s_to.gtfs_id.clone(),
-            signature: sig.clone(),
-        });
+
+        edges_by_partition
+            .entry(p_from)
+            .or_default()
+            .push(EdgeEntry {
+                from_chateau: s_from.chateau.clone(),
+                from_id: s_from.gtfs_id.clone(),
+                to_chateau: s_to.chateau.clone(),
+                to_id: s_to.gtfs_id.clone(),
+                signature: sig.clone(),
+            });
     }
-    
+
     for (pid, edges) in edges_by_partition {
         let path = args.output.join(format!("edges_chunk_{}.json", pid));
         let file = File::create(path)?;
@@ -871,7 +984,13 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     // Local patterns computed per partition above.
     compute_border_patterns(&all_global_nodes);
 
-    compute_global_patterns(&all_global_nodes, &cross_partition_edges, &intra_partition_edges, &global_to_partition_map, &args.output);
+    compute_global_patterns(
+        &all_global_nodes,
+        &cross_partition_edges,
+        &intra_partition_edges,
+        &global_to_partition_map,
+        &args.output,
+    );
 
     Ok(())
 }
@@ -881,15 +1000,19 @@ fn compute_border_patterns(border_nodes: &HashMap<u32, Vec<TransitStop>>) {
     // This is handled by `compute_intra_partition_connectivity` and stored in `intra_partition_edges`.
     // We just log the stats here.
     let total_border_nodes: usize = border_nodes.values().map(|v| v.len()).sum();
-    println!("  - Border Patterns: Identified {} border nodes across {} partitions (Connectivity computed)", total_border_nodes, border_nodes.len());
+    println!(
+        "  - Border Patterns: Identified {} border nodes across {} partitions (Connectivity computed)",
+        total_border_nodes,
+        border_nodes.len()
+    );
 }
 
 fn compute_global_patterns(
-    border_nodes: &HashMap<u32, Vec<TransitStop>>, 
+    border_nodes: &HashMap<u32, Vec<TransitStop>>,
     cross_edges: &[((usize, usize), String)],
     intra_edges: &[((usize, usize), String)],
     global_to_partition_map: &HashMap<usize, (u32, u32)>,
-    output_dir: &PathBuf
+    output_dir: &PathBuf,
 ) {
     println!("  - Building Global Hub Graph...");
 
@@ -898,7 +1021,7 @@ fn compute_global_patterns(
     // Edges: Adjacency List
     let mut graph: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut reverse_graph: HashMap<usize, Vec<usize>> = HashMap::new();
-    
+
     let mut all_edges = Vec::new();
     all_edges.extend_from_slice(cross_edges);
     all_edges.extend_from_slice(intra_edges);
@@ -923,19 +1046,19 @@ fn compute_global_patterns(
     // A hub might be owned by P1 but used in P2.
     // For the purpose of "Path from P_A to P_B", we consider hubs "in" P_A if they are border nodes of P_A.
     // But `border_nodes` map doesn't have global indices.
-    // 
+    //
     // Workaround: Invert `global_to_partition_map` to get `partition -> Vec<global_idx>`?
     // No, that only gives owned stops.
-    // 
+    //
     // Better: We iterate `graph` keys. If a node is in `border_stops` (which we don't have here), it's a hub.
     // Actually, ALL nodes in `graph` are hubs (border nodes), because `intra_edges` and `cross_edges` are only between border nodes.
     // (intra_edges were computed using BFS between hubs).
     // So every node in `graph` is a hub.
-    
+
     // We need to assign nodes to partitions.
     // A node u belongs to partition P if `stop_to_cluster[u] == P`.
     // We can use `global_to_partition_map` for this.
-    
+
     let mut partition_hubs: HashMap<u32, Vec<usize>> = HashMap::new();
     for &u in graph.keys() {
         if let Some(&(pid, _)) = global_to_partition_map.get(&u) {
@@ -943,17 +1066,30 @@ fn compute_global_patterns(
         }
     }
 
-    println!("  - Computing DAGs for {} partitions...", partition_ids.len());
+    println!(
+        "  - Computing DAGs for {} partitions...",
+        partition_ids.len()
+    );
     let mut dag_count = 0;
 
     for &p_start in &partition_ids {
         for &p_end in &partition_ids {
-            if p_start == p_end { continue; }
+            if p_start == p_end {
+                continue;
+            }
 
-            let start_hubs = partition_hubs.get(&p_start).map(|v| v.as_slice()).unwrap_or(&[]);
-            let end_hubs = partition_hubs.get(&p_end).map(|v| v.as_slice()).unwrap_or(&[]);
+            let start_hubs = partition_hubs
+                .get(&p_start)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            let end_hubs = partition_hubs
+                .get(&p_end)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
 
-            if start_hubs.is_empty() || end_hubs.is_empty() { continue; }
+            if start_hubs.is_empty() || end_hubs.is_empty() {
+                continue;
+            }
 
             // Forward BFS from start_hubs
             let mut forward_reachable = HashSet::new();
@@ -992,14 +1128,19 @@ fn compute_global_patterns(
             }
 
             // Intersection
-            let valid_nodes: HashSet<usize> = forward_reachable.intersection(&backward_reachable).cloned().collect();
+            let valid_nodes: HashSet<usize> = forward_reachable
+                .intersection(&backward_reachable)
+                .cloned()
+                .collect();
 
-            if valid_nodes.is_empty() { continue; }
+            if valid_nodes.is_empty() {
+                continue;
+            }
 
             // Build DAG
             let mut dag_hubs: Vec<usize> = valid_nodes.iter().cloned().collect();
             dag_hubs.sort(); // Deterministic order
-            
+
             let mut node_to_idx: HashMap<usize, u32> = HashMap::new();
             for (i, &u) in dag_hubs.iter().enumerate() {
                 node_to_idx.insert(u, i as u32);
@@ -1013,7 +1154,10 @@ fn compute_global_patterns(
                             dag_edges.push(DagEdge {
                                 from_hub_idx: *node_to_idx.get(&u).unwrap(),
                                 to_hub_idx: *node_to_idx.get(&v).unwrap(),
-                                pattern_signature: edge_signatures.get(&(u, v)).cloned().unwrap_or_default(),
+                                pattern_signature: edge_signatures
+                                    .get(&(u, v))
+                                    .cloned()
+                                    .unwrap_or_default(),
                             });
                         }
                     }
@@ -1021,13 +1165,16 @@ fn compute_global_patterns(
             }
 
             // Convert dag_hubs to GlobalHub
-            let global_hubs: Vec<GlobalHub> = dag_hubs.iter().map(|&u| {
-                let (pid, idx) = global_to_partition_map.get(&u).cloned().unwrap_or((0, 0));
-                GlobalHub {
-                    original_partition_id: pid,
-                    stop_idx_in_partition: idx,
-                }
-            }).collect();
+            let global_hubs: Vec<GlobalHub> = dag_hubs
+                .iter()
+                .map(|&u| {
+                    let (pid, idx) = global_to_partition_map.get(&u).cloned().unwrap_or((0, 0));
+                    GlobalHub {
+                        original_partition_id: pid,
+                        stop_idx_in_partition: idx,
+                    }
+                })
+                .collect();
 
             partition_dags.push(PartitionDag {
                 from_partition: p_start,
@@ -1038,12 +1185,10 @@ fn compute_global_patterns(
             dag_count += 1;
         }
     }
-    
+
     println!("  - Generated {} Partition DAGs", dag_count);
 
-    let global_index = GlobalPatternIndex {
-        partition_dags,
-    };
+    let global_index = GlobalPatternIndex { partition_dags };
 
     let path = output_dir.join("global_patterns.pbf");
     if let Err(e) = save_pbf(&global_index, path.to_str().unwrap()) {
@@ -1053,9 +1198,12 @@ fn compute_global_patterns(
     }
 }
 
-fn compute_intra_partition_connectivity(partition: &TransitPartition, global_indices: &[u32]) -> Vec<((usize, usize), String)> {
+fn compute_intra_partition_connectivity(
+    partition: &TransitPartition,
+    global_indices: &[u32],
+) -> Vec<((usize, usize), String)> {
     let mut edges = Vec::new();
-    
+
     // Map local_idx -> global_idx
     let local_to_global: Vec<usize> = global_indices.iter().map(|&i| i as usize).collect();
 
@@ -1065,18 +1213,22 @@ fn compute_intra_partition_connectivity(partition: &TransitPartition, global_ind
         let stops = &pattern.stop_indices;
         for i in 0..stops.len() - 1 {
             let u = stops[i];
-            let v = stops[i+1];
-            adj.entry(u).or_default().push((v, pattern.route_id.clone()));
+            let v = stops[i + 1];
+            adj.entry(u)
+                .or_default()
+                .push((v, pattern.route_id.clone()));
         }
     }
 
     // Identify Hubs (Local Indices)
     // For Intra-Partition Connectivity, we want to connect ANY "Global Node" (Hub or Border)
-    let hubs: Vec<u32> = partition.stops.iter()
+    let hubs: Vec<u32> = partition
+        .stops
+        .iter()
         .filter(|s| s.is_hub || s.is_border)
         .map(|s| s.id as u32)
         .collect();
-    
+
     let hubs_set: HashSet<u32> = hubs.iter().cloned().collect();
 
     // BFS from each Hub
@@ -1090,7 +1242,13 @@ fn compute_intra_partition_connectivity(partition: &TransitPartition, global_ind
         while let Some((u, path_sig)) = queue.pop_front() {
             if u != start_node && hubs_set.contains(&u) {
                 // Found a path to another hub
-                edges.push(((local_to_global[start_node as usize], local_to_global[u as usize]), path_sig.clone()));
+                edges.push((
+                    (
+                        local_to_global[start_node as usize],
+                        local_to_global[u as usize],
+                    ),
+                    path_sig.clone(),
+                ));
                 // Do not continue BFS through this hub for direct edges
                 continue;
             }
@@ -1101,7 +1259,7 @@ fn compute_intra_partition_connectivity(partition: &TransitPartition, global_ind
                         let new_sig = if path_sig.is_empty() {
                             route_id.clone()
                         } else if path_sig.ends_with(route_id) {
-                             path_sig.clone() 
+                            path_sig.clone()
                         } else {
                             format!("{}|{}", path_sig, route_id)
                         };
@@ -1116,7 +1274,11 @@ fn compute_intra_partition_connectivity(partition: &TransitPartition, global_ind
 }
 
 // Merge-Based Clustering
-fn merge_based_clustering(num_stops: usize, adjacency: &HashMap<(usize, usize), u32>, max_size: usize) -> Vec<Vec<usize>> {
+fn merge_based_clustering(
+    num_stops: usize,
+    adjacency: &HashMap<(usize, usize), u32>,
+    max_size: usize,
+) -> Vec<Vec<usize>> {
     // Initial clusters: each stop is a cluster
     let mut clusters: Vec<Vec<usize>> = (0..num_stops).map(|i| vec![i]).collect();
     let mut cluster_map: Vec<usize> = (0..num_stops).collect(); // Stop -> Cluster Index
@@ -1144,7 +1306,11 @@ fn merge_based_clustering(num_stops: usize, adjacency: &HashMap<(usize, usize), 
 
     // Initialize PQ with stop-stop edges
     for (&(u, v), &w) in adjacency {
-        pq.push(Edge { weight: w, c1: u, c2: v });
+        pq.push(Edge {
+            weight: w,
+            c1: u,
+            c2: v,
+        });
     }
 
     // PASS 1: Standard Greedy Merge (Respecting max_size)
@@ -1152,12 +1318,14 @@ fn merge_based_clustering(num_stops: usize, adjacency: &HashMap<(usize, usize), 
         let c1 = cluster_map[edge.c1]; // Get current cluster ID for original node
         let c2 = cluster_map[edge.c2];
 
-        if c1 == c2 { continue; } // Already merged
-        
+        if c1 == c2 {
+            continue;
+        } // Already merged
+
         // Check size constraint
         let size1 = clusters[c1].len();
         let size2 = clusters[c2].len();
-        
+
         if size1 + size2 <= max_size {
             // Merge c2 into c1
             let stops_to_move = clusters[c2].clone();
@@ -1172,16 +1340,16 @@ fn merge_based_clustering(num_stops: usize, adjacency: &HashMap<(usize, usize), 
 
     // PASS 2: Cleanup Orphans (Force merge small clusters)
     // Definition of "Small": Less than 10% of max_size, or < 50 stops
-    let min_size = (max_size / 10).max(20); 
-    
+    let min_size = (max_size / 10).max(20);
+
     // We need to iterate until no more merges happen, or just do one pass?
     // One pass is probably enough to catch the worst offenders.
     // We iterate through all active clusters.
-    
+
     // To do this efficiently, we need to know which clusters are connected.
     // Re-scanning adjacency is expensive but necessary.
     // Let's build a Cluster Adjacency Graph.
-    
+
     let mut cluster_adj: HashMap<(usize, usize), u32> = HashMap::new();
     for (&(u, v), &w) in adjacency {
         let c1 = cluster_map[u];
@@ -1196,8 +1364,10 @@ fn merge_based_clustering(num_stops: usize, adjacency: &HashMap<(usize, usize), 
     let mut merged_in_pass2 = HashSet::new();
 
     for &c_idx in &active_list {
-        if merged_in_pass2.contains(&c_idx) { continue; }
-        
+        if merged_in_pass2.contains(&c_idx) {
+            continue;
+        }
+
         let size = clusters[c_idx].len();
         if size < min_size {
             // Find best neighbor
@@ -1205,10 +1375,18 @@ fn merge_based_clustering(num_stops: usize, adjacency: &HashMap<(usize, usize), 
             let mut max_weight = 0;
 
             for &other_c in &active_list {
-                if c_idx == other_c { continue; }
-                if merged_in_pass2.contains(&other_c) { continue; } // Don't merge into something that's already gone (though we could chain)
+                if c_idx == other_c {
+                    continue;
+                }
+                if merged_in_pass2.contains(&other_c) {
+                    continue;
+                } // Don't merge into something that's already gone (though we could chain)
 
-                let (min, max) = if c_idx < other_c { (c_idx, other_c) } else { (other_c, c_idx) };
+                let (min, max) = if c_idx < other_c {
+                    (c_idx, other_c)
+                } else {
+                    (other_c, c_idx)
+                };
                 if let Some(&w) = cluster_adj.get(&(min, max)) {
                     if w > max_weight {
                         max_weight = w;
@@ -1221,7 +1399,7 @@ fn merge_based_clustering(num_stops: usize, adjacency: &HashMap<(usize, usize), 
                 // Force Merge c_idx into target
                 // Note: This might exceed max_size, but that's acceptable to avoid orphans.
                 // println!("    - Merging orphan cluster {} (size {}) into {} (size {})", c_idx, size, target, clusters[target].len());
-                
+
                 let stops_to_move = clusters[c_idx].clone();
                 for &stop in &stops_to_move {
                     cluster_map[stop] = target;
@@ -1240,20 +1418,37 @@ fn merge_based_clustering(num_stops: usize, adjacency: &HashMap<(usize, usize), 
 fn calculate_service_mask(service_id: &str, calendar: &[Calendar]) -> u32 {
     if let Some(cal) = calendar.iter().find(|c| c.service_id == service_id) {
         let mut mask = 0;
-        if cal.monday { mask |= 1 << 0; }
-        if cal.tuesday { mask |= 1 << 1; }
-        if cal.wednesday { mask |= 1 << 2; }
-        if cal.thursday { mask |= 1 << 3; }
-        if cal.friday { mask |= 1 << 4; }
-        if cal.saturday { mask |= 1 << 5; }
-        if cal.sunday { mask |= 1 << 6; }
+        if cal.monday {
+            mask |= 1 << 0;
+        }
+        if cal.tuesday {
+            mask |= 1 << 1;
+        }
+        if cal.wednesday {
+            mask |= 1 << 2;
+        }
+        if cal.thursday {
+            mask |= 1 << 3;
+        }
+        if cal.friday {
+            mask |= 1 << 4;
+        }
+        if cal.saturday {
+            mask |= 1 << 5;
+        }
+        if cal.sunday {
+            mask |= 1 << 6;
+        }
         mask
     } else {
         0
     }
 }
 
-fn reindex_deltas(mut patterns: Vec<TripPattern>, global_deltas: &[u32]) -> (Vec<u32>, Vec<TripPattern>) {
+fn reindex_deltas(
+    mut patterns: Vec<TripPattern>,
+    global_deltas: &[u32],
+) -> (Vec<u32>, Vec<TripPattern>) {
     let mut new_deltas = Vec::new();
     let mut delta_map = HashMap::new();
 
@@ -1265,9 +1460,9 @@ fn reindex_deltas(mut patterns: Vec<TripPattern>, global_deltas: &[u32]) -> (Vec
             } else {
                 let new_ptr = new_deltas.len() as u32;
                 let len = pat.stop_indices.len();
-                let slice = &global_deltas[old_ptr as usize .. old_ptr as usize + len];
+                let slice = &global_deltas[old_ptr as usize..old_ptr as usize + len];
                 new_deltas.extend_from_slice(slice);
-                
+
                 delta_map.insert(old_ptr, new_ptr);
                 trip.delta_pointer = new_ptr;
             }
@@ -1276,7 +1471,7 @@ fn reindex_deltas(mut patterns: Vec<TripPattern>, global_deltas: &[u32]) -> (Vec
     (new_deltas, patterns)
 }
 
-use rstar::{RTree, PointDistance};
+use rstar::RTree;
 use rstar::primitives::GeomWithData;
 use std::collections::VecDeque;
 
@@ -1295,7 +1490,12 @@ impl ChunkCache {
         }
     }
 
-    fn get_or_load(&mut self, x: u32, y: u32, osm_dir: &PathBuf) -> Option<&(StreetData, RTree<GeomWithData<[f64; 2], u32>>)> {
+    fn get_or_load(
+        &mut self,
+        x: u32,
+        y: u32,
+        osm_dir: &PathBuf,
+    ) -> Option<&(StreetData, RTree<GeomWithData<[f64; 2], u32>>)> {
         if self.map.contains_key(&(x, y)) {
             // Promote to back (recently used)
             if let Some(pos) = self.queue.iter().position(|&k| k == (x, y)) {
@@ -1308,16 +1508,21 @@ impl ChunkCache {
         // Load
         let chunk_filename = format!("chunk_{}_{}_{}.pbf", x, y, 10);
         let chunk_path = osm_dir.join(chunk_filename);
-        
-        if !chunk_path.exists() { return None; }
+
+        if !chunk_path.exists() {
+            return None;
+        }
 
         let street_data: StreetData = load_pbf(chunk_path.to_str().unwrap()).ok()?;
-        
+
         // Build RTree
-        let points: Vec<GeomWithData<[f64; 2], u32>> = street_data.nodes.iter().enumerate()
+        let points: Vec<GeomWithData<[f64; 2], u32>> = street_data
+            .nodes
+            .iter()
+            .enumerate()
             .map(|(i, node)| GeomWithData::new([node.lon, node.lat], i as u32))
             .collect();
-        
+
         let rtree = RTree::bulk_load(points);
 
         // Insert
@@ -1334,9 +1539,15 @@ impl ChunkCache {
     }
 }
 
-async fn find_osm_link(lon: f64, lat: f64, stop_idx: u32, osm_dir: &PathBuf, cache: &mut ChunkCache) -> Option<OsmLink> {
+async fn find_osm_link(
+    lon: f64,
+    lat: f64,
+    stop_idx: u32,
+    osm_dir: &PathBuf,
+    cache: &mut ChunkCache,
+) -> Option<OsmLink> {
     let (x, y) = lon_lat_to_tile(lon, lat, 10);
-    
+
     let (street_data, rtree) = cache.get_or_load(x, y, osm_dir)?;
 
     // Use RTree to find nearest neighbor
@@ -1346,7 +1557,9 @@ async fn find_osm_link(lon: f64, lat: f64, stop_idx: u32, osm_dir: &PathBuf, cac
 
     let dist = haversine_distance(lat, lon, node.lat, node.lon);
 
-    if dist > 200.0 { return None; }
+    if dist > 200.0 {
+        return None;
+    }
 
     let walk_seconds = (dist / 1.4) as u32;
     Some(OsmLink {
@@ -1360,14 +1573,18 @@ async fn find_osm_link(lon: f64, lat: f64, stop_idx: u32, osm_dir: &PathBuf, cac
 
 fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     // println!("    - Computing LTPs for partition {} ({} stops)...", partition.partition_id, partition.stops.len());
-    
-    let hubs: Vec<u32> = partition.stops.iter()
+
+    let hubs: Vec<u32> = partition
+        .stops
+        .iter()
         .enumerate()
         .filter(|(_, s)| s.is_hub || s.is_border) // Compute LTPs to all Global Nodes
         .map(|(i, _)| i as u32)
         .collect();
 
-    if hubs.is_empty() { return; }
+    if hubs.is_empty() {
+        return;
+    }
 
     // Precompute stop -> patterns map
     let mut stop_to_patterns: Vec<Vec<usize>> = vec![Vec::new(); partition.stops.len()];
@@ -1384,10 +1601,10 @@ fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     // Text says "per station in the cluster".
     for start_node in 0..partition.stops.len() {
         let start_node = start_node as u32;
-        
+
         // Run simplified Raptor at 8:00 AM (28800s)
-        let edges = run_raptor(partition, start_node, &hubs, 28800, &stop_to_patterns); 
-        
+        let edges = run_raptor(partition, start_node, &hubs, 28800, &stop_to_patterns);
+
         if !edges.is_empty() {
             ltps.push(LocalTransferPattern {
                 from_stop_idx: start_node,
@@ -1395,45 +1612,51 @@ fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
             });
         }
     }
-    
+
     partition.local_transfer_patterns = ltps;
 }
 
 fn run_raptor(
-    partition: &TransitPartition, 
-    start_node: u32, 
-    targets: &[u32], 
+    partition: &TransitPartition,
+    start_node: u32,
+    targets: &[u32],
     start_time: u32,
-    stop_to_patterns: &[Vec<usize>]
+    stop_to_patterns: &[Vec<usize>],
 ) -> Vec<DagEdge> {
     let num_stops = partition.stops.len();
     let mut earliest_arrival = vec![u32::MAX; num_stops];
     earliest_arrival[start_node as usize] = start_time;
-    
+
     let mut marked_stops = HashSet::new();
     marked_stops.insert(start_node);
 
     // Track predecessors: stop_idx -> (prev_stop_idx, pattern_signature)
     let mut predecessors: Vec<Option<(u32, String)>> = vec![None; num_stops];
 
-    for _round in 0..5 { // Max 5 transfers
-        if marked_stops.is_empty() { break; }
-        
+    for _round in 0..5 {
+        // Max 5 transfers
+        if marked_stops.is_empty() {
+            break;
+        }
+
         let mut next_marked = HashSet::new();
-        
+
         // 1. Route Scanning
         let mut routes_to_scan: HashMap<usize, u32> = HashMap::new(); // pattern_idx -> min_stop_index_in_pattern
-        
+
         for &stop in &marked_stops {
             if let Some(patterns) = stop_to_patterns.get(stop as usize) {
                 for &p_idx in patterns {
                     let pattern = &partition.trip_patterns[p_idx];
                     // Find index of stop in pattern
-                    if let Some(idx_in_pattern) = pattern.stop_indices.iter().position(|&s| s == stop) {
-                         let current_min = routes_to_scan.entry(p_idx).or_insert(idx_in_pattern as u32);
-                         if (idx_in_pattern as u32) < *current_min {
-                             *current_min = idx_in_pattern as u32;
-                         }
+                    if let Some(idx_in_pattern) =
+                        pattern.stop_indices.iter().position(|&s| s == stop)
+                    {
+                        let current_min =
+                            routes_to_scan.entry(p_idx).or_insert(idx_in_pattern as u32);
+                        if (idx_in_pattern as u32) < *current_min {
+                            *current_min = idx_in_pattern as u32;
+                        }
                     }
                 }
             }
@@ -1446,7 +1669,7 @@ fn run_raptor(
 
             for i in (start_idx as usize)..pattern.stop_indices.len() {
                 let stop_idx = pattern.stop_indices[i];
-                
+
                 // Check if we can board a trip
                 if let Some(trip) = current_trip {
                     // We are on a trip, check arrival
@@ -1455,13 +1678,14 @@ fn run_raptor(
                     // We need to sum deltas from trip.delta_pointer up to i
                     // This is slow if we sum every time.
                     // Optimization: Track current time on trip.
-                    
+
                     // Let's re-calculate for simplicity
                     let arrival = calculate_arrival_time(partition, trip, i);
-                    
+
                     if arrival < earliest_arrival[stop_idx as usize] {
                         earliest_arrival[stop_idx as usize] = arrival;
-                        predecessors[stop_idx as usize] = Some((boarded_at_stop, format!("Pattern:{}", pattern.route_id)));
+                        predecessors[stop_idx as usize] =
+                            Some((boarded_at_stop, format!("Pattern:{}", pattern.route_id)));
                         next_marked.insert(stop_idx);
                     }
                 }
@@ -1480,7 +1704,10 @@ fn run_raptor(
                         let dep_time = calculate_arrival_time(partition, trip, i); // Arr = Dep
                         if dep_time >= earliest_arrival[stop_idx as usize] {
                             // Found a trip
-                            if current_trip.is_none() || dep_time < calculate_arrival_time(partition, current_trip.unwrap(), i) {
+                            if current_trip.is_none()
+                                || dep_time
+                                    < calculate_arrival_time(partition, current_trip.unwrap(), i)
+                            {
                                 current_trip = Some(trip);
                                 boarded_at_stop = stop_idx;
                             }
@@ -1496,24 +1723,25 @@ fn run_raptor(
         // In this loop, we just check static transfers
         // We should copy marked stops for transfers?
         // Standard Raptor does transfers after routes.
-        
+
         // We need to iterate stops marked in THIS round (by routes)
         // `next_marked` contains stops updated by routes.
         // We also need to consider transfers from stops updated by transfers? No, usually just route -> transfer.
-        
+
         let stops_to_transfer: Vec<u32> = next_marked.iter().cloned().collect();
         for stop in stops_to_transfer {
-             // Check internal transfers
-             for transfer in &partition.internal_transfers {
-                 if transfer.from_stop_idx == stop {
-                     let arrival = earliest_arrival[stop as usize] + transfer.duration_seconds;
-                     if arrival < earliest_arrival[transfer.to_stop_idx as usize] {
-                         earliest_arrival[transfer.to_stop_idx as usize] = arrival;
-                         predecessors[transfer.to_stop_idx as usize] = Some((stop, "Walk".to_string()));
-                         next_marked.insert(transfer.to_stop_idx);
-                     }
-                 }
-             }
+            // Check internal transfers
+            for transfer in &partition.internal_transfers {
+                if transfer.from_stop_idx == stop {
+                    let arrival = earliest_arrival[stop as usize] + transfer.duration_seconds;
+                    if arrival < earliest_arrival[transfer.to_stop_idx as usize] {
+                        earliest_arrival[transfer.to_stop_idx as usize] = arrival;
+                        predecessors[transfer.to_stop_idx as usize] =
+                            Some((stop, "Walk".to_string()));
+                        next_marked.insert(transfer.to_stop_idx);
+                    }
+                }
+            }
         }
 
         marked_stops = next_marked;
@@ -1550,7 +1778,11 @@ fn run_raptor(
     edges
 }
 
-fn calculate_arrival_time(partition: &TransitPartition, trip: &CompressedTrip, stop_idx_in_pattern: usize) -> u32 {
+fn calculate_arrival_time(
+    partition: &TransitPartition,
+    trip: &CompressedTrip,
+    stop_idx_in_pattern: usize,
+) -> u32 {
     let mut time = trip.start_time;
     let ptr = trip.delta_pointer as usize;
     // Sum deltas from 0 to stop_idx_in_pattern
@@ -1558,7 +1790,7 @@ fn calculate_arrival_time(partition: &TransitPartition, trip: &CompressedTrip, s
     // time_deltas[ptr+1] is delta for stop 1
     for k in 0..=stop_idx_in_pattern {
         if ptr + k < partition.time_deltas.len() {
-             time += partition.time_deltas[ptr + k];
+            time += partition.time_deltas[ptr + k];
         }
     }
     time
@@ -1576,9 +1808,8 @@ fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let r = 6371000.0;
     let d_lat = (lat2 - lat1).to_radians();
     let d_lon = (lon2 - lon1).to_radians();
-    let a = (d_lat / 2.0).sin().powi(2) +
-            lat1.to_radians().cos() * lat2.to_radians().cos() *
-            (d_lon / 2.0).sin().powi(2);
+    let a = (d_lat / 2.0).sin().powi(2)
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * (d_lon / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
     r * c
 }
@@ -1625,26 +1856,30 @@ mod tests {
         // Pass 1: Should merge 0..99 into one cluster (Size 100).
         //         Node 100 cannot merge because 100 + 1 > 100.
         // Pass 2: Node 100 is orphan (Size 1 < 20). Should force merge into Cluster A.
-        
+
         let mut adjacency = HashMap::new();
-        
+
         // Create clique 0..99
         for i in 0..100 {
-            for j in (i+1)..100 {
+            for j in (i + 1)..100 {
                 adjacency.insert((i, j), 1);
             }
         }
-        
+
         // Connect 100 to 0
         adjacency.insert((0, 100), 10); // Strong connection
-        
+
         let clusters = merge_based_clustering(101, &adjacency, 100);
-        
+
         // Expect 1 cluster
-        assert_eq!(clusters.len(), 1, "Should have merged orphan into main cluster");
+        assert_eq!(
+            clusters.len(),
+            1,
+            "Should have merged orphan into main cluster"
+        );
         assert_eq!(clusters[0].len(), 101, "Cluster should contain all nodes");
     }
-    
+
     #[test]
     fn test_clustering_basic() {
         // Simple case: 4 nodes, 0-1, 2-3. Max size 2.
@@ -1652,7 +1887,7 @@ mod tests {
         let mut adjacency = HashMap::new();
         adjacency.insert((0, 1), 1);
         adjacency.insert((2, 3), 1);
-        
+
         let clusters = merge_based_clustering(4, &adjacency, 2);
         assert_eq!(clusters.len(), 2);
     }
@@ -1676,7 +1911,11 @@ mod tests {
                 parent_station: None,
                 zone_id: None,
                 url: None,
-                point: Some(postgis_diesel::types::Point { x: i as f64 * 0.01, y: 0.0, srid: Some(4326) }),
+                point: Some(postgis_diesel::types::Point {
+                    x: i as f64 * 0.01,
+                    y: 0.0,
+                    srid: Some(4326),
+                }),
                 timezone: None,
                 wheelchair_boarding: 0,
                 primary_route_type: None,
@@ -1700,7 +1939,7 @@ mod tests {
         // Mock Patterns
         // Pattern 1: 0 -> 1 -> 2 -> 3 -> 4 (Line A)
         // Pattern 2: 5 -> 6 -> 2 -> 7 -> 8 (Line B) - Intersects at 2
-        
+
         let p1 = ProcessedPattern {
             chateau: "test".to_string(),
             route_id: "A".to_string(),
@@ -1715,7 +1954,7 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
         };
-        
+
         let p2 = ProcessedPattern {
             chateau: "test".to_string(),
             route_id: "B".to_string(),
@@ -1724,25 +1963,25 @@ mod tests {
                 gtfs_trip_id: "t2".to_string(),
                 service_mask: 127,
                 start_time: 29100, // 8:05 AM
-                delta_pointer: 5, // Offset
+                delta_pointer: 5,  // Offset
                 service_idx: 0,
                 bikes_allowed: 0,
                 wheelchair_accessible: 0,
             }],
         };
-        
+
         let patterns = vec![p1, p2];
-        
+
         // Time Deltas (All 0 for simplicity, instant travel)
         let time_deltas = vec![0; 20];
-        
+
         let calendar = vec![];
-        
+
         // Run with sample_size = 100
         // We need to make sure sample picks random nodes that force transfer at 2.
         // With 10 nodes, 100 queries should hit 0->8 or 5->4 etc.
         let hubs = identify_hubs_time_dependent(&stops, &patterns, &time_deltas, &calendar, 500, 1);
-        
+
         // We expect 2 to be the hub
         assert!(hubs.contains(&2), "Node 2 should be identified as a hub");
     }
@@ -1752,7 +1991,7 @@ fn identify_hubs(
     num_stops: usize,
     adjacency: &HashMap<(usize, usize), u32>,
     sample_size: usize,
-    top_k: usize
+    top_k: usize,
 ) -> HashSet<usize> {
     // Build adjacency list
     let mut adj_list = vec![vec![]; num_stops];
@@ -1764,7 +2003,7 @@ fn identify_hubs(
     let mut centrality = vec![0; num_stops];
     let mut rng = rand::rng();
     let all_stops: Vec<usize> = (0..num_stops).collect();
-    
+
     // Handle small graphs
     let actual_sample_size = sample_size.min(num_stops);
     let sample = all_stops.choose_multiple(&mut rng, actual_sample_size);
@@ -1778,10 +2017,12 @@ fn identify_hubs(
         pq.push(std::cmp::Reverse((0, start_node)));
 
         while let Some(std::cmp::Reverse((d, u))) = pq.pop() {
-            if d > dist[u] { continue; }
-            
+            if d > dist[u] {
+                continue;
+            }
+
             for &(v, weight) in &adj_list[u] {
-                // Invert weight for "connectivity"? 
+                // Invert weight for "connectivity"?
                 // Adjacency weight is "Trip Count". Higher is better.
                 // Dijkstra minimizes cost. Cost = 1 / weight? Or just 1 (hops)?
                 // If we want "Centrality" in terms of "Transfer Hub", we want nodes that are on many paths.
@@ -1789,8 +2030,8 @@ fn identify_hubs(
                 // But we don't have time here, only trip count.
                 // Let's assume cost = 1 (Topological Centrality) or cost = 1000 / weight.
                 // Let's use cost = 1 for simplicity (Hops).
-                let cost = 1; 
-                
+                let cost = 1;
+
                 if dist[u] + cost < dist[v] {
                     dist[v] = dist[u] + cost;
                     parent[v] = Some(u);
@@ -1798,15 +2039,19 @@ fn identify_hubs(
                 }
             }
         }
-        
+
         // Reconstruct paths to all reachable nodes and increment centrality
         for i in 0..num_stops {
-            if i == start_node || dist[i] == u32::MAX { continue; }
+            if i == start_node || dist[i] == u32::MAX {
+                continue;
+            }
             let mut curr = i;
             while let Some(p) = parent[curr] {
                 centrality[p] += 1;
                 curr = p;
-                if curr == start_node { break; }
+                if curr == start_node {
+                    break;
+                }
             }
         }
     }
@@ -1815,7 +2060,11 @@ fn identify_hubs(
     let mut indexed_centrality: Vec<(usize, usize)> = centrality.into_iter().enumerate().collect();
     indexed_centrality.sort_by(|a, b| b.1.cmp(&a.1)); // Descending
 
-    indexed_centrality.iter().take(top_k).map(|(i, _)| *i).collect()
+    indexed_centrality
+        .iter()
+        .take(top_k)
+        .map(|(i, _)| *i)
+        .collect()
 }
 
 fn identify_hubs_time_dependent(
@@ -1824,10 +2073,10 @@ fn identify_hubs_time_dependent(
     time_deltas: &[u32],
     calendar: &[Calendar],
     sample_size: usize,
-    top_k: usize
+    top_k: usize,
 ) -> HashSet<usize> {
     println!("  - Building temporary graph for centrality analysis...");
-    
+
     // 1. Build Temporary Partition
     let mut t_stops = Vec::new();
     for (i, s) in stops.iter().enumerate() {
@@ -1855,7 +2104,9 @@ fn identify_hubs_time_dependent(
 
     // 2. Generate Internal Transfers (Distance-based)
     // Use RTree for efficiency
-    let points: Vec<GeomWithData<[f64; 2], usize>> = t_stops.iter().enumerate()
+    let points: Vec<GeomWithData<[f64; 2], usize>> = t_stops
+        .iter()
+        .enumerate()
         .map(|(i, s)| GeomWithData::new([s.lon, s.lat], i))
         .collect();
     let rtree = RTree::bulk_load(points);
@@ -1866,12 +2117,15 @@ fn identify_hubs_time_dependent(
         // Better to use haversine check
         for point in nearest {
             let neighbor_idx = point.data;
-            if i == neighbor_idx { continue; }
-            
+            if i == neighbor_idx {
+                continue;
+            }
+
             let neighbor = &t_stops[neighbor_idx];
             let dist = haversine_distance(stop.lat, stop.lon, neighbor.lat, neighbor.lon);
-            
-            if dist <= 300.0 { // 300m transfer radius for simulation
+
+            if dist <= 300.0 {
+                // 300m transfer radius for simulation
                 let walk_seconds = (dist / 1.4) as u32;
                 internal_transfers.push(StaticTransfer {
                     from_stop_idx: i as u32,
@@ -1883,7 +2137,10 @@ fn identify_hubs_time_dependent(
             }
         }
     }
-    println!("  - Generated {} internal transfers for simulation", internal_transfers.len());
+    println!(
+        "  - Generated {} internal transfers for simulation",
+        internal_transfers.len()
+    );
 
     let partition = TransitPartition {
         partition_id: 0,
@@ -1910,32 +2167,40 @@ fn identify_hubs_time_dependent(
     let mut centrality = vec![0; stops.len()];
     let mut rng = rand::rng();
     let num_stops = stops.len();
-    
+
     println!("  - Running {} random queries...", sample_size);
-    
+
     for _ in 0..sample_size {
         let start_node = rng.random_range(0..num_stops) as u32;
         let end_node = rng.random_range(0..num_stops) as u32;
-        
-        if start_node == end_node { continue; }
+
+        if start_node == end_node {
+            continue;
+        }
 
         // Random time between 7:00 AM and 10:00 AM
-        let start_time = rng.random_range(25200..36000); 
+        let start_time = rng.random_range(25200..36000);
 
         // Run Raptor
         // We use run_raptor but we need to adapt it.
         // run_raptor returns edges to targets.
         // If we pass targets=[end_node], it returns the path.
-        
-        let edges = run_raptor(&partition, start_node, &[end_node], start_time, &stop_to_patterns);
-        
+
+        let edges = run_raptor(
+            &partition,
+            start_node,
+            &[end_node],
+            start_time,
+            &stop_to_patterns,
+        );
+
         // Count nodes in edges
         let mut path_nodes = HashSet::new();
         for edge in edges {
             path_nodes.insert(edge.from_hub_idx as usize);
             path_nodes.insert(edge.to_hub_idx as usize);
         }
-        
+
         for node in path_nodes {
             // Don't count start/end as "hubs" just because they are endpoints?
             // Actually, if a node is an endpoint, it's not necessarily a transfer hub.
@@ -1955,7 +2220,11 @@ fn identify_hubs_time_dependent(
     let mut indexed_centrality: Vec<(usize, usize)> = centrality.into_iter().enumerate().collect();
     indexed_centrality.sort_by(|a, b| b.1.cmp(&a.1)); // Descending
 
-    indexed_centrality.iter().take(top_k).map(|(i, _)| *i).collect()
+    indexed_centrality
+        .iter()
+        .take(top_k)
+        .map(|(i, _)| *i)
+        .collect()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1975,13 +2244,13 @@ struct EdgeEntry {
 
 async fn stitch_graph(args: &Args) -> Result<()> {
     println!("Stitching graph from chunks in {:?}", args.output);
-    
+
     // 1. Load Manifest
     let manifest_path = args.output.join("manifest.json");
     let file = File::open(&manifest_path).context("Failed to open manifest")?;
     let reader = BufReader::new(file);
     let manifest: Manifest = serde_json::from_reader(reader)?;
-    
+
     // 2. Identify all partitions
     let mut partitions = HashSet::new();
     for p_list in manifest.chateau_to_partitions.values() {
@@ -1991,9 +2260,9 @@ async fn stitch_graph(args: &Args) -> Result<()> {
     }
     let mut sorted_partitions: Vec<u32> = partitions.into_iter().collect();
     sorted_partitions.sort();
-    
+
     println!("Found {} partitions", sorted_partitions.len());
-    
+
     // 3. Load Chunks and Build Global Node Map
     // Map (chateau, gtfs_id) -> (partition_id, local_idx)
     let mut global_node_map: HashMap<(String, String), (u32, u32)> = HashMap::new();
@@ -2008,10 +2277,13 @@ async fn stitch_graph(args: &Args) -> Result<()> {
     for &pid in &sorted_partitions {
         let path = args.output.join(format!("transit_chunk_{}.pbf", pid));
         let partition: TransitPartition = load_pbf(path.to_str().unwrap())?;
-        
+
         for (local_idx, stop) in partition.stops.iter().enumerate() {
-            global_node_map.insert((stop.chateau.clone(), stop.gtfs_original_id.clone()), (pid, local_idx as u32));
-            
+            global_node_map.insert(
+                (stop.chateau.clone(), stop.gtfs_original_id.clone()),
+                (pid, local_idx as u32),
+            );
+
             // Assign new global index
             let g_idx = next_global_idx;
             next_global_idx += 1;
@@ -2024,7 +2296,7 @@ async fn stitch_graph(args: &Args) -> Result<()> {
         }
         loaded_partitions.insert(pid, partition);
     }
-    
+
     // 4. Recompute Intra-Partition Edges
     let mut intra_partition_edges: Vec<((usize, usize), String)> = Vec::new();
     for &pid in &sorted_partitions {
@@ -2035,7 +2307,7 @@ async fn stitch_graph(args: &Args) -> Result<()> {
                 let g_idx = node_to_global_idx.get(&(pid, local_idx as u32)).unwrap();
                 global_indices.push(*g_idx as u32);
             }
-            
+
             let edges = compute_intra_partition_connectivity(partition, &global_indices);
             intra_partition_edges.extend(edges);
         }
@@ -2049,13 +2321,18 @@ async fn stitch_graph(args: &Args) -> Result<()> {
             let file = File::open(&edge_path)?;
             let reader = BufReader::new(file);
             let edges: Vec<EdgeEntry> = serde_json::from_reader(reader)?;
-            
+
             for edge in edges {
                 let from_key = (edge.from_chateau, edge.from_id);
                 let to_key = (edge.to_chateau, edge.to_id);
-                
-                if let (Some(&(p1, l1)), Some(&(p2, l2))) = (global_node_map.get(&from_key), global_node_map.get(&to_key)) {
-                    if let (Some(&g1), Some(&g2)) = (node_to_global_idx.get(&(p1, l1)), node_to_global_idx.get(&(p2, l2))) {
+
+                if let (Some(&(p1, l1)), Some(&(p2, l2))) =
+                    (global_node_map.get(&from_key), global_node_map.get(&to_key))
+                {
+                    if let (Some(&g1), Some(&g2)) = (
+                        node_to_global_idx.get(&(p1, l1)),
+                        node_to_global_idx.get(&(p2, l2)),
+                    ) {
                         cross_partition_edges.push(((g1, g2), edge.signature));
                     }
                 }
@@ -2064,7 +2341,13 @@ async fn stitch_graph(args: &Args) -> Result<()> {
     }
 
     // 6. Compute Global Patterns
-    compute_global_patterns(&all_global_nodes, &cross_partition_edges, &intra_partition_edges, &global_to_partition_map, &args.output);
+    compute_global_patterns(
+        &all_global_nodes,
+        &cross_partition_edges,
+        &intra_partition_edges,
+        &global_to_partition_map,
+        &args.output,
+    );
 
     Ok(())
 }
