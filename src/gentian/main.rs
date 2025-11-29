@@ -7,9 +7,9 @@ use catenary::models::{
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use catenary::routing_common::osm_graph::{StreetData, load_pbf, save_pbf};
 use catenary::routing_common::transit_graph::{
-    CompressedTrip, DagEdge, ExternalTransfer, GlobalHub, GlobalPatternIndex, LocalTransferPattern,
-    OsmLink, PartitionDag, StaticTransfer, TransferChunk, TransitPartition, TransitStop,
-    TripPattern,
+    CompressedTrip, DagEdge, DirectionPattern, ExternalTransfer, GlobalHub, GlobalPatternIndex,
+    LocalTransferPattern, OsmLink, PartitionDag, StaticTransfer, TransferChunk, TransitPartition,
+    TransitStop, TripPattern,
 };
 use clap::Parser;
 use diesel::prelude::*;
@@ -253,6 +253,8 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     // Edge weight = Number of trips passing between two stops
     let mut adjacency: HashMap<(usize, usize), u32> = HashMap::new();
 
+    let mut merged_patterns: HashMap<(String, Vec<u32>), ProcessedPattern> = HashMap::new();
+
     for (pattern_id, trips) in trips_by_pattern {
         if let Some(rows) = pattern_rows_map.get(&pattern_id) {
             let stop_indices: Vec<u32> = rows
@@ -318,16 +320,27 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 });
             }
 
-            p_trips.sort_by_key(|t| t.start_time);
+            // Merge into ProcessedPattern
+            let route_id = trips[0].route_id.clone();
+            let key = (route_id.clone(), stop_indices.clone());
 
-            processed_patterns.push(ProcessedPattern {
-                chateau: trips[0].chateau.clone(),
-                route_id: trips[0].route_id.clone(),
-                stop_indices,
-                trips: p_trips,
-            });
+            let entry = merged_patterns
+                .entry(key)
+                .or_insert_with(|| ProcessedPattern {
+                    chateau: trips[0].chateau.clone(),
+                    route_id,
+                    stop_indices,
+                    trips: Vec::new(),
+                });
+            entry.trips.extend(p_trips);
         }
     }
+
+    for pat in merged_patterns.values_mut() {
+        pat.trips.sort_by_key(|t| t.start_time);
+    }
+
+    let processed_patterns: Vec<ProcessedPattern> = merged_patterns.into_values().collect();
 
     println!("Processed {} patterns", processed_patterns.len());
 
@@ -852,6 +865,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         }
 
         let mut chunk_patterns = Vec::new();
+        let mut direction_patterns = Vec::new();
+        let mut direction_pattern_map: HashMap<Vec<u32>, u32> = HashMap::new();
+
         for pat in relevant_patterns {
             let local_indices: Vec<u32> = pat
                 .stop_indices
@@ -859,22 +875,34 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 .map(|idx| *local_stop_map.get(idx).unwrap() as u32)
                 .collect();
 
+            let dp_idx = if let Some(&idx) = direction_pattern_map.get(&local_indices) {
+                idx
+            } else {
+                let idx = direction_patterns.len() as u32;
+                direction_patterns.push(DirectionPattern {
+                    stop_indices: local_indices.clone(),
+                });
+                direction_pattern_map.insert(local_indices, idx);
+                idx
+            };
+
             chunk_patterns.push(TripPattern {
                 chateau: pat.chateau.clone(),
                 route_id: pat.route_id.clone(),
-                stop_indices: local_indices,
+                direction_pattern_idx: dp_idx,
                 trips: pat.trips.clone(),
             });
         }
 
         let (local_deltas, reindexed_patterns) =
-            reindex_deltas(chunk_patterns, &global_time_deltas);
+            reindex_deltas(chunk_patterns, &global_time_deltas, &direction_patterns);
 
         let mut partition = TransitPartition {
             partition_id: cluster_id as u32,
             stops: chunk_stops,
             trip_patterns: reindexed_patterns,
             time_deltas: local_deltas,
+            direction_patterns,
             internal_transfers: Vec::new(),
             osm_links,
             service_ids: service_ids.clone(),
@@ -1210,7 +1238,8 @@ fn compute_intra_partition_connectivity(
     // Build Local Adjacency with signatures
     let mut adj: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
     for pattern in &partition.trip_patterns {
-        let stops = &pattern.stop_indices;
+        let stops =
+            &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
         for i in 0..stops.len() - 1 {
             let u = stops[i];
             let v = stops[i + 1];
@@ -1448,18 +1477,21 @@ fn calculate_service_mask(service_id: &str, calendar: &[Calendar]) -> u32 {
 fn reindex_deltas(
     mut patterns: Vec<TripPattern>,
     global_deltas: &[u32],
+    direction_patterns: &[DirectionPattern],
 ) -> (Vec<u32>, Vec<TripPattern>) {
     let mut new_deltas = Vec::new();
     let mut delta_map = HashMap::new();
 
     for pat in &mut patterns {
+        let stop_indices = &direction_patterns[pat.direction_pattern_idx as usize].stop_indices;
+        let len = stop_indices.len();
+
         for trip in &mut pat.trips {
             let old_ptr = trip.delta_pointer;
             if let Some(&new_ptr) = delta_map.get(&old_ptr) {
                 trip.delta_pointer = new_ptr;
             } else {
                 let new_ptr = new_deltas.len() as u32;
-                let len = pat.stop_indices.len();
                 let slice = &global_deltas[old_ptr as usize..old_ptr as usize + len];
                 new_deltas.extend_from_slice(slice);
 
@@ -1589,7 +1621,9 @@ fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     // Precompute stop -> patterns map
     let mut stop_to_patterns: Vec<Vec<usize>> = vec![Vec::new(); partition.stops.len()];
     for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
-        for &s_idx in &pattern.stop_indices {
+        let stop_indices =
+            &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
+        for &s_idx in stop_indices {
             stop_to_patterns[s_idx as usize].push(p_idx);
         }
     }
@@ -1648,10 +1682,11 @@ fn run_raptor(
             if let Some(patterns) = stop_to_patterns.get(stop as usize) {
                 for &p_idx in patterns {
                     let pattern = &partition.trip_patterns[p_idx];
+                    let stop_indices = &partition.direction_patterns
+                        [pattern.direction_pattern_idx as usize]
+                        .stop_indices;
                     // Find index of stop in pattern
-                    if let Some(idx_in_pattern) =
-                        pattern.stop_indices.iter().position(|&s| s == stop)
-                    {
+                    if let Some(idx_in_pattern) = stop_indices.iter().position(|&s| s == stop) {
                         let current_min =
                             routes_to_scan.entry(p_idx).or_insert(idx_in_pattern as u32);
                         if (idx_in_pattern as u32) < *current_min {
@@ -1664,11 +1699,13 @@ fn run_raptor(
 
         for (p_idx, start_idx) in routes_to_scan {
             let pattern = &partition.trip_patterns[p_idx];
+            let stop_indices =
+                &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
             let mut current_trip: Option<&CompressedTrip> = None;
             let mut boarded_at_stop = 0;
 
-            for i in (start_idx as usize)..pattern.stop_indices.len() {
-                let stop_idx = pattern.stop_indices[i];
+            for i in (start_idx as usize)..stop_indices.len() {
+                let stop_idx = stop_indices[i];
 
                 // Check if we can board a trip
                 if let Some(trip) = current_trip {
@@ -1684,8 +1721,10 @@ fn run_raptor(
 
                     if arrival < earliest_arrival[stop_idx as usize] {
                         earliest_arrival[stop_idx as usize] = arrival;
-                        predecessors[stop_idx as usize] =
-                            Some((boarded_at_stop, format!("Pattern:{}", pattern.route_id)));
+                        predecessors[stop_idx as usize] = Some((
+                            boarded_at_stop,
+                            format!("Pattern:{}:{}", pattern.route_id, p_idx),
+                        ));
                         next_marked.insert(stop_idx);
                     }
                 }
@@ -1985,6 +2024,205 @@ mod tests {
         // We expect 2 to be the hub
         assert!(hubs.contains(&2), "Node 2 should be identified as a hub");
     }
+
+    #[test]
+    fn test_hub_loop_penalty() {
+        // Scenario:
+        // Pattern 1 (Loop): 0 -> 1 -> 2 -> 3 -> 0 (Route A, Pattern Idx 0)
+        // We force a transfer from 0->1 to 3->0 by having a "Walk" between 1 and 3?
+        // Or better:
+        // Pattern 1: 0 -> 1 -> 2 (Eastbound)
+        // Pattern 1 (same pat? No, usually loop is one long pattern): 0 -> 1 -> 2 -> 3 -> 4 -> 5 (where 5 is near 0)
+        // Let's simulate:
+        // Stop 0 and Stop 10 are close (Walkable).
+        // Pattern A: 0 -> 1 -> ... -> 9 -> 10.
+        // Trip goes 0->10.
+        // If we go 0->1, walk 1->9 (shortcut?), take 9->10.
+        // That's a self-transfer on Pattern A.
+        // Nodes 1 and 9 should NOT be hubs.
+
+        // Scenario 2:
+        // Pattern B: 20 -> 21.
+        // Pattern C: 21 -> 22.
+        // Transfer at 21.
+        // Node 21 SHOULD be a hub.
+
+        let mut stops = Vec::new();
+        for i in 0..15 {
+            stops.push(Stop {
+                onestop_feed_id: "test".to_string(),
+                attempt_id: "test".to_string(),
+                gtfs_id: i.to_string(),
+                name: Some(format!("Stop {}", i)),
+                name_translations: None,
+                displayname: None,
+                code: None,
+                gtfs_desc: None,
+                gtfs_desc_translations: None,
+                location_type: 0,
+                parent_station: None,
+                zone_id: None,
+                url: None,
+                point: Some(postgis_diesel::types::Point {
+                    x: 0.0,
+                    y: 0.0,
+                    srid: Some(4326),
+                }),
+                timezone: None,
+                wheelchair_boarding: 0,
+                primary_route_type: None,
+                level_id: None,
+                platform_code: None,
+                platform_code_translations: None,
+                routes: vec![],
+                route_types: vec![],
+                children_ids: vec![],
+                children_route_types: vec![],
+                station_feature: false,
+                hidden: false,
+                chateau: "test".to_string(),
+                location_alias: None,
+                tts_name_translations: None,
+                tts_name: None,
+                allowed_spatial_query: true,
+            });
+        }
+
+        // Geometry Setup:
+        // 0 and 10 are at (0, 0).
+        // 1 is at (0, 1.0). Far from 0.
+        // 9 is at (0.001, 1.0). Close to 1 (~100m).
+        // Intermediate stops 2..8 are far away (e.g. 0, 2.0).
+
+        stops[0].point = Some(postgis_diesel::types::Point {
+            x: 0.0,
+            y: 0.0,
+            srid: Some(4326),
+        });
+        stops[10].point = Some(postgis_diesel::types::Point {
+            x: 0.0,
+            y: 0.0,
+            srid: Some(4326),
+        });
+
+        stops[1].point = Some(postgis_diesel::types::Point {
+            x: 0.0,
+            y: 1.0,
+            srid: Some(4326),
+        });
+        stops[9].point = Some(postgis_diesel::types::Point {
+            x: 0.001,
+            y: 1.0,
+            srid: Some(4326),
+        });
+
+        // Move others away so they don't interfere
+        for i in 2..9 {
+            stops[i].point = Some(postgis_diesel::types::Point {
+                x: 0.0,
+                y: 2.0,
+                srid: Some(4326),
+            });
+        }
+
+        // 11, 12, 13 for Route B/C
+        stops[11].point = Some(postgis_diesel::types::Point {
+            x: 10.0,
+            y: 0.0,
+            srid: Some(4326),
+        });
+        stops[12].point = Some(postgis_diesel::types::Point {
+            x: 10.1,
+            y: 0.0,
+            srid: Some(4326),
+        }); // Far from others
+        stops[13].point = Some(postgis_diesel::types::Point {
+            x: 10.2,
+            y: 0.0,
+            srid: Some(4326),
+        });
+
+        let p_loop = ProcessedPattern {
+            chateau: "test".to_string(),
+            route_id: "LoopRoute".to_string(),
+            stop_indices: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            trips: vec![CompressedTrip {
+                gtfs_trip_id: "t1".to_string(),
+                service_mask: 127,
+                start_time: 28000,
+                delta_pointer: 0,
+                service_idx: 0,
+                bikes_allowed: 0,
+                wheelchair_accessible: 0,
+            }],
+        };
+
+        let p_b = ProcessedPattern {
+            chateau: "test".to_string(),
+            route_id: "RouteB".to_string(),
+            stop_indices: vec![11, 12],
+            trips: vec![CompressedTrip {
+                gtfs_trip_id: "tb".to_string(),
+                service_mask: 127,
+                start_time: 28000,
+                delta_pointer: 0, // We need valid pointer, but 0 is fine if deltas exist
+                service_idx: 0,
+                bikes_allowed: 0,
+                wheelchair_accessible: 0,
+            }],
+        };
+
+        let p_c = ProcessedPattern {
+            chateau: "test".to_string(),
+            route_id: "RouteC".to_string(),
+            stop_indices: vec![12, 13],
+            trips: vec![CompressedTrip {
+                gtfs_trip_id: "tc".to_string(),
+                service_mask: 127,
+                start_time: 29000, // Later
+                delta_pointer: 0,
+                service_idx: 0,
+                bikes_allowed: 0,
+                wheelchair_accessible: 0,
+            }],
+        };
+
+        let patterns = vec![p_loop, p_b, p_c];
+        let calendar = vec![];
+
+        // Let's adjust time deltas.
+        // We need `reindex_deltas` to work? `identify_hubs` builds its own partition.
+        // It uses `time_deltas` passed in.
+        // p_loop uses delta_pointer 0.
+        // indices: 0, 1, 2...
+        // 0->1: delta[1].
+        // 1->2: delta[2].
+
+        let mut time_deltas = vec![0; 100];
+        // Make loop slow
+        for i in 2..10 {
+            time_deltas[i] = 1000; // 1000s per stop
+        }
+
+        let hubs =
+            identify_hubs_time_dependent(&stops, &patterns, &time_deltas, &calendar, 5000, 5);
+
+        // 12 should be a hub (Transfer B->C).
+        assert!(
+            hubs.contains(&12),
+            "Node 12 should be a hub (Inter-route transfer)"
+        );
+
+        // 1 and 9 should NOT be hubs (Self-transfer on LoopRoute).
+        assert!(
+            !hubs.contains(&1),
+            "Node 1 should NOT be a hub (Self-transfer)"
+        );
+        assert!(
+            !hubs.contains(&9),
+            "Node 9 should NOT be a hub (Self-transfer)"
+        );
+    }
 }
 
 fn identify_hubs(
@@ -2093,11 +2331,25 @@ fn identify_hubs_time_dependent(
     }
 
     let mut t_patterns = Vec::new();
+    let mut direction_patterns = Vec::new();
+    let mut direction_pattern_map: HashMap<Vec<u32>, u32> = HashMap::new();
+
     for pat in patterns {
+        let dp_idx = if let Some(&idx) = direction_pattern_map.get(&pat.stop_indices) {
+            idx
+        } else {
+            let idx = direction_patterns.len() as u32;
+            direction_patterns.push(DirectionPattern {
+                stop_indices: pat.stop_indices.clone(),
+            });
+            direction_pattern_map.insert(pat.stop_indices.clone(), idx);
+            idx
+        };
+
         t_patterns.push(TripPattern {
             chateau: "temp".to_string(),
             route_id: pat.route_id.clone(),
-            stop_indices: pat.stop_indices.clone(),
+            direction_pattern_idx: dp_idx,
             trips: pat.trips.clone(),
         });
     }
@@ -2147,6 +2399,7 @@ fn identify_hubs_time_dependent(
         stops: t_stops,
         trip_patterns: t_patterns,
         time_deltas: time_deltas.to_vec(),
+        direction_patterns,
         internal_transfers,
         osm_links: Vec::new(),
         service_ids: Vec::new(),
@@ -2158,7 +2411,9 @@ fn identify_hubs_time_dependent(
     // Precompute stop -> patterns
     let mut stop_to_patterns: Vec<Vec<usize>> = vec![Vec::new(); partition.stops.len()];
     for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
-        for &s_idx in &pattern.stop_indices {
+        let stop_indices =
+            &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
+        for &s_idx in stop_indices {
             stop_to_patterns[s_idx as usize].push(p_idx);
         }
     }
@@ -2182,10 +2437,6 @@ fn identify_hubs_time_dependent(
         let start_time = rng.random_range(25200..36000);
 
         // Run Raptor
-        // We use run_raptor but we need to adapt it.
-        // run_raptor returns edges to targets.
-        // If we pass targets=[end_node], it returns the path.
-
         let edges = run_raptor(
             &partition,
             start_node,
@@ -2194,24 +2445,249 @@ fn identify_hubs_time_dependent(
             &stop_to_patterns,
         );
 
-        // Count nodes in edges
-        let mut path_nodes = HashSet::new();
-        for edge in edges {
-            path_nodes.insert(edge.from_hub_idx as usize);
-            path_nodes.insert(edge.to_hub_idx as usize);
-        }
+        // Reconstruct path to check for self-transfers
+        // Edges are: (u, v, sig)
+        // We want to count nodes v where Incoming Sig != Outgoing Sig
+        // But `edges` is a bag of edges, not ordered?
+        // `run_raptor` returns `edges` reconstructed from `predecessors`.
+        // They are ordered from target back to start? No, `run_raptor` pushes them as it backtracks.
+        // So they are (prev, curr).
+        // Let's organize them into a map or just iterate if it's a single path.
+        // Since we passed a single target, it should be a single path (linear).
+        // Edges: (n-1 -> n), (n-2 -> n-1), ... (start -> n-k)
+        // Wait, `run_raptor` loop: `while curr != start_node ... edges.push(edge) ... curr = prev`.
+        // So edges are pushed in reverse order: (last -> target), (second_last -> last), ...
+        // Let's reverse them to get forward path.
 
-        for node in path_nodes {
-            // Don't count start/end as "hubs" just because they are endpoints?
-            // Actually, if a node is an endpoint, it's not necessarily a transfer hub.
-            // But if it's used often as a start/end, maybe it is important?
-            // "The stations being on the largest number of shortest paths are chosen as hubs."
-            // Usually this includes endpoints if they are popular, but here we pick random endpoints.
-            // So we should probably exclude start/end to avoid bias if sample is small?
-            // But random sampling is uniform.
-            // Let's exclude start/end to focus on *transfer* hubs.
-            if node != start_node as usize && node != end_node as usize {
-                centrality[node] += 1;
+        let mut forward_edges = edges.clone();
+        forward_edges.reverse();
+
+        // Path: Start -> (Edge 0) -> Node 1 -> (Edge 1) -> Node 2 ...
+        // Centrality for Node i:
+        // Check Edge (i-1 -> i) and Edge (i -> i+1).
+        // If Sig(i-1 -> i) != Sig(i -> i+1), increment centrality for i.
+
+        // Edge 0: Start -> N1. Sig0.
+        // Edge 1: N1 -> N2. Sig1.
+        // If Sig0 != Sig1, N1 is a transfer hub.
+
+        for i in 0..forward_edges.len() {
+            // We are looking at the node *between* edge i and edge i+1?
+            // Or just the "to" node of edge i?
+            // If i is the last edge, it goes to Target. We exclude Target.
+
+            if i + 1 < forward_edges.len() {
+                let incoming = &forward_edges[i];
+                let outgoing = &forward_edges[i + 1];
+
+                // Node is incoming.to_hub_idx (which should be == outgoing.from_hub_idx)
+                let node = incoming.to_hub_idx as usize;
+
+                // Check signatures
+                let sig_in = &incoming.pattern_signature;
+                let sig_out = &outgoing.pattern_signature;
+
+                // Logic:
+                // 1. If both are "Walk", it's just walking, no transfer hub? Or maybe it is?
+                //    Usually Walk -> Walk implies a long walk?
+                // 2. Pattern A -> Pattern B (Different): Transfer.
+                // 3. Pattern A -> Pattern A (Same): Self-transfer (Loop or just stay on vehicle).
+                //    But `run_raptor` doesn't generate edges for staying on vehicle?
+                //    Raptor generates an edge per "hop" in the DAG?
+                //    Actually `run_raptor` reconstructs the path.
+                //    If I stay on the bus from A to C, predecessors[C] says "Pattern A from A".
+                //    So it's one edge A->C.
+                //    So we don't see intermediate stops.
+                //    So if we see Pattern A -> Pattern A, it means:
+                //    Start -> ... -> Node X (Arrive on Pat A) -> Node Y (Depart on Pat A) -> ...
+                //    This implies a transfer *between trips* or *re-boarding* same pattern?
+                //    Yes, that's exactly the "Loop" case or "Forced Transfer" case.
+                //    If it's the SAME pattern index, we penalize it.
+
+                if sig_in != sig_out {
+                    // Check if it's just a "Walk" intermediate?
+                    // If Pattern A -> Walk -> Pattern B.
+                    // Node (Pat A -> Walk) is the alighting stop.
+                    // Node (Walk -> Pat B) is the boarding stop.
+                    // Both are participating in the transfer.
+                    // If Pat A -> Pat B (Direct transfer? Not possible in this model, usually walk is implicit or explicit).
+                    // In `run_raptor`, internal transfers are explicit "Walk" edges.
+                    // So: Pattern A -> Walk -> Pattern B.
+                    // Node 1: In=Pat A, Out=Walk. Diff! -> Increment.
+                    // Node 2: In=Walk, Out=Pat B. Diff! -> Increment.
+                    // This correctly identifies both ends of a transfer.
+
+                    // What about Loop?
+                    // Pattern A -> Walk -> Pattern A.
+                    // Node 1: In=Pat A, Out=Walk. Diff! -> Increment.
+                    // Node 2: In=Walk, Out=Pat A. Diff! -> Increment.
+                    // This STILL increments centrality!
+                    // We need to look ahead?
+
+                    // If the transfer connects the SAME pattern, we should ignore it?
+                    // "We are penalising the patterns that have transfers on themselves."
+
+                    // Case: Pat A -> Walk -> Pat A.
+                    // We want to ignore Node 1 and Node 2?
+                    // Or just not count this as a "valid transfer flow"?
+
+                    // If we have a sequence: Pattern X -> ... -> Pattern X.
+                    // Any nodes in between are facilitating a self-transfer.
+
+                    // But we iterate edges.
+                    // We can track "Previous Pattern".
+                    // If we switch Pattern A -> Walk, we don't know the next pattern yet.
+
+                    // Let's look at the triplet: (Incoming, Transfer, Outgoing).
+                    // If Incoming is Pattern A, Transfer is Walk, Outgoing is Pattern A.
+                    // Then we should NOT count the nodes involved in this walk.
+
+                    // What if it's Pattern A -> Pattern B (Direct, if we had that)?
+
+                    // Let's try to identify "Pattern Segments".
+                    // Path: [Pat A, Walk, Pat B, Walk, Pat C]
+                    // We want to count transitions between *Different* patterns.
+
+                    // Actually, the user said: "bus routes that are loops... are being overrepresentation".
+                    // This implies they are transferring from the route to itself.
+                    // If we filter out "Self Transfers", we reduce their count.
+
+                    // If I have Pat A -> Walk -> Pat A.
+                    // I should detect this and NOT increment centrality for the stops.
+
+                    // Implementation:
+                    // Iterate and look for Pattern Segments.
+                    // If we see Pat A ... Pat B.
+                    // If A != B, then the transition nodes are hubs.
+                    // If A == B, they are not.
+
+                    // But "Walk" is an edge.
+                    // Let's simplify:
+                    // A node is a hub if it connects two *different* "Transport Modes/Routes".
+                    // "Walk" is not a transport route in this context.
+
+                    // Let's look at the path as a sequence of Pattern IDs.
+                    // Ignore "Walk".
+                    // If we go Pat A -> Pat B.
+                    // The nodes where we leave A and board B are hubs.
+                    // If Pat A -> Pat A.
+                    // The nodes are NOT hubs.
+
+                    // Algorithm:
+                    // 1. Traverse path.
+                    // 2. Keep track of `last_pattern_id`.
+                    // 3. Keep track of `nodes_since_last_pattern`.
+                    // 4. When we hit a NEW pattern (not Walk):
+                    //    If new_pattern != last_pattern:
+                    //       Mark `nodes_since_last_pattern` as hubs.
+                    //       (These are the alighting and boarding stops).
+                    //    If new_pattern == last_pattern:
+                    //       Do NOT mark.
+                    //    Reset `nodes_since_last_pattern`.
+                    //    Update `last_pattern`.
+
+                    // Handling "Walk":
+                    // Edges:
+                    // 1. Pat A (Start -> U)
+                    // 2. Walk (U -> V)
+                    // 3. Pat B (V -> End)
+
+                    // Processing:
+                    // Edge 1: Type=Pattern A.
+                    //   - It's the first pattern. `last_pattern` = A.
+                    //   - Node U is the "end" of this segment. Add U to `pending_nodes`.
+                    // Edge 2: Type=Walk.
+                    //   - Node V is "end" of walk. Add V to `pending_nodes`.
+                    // Edge 3: Type=Pattern B.
+                    //   - Compare B with `last_pattern` (A).
+                    //   - A != B? Yes.
+                    //   - Increment centrality for all in `pending_nodes` (U, V).
+                    //   - Clear `pending_nodes`.
+                    //   - `last_pattern` = B.
+                    //   - Add End to `pending_nodes`? No, End is target.
+
+                    // Edge case: Pat A -> Pat A.
+                    // Edge 1: Pat A (Start -> U). `last`=A. `pending`=[U].
+                    // Edge 2: Walk (U -> V). `pending`=[U, V].
+                    // Edge 3: Pat A (V -> End).
+                    //   - Compare A with A. Equal.
+                    //   - Do NOT increment.
+                    //   - Clear `pending`.
+                    //   - `last` = A.
+
+                    // This looks correct!
+
+                    // What if there is NO walk? Pat A -> Pat B (at same stop).
+                    // Edge 1: Pat A (Start -> U). `last`=A. `pending`=[U].
+                    // Edge 2: Pat B (U -> End).
+                    //   - Compare B with A. Diff.
+                    //   - Increment `pending`=[U].
+                    //   - `last`=B.
+                    // Correct.
+
+                    // What about Start Node?
+                    // We don't count start node as hub usually.
+                    // My logic above adds U (end of edge 1).
+                    // If Edge 1 is Start->U. U is counted. Start is not. Correct.
+
+                    // What about End Node?
+                    // Edge 3: Pat B (V -> End).
+                    // We process this edge.
+                    // We check B vs A.
+                    // We flush `pending` (U, V).
+                    // We set `last`=B.
+                    // We add End to `pending`?
+                    // The loop continues? No, we are at end.
+                    // `pending` has [End].
+                    // But we finish loop. `pending` is discarded.
+                    // So End is not counted. Correct.
+
+                    // One detail: `run_raptor` edges have `pattern_signature`.
+                    // It is "Pattern:RouteID:Idx" or "Walk".
+
+                    // Let's implement this state machine.
+
+                    let mut last_pattern: Option<String> = None;
+                    let mut pending_nodes: Vec<usize> = Vec::new();
+
+                    for edge in &forward_edges {
+                        let sig = &edge.pattern_signature;
+                        let target_node = edge.to_hub_idx as usize;
+
+                        if sig.starts_with("Pattern:") {
+                            // It's a pattern
+                            if let Some(ref last) = last_pattern {
+                                if *last != *sig {
+                                    // Transfer between different patterns!
+                                    for &node in &pending_nodes {
+                                        centrality[node] += 1;
+                                    }
+                                } else {
+                                    // Same pattern - Self Transfer - Ignore pending nodes
+                                }
+                            } else {
+                                // First pattern encountered
+                                // No pending nodes to commit (start of trip)
+                            }
+
+                            // Reset for next segment
+                            last_pattern = Some(sig.clone());
+                            pending_nodes.clear();
+
+                            // The target of a pattern edge is a potential transfer point (alighting)
+                            pending_nodes.push(target_node);
+                        } else if sig == "Walk" {
+                            // It's a walk
+                            // Just add to pending
+                            pending_nodes.push(target_node);
+                        } else {
+                            // Unknown? Treat as Walk/Connection
+                            pending_nodes.push(target_node);
+                        }
+                    }
+                    // End of path. Pending nodes are the final destination stops.
+                    // We don't count them as hubs.
+                }
             }
         }
     }
@@ -2222,6 +2698,7 @@ fn identify_hubs_time_dependent(
 
     indexed_centrality
         .iter()
+        .filter(|(_, c)| *c > 0)
         .take(top_k)
         .map(|(i, _)| *i)
         .collect()

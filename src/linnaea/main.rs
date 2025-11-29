@@ -152,11 +152,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for partition in &partitions {
         let mut seen_patterns = AHashSet::new();
         for pattern in &partition.trip_patterns {
-            if !seen_patterns.insert(pattern.stop_indices.clone()) {
+            let direction_pattern =
+                &partition.direction_patterns[pattern.direction_pattern_idx as usize];
+            if !seen_patterns.insert(direction_pattern.stop_indices.clone()) {
                 continue;
             }
             let mut line_coords = Vec::new();
-            for &stop_idx in &pattern.stop_indices {
+            for &stop_idx in &direction_pattern.stop_indices {
                 if let Some(&coords) = partition_stops.get(&(partition.partition_id, stop_idx)) {
                     line_coords.push(vec![coords.0, coords.1]);
                 }

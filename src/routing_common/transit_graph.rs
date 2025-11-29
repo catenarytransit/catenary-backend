@@ -43,6 +43,11 @@ pub struct TransitPartition {
     #[prost(uint32, repeated, tag = "4")]
     pub time_deltas: Vec<u32>,
 
+    /// The "Pool" of Direction Patterns (Stop Lists).
+    /// Many TripPatterns (schedules) can share the same sequence of stops.
+    #[prost(message, repeated, tag = "11")]
+    pub direction_patterns: Vec<DirectionPattern>,
+
     /// Static footpaths between stops (e.g., Platform 1 to Platform 2).
     /// These are internal transfers, distinct from street walking.
     #[prost(message, repeated, tag = "5")]
@@ -142,6 +147,15 @@ pub struct TransitStop {
     pub lon: f64,
 }
 
+/// A "Direction Pattern" is a unique sequence of stops.
+/// It is shared by multiple TripPatterns (schedules).
+#[derive(Clone, PartialEq, Message)]
+pub struct DirectionPattern {
+    /// The sequence of Stop Indices (referencing `stops` vector) for this pattern.
+    #[prost(uint32, repeated, tag = "1")]
+    pub stop_indices: Vec<u32>,
+}
+
 /// A "Trip Pattern" is a collection of trips that visit the EXACT same
 /// sequence of stops. This is the primary unit of Trip-Based Routing.
 #[derive(Clone, PartialEq, Message)]
@@ -152,9 +166,10 @@ pub struct TripPattern {
     #[prost(string, tag = "2")]
     pub route_id: String,
 
-    /// The sequence of Stop Indices (referencing `stops` vector) for this pattern.
-    #[prost(uint32, repeated, tag = "3")]
-    pub stop_indices: Vec<u32>,
+    /// Index into `TransitPartition.direction_patterns`.
+    /// This defines the sequence of stops for this pattern.
+    #[prost(uint32, tag = "3")]
+    pub direction_pattern_idx: u32,
 
     /// The list of trips executing this pattern, SORTED by departure time.
     /// This sorting allows for binary search or linear scan during routing.

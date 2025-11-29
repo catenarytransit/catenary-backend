@@ -58,6 +58,7 @@ To avoid memory exhaustion (e.g., processing `planet.pbf`), generation is perfor
         2. Calculate edge weights between clusters (number of trips connecting them).
         3. Iteratively merge the pair of clusters with the highest connectivity, provided the merged size does not exceed the limit.
         4. Result: Convex-like, highly connected clusters.
+    - **Outcome**: This process naturally identifies **Border Nodes** (stops with edges crossing cluster boundaries), which become part of the Global Routing graph.
 
 ## Storage & Trigger Mechanism
 - **Concept**: Data is organized by **Chateau** (list of agencies sharing a GTFS feed).
@@ -103,10 +104,12 @@ We follow the hierarchy approach given by Bast et al. in Transfer Patterns[1] an
     - **Scope**: Computed per **Continent** (e.g., North America, Japan, Australia) to manage scale.
     - **Structure**: A DAG connecting **Global Nodes** (Hubs + Border Nodes) across the continent.
     - **Pre-computation**:
-        - Identify Hubs (high centrality via random shortest path sampling).
-        - Identify Border Nodes (cross-partition edges).
-        - Run Profile Search (CSA/Raptor) between Global Nodes on the continent-wide graph.
-        - Store optimal transfer sequences.
+        - **Hub Selection (Centrality)**:
+            - Hubs are identified by running random shortest path queries (Time-Dependent Centrality).
+            - **Self-Transfer Penalty**: We explicitly penalize "self-transfers" (transfers between the same route/pattern) to prevent stops on loop routes from being falsely identified as major hubs. This ensures selected hubs are true interchange points between different services.
+        - **Border Nodes**: Derived from the clustering process (stops with cross-partition links).
+        - **Global Graph**: Constructed from the union of Hubs and Border Nodes.
+        - **Pattern Generation**: Profile Search (CSA/Raptor) is run between all Global Nodes to find optimal long-distance transfer sequences.
 
 ---
 
