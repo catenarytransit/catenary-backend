@@ -15,6 +15,7 @@ use std::cmp::Ordering;
 use rand::prelude::*;
 
 struct ProcessedPattern {
+    chateau: String,
     route_id: String,
     stop_indices: Vec<u32>,
     trips: Vec<CompressedTrip>,
@@ -23,7 +24,7 @@ struct ProcessedPattern {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Chateau ID to process
+    /// Chateau ID to process (comma-separated for multiple)
     #[arg(short, long)]
     chateau: String,
 
@@ -46,7 +47,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     
     let args = Args::parse();
-    println!("Starting Gentian for Chateau: {}", args.chateau);
+    println!("Starting Gentian for Chateaux: {}", args.chateau);
 
     // Create output directory
     tokio::fs::create_dir_all(&args.output).await.context("Failed to create output dir")?;
@@ -64,69 +65,81 @@ async fn main() -> Result<()> {
 async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result<()> {
     let mut conn = pool.get().await.context("Failed to get DB connection")?;
 
-    // 1. Fetch Chateau info
-    use catenary::schema::gtfs::chateaus::dsl::*;
-    let _chateau_row: Chateau = chateaus
-        .filter(chateau.eq(&args.chateau))
-        .select(Chateau::as_select())
-        .first(&mut conn)
-        .await
-        .context("Chateau not found")?;
+    let chateaux_list: Vec<String> = args.chateau.split(',').map(|s| s.trim().to_string()).collect();
+    println!("Processing {} chateaux: {:?}", chateaux_list.len(), chateaux_list);
 
-    println!("Found Chateau: {}", args.chateau);
-    
-    // 2. Fetch All Data for Chateau
+    // 2. Fetch All Data for ALL Chateaux
     println!("Fetching data...");
     
-    // Stops
-    use catenary::schema::gtfs::stops::dsl::{stops, chateau as stop_chateau};
-    let db_stops: Vec<Stop> = stops
-        .filter(stop_chateau.eq(&args.chateau))
-        .select(Stop::as_select())
-        .load(&mut conn)
-        .await?;
-    println!("Fetched {} stops", db_stops.len());
+    let mut db_stops: Vec<Stop> = Vec::new();
+    let mut db_trips: Vec<DbCompressedTrip> = Vec::new();
+    let mut db_patterns: Vec<ItineraryPatternRow> = Vec::new();
+    let mut db_calendar: Vec<Calendar> = Vec::new();
+    let mut db_routes: Vec<Route> = Vec::new();
 
-    // Trips
-    use catenary::schema::gtfs::trips_compressed::dsl::{trips_compressed, chateau as trip_chateau};
-    let db_trips: Vec<DbCompressedTrip> = trips_compressed
-        .filter(trip_chateau.eq(&args.chateau))
-        .select(DbCompressedTrip::as_select())
-        .load(&mut conn)
-        .await?;
-    println!("Fetched {} trips", db_trips.len());
+    for chateau_id in &chateaux_list {
+        println!("  - Fetching data for {}", chateau_id);
+        
+        // Stops
+        use catenary::schema::gtfs::stops::dsl::{stops, chateau as stop_chateau};
+        let stops_chunk: Vec<Stop> = stops
+            .filter(stop_chateau.eq(chateau_id))
+            .select(Stop::as_select())
+            .load(&mut conn)
+            .await?;
+        db_stops.extend(stops_chunk);
 
-    // Itinerary Patterns
-    use catenary::schema::gtfs::itinerary_pattern::dsl::{itinerary_pattern, chateau as pattern_chateau};
-    let db_patterns: Vec<ItineraryPatternRow> = itinerary_pattern
-        .filter(pattern_chateau.eq(&args.chateau))
-        .select(ItineraryPatternRow::as_select())
-        .load(&mut conn)
-        .await?;
-    println!("Fetched {} pattern rows", db_patterns.len());
+        // Trips
+        use catenary::schema::gtfs::trips_compressed::dsl::{trips_compressed, chateau as trip_chateau};
+        let trips_chunk: Vec<DbCompressedTrip> = trips_compressed
+            .filter(trip_chateau.eq(chateau_id))
+            .select(DbCompressedTrip::as_select())
+            .load(&mut conn)
+            .await?;
+        db_trips.extend(trips_chunk);
 
-    // Calendar
-    use catenary::schema::gtfs::calendar::dsl::{calendar, chateau as cal_chateau};
-    let db_calendar: Vec<Calendar> = calendar
-        .filter(cal_chateau.eq(&args.chateau))
-        .select(Calendar::as_select())
-        .load(&mut conn)
-        .await?;
+        // Itinerary Patterns
+        use catenary::schema::gtfs::itinerary_pattern::dsl::{itinerary_pattern, chateau as pattern_chateau};
+        let patterns_chunk: Vec<ItineraryPatternRow> = itinerary_pattern
+            .filter(pattern_chateau.eq(chateau_id))
+            .select(ItineraryPatternRow::as_select())
+            .load(&mut conn)
+            .await?;
+        db_patterns.extend(patterns_chunk);
 
-    // Routes
-    use catenary::schema::gtfs::routes::dsl::{routes, chateau as route_chateau};
-    let db_routes: Vec<Route> = routes
-        .filter(route_chateau.eq(&args.chateau))
-        .select(Route::as_select())
-        .load(&mut conn)
-        .await?;
+        // Calendar
+        use catenary::schema::gtfs::calendar::dsl::{calendar, chateau as cal_chateau};
+        let calendar_chunk: Vec<Calendar> = calendar
+            .filter(cal_chateau.eq(chateau_id))
+            .select(Calendar::as_select())
+            .load(&mut conn)
+            .await?;
+        db_calendar.extend(calendar_chunk);
+
+        // Routes
+        use catenary::schema::gtfs::routes::dsl::{routes, chateau as route_chateau};
+        let routes_chunk: Vec<Route> = routes
+            .filter(route_chateau.eq(chateau_id))
+            .select(Route::as_select())
+            .load(&mut conn)
+            .await?;
+        db_routes.extend(routes_chunk);
+    }
+
+    println!("Total Fetched:");
+    println!("  - Stops: {}", db_stops.len());
+    println!("  - Trips: {}", db_trips.len());
+    println!("  - Patterns: {}", db_patterns.len());
+    println!("  - Routes: {}", db_routes.len());
+
     let route_map: HashMap<String, Route> = db_routes.into_iter().map(|r| (r.route_id.clone(), r)).collect();
     
     // 3. Process Data
-    let stop_id_map: HashMap<String, usize> = db_stops
+    // Map (Chateau, GTFS_ID) -> Global Index
+    let stop_id_map: HashMap<(String, String), usize> = db_stops
         .iter()
         .enumerate()
-        .map(|(i, s)| (s.gtfs_id.clone(), i))
+        .map(|(i, s)| ((s.chateau.clone(), s.gtfs_id.clone()), i))
         .collect();
 
     let mut pattern_rows_map: HashMap<String, Vec<&ItineraryPatternRow>> = HashMap::new();
@@ -157,7 +170,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     for (pattern_id, trips) in trips_by_pattern {
         if let Some(rows) = pattern_rows_map.get(&pattern_id) {
             let stop_indices: Vec<u32> = rows.iter().filter_map(|r| {
-                stop_id_map.get(r.stop_id.as_str()).map(|&i| i as u32)
+                stop_id_map.get(&(r.chateau.clone(), r.stop_id.to_string())).map(|&i| i as u32)
             }).collect();
 
             if stop_indices.len() != rows.len() { continue; }
@@ -215,6 +228,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             p_trips.sort_by_key(|t| t.start_time);
 
             processed_patterns.push(ProcessedPattern {
+                chateau: trips[0].chateau.clone(),
                 route_id: trips[0].route_id.clone(),
                 stop_indices,
                 trips: p_trips,
@@ -224,10 +238,12 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     println!("Processed {} patterns", processed_patterns.len());
 
-    // 4. Merge-Based Clustering
+    // 4. Merge-Based Clustering (Moved Before Hub Identification)
     println!("Clustering stops (Merge-Based)...");
     let clusters = merge_based_clustering(db_stops.len(), &adjacency, args.cluster_size);
     println!("Created {} clusters", clusters.len());
+
+
 
 
     // 5. Generate Chunks per Cluster
@@ -270,10 +286,260 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     println!("Identified {} intra-cluster border nodes", border_stops.len());
 
     // Identify Hubs (Time-Dependent Centrality)
-    println!("Identifying Hubs (Time-Dependent Centrality)...");
-    // Sample 500 random queries, select top 50 hubs
-    let hubs = identify_hubs_time_dependent(&db_stops, &processed_patterns, &global_time_deltas, &db_calendar, 500, 50);
-    println!("Identified {} hubs", hubs.len());
+    println!("Identifying Hubs (Hierarchical Approach)...");
+    let mut hubs: HashSet<usize> = HashSet::new();
+
+    // Helper to run identification on a subset
+    let run_hub_identification = |
+        subset_name: &str,
+        subset_stop_indices: &[usize],
+        subset_patterns: &[&ProcessedPattern],
+        sample_size_override: Option<usize>
+    | -> Result<HashSet<usize>> {
+        if subset_stop_indices.is_empty() || subset_patterns.is_empty() {
+            println!("  - Skipping {} (No data)", subset_name);
+            return Ok(HashSet::new());
+        }
+
+        // 1. Map Global -> Local
+        let mut global_to_local: HashMap<usize, u32> = HashMap::new();
+        let mut local_stops: Vec<Stop> = Vec::with_capacity(subset_stop_indices.len());
+        
+        for (local_idx, &global_idx) in subset_stop_indices.iter().enumerate() {
+            global_to_local.insert(global_idx, local_idx as u32);
+            local_stops.push(db_stops[global_idx].clone());
+        }
+
+        // 2. Re-index Patterns
+        let mut local_patterns: Vec<ProcessedPattern> = Vec::with_capacity(subset_patterns.len());
+        for pat in subset_patterns {
+            let mut new_indices = Vec::with_capacity(pat.stop_indices.len());
+            let mut valid = true;
+            for &global_idx in &pat.stop_indices {
+                if let Some(&local_idx) = global_to_local.get(&(global_idx as usize)) {
+                    new_indices.push(local_idx);
+                } else {
+                    // This pattern uses a stop not in the subset? 
+                    // This shouldn't happen if we filtered correctly, but if it does, we should probably skip or truncate?
+                    // For Regional pass, all stops should be in chateau.
+                    // For Global pass, we include all stops used by patterns.
+                    valid = false;
+                    break;
+                }
+            }
+            if valid {
+                let mut new_pat = ProcessedPattern {
+                    chateau: pat.chateau.clone(),
+                    route_id: pat.route_id.clone(),
+                    stop_indices: new_indices,
+                    trips: pat.trips.clone(),
+                };
+                local_patterns.push(new_pat);
+            }
+        }
+
+        // 3. Determine Parameters
+        let num_subset_stops = local_stops.len();
+        let dynamic_top_k = (num_subset_stops / 50).max(10).min(500); // Adjusted min/max
+        
+        let sample_size = sample_size_override.unwrap_or_else(|| {
+            2000 + (num_subset_stops / 5)
+        });
+
+        println!("  - Pass: {} | Stops: {} | Patterns: {} | Samples: {} | Top-K: {}", 
+            subset_name, num_subset_stops, local_patterns.len(), sample_size, dynamic_top_k);
+
+        // 4. Run Identification
+        let local_hubs = identify_hubs_time_dependent(
+            &local_stops, 
+            &local_patterns, 
+            &global_time_deltas, 
+            &db_calendar, 
+            sample_size, 
+            dynamic_top_k
+        );
+
+        // 5. Map Local -> Global
+        let mut global_hubs = HashSet::new();
+        for local_idx in local_hubs {
+            if local_idx < subset_stop_indices.len() {
+                global_hubs.insert(subset_stop_indices[local_idx]);
+            }
+        }
+        
+        Ok(global_hubs)
+    };
+
+    // --- PASS 1: Regional Hubs (Super-Clusters) ---
+    println!("  > Building Super-Clusters (Regions)...");
+    
+    // Build Super-Clusters
+    // Target size ~50,000 stops? Or just group connected clusters?
+    // Let's use a larger max_size for super-clustering.
+    let super_cluster_target_size = 50_000;
+    
+    // We need to cluster the CLUSTERS.
+    // Build Cluster Adjacency
+    let mut cluster_adj: HashMap<(usize, usize), u32> = HashMap::new();
+    let mut stop_to_cluster_map: Vec<usize> = vec![0; db_stops.len()];
+    for (c_idx, c_stops) in clusters.iter().enumerate() {
+        for &s in c_stops {
+            stop_to_cluster_map[s] = c_idx;
+        }
+    }
+
+    for (&(u, v), &w) in &adjacency {
+        let c1 = stop_to_cluster_map[u];
+        let c2 = stop_to_cluster_map[v];
+        if c1 != c2 {
+            let (min, max) = if c1 < c2 { (c1, c2) } else { (c2, c1) };
+            *cluster_adj.entry((min, max)).or_default() += w;
+        }
+    }
+
+    // Run clustering on clusters
+    // We can reuse merge_based_clustering logic but adapted for "Cluster Nodes".
+    // Or just implement a simple greedy merge here.
+    
+    let num_clusters = clusters.len();
+    let mut super_clusters: Vec<Vec<usize>> = (0..num_clusters).map(|i| vec![i]).collect(); // Indices into `clusters`
+    let mut sc_map: Vec<usize> = (0..num_clusters).collect(); // Cluster -> SuperCluster
+    let mut active_sc: HashSet<usize> = (0..num_clusters).collect();
+    
+    // Priority Queue for merges
+    #[derive(Eq, PartialEq)]
+    struct ScEdge {
+        weight: u32,
+        sc1: usize,
+        sc2: usize,
+    }
+    impl Ord for ScEdge {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.weight.cmp(&other.weight)
+        }
+    }
+    impl PartialOrd for ScEdge {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    
+    let mut pq = BinaryHeap::new();
+    for (&(c1, c2), &w) in &cluster_adj {
+        pq.push(ScEdge { weight: w, sc1: c1, sc2: c2 });
+    }
+    
+    // Helper to get size of super cluster (number of stops)
+    let get_sc_size = |sc_idx: usize, super_clusters: &Vec<Vec<usize>>, clusters: &Vec<Vec<usize>>| -> usize {
+        super_clusters[sc_idx].iter().map(|&c_idx| clusters[c_idx].len()).sum()
+    };
+
+    while let Some(edge) = pq.pop() {
+        let sc1 = sc_map[edge.sc1];
+        let sc2 = sc_map[edge.sc2];
+        
+        if sc1 == sc2 { continue; }
+        
+        let size1 = get_sc_size(sc1, &super_clusters, &clusters);
+        let size2 = get_sc_size(sc2, &super_clusters, &clusters);
+        
+        if size1 + size2 <= super_cluster_target_size {
+            // Merge sc2 into sc1
+            let to_move = super_clusters[sc2].clone();
+            for &c_idx in &to_move {
+                sc_map[c_idx] = sc1;
+            }
+            super_clusters[sc1].extend(to_move);
+            super_clusters[sc2].clear();
+            active_sc.remove(&sc2);
+        }
+    }
+    
+    let final_super_clusters: Vec<Vec<usize>> = super_clusters.into_iter().filter(|sc| !sc.is_empty()).collect();
+    println!("  > Created {} Super-Clusters (Regions) from {} base clusters", final_super_clusters.len(), num_clusters);
+
+    println!("  > Starting Regional Pass (Super-Clusters)...");
+    for (i, sc) in final_super_clusters.iter().enumerate() {
+        // Collect all stops in this super cluster
+        let mut region_stop_indices = Vec::new();
+        for &c_idx in sc {
+            region_stop_indices.extend(&clusters[c_idx]);
+        }
+        
+        // Filter Patterns
+        // We need patterns that touch ANY stop in this region.
+        // Optimization: Precompute pattern -> stop set? Or just iterate.
+        // Iterating processed_patterns (which can be large) for every super cluster might be slow if many SCs.
+        // But with 50k stops per SC, we have few SCs.
+        
+        let region_stop_set: HashSet<u32> = region_stop_indices.iter().map(|&idx| idx as u32).collect();
+        
+        let region_patterns: Vec<&ProcessedPattern> = processed_patterns.iter()
+            .filter(|p| p.stop_indices.iter().any(|s| region_stop_set.contains(s)))
+            .collect();
+
+        let region_hubs = run_hub_identification(
+            &format!("Region {} ({} clusters)", i, sc.len()),
+            &region_stop_indices,
+            &region_patterns,
+            None
+        )?;
+        
+        hubs.extend(region_hubs);
+    }
+
+    // --- PASS 2: Global Hubs (Long Distance / Rail) ---
+    println!("  > Starting Global Pass...");
+    
+    // Filter Patterns: Route Type 2 (Rail) or maybe others?
+    // Let's include Route Type 2 (Rail), 1 (Subway) if it crosses regions? 
+    // User said: "interregion long distance travel of trains and perhaps long distance buses"
+    // Route types: 2 (Rail), 3 (Bus), 1 (Subway/Metro).
+    // Long distance bus is hard to distinguish from local bus by route_type alone (both 3).
+    // But we can check if a pattern spans multiple chateaux? 
+    // Or just rely on Rail (2) for now as a proxy for "Backbone".
+    // Also include patterns that cross chateau boundaries?
+    // Let's stick to Route Type 2 (Rail) as the primary "Global" layer for now, 
+    // plus maybe patterns that have long average stop distances?
+    // For simplicity: Route Type 2.
+    
+    let global_patterns: Vec<&ProcessedPattern> = processed_patterns.iter()
+        .filter(|p| {
+            if let Some(route) = route_map.get(&p.route_id) {
+                // Type 2 = Rail, Type 101-108 = various rails.
+                // GTFS route types: 2 is Rail.
+                route.route_type == 2
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    if !global_patterns.is_empty() {
+        // Collect all stops used by these patterns
+        let mut global_stop_indices_set = HashSet::new();
+        for p in &global_patterns {
+            for &idx in &p.stop_indices {
+                global_stop_indices_set.insert(idx as usize);
+            }
+        }
+        let mut global_stop_indices: Vec<usize> = global_stop_indices_set.into_iter().collect();
+        global_stop_indices.sort(); // Deterministic order
+
+        let global_layer_hubs = run_hub_identification(
+            "Global Layer (Rail)",
+            &global_stop_indices,
+            &global_patterns,
+            None // Use default scaling
+        )?;
+
+        println!("    -> Identified {} global hubs", global_layer_hubs.len());
+        hubs.extend(global_layer_hubs);
+    } else {
+        println!("    -> No global patterns found (Route Type 2)");
+    }
+
+    println!("Total Unique Hubs Identified: {}", hubs.len());
 
 
     let mut intra_partition_edges: Vec<((usize, usize), String)> = Vec::new();
@@ -365,7 +631,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         // Query DB for external stops
         let external_stops = fetch_stops_in_bbox(
             search_min_lat, search_max_lat, search_min_lon, search_max_lon,
-            &args.chateau, &mut conn
+            &chateaux_list, &mut conn
         ).await?;
 
         println!("  - Found {} external stops in BBox", external_stops.len());
@@ -449,7 +715,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             }).collect();
 
             chunk_patterns.push(TripPattern {
-                chateau: args.chateau.clone(),
+                chateau: pat.chateau.clone(),
                 route_id: pat.route_id.clone(),
                 stop_indices: local_indices,
                 trips: pat.trips.clone(),
@@ -476,7 +742,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             partition_id: cluster_id as u32,
             external_transfers,
         };
-        let transfer_filename = format!("transfers_chunk_{}_{}.pbf", args.chateau, cluster_id);
+        let transfer_filename = format!("transfers_chunk_{}.pbf", cluster_id);
         let transfer_path = args.output.join(transfer_filename);
         println!("Saving transfer chunk to {}", transfer_path.display());
         save_pbf(&transfer_chunk, transfer_path.to_str().unwrap())?;
@@ -495,7 +761,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         // Compute Local Transfer Patterns
         compute_local_patterns_for_partition(&mut partition);
 
-        let filename = format!("transit_chunk_{}_{}.pbf", args.chateau, cluster_id);
+        let filename = format!("transit_chunk_{}.pbf", cluster_id);
         let path = args.output.join(filename);
         println!("Saving transit chunk to {}", path.display());
         save_pbf(&partition, path.to_str().unwrap())?;
@@ -1224,7 +1490,7 @@ async fn fetch_stops_in_bbox(
     max_lat: f64,
     min_lon: f64,
     max_lon: f64,
-    current_chateau: &str,
+    excluded_chateaux: &[String],
     conn: &mut AsyncPgConnection,
 ) -> Result<Vec<Stop>> {
     use catenary::schema::gtfs::stops::dsl::*;
@@ -1238,7 +1504,7 @@ async fn fetch_stops_in_bbox(
     );
 
     let results = stops
-        .filter(chateau.ne(current_chateau))
+        .filter(chateau.ne_all(excluded_chateaux))
         .filter(sql::<Bool>(&raw_sql))
         .select(Stop::as_select())
         .load(conn)
@@ -1338,6 +1604,7 @@ mod tests {
         // Pattern 2: 5 -> 6 -> 2 -> 7 -> 8 (Line B) - Intersects at 2
         
         let p1 = ProcessedPattern {
+            chateau: "test".to_string(),
             route_id: "A".to_string(),
             stop_indices: vec![0, 1, 2, 3, 4],
             trips: vec![CompressedTrip {
@@ -1352,6 +1619,7 @@ mod tests {
         };
         
         let p2 = ProcessedPattern {
+            chateau: "test".to_string(),
             route_id: "B".to_string(),
             stop_indices: vec![5, 6, 2, 7, 8],
             trips: vec![CompressedTrip {
