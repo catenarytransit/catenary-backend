@@ -77,6 +77,11 @@ pub struct TransitPartition {
     /// Local Transfer Patterns (LTPs).
     #[prost(message, repeated, tag = "10")]
     pub local_transfer_patterns: Vec<LocalTransferPattern>,
+
+    /// List of unique timezones used in this partition (e.g., "America/Los_Angeles").
+    /// Referenced by `TripPattern.timezone_idx`.
+    #[prost(string, repeated, tag = "12")]
+    pub timezones: Vec<String>,
 }
 
 /// A transfer to a stop in a different Chateau.
@@ -175,6 +180,10 @@ pub struct TripPattern {
     /// This sorting allows for binary search or linear scan during routing.
     #[prost(message, repeated, tag = "4")]
     pub trips: Vec<CompressedTrip>,
+
+    /// Index into `TransitPartition.timezones`.
+    #[prost(uint32, tag = "5")]
+    pub timezone_idx: u32,
 }
 
 /// A single Trip instance (e.g., "The 8:05 AM Bus").

@@ -8,16 +8,18 @@ fn test_transit_partition_serialization() {
         partition_id: 1,
         stops: vec![TransitStop {
             id: 0,
+            lat: 34.0,
+            lon: -118.0,
             chateau: "test_chateau".to_string(),
             gtfs_original_id: "stop_1".to_string(),
             is_hub: true,
-            lat: 34.0,
-            lon: -118.0,
+            is_border: false,
+            is_external_gateway: false,
         }],
         trip_patterns: vec![TripPattern {
             chateau: "test_chateau".to_string(),
             route_id: "route_1".to_string(),
-            stop_indices: vec![0],
+            direction_pattern_idx: 0,
             trips: vec![CompressedTrip {
                 gtfs_trip_id: "trip_1".to_string(),
                 service_mask: 1,
@@ -29,6 +31,9 @@ fn test_transit_partition_serialization() {
             }],
         }],
         time_deltas: vec![],
+        direction_patterns: vec![DirectionPattern {
+            stop_indices: vec![0],
+        }],
         internal_transfers: vec![],
         osm_links: vec![],
         service_ids: vec!["c_12345".to_string(), "c_67890".to_string()],
@@ -37,6 +42,8 @@ fn test_transit_partition_serialization() {
             added_dates: vec![20231225],
             removed_dates: vec![20230101],
         }],
+        _deprecated_external_transfers: vec![],
+        local_transfer_patterns: vec![],
     };
 
     let encoded = partition.encode_to_vec();

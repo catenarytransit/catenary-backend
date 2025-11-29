@@ -1,3 +1,4 @@
+pub mod api;
 pub mod osm_graph;
 pub mod transit_graph;
 

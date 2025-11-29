@@ -2,7 +2,7 @@ use ahash::AHashMap as HashMap;
 use ahash::AHashSet as HashSet;
 use anyhow::{Context, Result};
 use catenary::models::{
-    Calendar, CompressedTrip as DbCompressedTrip, ItineraryPatternRow, Route, Stop,
+    Agency, Calendar, CompressedTrip as DbCompressedTrip, ItineraryPatternRow, Route, Stop,
 };
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use catenary::routing_common::osm_graph::{StreetData, load_pbf, save_pbf};
@@ -28,6 +28,7 @@ struct ProcessedPattern {
     route_id: String,
     stop_indices: Vec<u32>,
     trips: Vec<CompressedTrip>,
+    timezone_idx: u32,
 }
 
 #[derive(Parser, Debug)]
@@ -107,6 +108,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     let mut db_patterns: Vec<ItineraryPatternRow> = Vec::new();
     let mut db_calendar: Vec<Calendar> = Vec::new();
     let mut db_routes: Vec<Route> = Vec::new();
+    let mut db_agencies: Vec<Agency> = Vec::new();
 
     for chateau_id in &chateaux_list {
         println!("  - Fetching data for {}", chateau_id);
@@ -159,13 +161,24 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             .load(&mut conn)
             .await?;
         db_routes.extend(routes_chunk);
+
+        // Agencies
+        use catenary::schema::gtfs::agencies::dsl::{agencies, chateau as agency_chateau};
+        let agencies_chunk: Vec<Agency> = agencies
+            .filter(agency_chateau.eq(chateau_id))
+            .select(Agency::as_select())
+            .load(&mut conn)
+            .await?;
+        db_agencies.extend(agencies_chunk);
     }
 
     println!("Total Fetched (Primary):");
     println!("  - Stops: {}", db_stops.len());
     println!("  - Trips: {}", db_trips.len());
     println!("  - Patterns: {}", db_patterns.len());
+    println!("  - Patterns: {}", db_patterns.len());
     println!("  - Routes: {}", db_routes.len());
+    println!("  - Agencies: {}", db_agencies.len());
 
     // 2b. Fetch Referenced External Stops
     let mut loaded_stops: HashSet<(String, String)> = db_stops
@@ -214,6 +227,37 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         .map(|r| (r.route_id.clone(), r))
         .collect();
 
+    // Map Route ID -> Timezone
+    // 1. Map Agency ID -> Timezone
+    let mut agency_timezone_map: HashMap<(String, String), String> = HashMap::new(); // (Chateau, AgencyID) -> Timezone
+    for agency in &db_agencies {
+        agency_timezone_map.insert(
+            (agency.chateau.clone(), agency.agency_id.clone()),
+            agency.agency_timezone.clone(),
+        );
+    }
+
+    // 2. Map Route ID -> Timezone
+    let mut route_timezone_map: HashMap<String, String> = HashMap::new();
+    for route in route_map.values() {
+        let tz = if let Some(agency_id) = &route.agency_id {
+            agency_timezone_map
+                .get(&(route.chateau.clone(), agency_id.clone()))
+                .cloned()
+        } else {
+            // Fallback: Try to find ANY agency for this chateau?
+            // Or just use the first one found for the chateau.
+            db_agencies
+                .iter()
+                .find(|a| a.chateau == route.chateau)
+                .map(|a| a.agency_timezone.clone())
+        };
+
+        if let Some(t) = tz {
+            route_timezone_map.insert(route.route_id.clone(), t);
+        }
+    }
+
     // 3. Process Data
     // Map (Chateau, GTFS_ID) -> Global Index
     let stop_id_map: HashMap<(String, String), usize> = db_stops
@@ -249,6 +293,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     let mut service_ids: Vec<String> = Vec::new();
     let mut service_id_map: HashMap<String, u32> = HashMap::new();
 
+    let mut global_timezones: Vec<String> = Vec::new();
+    let mut timezone_map: HashMap<String, u32> = HashMap::new();
+
     // Build Adjacency Graph for Clustering
     // Edge weight = Number of trips passing between two stops
     let mut adjacency: HashMap<(usize, usize), u32> = HashMap::new();
@@ -279,13 +326,28 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 *adjacency.entry((min, max)).or_default() += trip_count;
             }
 
-            // Calculate Time Deltas
             let mut deltas: Vec<u32> = Vec::new();
             deltas.push(0);
             for i in 1..rows.len() {
                 let curr = rows[i].arrival_time_since_start.unwrap_or(0);
                 deltas.push(curr as u32);
             }
+
+            // Timezone
+            let route_id = trips[0].route_id.clone();
+            let tz_str = route_timezone_map
+                .get(&route_id)
+                .cloned()
+                .unwrap_or_else(|| "UTC".to_string());
+
+            let tz_idx = if let Some(&idx) = timezone_map.get(&tz_str) {
+                idx
+            } else {
+                let idx = global_timezones.len() as u32;
+                global_timezones.push(tz_str.clone());
+                timezone_map.insert(tz_str, idx);
+                idx
+            };
 
             let delta_ptr = if let Some(&ptr) = time_deltas_map.get(&deltas) {
                 ptr
@@ -321,7 +383,6 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             }
 
             // Merge into ProcessedPattern
-            let route_id = trips[0].route_id.clone();
             let key = (route_id.clone(), stop_indices.clone());
 
             let entry = merged_patterns
@@ -331,6 +392,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                     route_id,
                     stop_indices,
                     trips: Vec::new(),
+                    timezone_idx: tz_idx,
                 });
             entry.trips.extend(p_trips);
         }
@@ -440,6 +502,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                     route_id: pat.route_id.clone(),
                     stop_indices: new_indices,
                     trips: pat.trips.clone(),
+                    timezone_idx: pat.timezone_idx,
                 };
                 local_patterns.push(new_pat);
             }
@@ -891,6 +954,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 route_id: pat.route_id.clone(),
                 direction_pattern_idx: dp_idx,
                 trips: pat.trips.clone(),
+                timezone_idx: pat.timezone_idx,
             });
         }
 
@@ -909,6 +973,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             service_exceptions: Vec::new(),
             _deprecated_external_transfers: Vec::new(),
             local_transfer_patterns: Vec::new(),
+            timezones: global_timezones.clone(),
         };
 
         // Save Transfer Chunk
@@ -1991,7 +2056,9 @@ mod tests {
                 service_idx: 0,
                 bikes_allowed: 0,
                 wheelchair_accessible: 0,
+                wheelchair_accessible: 0,
             }],
+            timezone_idx: 0,
         };
 
         let p2 = ProcessedPattern {
@@ -2006,7 +2073,9 @@ mod tests {
                 service_idx: 0,
                 bikes_allowed: 0,
                 wheelchair_accessible: 0,
+                wheelchair_accessible: 0,
             }],
+            timezone_idx: 0,
         };
 
         let patterns = vec![p1, p2];
@@ -2154,7 +2223,9 @@ mod tests {
                 service_idx: 0,
                 bikes_allowed: 0,
                 wheelchair_accessible: 0,
+                wheelchair_accessible: 0,
             }],
+            timezone_idx: 0,
         };
 
         let p_b = ProcessedPattern {
@@ -2169,7 +2240,9 @@ mod tests {
                 service_idx: 0,
                 bikes_allowed: 0,
                 wheelchair_accessible: 0,
+                wheelchair_accessible: 0,
             }],
+            timezone_idx: 0,
         };
 
         let p_c = ProcessedPattern {
@@ -2184,7 +2257,9 @@ mod tests {
                 service_idx: 0,
                 bikes_allowed: 0,
                 wheelchair_accessible: 0,
+                wheelchair_accessible: 0,
             }],
+            timezone_idx: 0,
         };
 
         let patterns = vec![p_loop, p_b, p_c];
@@ -2351,6 +2426,7 @@ fn identify_hubs_time_dependent(
             route_id: pat.route_id.clone(),
             direction_pattern_idx: dp_idx,
             trips: pat.trips.clone(),
+            timezone_idx: pat.timezone_idx,
         });
     }
 
@@ -2406,6 +2482,7 @@ fn identify_hubs_time_dependent(
         service_exceptions: Vec::new(),
         _deprecated_external_transfers: Vec::new(),
         local_transfer_patterns: Vec::new(),
+        timezones: vec!["UTC".to_string()], // Dummy, not used for centrality
     };
 
     // Precompute stop -> patterns
