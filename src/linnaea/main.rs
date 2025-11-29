@@ -117,6 +117,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             foreign_members: None,
                         });
                     }
+
+                    if stop.is_external_gateway {
+                        let mut properties = JsonObject::new();
+                        properties.insert("type".to_string(), "external_gateway".into());
+                        properties.insert("chateau".to_string(), stop.chateau.clone().into());
+                        properties
+                            .insert("gtfs_id".to_string(), stop.gtfs_original_id.clone().into());
+                        properties
+                            .insert("partition_id".to_string(), partition.partition_id.into());
+
+                        features.push(Feature {
+                            bbox: None,
+                            geometry: Some(Geometry::new(Value::Point(vec![stop.lon, stop.lat]))),
+                            id: None,
+                            properties: Some(properties),
+                            foreign_members: None,
+                        });
+                    }
                 }
                 partitions.push(partition);
             } else if filename.starts_with("transfer_chunk_") && filename.ends_with(".pbf") {
@@ -145,7 +163,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if line_coords.len() > 1 {
-                let color = get_color(&pattern.chateau);
+                let _color = get_color(&pattern.chateau);
                 let mut properties = JsonObject::new();
                 properties.insert("type".to_string(), "trip_pattern".into());
                 properties.insert("chateau".to_string(), pattern.chateau.clone().into());
@@ -173,6 +191,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let (Some(from), Some(to)) = (from_coords, to_coords) {
                 let mut properties = JsonObject::new();
                 properties.insert("type".to_string(), "internal_transfer".into());
+                properties.insert(
+                    "distance_meters".to_string(),
+                    transfer.distance_meters.into(),
+                );
+                properties.insert(
+                    "wheelchair_accessible".to_string(),
+                    transfer.wheelchair_accessible.into(),
+                );
 
                 features.push(Feature {
                     bbox: None,
@@ -247,6 +273,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let (Some(from), Some(to)) = (from_coords, to_coords) {
                 let mut properties = JsonObject::new();
                 properties.insert("type".to_string(), "external_transfer".into());
+                properties.insert(
+                    "distance_meters".to_string(),
+                    transfer.distance_meters.into(),
+                );
+                properties.insert(
+                    "wheelchair_accessible".to_string(),
+                    transfer.wheelchair_accessible.into(),
+                );
 
                 features.push(Feature {
                     bbox: None,
