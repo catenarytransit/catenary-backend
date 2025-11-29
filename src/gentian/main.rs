@@ -13,6 +13,9 @@ use ahash::AHashMap as HashMap;
 use ahash::AHashSet as HashSet;
 use std::cmp::Ordering;
 use rand::prelude::*;
+use serde::{Serialize, Deserialize};
+use std::fs::File;
+use std::io::BufReader;
 
 struct ProcessedPattern {
     chateau: String,
@@ -39,6 +42,10 @@ struct Args {
     /// Target cluster size (number of stops)
     #[arg(long, default_value = "4000")]
     cluster_size: usize,
+
+    /// Run in stitch mode (rebuild global graph from chunks)
+    #[arg(long)]
+    stitch: bool,
 }
 
 #[tokio::main]
@@ -57,7 +64,12 @@ async fn main() -> Result<()> {
     let pool = Arc::new(pool);
 
     // Run generation
-    generate_chunks(&args, pool).await?;
+    // Run generation or stitch
+    if args.stitch {
+        stitch_graph(&args).await?;
+    } else {
+        generate_chunks(&args, pool).await?;
+    }
 
     Ok(())
 }
@@ -126,11 +138,46 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         db_routes.extend(routes_chunk);
     }
 
-    println!("Total Fetched:");
+    println!("Total Fetched (Primary):");
     println!("  - Stops: {}", db_stops.len());
     println!("  - Trips: {}", db_trips.len());
     println!("  - Patterns: {}", db_patterns.len());
     println!("  - Routes: {}", db_routes.len());
+
+    // 2b. Fetch Referenced External Stops
+    let mut loaded_stops: HashSet<(String, String)> = db_stops.iter()
+        .map(|s| (s.chateau.clone(), s.gtfs_id.clone()))
+        .collect();
+        
+    let mut missing_stops: HashSet<(String, String)> = HashSet::new();
+    for row in &db_patterns {
+        let key = (row.chateau.clone(), row.stop_id.clone());
+        if !loaded_stops.contains(&key) {
+            missing_stops.insert(key);
+        }
+    }
+    
+    if !missing_stops.is_empty() {
+        println!("Fetching {} referenced external stops...", missing_stops.len());
+        let mut by_chateau: HashMap<String, Vec<String>> = HashMap::new();
+        for (c, s) in missing_stops {
+            by_chateau.entry(c).or_default().push(s);
+        }
+        
+        for (chateau_id, stop_ids) in by_chateau {
+             use catenary::schema::gtfs::stops::dsl::{stops, chateau, gtfs_id};
+             for chunk in stop_ids.chunks(1000) {
+                 let extra_stops: Vec<Stop> = stops
+                    .filter(chateau.eq(&chateau_id))
+                    .filter(gtfs_id.eq_any(chunk))
+                    .select(Stop::as_select())
+                    .load(&mut conn)
+                    .await?;
+                 db_stops.extend(extra_stops);
+             }
+        }
+        println!("  - Total Stops after fetching external: {}", db_stops.len());
+    }
 
     let route_map: HashMap<String, Route> = db_routes.into_iter().map(|r| (r.route_id.clone(), r)).collect();
     
@@ -768,6 +815,57 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     }
 
     // 6. Transfer Pattern Precomputation (Stubs)
+    // NEW: Save Manifest and Edges
+    println!("Saving Manifest and Edge Files...");
+    
+    // Manifest
+    let mut chateau_to_partitions: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut partition_to_chateaux: HashMap<u32, Vec<String>> = HashMap::new();
+    
+    for (s_idx, stop) in db_stops.iter().enumerate() {
+        let pid = stop_to_cluster[s_idx] as u32;
+        chateau_to_partitions.entry(stop.chateau.clone()).or_default().push(pid);
+        partition_to_chateaux.entry(pid).or_default().push(stop.chateau.clone());
+    }
+    
+    for v in chateau_to_partitions.values_mut() {
+        v.sort(); v.dedup();
+    }
+    for v in partition_to_chateaux.values_mut() {
+        v.sort(); v.dedup();
+    }
+    
+    let manifest = Manifest {
+        chateau_to_partitions,
+        partition_to_chateaux,
+    };
+    
+    let manifest_file = File::create(args.output.join("manifest.json"))?;
+    serde_json::to_writer(manifest_file, &manifest)?;
+    
+    // Edges
+    let mut edges_by_partition: HashMap<u32, Vec<EdgeEntry>> = HashMap::new();
+    
+    for &((u, v), ref sig) in &cross_partition_edges {
+        let p_from = stop_to_cluster[u] as u32;
+        let s_from = &db_stops[u];
+        let s_to = &db_stops[v];
+        
+        edges_by_partition.entry(p_from).or_default().push(EdgeEntry {
+            from_chateau: s_from.chateau.clone(),
+            from_id: s_from.gtfs_id.clone(),
+            to_chateau: s_to.chateau.clone(),
+            to_id: s_to.gtfs_id.clone(),
+            signature: sig.clone(),
+        });
+    }
+    
+    for (pid, edges) in edges_by_partition {
+        let path = args.output.join(format!("edges_chunk_{}.json", pid));
+        let file = File::create(path)?;
+        serde_json::to_writer(file, &edges)?;
+    }
+
     // 6. Transfer Pattern Precomputation
     println!("Computing Transfer Patterns...");
     // Local patterns computed per partition above.
@@ -1857,11 +1955,116 @@ fn identify_hubs_time_dependent(
     let mut indexed_centrality: Vec<(usize, usize)> = centrality.into_iter().enumerate().collect();
     indexed_centrality.sort_by(|a, b| b.1.cmp(&a.1)); // Descending
 
-    println!("  - Top 5 Hubs:");
-    for i in 0..5.min(indexed_centrality.len()) {
-        let (idx, count) = indexed_centrality[i];
-        println!("    {}: {} (Score: {})", idx, stops[idx].name.as_deref().unwrap_or("?"), count);
+    indexed_centrality.iter().take(top_k).map(|(i, _)| *i).collect()
+}
+
+#[derive(Serialize, Deserialize)]
+struct Manifest {
+    chateau_to_partitions: HashMap<String, Vec<u32>>,
+    partition_to_chateaux: HashMap<u32, Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct EdgeEntry {
+    from_chateau: String,
+    from_id: String,
+    to_chateau: String,
+    to_id: String,
+    signature: String,
+}
+
+async fn stitch_graph(args: &Args) -> Result<()> {
+    println!("Stitching graph from chunks in {:?}", args.output);
+    
+    // 1. Load Manifest
+    let manifest_path = args.output.join("manifest.json");
+    let file = File::open(&manifest_path).context("Failed to open manifest")?;
+    let reader = BufReader::new(file);
+    let manifest: Manifest = serde_json::from_reader(reader)?;
+    
+    // 2. Identify all partitions
+    let mut partitions = HashSet::new();
+    for p_list in manifest.chateau_to_partitions.values() {
+        for &p in p_list {
+            partitions.insert(p);
+        }
+    }
+    let mut sorted_partitions: Vec<u32> = partitions.into_iter().collect();
+    sorted_partitions.sort();
+    
+    println!("Found {} partitions", sorted_partitions.len());
+    
+    // 3. Load Chunks and Build Global Node Map
+    // Map (chateau, gtfs_id) -> (partition_id, local_idx)
+    let mut global_node_map: HashMap<(String, String), (u32, u32)> = HashMap::new();
+    let mut all_global_nodes: HashMap<u32, Vec<TransitStop>> = HashMap::new();
+    let mut loaded_partitions: HashMap<u32, TransitPartition> = HashMap::new();
+
+    // New Global Index Space
+    let mut node_to_global_idx: HashMap<(u32, u32), usize> = HashMap::new();
+    let mut global_to_partition_map: HashMap<usize, (u32, u32)> = HashMap::new();
+    let mut next_global_idx = 0;
+
+    for &pid in &sorted_partitions {
+        let path = args.output.join(format!("transit_chunk_{}.pbf", pid));
+        let partition: TransitPartition = load_pbf(path.to_str().unwrap())?;
+        
+        for (local_idx, stop) in partition.stops.iter().enumerate() {
+            global_node_map.insert((stop.chateau.clone(), stop.gtfs_original_id.clone()), (pid, local_idx as u32));
+            
+            // Assign new global index
+            let g_idx = next_global_idx;
+            next_global_idx += 1;
+            node_to_global_idx.insert((pid, local_idx as u32), g_idx);
+            global_to_partition_map.insert(g_idx, (pid, local_idx as u32));
+
+            if stop.is_hub || stop.is_border {
+                all_global_nodes.entry(pid).or_default().push(stop.clone());
+            }
+        }
+        loaded_partitions.insert(pid, partition);
+    }
+    
+    // 4. Recompute Intra-Partition Edges
+    let mut intra_partition_edges: Vec<((usize, usize), String)> = Vec::new();
+    for &pid in &sorted_partitions {
+        if let Some(partition) = loaded_partitions.get(&pid) {
+            // Build global_indices vector for this partition
+            let mut global_indices = Vec::new();
+            for local_idx in 0..partition.stops.len() {
+                let g_idx = node_to_global_idx.get(&(pid, local_idx as u32)).unwrap();
+                global_indices.push(*g_idx as u32);
+            }
+            
+            let edges = compute_intra_partition_connectivity(partition, &global_indices);
+            intra_partition_edges.extend(edges);
+        }
     }
 
-    indexed_centrality.iter().take(top_k).map(|(i, _)| *i).collect()
+    // 5. Load Cross-Partition Edges
+    let mut cross_partition_edges: Vec<((usize, usize), String)> = Vec::new();
+    for &pid in &sorted_partitions {
+        let edge_path = args.output.join(format!("edges_chunk_{}.json", pid));
+        if edge_path.exists() {
+            let file = File::open(&edge_path)?;
+            let reader = BufReader::new(file);
+            let edges: Vec<EdgeEntry> = serde_json::from_reader(reader)?;
+            
+            for edge in edges {
+                let from_key = (edge.from_chateau, edge.from_id);
+                let to_key = (edge.to_chateau, edge.to_id);
+                
+                if let (Some(&(p1, l1)), Some(&(p2, l2))) = (global_node_map.get(&from_key), global_node_map.get(&to_key)) {
+                    if let (Some(&g1), Some(&g2)) = (node_to_global_idx.get(&(p1, l1)), node_to_global_idx.get(&(p2, l2))) {
+                        cross_partition_edges.push(((g1, g2), edge.signature));
+                    }
+                }
+            }
+        }
+    }
+
+    // 6. Compute Global Patterns
+    compute_global_patterns(&all_global_nodes, &cross_partition_edges, &intra_partition_edges, &global_to_partition_map, &args.output);
+
+    Ok(())
 }
