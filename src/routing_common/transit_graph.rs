@@ -13,6 +13,45 @@
 //    - Stores the pre-computed DAGs connecting "Hub Stops" between partitions.
 
 use prost::Message;
+use std::fs::File;
+use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::path::Path;
+
+// ===========================================================================
+// IO HELPERS
+// ===========================================================================
+
+/// A sequence of time deltas for a trip.
+#[derive(Clone, PartialEq, Message)]
+pub struct TimeDeltaSequence {
+    #[prost(uint32, repeated, tag = "1")]
+    pub deltas: Vec<u32>,
+}
+
+/// Generic helper to save any Protobuf message to a file.
+pub fn save_pbf<T: Message>(data: &T, path: &str) -> io::Result<()> {
+    let path = Path::new(path);
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    let payload = data.encode_to_vec();
+    writer.write_all(&payload)?;
+    Ok(())
+}
+
+/// Generic helper to load any Protobuf message from a file.
+pub fn load_pbf<T: Message + Default>(path: &str) -> io::Result<T> {
+    let path = Path::new(path);
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer)?;
+    T::decode(&buffer[..]).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Protobuf decode error: {}", e),
+        )
+    })
+}
 
 // ===========================================================================
 // 1. TRANSIT PARTITION (The Chunk)
@@ -36,12 +75,10 @@ pub struct TransitPartition {
     pub trip_patterns: Vec<TripPattern>,
 
     /// The "Pool" of time deltas.
-    /// To save space, trips do not store their own times. They point to a slice
-    /// of this massive array.
-    /// Values are "Seconds since previous stop".
-    /// [Trip A Stop 1 (0), Trip A Stop 2 (300), Trip B Stop 1 (0)...]
-    #[prost(uint32, repeated, tag = "4")]
-    pub time_deltas: Vec<u32>,
+    /// To save space, trips do not store their own times. They point to a sequence
+    /// in this list.
+    #[prost(message, repeated, tag = "4")]
+    pub time_deltas: Vec<TimeDeltaSequence>,
 
     /// The "Pool" of Direction Patterns (Stop Lists).
     /// Many TripPatterns (schedules) can share the same sequence of stops.
@@ -201,15 +238,14 @@ pub struct CompressedTrip {
     #[prost(uint32, tag = "2")]
     pub service_mask: u32,
 
-    /// Absolute Start Time (Seconds past midnight).
+    /// Absolute Start Time (Seconds past reference midnight).
     /// e.g., 08:00 AM = 28800.
     #[prost(uint32, tag = "3")]
     pub start_time: u32,
 
-    /// Pointer to the `time_deltas` array in `TransitPartition`.
-    /// The trip reads `stop_indices.len()` integers starting at this index.
+    /// Index into `TransitPartition.time_deltas`.
     #[prost(uint32, tag = "4")]
-    pub delta_pointer: u32,
+    pub time_delta_idx: u32,
 
     /// Index into `TransitPartition.service_ids`.
     /// Allows looking up the specific Service ID for this trip.
@@ -335,11 +371,38 @@ pub struct DagEdge {
     pub to_hub_idx: u32,
 
     /// The "Transfer Pattern" used here.
-    /// Simplification: Just storing the fact that a connection exists.
-    /// In full "Scalable Transfer Patterns", this might point to a specific
-    /// trip pattern sequence.
-    #[prost(string, tag = "3")]
-    pub pattern_signature: String,
+    /// Replaces the old string-based signature with a structured reference.
+    #[prost(oneof = "EdgeType", tags = "3, 4")]
+    pub edge_type: Option<EdgeType>,
+}
+
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
+pub struct TransitEdge {
+    /// Index into the source partition's `trip_patterns`.
+    #[prost(uint32, tag = "1")]
+    pub trip_pattern_idx: u32,
+
+    /// Index in the pattern's stop sequence (NOT the global stop index).
+    #[prost(uint32, tag = "2")]
+    pub start_stop_idx: u32,
+
+    /// Index in the pattern's stop sequence.
+    #[prost(uint32, tag = "3")]
+    pub end_stop_idx: u32,
+}
+
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
+pub struct WalkEdge {
+    #[prost(uint32, tag = "1")]
+    pub duration_seconds: u32,
+}
+
+#[derive(Clone, PartialEq, prost::Oneof, serde::Serialize, serde::Deserialize)]
+pub enum EdgeType {
+    #[prost(message, tag = "3")]
+    Transit(TransitEdge),
+    #[prost(message, tag = "4")]
+    Walk(WalkEdge),
 }
 
 /// Local Transfer Patterns (LTPs).
@@ -355,4 +418,15 @@ pub struct LocalTransferPattern {
     /// These edges describe optimal paths to reach other stops (primarily border stops).
     #[prost(message, repeated, tag = "2")]
     pub edges: Vec<DagEdge>,
+}
+
+/// Represents an edge between partitions in the global graph.
+/// Used for "edges_chunk_X.json".
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize, Debug)]
+pub struct EdgeEntry {
+    pub from_chateau: String,
+    pub from_id: String,
+    pub to_chateau: String,
+    pub to_id: String,
+    pub edge_type: Option<EdgeType>,
 }

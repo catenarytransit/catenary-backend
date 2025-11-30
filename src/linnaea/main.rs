@@ -1,7 +1,9 @@
 //cargo run --bin linnaea --release -- --input containers/test_graph_gen/output --output transit_viz.geojson
 
 use ahash::{AHashMap, AHashSet};
-use catenary::routing_common::transit_graph::{TransferChunk, TransitPartition};
+use catenary::routing_common::transit_graph::{
+    EdgeType, GlobalPatternIndex, TransferChunk, TransitPartition,
+};
 use clap::Parser;
 use geojson::{Feature, FeatureCollection, Geometry, JsonObject, Value};
 use prost::Message;
@@ -50,6 +52,17 @@ fn get_color(key: &str) -> String {
     TAILWIND_COLORS[hash as usize % TAILWIND_COLORS.len()].to_string()
 }
 
+fn format_edge_type(edge_type: &Option<EdgeType>) -> String {
+    match edge_type {
+        Some(EdgeType::Transit(t)) => format!(
+            "Pattern:{}:{}-{}",
+            t.trip_pattern_idx, t.start_stop_idx, t.end_stop_idx
+        ),
+        Some(EdgeType::Walk(w)) => format!("Walk:{}s", w.duration_seconds),
+        None => "Unknown".to_string(),
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -58,9 +71,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut partition_stops: AHashMap<(u32, u32), (f64, f64)> = AHashMap::new(); // (partition_id, stop_idx) -> coords
     let mut partitions: Vec<TransitPartition> = Vec::new();
     let mut transfer_chunks: Vec<TransferChunk> = Vec::new();
+    let mut global_pattern_index: Option<GlobalPatternIndex> = None;
 
     println!("Reading files from {:?}", args.input);
 
+    let mut hub_count = 0;
     let entries = std::fs::read_dir(&args.input)?;
     for entry in entries {
         let entry = entry?;
@@ -101,6 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     if stop.is_hub {
+                        hub_count += 1;
                         let mut properties = JsonObject::new();
                         properties.insert("type".to_string(), "hub_node".into());
                         properties.insert("chateau".to_string(), stop.chateau.clone().into());
@@ -144,9 +160,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 file.read_to_end(&mut buffer)?;
                 let chunk = TransferChunk::decode(&buffer[..])?;
                 transfer_chunks.push(chunk);
+            } else if filename == "global_patterns.pbf" {
+                println!("Loading global patterns: {}", filename);
+                let mut file = File::open(&path)?;
+                let mut buffer = Vec::new();
+                file.read_to_end(&mut buffer)?;
+                global_pattern_index = Some(GlobalPatternIndex::decode(&buffer[..])?);
             }
         }
     }
+    println!("Total Hub Nodes Found: {}", hub_count);
 
     println!("Processing patterns...");
     for partition in &partitions {
@@ -237,7 +260,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     properties.insert("partition_id".to_string(), partition.partition_id.into());
                     properties.insert(
                         "signature".to_string(),
-                        edge.pattern_signature.clone().into(),
+                        format_edge_type(&edge.edge_type).into(),
                     );
 
                     features.push(Feature {
@@ -304,6 +327,84 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
+    }
+
+    if let Some(index) = global_pattern_index {
+        println!("Processing global transfer patterns (overlay)...");
+        println!("Validating hubs...");
+
+        for dag in &index.partition_dags {
+            // Validation: Check if hubs exist and are marked correctly
+            for (i, hub) in dag.hubs.iter().enumerate() {
+                // Check if partition exists
+                let partition = partitions
+                    .iter()
+                    .find(|p| p.partition_id == hub.original_partition_id);
+                if let Some(p) = partition {
+                    // Check if stop exists
+                    if let Some(stop) = p.stops.get(hub.stop_idx_in_partition as usize) {
+                        if !stop.is_hub && !stop.is_border {
+                            println!(
+                                "VALIDATION ERROR: Global Hub {} (Partition {}, Stop {}) is NOT marked as a hub in the partition!",
+                                i, hub.original_partition_id, hub.stop_idx_in_partition
+                            );
+                        }
+                    } else {
+                        println!(
+                            "VALIDATION ERROR: Global Hub {} references non-existent stop {} in partition {}",
+                            i, hub.stop_idx_in_partition, hub.original_partition_id
+                        );
+                    }
+                } else {
+                    println!(
+                        "VALIDATION ERROR: Global Hub {} references non-existent partition {}",
+                        i, hub.original_partition_id
+                    );
+                }
+            }
+
+            // Visualization
+            for edge in &dag.edges {
+                let from_hub = &dag.hubs[edge.from_hub_idx as usize];
+                let to_hub = &dag.hubs[edge.to_hub_idx as usize];
+
+                let from_coords = partition_stops.get(&(
+                    from_hub.original_partition_id,
+                    from_hub.stop_idx_in_partition,
+                ));
+                let to_coords = partition_stops
+                    .get(&(to_hub.original_partition_id, to_hub.stop_idx_in_partition));
+
+                if let (Some(from), Some(to)) = (from_coords, to_coords) {
+                    let mut properties = JsonObject::new();
+                    properties.insert("type".to_string(), "global_transfer_pattern".into());
+                    properties.insert("from_partition".to_string(), dag.from_partition.into());
+                    properties.insert("to_partition".to_string(), dag.to_partition.into());
+                    properties.insert(
+                        "signature".to_string(),
+                        format_edge_type(&edge.edge_type).into(),
+                    );
+
+                    features.push(Feature {
+                        bbox: None,
+                        geometry: Some(Geometry::new(Value::LineString(vec![
+                            vec![from.0, from.1],
+                            vec![to.0, to.1],
+                        ]))),
+                        id: None,
+                        properties: Some(properties),
+                        foreign_members: None,
+                    });
+                } else {
+                    println!(
+                        "Warning: Could not resolve endpoints for global edge {} -> {}",
+                        edge.from_hub_idx, edge.to_hub_idx
+                    );
+                }
+            }
+        }
+    } else {
+        println!("Warning: No global_patterns.pbf found. Skipping global overlay.");
     }
 
     let geojson = geojson::GeoJson::FeatureCollection(FeatureCollection {

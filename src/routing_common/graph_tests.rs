@@ -24,11 +24,12 @@ fn test_transit_partition_serialization() {
                 gtfs_trip_id: "trip_1".to_string(),
                 service_mask: 1,
                 start_time: 3600,
-                delta_pointer: 0,
+                time_delta_idx: 0,
                 service_idx: 0,
                 bikes_allowed: 1,
                 wheelchair_accessible: 1,
             }],
+            timezone_idx: 0,
         }],
         time_deltas: vec![],
         direction_patterns: vec![DirectionPattern {
@@ -44,6 +45,7 @@ fn test_transit_partition_serialization() {
         }],
         _deprecated_external_transfers: vec![],
         local_transfer_patterns: vec![],
+        timezones: vec!["UTC".to_string()],
     };
 
     let encoded = partition.encode_to_vec();

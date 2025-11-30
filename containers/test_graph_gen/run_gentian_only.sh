@@ -24,16 +24,15 @@ export PGPASSWORD=catenary
 # We use the same query as run_test.sh to ensure consistency
 CHATEAUS=$(psql -h postgres -U catenary -d catenary -t -c "SELECT c.chateau FROM gtfs.chateaus c WHERE EXISTS (SELECT 1 FROM gtfs.routes r WHERE r.chateau = c.chateau);")
 
-for chateau in $CHATEAUS; do
-    # Trim whitespace
-    chateau=$(echo "$chateau" | xargs)
-    if [ -n "$chateau" ]; then
-        echo "Running Gentian for $chateau"
-        /catenary/output-binaries/gentian \
-            --chateau "$chateau" \
-            --osm-chunks /catenary/osm_chunks \
-            --output /catenary/graph_output
-    fi
-done
+# Join chateaus with commas
+CHATEAU_LIST=$(echo "$CHATEAUS" | tr '\n' ',' | sed 's/,$//')
+
+if [ -n "$CHATEAU_LIST" ]; then
+    echo "Running Gentian for ALL chateaus: $CHATEAU_LIST"
+    /catenary/output-binaries/gentian \
+        --chateau "$CHATEAU_LIST" \
+        --osm-chunks /catenary/osm_chunks \
+        --output /catenary/graph_output
+fi
 
 echo "Gentian Run Complete!"

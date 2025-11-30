@@ -1,0 +1,20 @@
+version: '3.8'
+services:
+  edelweiss:
+    build:
+      context: ../../
+      dockerfile: containers/edelweiss/Dockerfile
+    ports:
+      - "9090:9090"
+    environment:
+      DATABASE_URL: postgres://catenary:catenary@postgres/catenary
+      GRAPH_DIR: /graphs
+    volumes:
+      - ../test_graph_gen/output:/graphs
+    networks:
+      - default
+
+networks:
+  default:
+    name: test_graph_gen_default
+    external: true

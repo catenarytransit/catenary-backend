@@ -246,3 +246,11 @@ path = "src/gentian/main.rs"
 [[bin]]
 name = "linnaea"
 path = "src/linnaea/main.rs"
+
+[[bin]]
+name = "edelweiss"
+path = "src/edelweiss/main.rs"
+
+[[bin]]
+name = "test_edelweiss_client"
+path = "src/test_edelweiss_client/main.rs"
