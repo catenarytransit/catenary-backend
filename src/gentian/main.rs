@@ -1495,6 +1495,27 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     let manifest_file = File::create(args.output.join("manifest.json"))?;
     serde_json::to_writer(manifest_file, &manifest)?;
 
+    // Cleanup Stale Partitions
+    println!("Cleaning up stale partitions...");
+    let valid_partitions: HashSet<u32> = manifest.partition_to_chateaux.keys().cloned().collect();
+    let mut entries = tokio::fs::read_dir(&args.output).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+            if filename.starts_with("transit_chunk_") && filename.ends_with(".pbf") {
+                let pid_str = filename
+                    .trim_start_matches("transit_chunk_")
+                    .trim_end_matches(".pbf");
+                if let Ok(pid) = pid_str.parse::<u32>() {
+                    if !valid_partitions.contains(&pid) {
+                        println!("Deleting stale partition: {}", filename);
+                        tokio::fs::remove_file(path).await?;
+                    }
+                }
+            }
+        }
+    }
+
     // Edges
     let mut edges_by_partition: HashMap<u32, Vec<EdgeEntry>> = HashMap::new();
 
