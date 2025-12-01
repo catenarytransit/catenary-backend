@@ -6,15 +6,18 @@ use catenary::models::{
 };
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use catenary::routing_common::osm_graph::{StreetData, load_pbf, save_pbf};
+use catenary::routing_common::transit_graph::BoundaryPoint;
 use catenary::routing_common::transit_graph::{
     CompressedTrip, DagEdge, DirectionPattern, EdgeEntry, EdgeType, ExternalTransfer, GlobalHub,
-    GlobalPatternIndex, LocalTransferPattern, OsmLink, PartitionDag, StaticTransfer,
-    TimeDeltaSequence, TransferChunk, TransitEdge, TransitPartition, TransitStop, TripPattern,
-    WalkEdge,
+    GlobalPatternIndex, LocalTransferPattern, Manifest, OsmLink, PartitionBoundary, PartitionDag,
+    StaticTransfer, TimeDeltaSequence, TransferChunk, TransitEdge, TransitPartition, TransitStop,
+    TripPattern, WalkEdge,
 };
 use clap::Parser;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use geo::prelude::*;
+use geo::{ConvexHull, MultiPoint, Point};
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -101,8 +104,141 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         chateaux_list
     );
 
-    // 2. Fetch All Data for ALL Chateaux
-    println!("Fetching data...");
+    // Load existing manifest if it exists
+    let manifest_path = args.output.join("manifest.json");
+    let mut existing_manifest = if manifest_path.exists() {
+        let file = File::open(&manifest_path).context("Failed to open manifest.json")?;
+        let reader = BufReader::new(file);
+        serde_json::from_reader(reader).unwrap_or_else(|_| Manifest {
+            chateau_to_partitions: std::collections::HashMap::new(),
+            partition_to_chateaux: std::collections::HashMap::new(),
+            partition_boundaries: std::collections::HashMap::new(),
+        })
+    } else {
+        Manifest {
+            chateau_to_partitions: std::collections::HashMap::new(),
+            partition_to_chateaux: std::collections::HashMap::new(),
+            partition_boundaries: std::collections::HashMap::new(),
+        }
+    };
+
+    let mut used_ids: HashSet<u32> = existing_manifest
+        .partition_boundaries
+        .keys()
+        .cloned()
+        .collect();
+
+    // 2. Identify Overlapping Partitions & Expand Chateaux List
+    println!("Identifying overlapping partitions...");
+
+    let mut chateaux_to_process: HashSet<String> = chateaux_list.into_iter().collect();
+    let mut processed_chateaux: HashSet<String> = HashSet::new();
+    let mut partitions_to_remove: HashSet<u32> = HashSet::new();
+
+    // Initial fetch of stops for requested chateaux to determine BBox
+    let mut initial_stops: Vec<Stop> = Vec::new();
+    for chateau_id in &chateaux_to_process {
+        use catenary::schema::gtfs::stops::dsl::{chateau as stop_chateau, stops};
+        let stops_chunk: Vec<Stop> = stops
+            .filter(stop_chateau.eq(chateau_id))
+            .select(Stop::as_select())
+            .load(&mut conn)
+            .await?;
+        initial_stops.extend(stops_chunk);
+    }
+
+    if !initial_stops.is_empty() {
+        let mut min_lat = f64::MAX;
+        let mut max_lat = f64::MIN;
+        let mut min_lon = f64::MAX;
+        let mut max_lon = f64::MIN;
+
+        for s in &initial_stops {
+            let lat = s.point.as_ref().map(|p| p.y).unwrap_or(0.0);
+            let lon = s.point.as_ref().map(|p| p.x).unwrap_or(0.0);
+            if lat < min_lat {
+                min_lat = lat;
+            }
+            if lat > max_lat {
+                max_lat = lat;
+            }
+            if lon < min_lon {
+                min_lon = lon;
+            }
+            if lon > max_lon {
+                max_lon = lon;
+            }
+        }
+
+        // Expand BBox slightly to catch nearby partitions
+        let expansion = 0.05; // ~5km
+        min_lat -= expansion;
+        max_lat += expansion;
+        min_lon -= expansion;
+        max_lon += expansion;
+
+        // Find overlapping partitions in manifest
+        for (pid, boundary) in &existing_manifest.partition_boundaries {
+            // Calculate bbox of the boundary polygon
+            let mut b_min_lat = f64::MAX;
+            let mut b_max_lat = f64::MIN;
+            let mut b_min_lon = f64::MAX;
+            let mut b_max_lon = f64::MIN;
+
+            for p in &boundary.points {
+                if p.lat < b_min_lat {
+                    b_min_lat = p.lat;
+                }
+                if p.lat > b_max_lat {
+                    b_max_lat = p.lat;
+                }
+                if p.lon < b_min_lon {
+                    b_min_lon = p.lon;
+                }
+                if p.lon > b_max_lon {
+                    b_max_lon = p.lon;
+                }
+            }
+
+            // Check intersection of bboxes
+            // Two bboxes (min_lat, min_lon, max_lat, max_lon) and (b_min_lat, ...) overlap if:
+            // max_lat >= b_min_lat && min_lat <= b_max_lat && ...
+            if max_lat >= b_min_lat
+                && min_lat <= b_max_lat
+                && max_lon >= b_min_lon
+                && min_lon <= b_max_lon
+            {
+                partitions_to_remove.insert(*pid);
+            }
+        }
+    }
+
+    // Also add partitions that contain any of the requested chateaux (to ensure complete replacement)
+    for chateau_id in &chateaux_to_process {
+        if let Some(pids) = existing_manifest.chateau_to_partitions.get(chateau_id) {
+            for pid in pids {
+                partitions_to_remove.insert(*pid);
+            }
+        }
+    }
+
+    // Expand chateaux list from the identified partitions
+    for pid in &partitions_to_remove {
+        if let Some(chateaux) = existing_manifest.partition_to_chateaux.get(pid) {
+            for c in chateaux {
+                chateaux_to_process.insert(c.clone());
+            }
+        }
+    }
+
+    println!("Expanded Chateaux List: {:?}", chateaux_to_process);
+    println!("Partitions to Replace: {:?}", partitions_to_remove);
+
+    // 3. Fetch All Data for ALL Chateaux (Expanded List)
+    println!(
+        "Fetching data for {} chateaux...",
+        chateaux_to_process.len()
+    );
 
     let mut db_stops: Vec<Stop> = Vec::new();
     let mut db_trips: Vec<DbCompressedTrip> = Vec::new();
@@ -111,17 +247,46 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     let mut db_routes: Vec<Route> = Vec::new();
     let mut db_agencies: Vec<Agency> = Vec::new();
 
-    for chateau_id in &chateaux_list {
+    // Optimization: We already fetched stops for the initial list. Reuse them?
+    // Yes, but we need to be careful about duplicates if we re-fetch.
+    // Simplest approach: Re-fetch everything for the final list, or filter.
+    // Let's just use the `processed_chateaux` set to track what we fetched.
+
+    // Add initial stops to db_stops
+    db_stops.extend(initial_stops);
+    // Mark initial chateaux as processed (for stops only? No, we need trips too).
+    // Wait, we ONLY fetched stops for initial list. We still need trips/patterns for them.
+    // So we should iterate `chateaux_to_process`. If it was in initial list, we skip fetching stops (already have them), but fetch others.
+
+    // Actually, `initial_stops` contains stops for `chateaux_to_process` (initial set).
+    // We need to fetch stops for the *added* chateaux.
+    // And trips/etc for *all* chateaux.
+
+    // Let's rebuild `db_stops` cleanly.
+    // Map: Chateau -> Vec<Stop>
+    let mut stops_by_chateau: HashMap<String, Vec<Stop>> = HashMap::new();
+    for s in db_stops.drain(..) {
+        stops_by_chateau
+            .entry(s.chateau.clone())
+            .or_default()
+            .push(s);
+    }
+
+    for chateau_id in &chateaux_to_process {
         println!("  - Fetching data for {}", chateau_id);
 
-        // Stops
-        use catenary::schema::gtfs::stops::dsl::{chateau as stop_chateau, stops};
-        let stops_chunk: Vec<Stop> = stops
-            .filter(stop_chateau.eq(chateau_id))
-            .select(Stop::as_select())
-            .load(&mut conn)
-            .await?;
-        db_stops.extend(stops_chunk);
+        // Stops (if not already fetched)
+        if !stops_by_chateau.contains_key(chateau_id) {
+            use catenary::schema::gtfs::stops::dsl::{chateau as stop_chateau, stops};
+            let stops_chunk: Vec<Stop> = stops
+                .filter(stop_chateau.eq(chateau_id))
+                .select(Stop::as_select())
+                .load(&mut conn)
+                .await?;
+            stops_by_chateau.insert(chateau_id.clone(), stops_chunk);
+        }
+
+        // Flatten stops back to db_stops later
 
         // Trips
         use catenary::schema::gtfs::trips_compressed::dsl::{
@@ -171,6 +336,11 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             .load(&mut conn)
             .await?;
         db_agencies.extend(agencies_chunk);
+    }
+
+    // Flatten stops map back to db_stops
+    for (_, stops) in stops_by_chateau {
+        db_stops.extend(stops);
     }
 
     println!("Total Fetched (Primary):");
@@ -432,6 +602,18 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         "Retained {} clusters after filtering unused stops",
         clusters.len()
     );
+
+    // Generate unique partition IDs for each cluster
+    let mut cluster_id_to_partition_id: Vec<u32> = Vec::with_capacity(clusters.len());
+    let mut rng = rand::thread_rng();
+    for _ in 0..clusters.len() {
+        let mut pid = rng.r#gen::<u32>();
+        while used_ids.contains(&pid) {
+            pid = rng.r#gen::<u32>();
+        }
+        used_ids.insert(pid);
+        cluster_id_to_partition_id.push(pid);
+    }
 
     // Analyze cluster sizes
     let mut sizes: Vec<usize> = clusters.iter().map(|c| c.len()).collect();
@@ -779,6 +961,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     let mut global_to_partition_map: HashMap<usize, (u32, u32)> = HashMap::new();
 
     let mut all_global_nodes: HashMap<u32, Vec<TransitStop>> = HashMap::new();
+    let mut partition_boundaries: HashMap<u32, PartitionBoundary> = HashMap::new();
 
     let mut chunk_cache = ChunkCache::new(50);
 
@@ -877,6 +1060,32 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             }
         }
 
+        // Calculate Convex Hull
+        let points: Vec<Point<f64>> = cluster_stop_indices
+            .iter()
+            .map(|&idx| {
+                let s = &db_stops[idx];
+                let lat = s.point.as_ref().map(|p| p.y).unwrap_or(0.0);
+                let lon = s.point.as_ref().map(|p| p.x).unwrap_or(0.0);
+                Point::new(lon, lat) // Geo uses (x, y) = (lon, lat)
+            })
+            .collect();
+
+        let hull = ConvexHull::convex_hull(&MultiPoint(points));
+        let boundary_points: Vec<BoundaryPoint> = hull
+            .exterior()
+            .points()
+            .map(|p| BoundaryPoint {
+                lat: p.y(),
+                lon: p.x(),
+            })
+            .collect();
+
+        let boundary = PartitionBoundary {
+            points: boundary_points,
+        };
+        partition_boundaries.insert(cluster_id_to_partition_id[cluster_id], boundary.clone());
+
         // Expand BBox by ~500m (approx 0.005 deg)
         let expansion = 0.005;
         let search_min_lat = min_lat - expansion;
@@ -885,12 +1094,13 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         let search_max_lon = max_lon + expansion;
 
         // Query DB for external stops
+        let chateaux_vec: Vec<String> = chateaux_to_process.iter().cloned().collect();
         let external_stops = fetch_stops_in_bbox(
             search_min_lat,
             search_max_lat,
             search_min_lon,
             search_max_lon,
-            &chateaux_list,
+            &chateaux_vec,
             &mut conn,
         )
         .await?;
@@ -950,7 +1160,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                     // Check patterns
                     for pat in &relevant_patterns {
                         if pat.stop_indices.contains(&(global_idx as u32)) {
-                            if let Some(route) = route_map.get(&(pat.chateau.clone(), pat.route_id.clone())) {
+                            if let Some(route) =
+                                route_map.get(&(pat.chateau.clone(), pat.route_id.clone()))
+                            {
                                 if route.route_type == 1 || route.route_type == 2 {
                                     is_train = true;
                                     break;
@@ -1002,8 +1214,10 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         let (local_deltas, reindexed_patterns) =
             reindex_deltas(chunk_patterns, &global_time_deltas, &direction_patterns);
 
+        let partition_id = cluster_id_to_partition_id[cluster_id];
+
         let mut partition = TransitPartition {
-            partition_id: cluster_id as u32,
+            partition_id,
             stops: chunk_stops,
             trip_patterns: reindexed_patterns,
             time_deltas: local_deltas,
@@ -1015,14 +1229,15 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             _deprecated_external_transfers: Vec::new(),
             local_transfer_patterns: Vec::new(),
             timezones: global_timezones.clone(),
+            boundary: Some(boundary),
         };
 
         // Save Transfer Chunk
         let transfer_chunk = TransferChunk {
-            partition_id: cluster_id as u32,
+            partition_id,
             external_transfers,
         };
-        let transfer_filename = format!("transfers_chunk_{}.pbf", cluster_id);
+        let transfer_filename = format!("transfers_chunk_{}.pbf", partition_id);
         let transfer_path = args.output.join(transfer_filename);
         println!("Saving transfer chunk to {}", transfer_path.display());
         save_pbf(&transfer_chunk, transfer_path.to_str().unwrap())?;
@@ -1112,6 +1327,34 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             .push(stop.chateau.clone());
     }
 
+    // Merge with existing manifest (excluding removed partitions)
+    for (chateau, pids) in existing_manifest.chateau_to_partitions {
+        if !chateaux_to_process.contains(&chateau) {
+            let entry = chateau_to_partitions.entry(chateau).or_default();
+            for pid in pids {
+                if !partitions_to_remove.contains(&pid) {
+                    entry.push(pid);
+                }
+            }
+        }
+    }
+
+    for (pid, chateaux) in existing_manifest.partition_to_chateaux {
+        if !partitions_to_remove.contains(&pid) {
+            let entry = partition_to_chateaux.entry(pid).or_default();
+            for c in chateaux {
+                entry.push(c);
+            }
+        }
+    }
+
+    for (pid, boundary) in existing_manifest.partition_boundaries {
+        if !partitions_to_remove.contains(&pid) {
+            partition_boundaries.insert(pid, boundary);
+        }
+    }
+
+    // Clean up duplicates again
     for v in chateau_to_partitions.values_mut() {
         v.sort();
         v.dedup();
@@ -1122,8 +1365,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     }
 
     let manifest = Manifest {
-        chateau_to_partitions,
-        partition_to_chateaux,
+        chateau_to_partitions: chateau_to_partitions.into_iter().collect(),
+        partition_to_chateaux: partition_to_chateaux.into_iter().collect(),
+        partition_boundaries: partition_boundaries.into_iter().collect(),
     };
 
     let manifest_file = File::create(args.output.join("manifest.json"))?;
@@ -2585,6 +2829,23 @@ fn identify_hubs_time_dependent(
         });
     }
 
+    // Calculate BBox for temporary partition
+    // Calculate Convex Hull for boundary
+    let points: Vec<Point<f64>> = t_stops.iter().map(|s| Point::new(s.lon, s.lat)).collect();
+    let hull = ConvexHull::convex_hull(&MultiPoint(points));
+    let boundary_points: Vec<BoundaryPoint> = hull
+        .exterior()
+        .points()
+        .map(|p| BoundaryPoint {
+            lat: p.y(),
+            lon: p.x(),
+        })
+        .collect();
+
+    let boundary = PartitionBoundary {
+        points: boundary_points,
+    };
+
     // 2. Generate Internal Transfers (Distance-based)
     // Use RTree for efficiency
     let points: Vec<GeomWithData<[f64; 2], usize>> = t_stops
@@ -2638,6 +2899,7 @@ fn identify_hubs_time_dependent(
         _deprecated_external_transfers: Vec::new(),
         local_transfer_patterns: Vec::new(),
         timezones: vec!["UTC".to_string()], // Dummy, not used for centrality
+        boundary: Some(boundary),
     };
 
     // Precompute stop -> patterns
@@ -2737,12 +2999,6 @@ fn identify_hubs_time_dependent(
         .take(top_k)
         .map(|(i, _)| *i)
         .collect()
-}
-
-#[derive(Serialize, Deserialize)]
-struct Manifest {
-    chateau_to_partitions: HashMap<String, Vec<u32>>,
-    partition_to_chateaux: HashMap<u32, Vec<String>>,
 }
 
 async fn stitch_graph(args: &Args) -> Result<()> {

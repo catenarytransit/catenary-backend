@@ -54,7 +54,7 @@ impl<'a> Router<'a> {
             }
             tried_partitions.insert(*start_pid);
 
-            if let Some(start_partition) = self.graph.transit_partitions.get(start_pid) {
+            if let Some(start_partition) = self.graph.get_transit_partition(*start_pid) {
                 // Determine relevant end partitions
                 // For now, we try to route to ALL end partitions found.
                 for &end_pid in &end_pids {
@@ -78,10 +78,10 @@ impl<'a> Router<'a> {
                         .iter()
                         .map(|(p, s, _)| (*p, *s))
                         .collect();
-                    query_graph.build_local(start_partition, &start_stops_simple);
+                    query_graph.build_local(&start_partition, &start_stops_simple);
 
                     // 2b. Target from Border
-                    if let Some(end_partition) = self.graph.transit_partitions.get(&end_pid) {
+                    if let Some(end_partition) = self.graph.get_transit_partition(end_pid) {
                         // Identify border stops in end partition
                         let mut border_stops = Vec::new();
                         for (idx, stop) in end_partition.stops.iter().enumerate() {
@@ -94,7 +94,7 @@ impl<'a> Router<'a> {
                         // If we are routing TO target, we need edges that lead TO target.
                         // LTPs are "From X -> Y".
                         // So adding LTPs from Border Stops allows us to reach Target if Target is reachable from Border.
-                        query_graph.build_local(end_partition, &border_stops);
+                        query_graph.build_local(&end_partition, &border_stops);
                     }
 
                     // 2c. Border to Border (Global DAGs)
@@ -110,15 +110,15 @@ impl<'a> Router<'a> {
                     let window = 7200; // 2 hours
                     let mut service_contexts = HashMap::new();
                     self.compute_service_contexts(
-                        start_partition,
+                        &start_partition,
                         req.time as i64,
                         window,
                         &mut service_contexts,
                     );
-                    if let Some(end_part) = self.graph.transit_partitions.get(&end_pid) {
+                    if let Some(end_part) = self.graph.get_transit_partition(end_pid) {
                         if *start_pid != end_pid {
                             self.compute_service_contexts(
-                                end_part,
+                                &end_part,
                                 req.time as i64,
                                 window,
                                 &mut service_contexts,
@@ -158,13 +158,31 @@ impl<'a> Router<'a> {
         // Simple Euclidean distance for now, should use OSM graph
         let mut stops = Vec::new();
         let max_radius_meters = 2000.0; // 2km
+        let max_radius_deg = max_radius_meters / 111000.0;
 
-        for (pid, partition) in &self.graph.transit_partitions {
-            for (idx, stop) in partition.stops.iter().enumerate() {
-                let dist = self.haversine_distance(lat, lon, stop.lat, stop.lon);
-                if dist <= max_radius_meters {
-                    let time = (dist / speed) as u32;
-                    stops.push((*pid, idx as u32, time));
+        let candidate_pids = self
+            .graph
+            .find_partitions_for_point(lat, lon, max_radius_deg);
+
+        // If manifest exists, use candidate_pids.
+        // If not (e.g. test environment without manifest), fall back to loaded partitions?
+        // But we want to support dynamic loading.
+        // If manifest is present, we trust it.
+        // If not, we iterate over whatever is in memory (for tests).
+        let pids_to_check: Vec<u32> = if self.graph.manifest.is_some() {
+            candidate_pids
+        } else {
+            self.graph.transit_partitions.keys().cloned().collect()
+        };
+
+        for pid in pids_to_check {
+            if let Some(partition) = self.graph.get_transit_partition(pid) {
+                for (idx, stop) in partition.stops.iter().enumerate() {
+                    let dist = self.haversine_distance(lat, lon, stop.lat, stop.lon);
+                    if dist <= max_radius_meters {
+                        let time = (dist / speed) as u32;
+                        stops.push((pid, idx as u32, time));
+                    }
                 }
             }
         }
@@ -300,7 +318,7 @@ impl<'a> Router<'a> {
         chateau: &str,
         gtfs_id: &str,
     ) -> Option<u32> {
-        if let Some(partition) = self.graph.transit_partitions.get(&partition_id) {
+        if let Some(partition) = self.graph.get_transit_partition(partition_id) {
             for (idx, stop) in partition.stops.iter().enumerate() {
                 if stop.gtfs_original_id == gtfs_id && stop.chateau == chateau {
                     return Some(idx as u32);
@@ -518,6 +536,7 @@ mod tests {
                 },
             ],
             timezones: vec!["UTC".to_string()],
+            boundary: None,
         }
     }
 
@@ -718,6 +737,7 @@ fn test_multi_partition_selection() {
         _deprecated_external_transfers: vec![],
         local_transfer_patterns: vec![],
         timezones: vec!["UTC".to_string()],
+        boundary: None,
     };
 
     // Partition 1
@@ -792,6 +812,7 @@ fn test_multi_partition_selection() {
             }],
         }],
         timezones: vec!["UTC".to_string()],
+        boundary: None,
     };
 
     let mut graph = GraphManager::new();

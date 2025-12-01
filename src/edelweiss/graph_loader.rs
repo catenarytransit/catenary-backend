@@ -12,6 +12,8 @@ pub struct GraphManager {
     pub transfer_partitions: HashMap<u32, TransferChunk>,
     pub edge_partitions: HashMap<u32, Vec<EdgeEntry>>,
     pub global_index: Option<GlobalPatternIndex>,
+    pub manifest: Option<catenary::routing_common::transit_graph::Manifest>,
+    pub base_path: Option<std::path::PathBuf>,
 }
 
 impl GraphManager {
@@ -22,11 +24,14 @@ impl GraphManager {
             transfer_partitions: HashMap::new(),
             edge_partitions: HashMap::new(),
             global_index: None,
+            manifest: None,
+            base_path: None,
         }
     }
 
     pub fn load_from_directory(&mut self, dir_path: &str) -> Result<()> {
         let path = Path::new(dir_path);
+        self.base_path = Some(path.to_path_buf());
 
         // Load Global Patterns
         let global_path = path.join("global_patterns.pbf");
@@ -36,47 +41,104 @@ impl GraphManager {
             self.global_index = Some(index);
         }
 
-        // Iterate over files in directory
-        let entries = std::fs::read_dir(path)?;
-        println!("Scanning directory: {:?}", path);
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            let file_name = path.file_name().unwrap().to_str().unwrap();
+        // Load Manifest
+        let manifest_path = path.join("manifest.json");
+        if manifest_path.exists() {
+            println!("Loading manifest from {:?}", manifest_path);
+            let file = std::fs::File::open(&manifest_path)?;
+            let reader = std::io::BufReader::new(file);
+            let manifest: catenary::routing_common::transit_graph::Manifest =
+                serde_json::from_reader(reader)?;
+            self.manifest = Some(manifest);
+        }
 
-            if file_name.starts_with("transit_chunk_") && file_name.ends_with(".pbf") {
-                println!("Loading transit partition from {:?}", path);
-                let partition: TransitPartition = transit_graph::load_pbf(path.to_str().unwrap())?;
-                self.transit_partitions
-                    .insert(partition.partition_id, partition);
-            } else if file_name.starts_with("streets_chunk_") && file_name.ends_with(".pbf") {
-                println!("Loading street partition from {:?}", path);
-                let partition: StreetData = osm_graph::load_pbf(path.to_str().unwrap())?;
-                self.street_partitions
-                    .insert(partition.partition_id, partition);
-            } else if file_name.starts_with("transfers_chunk_") && file_name.ends_with(".pbf") {
-                println!("Loading transfer partition from {:?}", path);
-                let partition: TransferChunk = transit_graph::load_pbf(path.to_str().unwrap())?;
-                self.transfer_partitions
-                    .insert(partition.partition_id, partition);
-            } else if file_name.starts_with("edges_chunk_") && file_name.ends_with(".json") {
-                println!("Loading edge partition from {:?}", path);
-                let file = std::fs::File::open(&path)?;
-                let reader = std::io::BufReader::new(file);
-                let edges: Vec<EdgeEntry> = serde_json::from_reader(reader)?;
+        println!("Graph Manager initialized. Partitions will be loaded on demand.");
+        Ok(())
+    }
 
-                // Extract partition ID from filename: edges_chunk_123.json
-                if let Some(pid_str) = file_name
-                    .strip_prefix("edges_chunk_")
-                    .and_then(|s| s.strip_suffix(".json"))
+    pub fn get_transit_partition(&self, partition_id: u32) -> Option<TransitPartition> {
+        // TODO: Implement caching
+        if let Some(partition) = self.transit_partitions.get(&partition_id) {
+            return Some(partition.clone());
+        }
+
+        // Try to load from disk
+        if let Some(base_path) = &self.base_path {
+            let filename = format!("transit_chunk_{}.pbf", partition_id);
+            let path = base_path.join(filename);
+            if path.exists() {
+                // println!("Loading transit partition {} from disk", partition_id);
+                if let Ok(partition) =
+                    transit_graph::load_pbf::<TransitPartition>(path.to_str().unwrap())
                 {
-                    if let Ok(pid) = pid_str.parse::<u32>() {
-                        self.edge_partitions.insert(pid, edges);
-                    }
+                    // In a real implementation, we would insert into cache here.
+                    // For now, just return it.
+                    return Some(partition);
                 }
             }
         }
+        None
+    }
 
-        Ok(())
+    pub fn get_transfer_partition(&self, partition_id: u32) -> Option<TransferChunk> {
+        if let Some(partition) = self.transfer_partitions.get(&partition_id) {
+            return Some(partition.clone());
+        }
+
+        if let Some(base_path) = &self.base_path {
+            let filename = format!("transfers_chunk_{}.pbf", partition_id);
+            let path = base_path.join(filename);
+            if path.exists() {
+                if let Ok(partition) =
+                    transit_graph::load_pbf::<TransferChunk>(path.to_str().unwrap())
+                {
+                    return Some(partition);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn find_partitions_for_point(&self, lat: f64, lon: f64, radius_deg: f64) -> Vec<u32> {
+        let mut partitions = Vec::new();
+        if let Some(manifest) = &self.manifest {
+            for (pid, boundary) in &manifest.partition_boundaries {
+                // Calculate bbox of the boundary polygon
+                let mut b_min_lat = f64::MAX;
+                let mut b_max_lat = f64::MIN;
+                let mut b_min_lon = f64::MAX;
+                let mut b_max_lon = f64::MIN;
+
+                for p in &boundary.points {
+                    if p.lat < b_min_lat {
+                        b_min_lat = p.lat;
+                    }
+                    if p.lat > b_max_lat {
+                        b_max_lat = p.lat;
+                    }
+                    if p.lon < b_min_lon {
+                        b_min_lon = p.lon;
+                    }
+                    if p.lon > b_max_lon {
+                        b_max_lon = p.lon;
+                    }
+                }
+
+                // Check intersection with point radius
+                let p_min_lat = lat - radius_deg;
+                let p_max_lat = lat + radius_deg;
+                let p_min_lon = lon - radius_deg;
+                let p_max_lon = lon + radius_deg;
+
+                if p_max_lat >= b_min_lat
+                    && p_min_lat <= b_max_lat
+                    && p_max_lon >= b_min_lon
+                    && p_min_lon <= b_max_lon
+                {
+                    partitions.push(*pid);
+                }
+            }
+        }
+        partitions
     }
 }

@@ -119,6 +119,10 @@ pub struct TransitPartition {
     /// Referenced by `TripPattern.timezone_idx`.
     #[prost(string, repeated, tag = "12")]
     pub timezones: Vec<String>,
+
+    /// The geographic boundary of this partition.
+    #[prost(message, optional, tag = "13")]
+    pub boundary: Option<PartitionBoundary>,
 }
 
 /// A transfer to a stop in a different Chateau.
@@ -429,4 +433,25 @@ pub struct EdgeEntry {
     pub to_chateau: String,
     pub to_id: String,
     pub edge_type: Option<EdgeType>,
+}
+
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
+pub struct PartitionBoundary {
+    #[prost(message, repeated, tag = "1")]
+    pub points: Vec<BoundaryPoint>,
+}
+
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
+pub struct BoundaryPoint {
+    #[prost(double, tag = "1")]
+    pub lat: f64,
+    #[prost(double, tag = "2")]
+    pub lon: f64,
+}
+
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize, Debug)]
+pub struct Manifest {
+    pub chateau_to_partitions: std::collections::HashMap<String, Vec<u32>>,
+    pub partition_to_chateaux: std::collections::HashMap<u32, Vec<String>>,
+    pub partition_boundaries: std::collections::HashMap<u32, PartitionBoundary>,
 }
