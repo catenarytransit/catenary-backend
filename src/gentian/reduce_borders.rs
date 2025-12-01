@@ -1,4 +1,7 @@
-fn reduce_borders_by_merging(
+use ahash::AHashMap as HashMap;
+use ahash::AHashSet as HashSet;
+
+pub fn reduce_borders_by_merging(
     mut clusters: Vec<Vec<usize>>,
     adjacency: &HashMap<(usize, usize), u32>,
     max_cluster_size: usize,
@@ -209,7 +212,6 @@ fn reduce_borders_by_merging(
 
                 // For each border node in neighbor_c, if it points to c2, change to c1.
                 // We have to iterate neighbor's borders.
-                let mut nodes_to_remove_from_border = Vec::new();
 
                 for &u in &cluster_borders[neighbor_c] {
                     if let Some(w) = node_connectivity[u].remove(&c2) {
