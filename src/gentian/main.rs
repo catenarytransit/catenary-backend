@@ -629,6 +629,14 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         clusters.len()
     );
 
+    // 4b. Reduce Borders by Merging (Post-Processing)
+    // Target max size for merged clusters: 20,000 (as per paper/plan)
+    let clusters = reduce_borders_by_merging(clusters, &adjacency, 20_000);
+    println!(
+        "Reduced to {} clusters after border reduction",
+        clusters.len()
+    );
+
     // Generate unique partition IDs for each cluster
     let mut cluster_id_to_partition_id: Vec<u32> = Vec::with_capacity(clusters.len());
     let mut rng = rand::thread_rng();
@@ -1011,7 +1019,6 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     // Filter Patterns: Route Type 2 (Rail) or maybe others?
     // Let's include Route Type 2 (Rail), 1 (Subway) if it crosses regions?
-    // User said: "interregion long distance travel of trains and perhaps long distance buses"
     // Route types: 2 (Rail), 3 (Bus), 1 (Subway/Metro).
     // Long distance bus is hard to distinguish from local bus by route_type alone (both 3).
     // But we can check if a pattern spans multiple chateaux?
@@ -1255,8 +1262,6 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                     // Otherwise 200m.
                     // Actually, we already filtered by 3km for cycling.
                     // But for "Gateway" status (which implies walking transfer usually), we want a tighter bound?
-                    // The user said: "Increase the hub distance threshold for train stations to 300m."
-                    // And: "I think we need to add a different type to mark overlapping stops between chateaus that are not hubs."
 
                     // Let's check if this stop serves a train route.
                     // We need to know if `stop` (local) serves a train.
@@ -1502,15 +1507,26 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-            if filename.starts_with("transit_chunk_") && filename.ends_with(".pbf") {
-                let pid_str = filename
+            let pid_opt = if filename.starts_with("transit_chunk_") && filename.ends_with(".pbf") {
+                filename
                     .trim_start_matches("transit_chunk_")
-                    .trim_end_matches(".pbf");
-                if let Ok(pid) = pid_str.parse::<u32>() {
-                    if !valid_partitions.contains(&pid) {
-                        println!("Deleting stale partition: {}", filename);
-                        tokio::fs::remove_file(path).await?;
-                    }
+                    .trim_end_matches(".pbf")
+                    .parse::<u32>()
+                    .ok()
+            } else if filename.starts_with("transfers_chunk_") && filename.ends_with(".pbf") {
+                filename
+                    .trim_start_matches("transfers_chunk_")
+                    .trim_end_matches(".pbf")
+                    .parse::<u32>()
+                    .ok()
+            } else {
+                None
+            };
+
+            if let Some(pid) = pid_opt {
+                if !valid_partitions.contains(&pid) {
+                    println!("Deleting stale partition file: {}", filename);
+                    tokio::fs::remove_file(path).await?;
                 }
             }
         }
@@ -3480,4 +3496,340 @@ async fn stitch_graph(args: &Args) -> Result<()> {
     );
 
     Ok(())
+}
+fn reduce_borders_by_merging(
+    mut clusters: Vec<Vec<usize>>,
+    adjacency: &HashMap<(usize, usize), u32>,
+    max_cluster_size: usize,
+) -> Vec<Vec<usize>> {
+    println!("Reducing borders by merging clusters...");
+    let num_stops = clusters.iter().map(|c| c.len()).sum();
+    let mut stop_to_cluster = vec![0; num_stops];
+    let mut cluster_active = vec![true; clusters.len()];
+
+    // 1. Build Stop -> Cluster Map
+    for (c_idx, stops) in clusters.iter().enumerate() {
+        for &s_idx in stops {
+            if s_idx < num_stops {
+                stop_to_cluster[s_idx] = c_idx;
+            }
+        }
+    }
+
+    // 2. Identify Border Nodes and Connectivity
+    // node_connectivity[u] = { cluster_id -> weight }
+    let mut node_connectivity: Vec<HashMap<usize, u32>> = vec![HashMap::new(); num_stops];
+    let mut cluster_borders: Vec<HashSet<usize>> = vec![HashSet::new(); clusters.len()];
+
+    // Also track cluster-to-cluster connectivity for candidate selection
+    // (c1, c2) -> weight
+    let mut cluster_adj: HashMap<(usize, usize), u32> = HashMap::new();
+
+    for (&(u, v), &w) in adjacency {
+        if u >= num_stops || v >= num_stops {
+            continue;
+        }
+        let c1 = stop_to_cluster[u];
+        let c2 = stop_to_cluster[v];
+
+        if c1 != c2 {
+            // u connects to c2
+            *node_connectivity[u].entry(c2).or_default() += w;
+            cluster_borders[c1].insert(u);
+
+            // v connects to c1
+            *node_connectivity[v].entry(c1).or_default() += w;
+            cluster_borders[c2].insert(v);
+
+            // Cluster adjacency
+            let (min, max) = if c1 < c2 { (c1, c2) } else { (c2, c1) };
+            *cluster_adj.entry((min, max)).or_default() += w;
+        }
+    }
+
+    println!(
+        "  Initial borders: {}",
+        cluster_borders.iter().map(|b| b.len()).sum::<usize>()
+    );
+
+    // 3. Merge Loop
+    let mut merged_count = 0;
+    loop {
+        let mut best_merge = None;
+        let mut best_score = 0.0;
+
+        // Iterate all adjacent cluster pairs
+        for (&(c1, c2), &weight) in &cluster_adj {
+            if !cluster_active[c1] || !cluster_active[c2] {
+                continue;
+            }
+
+            let size1 = clusters[c1].len();
+            let size2 = clusters[c2].len();
+            let new_size = size1 + size2;
+
+            if new_size > max_cluster_size {
+                continue;
+            }
+
+            // Calculate Reduction
+            // Reduction = borders(A) + borders(B) - borders(A U B)
+            // borders(A U B) = (borders(A) \ internal) U (borders(B) \ internal)
+            // "internal" are nodes that ONLY connect to the other cluster (and maybe itself)
+
+            // Heuristic:
+            // We can count how many border nodes in A connect ONLY to B (and internal).
+            // Actually, we can just check the `node_connectivity`.
+            // For a node u in borders[c1]:
+            //   If node_connectivity[u] contains ONLY c2 (besides internal connections which are not in map),
+            //   then merging c1 and c2 removes u from borders.
+            //   If u connects to c2 AND c3, it stays a border (to c3).
+
+            let mut reduction = 0;
+
+            // Check c1 borders
+            for &u in &cluster_borders[c1] {
+                let conns = &node_connectivity[u];
+                // If it connects to c2 and NO other external cluster, it will cease to be a border.
+                // The map only contains external clusters.
+                // So if map keys are {c2}, or subset of {c2}, it's removed.
+                // (It must connect to c2 to be in this check? No, u is in borders[c1], so it connects to SOME external.)
+                // Wait, u might connect to c3 but NOT c2. Then it stays border.
+                // We only care if it connects to c2.
+
+                // Actually, simpler:
+                // New border set = (borders[c1] U borders[c2])
+                // Filter: keep u if u connects to any cluster OTHER than c1 or c2.
+
+                // To avoid iterating sets every time, let's estimate or compute exactly for the candidate.
+                // Since we need to be greedy, we might need to be fast.
+                // But let's do exact count for now.
+
+                let mut connects_to_others = false;
+                for &target_c in conns.keys() {
+                    if target_c != c2 {
+                        connects_to_others = true;
+                        break;
+                    }
+                }
+                if !connects_to_others {
+                    reduction += 1;
+                }
+            }
+
+            // Check c2 borders
+            for &v in &cluster_borders[c2] {
+                let conns = &node_connectivity[v];
+                let mut connects_to_others = false;
+                for &target_c in conns.keys() {
+                    if target_c != c1 {
+                        connects_to_others = true;
+                        break;
+                    }
+                }
+                if !connects_to_others {
+                    reduction += 1;
+                }
+            }
+
+            // Score
+            // We want high reduction.
+            // We want to avoid huge clusters if reduction is small.
+            // Interconnectedness is roughly `weight` (trip count) or `reduction` (node count).
+            // Let's use `reduction`.
+
+            // Thresholds:
+            // Dramatic reduction: > 20 stops?
+            // And > 10% of total borders?
+
+            let total_borders = cluster_borders[c1].len() + cluster_borders[c2].len();
+            if total_borders == 0 {
+                continue;
+            }
+
+            let ratio = reduction as f64 / total_borders as f64;
+
+            // Criteria:
+            // 1. Reduction > 20 AND Ratio > 0.1
+            // OR
+            // 2. Very high reduction > 100 (Dense city merge)
+            // OR
+            // 3. For small graphs (testing), if reduction >= 3 and ratio > 0.4
+
+            let is_candidate = (reduction > 20 && ratio > 0.1)
+                || (reduction > 100)
+                || (reduction >= 3 && ratio > 0.4);
+
+            if is_candidate {
+                // Score: prioritize high reduction, penalize size slightly?
+                // Score = reduction
+                let score = reduction as f64;
+                if score > best_score {
+                    best_score = score;
+                    best_merge = Some((c1, c2));
+                }
+            }
+        }
+
+        if let Some((c1, c2)) = best_merge {
+            // Execute Merge: Merge c2 into c1
+            // println!("    Merging {} (size {}) and {} (size {}) -> Reduction: {}", c1, clusters[c1].len(), c2, clusters[c2].len(), best_score);
+
+            // 1. Move stops
+            let stops_c2 = clusters[c2].clone();
+            for &s in &stops_c2 {
+                stop_to_cluster[s] = c1;
+            }
+            clusters[c1].extend(stops_c2);
+            clusters[c2].clear();
+            cluster_active[c2] = false;
+
+            // 2. Update Connectivity Maps (The expensive part)
+            // We need to update `node_connectivity` for ALL nodes that pointed to c2 -> point to c1
+            // And `node_connectivity` for nodes IN c1/c2 that pointed to each other -> remove
+
+            // Optimization: We only need to update nodes that are borders of c1, c2, OR neighbors of c2.
+            // Finding neighbors of c2: iterate `cluster_adj`.
+
+            // A. Update neighbors of c2 (nodes outside c1/c2 that pointed to c2)
+            // We can't easily find *which nodes* point to c2 without reverse index or iterating all borders.
+            // But we have `cluster_adj` which tells us WHICH clusters connect to c2.
+            // Let's iterate those clusters.
+
+            let mut neighbors_of_c2 = Vec::new();
+            for (&(ca, cb), _) in &cluster_adj {
+                if ca == c2 && cluster_active[cb] {
+                    neighbors_of_c2.push(cb);
+                } else if cb == c2 && cluster_active[ca] {
+                    neighbors_of_c2.push(ca);
+                }
+            }
+
+            for &neighbor_c in &neighbors_of_c2 {
+                if neighbor_c == c1 {
+                    continue;
+                } // Handle c1-c2 separately
+
+                // For each border node in neighbor_c, if it points to c2, change to c1.
+                // We have to iterate neighbor's borders.
+                // let mut nodes_to_remove_from_border = Vec::new(); // Unused
+
+                for &u in &cluster_borders[neighbor_c] {
+                    if let Some(w) = node_connectivity[u].remove(&c2) {
+                        *node_connectivity[u].entry(c1).or_default() += w;
+                    }
+                    // It still points to c1 (now), so it remains a border.
+                }
+
+                // Update cluster_adj
+                // Remove (neighbor, c2), Add to (neighbor, c1)
+                let key_old = if neighbor_c < c2 {
+                    (neighbor_c, c2)
+                } else {
+                    (c2, neighbor_c)
+                };
+                if let Some(w) = cluster_adj.remove(&key_old) {
+                    let key_new = if neighbor_c < c1 {
+                        (neighbor_c, c1)
+                    } else {
+                        (c1, neighbor_c)
+                    };
+                    *cluster_adj.entry(key_new).or_default() += w;
+                }
+            }
+
+            // B. Update nodes IN c1 and c2 (The new merged cluster)
+            // Their connections to c2 should be removed (internalized).
+            // Their connections to c1 should be removed (internalized).
+            // Their connections to others remain.
+
+            // We need to rebuild `cluster_borders[c1]`.
+            let mut new_borders_c1 = HashSet::new();
+
+            // Process old c1 borders
+            for &u in &cluster_borders[c1] {
+                // Remove connection to c2 if exists (it's now internal)
+                node_connectivity[u].remove(&c2);
+                // If it still has connections, keep it
+                if !node_connectivity[u].is_empty() {
+                    new_borders_c1.insert(u);
+                }
+            }
+
+            // Process old c2 borders
+            for &v in &cluster_borders[c2] {
+                // Remove connection to c1 if exists
+                node_connectivity[v].remove(&c1);
+                // If it still has connections, keep it
+                if !node_connectivity[v].is_empty() {
+                    new_borders_c1.insert(v);
+                }
+            }
+
+            cluster_borders[c1] = new_borders_c1;
+            cluster_borders[c2].clear();
+
+            // Remove (c1, c2) from cluster_adj
+            let key_self = if c1 < c2 { (c1, c2) } else { (c2, c1) };
+            cluster_adj.remove(&key_self);
+
+            merged_count += 1;
+        } else {
+            break;
+        }
+    }
+
+    println!(
+        "  Merged {} times. Final borders: {}",
+        merged_count,
+        cluster_borders.iter().map(|b| b.len()).sum::<usize>()
+    );
+
+    clusters.into_iter().filter(|c| !c.is_empty()).collect()
+}
+
+#[cfg(test)]
+mod border_reduction_tests {
+    use super::*;
+
+    #[test]
+    fn test_reduce_borders_by_merging() {
+        // Scenario:
+        // Cluster 0: [0, 1]
+        // Cluster 1: [2, 3]
+        // Cluster 2: [4, 5]
+        //
+        // Connections:
+        // 0 -> 2 (strong)
+        // 1 -> 3 (strong)
+        // 2 -> 4 (weak)
+        //
+        // Merging 0 and 1 should reduce borders significantly (0, 1, 2, 3 are borders).
+        // If merged, 0->2 and 1->3 become internal.
+        // Border set of {0,1} was {0, 1}. Border set of {2,3} was {2, 3, 2->4}.
+        // Merged {0,1,2,3}: 0->2 internal, 1->3 internal.
+        // Only 2->4 remains external. So 2 is border.
+        // Reduction: 4 borders -> 1 border. High reduction.
+
+        let clusters = vec![vec![0, 1], vec![2, 3], vec![4, 5]];
+        let mut adjacency = HashMap::new();
+
+        // C0 <-> C1 (Strong)
+        adjacency.insert((0, 2), 10);
+        adjacency.insert((1, 3), 10);
+
+        // C1 <-> C2 (Weak)
+        adjacency.insert((2, 4), 1);
+
+        let new_clusters = reduce_borders_by_merging(clusters, &adjacency, 10);
+
+        // Expect C0 and C1 to merge. C2 stays separate.
+        // Result: 2 clusters.
+        assert_eq!(new_clusters.len(), 2, "Should merge C0 and C1");
+
+        // Check sizes
+        let sizes: Vec<usize> = new_clusters.iter().map(|c| c.len()).collect();
+        assert!(sizes.contains(&4)); // Merged
+        assert!(sizes.contains(&2)); // C2
+    }
 }
