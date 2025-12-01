@@ -81,10 +81,13 @@ async fn main() -> Result<()> {
 
     // Run generation
     // Run generation or stitch
+    // Run generation or stitch
     if args.stitch {
         stitch_graph(&args).await?;
     } else {
         generate_chunks(&args, pool).await?;
+        // Always stitch after generation to ensure global connectivity is up to date
+        stitch_graph(&args).await?;
     }
 
     Ok(())

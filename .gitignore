@@ -105,3 +105,5 @@ containers/test_graph_gen/osm_chunks
 transit_viz.geojson
 graph_output/
 output/
+temp/
+*.log

@@ -111,6 +111,8 @@ echo "Postgres is ready."
 echo "=== Running Migrations ==="
 diesel migration run --database-url "postgres://$POSTGRES_USER:$PGPASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB"
 
+export DATABASE_URL="postgres://$POSTGRES_USER:$PGPASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB"
+
 if [ "$GENTIAN_ONLY" = false ]; then
     echo "=== Running Maple (GTFS Ingest) ==="
     # Setup temp dirs for maple
@@ -123,7 +125,6 @@ if [ "$GENTIAN_ONLY" = false ]; then
     export GTFS_UNCOMPRESSED_TEMP
     export DELETE_BEFORE_INGEST=true
     export FORCE_INGEST_ALL=true
-    export DATABASE_URL="postgres://$POSTGRES_USER:$PGPASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB"
 
     # Feeds list from run_test.sh
     FEEDS=(
