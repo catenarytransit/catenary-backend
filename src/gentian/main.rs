@@ -1403,10 +1403,28 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                                     && dp.stop_indices[i + 1] == local_v as u32
                                 {
                                     // Found it!
+                                    // Calculate min_duration for segment i -> i+1
+                                    let mut min_duration = u32::MAX;
+                                    for trip in &pattern.trips {
+                                        let delta_seq =
+                                            &partition.time_deltas[trip.time_delta_idx as usize];
+                                        // Travel time from i to i+1 is at index 2*(i+1)
+                                        if 2 * (i + 1) < delta_seq.deltas.len() {
+                                            let dur = delta_seq.deltas[2 * (i + 1)];
+                                            if dur < min_duration {
+                                                min_duration = dur;
+                                            }
+                                        }
+                                    }
+                                    if min_duration == u32::MAX {
+                                        min_duration = 0;
+                                    }
+
                                     let transit_edge = TransitEdge {
                                         trip_pattern_idx: p_idx as u32,
                                         start_stop_idx: i as u32,
                                         end_stop_idx: (i + 1) as u32,
+                                        min_duration,
                                     };
                                     cross_partition_edges.push((
                                         (u, v),
@@ -1680,56 +1698,121 @@ fn compute_global_patterns(
                 continue;
             }
 
-            // Forward BFS from start_hubs
-            let mut forward_reachable = HashSet::new();
-            let mut queue = std::collections::VecDeque::new();
-            for &h in start_hubs {
-                if forward_reachable.insert(h) {
-                    queue.push_back(h);
+            // Dijkstra State
+            #[derive(Copy, Clone, Eq, PartialEq)]
+            struct State {
+                cost: u32,
+                node: usize,
+            }
+            impl Ord for State {
+                fn cmp(&self, other: &Self) -> Ordering {
+                    other.cost.cmp(&self.cost) // Min-heap
                 }
             }
-            while let Some(u) = queue.pop_front() {
-                if let Some(neighbors) = graph.get(&u) {
-                    for &v in neighbors {
-                        if forward_reachable.insert(v) {
-                            queue.push_back(v);
+            impl PartialOrd for State {
+                fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                    Some(self.cmp(other))
+                }
+            }
+
+            let mut useful_edges: HashSet<(usize, usize)> = HashSet::new();
+            let mut useful_nodes: HashSet<usize> = HashSet::new();
+
+            // Run Dijkstra from EACH start hub
+            // Optimization: If start_hubs is large, this might be slow.
+            // But for border nodes, it should be manageable.
+            for &start_node in start_hubs {
+                let mut dist: HashMap<usize, u32> = HashMap::new();
+                let mut predecessors: HashMap<usize, Vec<usize>> = HashMap::new(); // Store all parents for multipath?
+                // Actually, just storing one parent is enough for "a" shortest path.
+                // But we might want all shortest paths?
+                // Let's store one for now to keep it simple, or list if equal cost.
+
+                let mut pq = BinaryHeap::new();
+
+                dist.insert(start_node, 0);
+                pq.push(State {
+                    cost: 0,
+                    node: start_node,
+                });
+
+                while let Some(State { cost, node: u }) = pq.pop() {
+                    if cost > *dist.get(&u).unwrap_or(&u32::MAX) {
+                        continue;
+                    }
+
+                    // If we reached an end hub, we don't stop, because we need to find paths to ALL end hubs.
+                    // But we can prune if cost is too high? No.
+
+                    if let Some(neighbors) = graph.get(&u) {
+                        for &v in neighbors {
+                            let weight = if let Some(et) = edge_types.get(&(u, v)) {
+                                match et {
+                                    EdgeType::Transit(t) => t.min_duration,
+                                    EdgeType::Walk(w) => w.duration_seconds,
+                                }
+                            } else {
+                                0
+                            };
+
+                            let next_cost = cost + weight;
+                            let curr_dist = *dist.get(&v).unwrap_or(&u32::MAX);
+
+                            if next_cost < curr_dist {
+                                dist.insert(v, next_cost);
+                                predecessors.insert(v, vec![u]);
+                                pq.push(State {
+                                    cost: next_cost,
+                                    node: v,
+                                });
+                            } else if next_cost == curr_dist {
+                                predecessors.entry(v).or_default().push(u);
+                            }
+                        }
+                    }
+                }
+
+                // Trace back from ALL end hubs
+                for &end_node in end_hubs {
+                    if let Some(&d) = dist.get(&end_node) {
+                        if d == u32::MAX {
+                            continue;
+                        }
+
+                        // BFS back from end_node using predecessors
+                        let mut q = std::collections::VecDeque::new();
+                        q.push_back(end_node);
+                        useful_nodes.insert(end_node);
+
+                        let mut visited_back = HashSet::new();
+                        visited_back.insert(end_node);
+
+                        while let Some(curr) = q.pop_front() {
+                            if curr == start_node {
+                                continue;
+                            }
+                            if let Some(preds) = predecessors.get(&curr) {
+                                for &pred in preds {
+                                    if useful_edges.insert((pred, curr)) {
+                                        useful_nodes.insert(pred);
+                                        // Only push if not visited to avoid cycles/redundancy
+                                        if visited_back.insert(pred) {
+                                            q.push_back(pred);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Backward BFS from end_hubs
-            let mut backward_reachable = HashSet::new();
-            queue.clear();
-            for &h in end_hubs {
-                if backward_reachable.insert(h) {
-                    queue.push_back(h);
-                }
-            }
-            while let Some(u) = queue.pop_front() {
-                if let Some(neighbors) = reverse_graph.get(&u) {
-                    for &v in neighbors {
-                        if backward_reachable.insert(v) {
-                            queue.push_back(v);
-                        }
-                    }
-                }
-            }
-
-            // Intersection
-            let mut dag_nodes = HashSet::new();
-            for n in forward_reachable {
-                if backward_reachable.contains(&n) {
-                    dag_nodes.insert(n);
-                }
-            }
-
-            if dag_nodes.is_empty() {
+            if useful_nodes.is_empty() {
                 continue;
             }
 
             // Build DAG
-            let mut dag_hubs_vec: Vec<usize> = dag_nodes.into_iter().collect();
+            let mut dag_hubs_vec: Vec<usize> = useful_nodes.into_iter().collect();
             dag_hubs_vec.sort();
             let mut global_to_dag_idx: HashMap<usize, u32> = HashMap::new();
             for (i, &g_idx) in dag_hubs_vec.iter().enumerate() {
@@ -1737,18 +1820,14 @@ fn compute_global_patterns(
             }
 
             let mut dag_edges = Vec::new();
-            for &u in &dag_hubs_vec {
-                if let Some(neighbors) = graph.get(&u) {
-                    for &v in neighbors {
-                        if global_to_dag_idx.contains_key(&v) {
-                            if let Some(et) = edge_types.get(&(u, v)) {
-                                dag_edges.push(DagEdge {
-                                    from_hub_idx: *global_to_dag_idx.get(&u).unwrap(),
-                                    to_hub_idx: *global_to_dag_idx.get(&v).unwrap(),
-                                    edge_type: Some(et.clone()),
-                                });
-                            }
-                        }
+            for &(u, v) in &useful_edges {
+                if global_to_dag_idx.contains_key(&u) && global_to_dag_idx.contains_key(&v) {
+                    if let Some(et) = edge_types.get(&(u, v)) {
+                        dag_edges.push(DagEdge {
+                            from_hub_idx: *global_to_dag_idx.get(&u).unwrap(),
+                            to_hub_idx: *global_to_dag_idx.get(&v).unwrap(),
+                            edge_type: Some(et.clone()),
+                        });
                     }
                 }
             }
@@ -1820,11 +1899,53 @@ fn compute_intra_partition_connectivity(
             let (idx1, stop1) = hubs_on_pattern[k];
             let (idx2, stop2) = hubs_on_pattern[k + 1];
 
+            // Calculate min_duration
+            let mut min_duration = u32::MAX;
+            for trip in &pattern.trips {
+                let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
+                // Duration from Dep(idx1) to Arr(idx2)
+                // Dep(idx1) is after dwell at idx1.
+                // Arr(idx2) is before dwell at idx2.
+                // Sequence:
+                // ...
+                // 2*idx1: Travel to idx1
+                // 2*idx1+1: Dwell at idx1
+                // 2*(idx1+1): Travel to idx1+1  <-- Start summing here
+                // 2*(idx1+1)+1: Dwell at idx1+1
+                // ...
+                // 2*idx2: Travel to idx2        <-- End summing here (inclusive)
+
+                let mut duration = 0;
+                if 2 * idx2 < delta_seq.deltas.len() {
+                    for k in (idx1 + 1)..=idx2 {
+                        // Add travel time to k
+                        duration += delta_seq.deltas[2 * k];
+                        // Add dwell time at k-1 (if k > idx1 + 1)
+                        // Wait, logic:
+                        // Time from Dep(A) to Arr(B).
+                        // Path: A -> (Travel) -> B
+                        // If A and B are adjacent: Duration = Travel(B)
+                        // If A -> X -> B: Duration = Travel(X) + Dwell(X) + Travel(B)
+
+                        if k > idx1 + 1 {
+                            duration += delta_seq.deltas[2 * (k - 1) + 1];
+                        }
+                    }
+                }
+                if duration < min_duration {
+                    min_duration = duration;
+                }
+            }
+            if min_duration == u32::MAX {
+                min_duration = 0;
+            } // Should not happen
+
             // Create TransitEdge
             let edge = TransitEdge {
                 trip_pattern_idx: p_idx as u32,
                 start_stop_idx: idx1 as u32,
                 end_stop_idx: idx2 as u32,
+                min_duration,
             };
 
             edges.push((
@@ -2283,12 +2404,33 @@ fn run_raptor(
                     if arrival < earliest_arrival[stop_idx as usize] {
                         earliest_arrival[stop_idx as usize] = arrival;
 
+                        // Calculate min_duration
+                        let mut min_duration = u32::MAX;
+                        for trip in &pattern.trips {
+                            let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
+                            let mut duration = 0;
+                            if 2 * i < delta_seq.deltas.len() {
+                                for k in (boarded_at_idx + 1)..=i {
+                                    duration += delta_seq.deltas[2 * k];
+                                    if k > boarded_at_idx + 1 {
+                                        duration += delta_seq.deltas[2 * (k - 1) + 1];
+                                    }
+                                }
+                            }
+                            if duration < min_duration {
+                                min_duration = duration;
+                            }
+                        }
+                        if min_duration == u32::MAX {
+                            min_duration = 0;
+                        }
+
                         let edge = TransitEdge {
                             trip_pattern_idx: p_idx as u32,
                             start_stop_idx: boarded_at_idx as u32,
                             end_stop_idx: i as u32,
+                            min_duration,
                         };
-
                         predecessors[stop_idx as usize] =
                             Some((boarded_at_stop, EdgeType::Transit(edge)));
                         next_marked.insert(stop_idx);
@@ -3503,22 +3645,29 @@ fn reduce_borders_by_merging(
     max_cluster_size: usize,
 ) -> Vec<Vec<usize>> {
     println!("Reducing borders by merging clusters...");
-    let num_stops = clusters.iter().map(|c| c.len()).sum();
-    let mut stop_to_cluster = vec![0; num_stops];
+    let num_stops: usize = clusters.iter().map(|c| c.len()).sum();
+
+    // Calculate max stop index to size vectors correctly
+    let max_stop_idx = clusters
+        .iter()
+        .flat_map(|c| c.iter())
+        .max()
+        .copied()
+        .unwrap_or(0);
+
+    let mut stop_to_cluster = vec![usize::MAX; max_stop_idx + 1];
     let mut cluster_active = vec![true; clusters.len()];
 
     // 1. Build Stop -> Cluster Map
     for (c_idx, stops) in clusters.iter().enumerate() {
         for &s_idx in stops {
-            if s_idx < num_stops {
-                stop_to_cluster[s_idx] = c_idx;
-            }
+            stop_to_cluster[s_idx] = c_idx;
         }
     }
 
     // 2. Identify Border Nodes and Connectivity
     // node_connectivity[u] = { cluster_id -> weight }
-    let mut node_connectivity: Vec<HashMap<usize, u32>> = vec![HashMap::new(); num_stops];
+    let mut node_connectivity: Vec<HashMap<usize, u32>> = vec![HashMap::new(); max_stop_idx + 1];
     let mut cluster_borders: Vec<HashSet<usize>> = vec![HashSet::new(); clusters.len()];
 
     // Also track cluster-to-cluster connectivity for candidate selection
@@ -3526,11 +3675,15 @@ fn reduce_borders_by_merging(
     let mut cluster_adj: HashMap<(usize, usize), u32> = HashMap::new();
 
     for (&(u, v), &w) in adjacency {
-        if u >= num_stops || v >= num_stops {
+        if u > max_stop_idx || v > max_stop_idx {
             continue;
         }
         let c1 = stop_to_cluster[u];
         let c2 = stop_to_cluster[v];
+
+        if c1 == usize::MAX || c2 == usize::MAX {
+            continue;
+        }
 
         if c1 != c2 {
             // u connects to c2

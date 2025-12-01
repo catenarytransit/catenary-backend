@@ -402,6 +402,11 @@ pub struct TransitEdge {
     /// Index in the pattern's stop sequence.
     #[prost(uint32, tag = "3")]
     pub end_stop_idx: u32,
+
+    /// Minimum travel time in seconds for this segment across all trips.
+    /// Used for static analysis / global graph construction.
+    #[prost(uint32, tag = "4")]
+    pub min_duration: u32,
 }
 
 #[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
