@@ -1,5 +1,5 @@
 use crate::graph_loader::GraphManager;
-use catenary::routing_common::api::{Itinerary, Leg, TravelMode};
+use catenary::routing_common::api::{Itinerary, Leg, OsmLeg, TransitLeg, TravelMode};
 use catenary::routing_common::transit_graph::{
     CompressedTrip, DagEdge, EdgeType, GlobalPatternIndex, ServiceException, TransitPartition,
 };
@@ -243,7 +243,9 @@ impl QueryGraph {
                         graph_manager.get_transit_partition(end_node.partition_id)
                     {
                         let stop = &partition.stops[end_node.stop_idx as usize];
-                        legs.push(Leg {
+                        legs.push(Leg::Osm(OsmLeg {
+                            start_time: min_end_time - *egress_time as u64,
+                            end_time: min_end_time,
                             mode: TravelMode::Walk,
                             start_stop_id: Some(stop.gtfs_original_id.clone()),
                             end_stop_id: None, // Destination
@@ -251,16 +253,11 @@ impl QueryGraph {
                                 partition.chateau_ids[stop.chateau_idx as usize].clone(),
                             ),
                             end_stop_chateau: None,
-                            route_id: None,
-                            trip_id: None,
-                            chateau: None,
                             start_stop_name: None,
                             end_stop_name: None,
-                            route_name: None,
-                            trip_name: None,
                             duration_seconds: *egress_time as u64,
                             geometry: geometry.clone(),
-                        });
+                        }));
                     }
                 }
             }
@@ -271,7 +268,7 @@ impl QueryGraph {
                 duration_seconds: min_end_time - start_time_unix as u64,
                 transfers: legs
                     .iter()
-                    .filter(|l| l.mode == TravelMode::Transit)
+                    .filter(|l| matches!(l, Leg::Transit(_)))
                     .count()
                     .saturating_sub(1) as u32,
                 reliability_score: 1.0,
@@ -506,7 +503,9 @@ impl QueryGraph {
                     )
                 };
 
-                Some(Leg {
+                Some(Leg::Osm(OsmLeg {
+                    start_time,
+                    end_time,
                     mode: TravelMode::Walk,
                     start_stop_id: Some(start_stop.gtfs_original_id.clone()),
                     end_stop_id: Some(end_stop_id),
@@ -514,16 +513,11 @@ impl QueryGraph {
                         partition.chateau_ids[start_stop.chateau_idx as usize].clone(),
                     ),
                     end_stop_chateau: Some(end_stop_chateau),
-                    route_id: None,
-                    trip_id: None,
-                    chateau: None,
                     start_stop_name: None,
                     end_stop_name: None,
-                    route_name: None,
-                    trip_name: None,
                     duration_seconds: end_time - start_time,
                     geometry: vec![],
-                })
+                }))
             }
             EdgeType::Transit(t) => {
                 let pattern = &partition.trip_patterns[t.trip_pattern_idx as usize];
@@ -537,19 +531,18 @@ impl QueryGraph {
 
                 let end_stop = &partition.stops[end_stop_idx_in_partition as usize];
 
-                Some(Leg {
+                Some(Leg::Transit(TransitLeg {
+                    start_time,
+                    end_time,
                     mode: TravelMode::Transit,
-                    start_stop_id: Some(start_stop.gtfs_original_id.clone()),
-                    end_stop_id: Some(end_stop.gtfs_original_id.clone()),
-                    start_stop_chateau: Some(
-                        partition.chateau_ids[start_stop.chateau_idx as usize].clone(),
-                    ),
-                    end_stop_chateau: Some(
-                        partition.chateau_ids[end_stop.chateau_idx as usize].clone(),
-                    ),
-                    route_id: Some(pattern.route_id.clone()),
+                    start_stop_id: start_stop.gtfs_original_id.clone(),
+                    end_stop_id: end_stop.gtfs_original_id.clone(),
+                    start_stop_chateau: partition.chateau_ids[start_stop.chateau_idx as usize]
+                        .clone(),
+                    end_stop_chateau: partition.chateau_ids[end_stop.chateau_idx as usize].clone(),
+                    route_id: pattern.route_id.clone(),
                     trip_id: None,
-                    chateau: Some(partition.chateau_ids[pattern.chateau_idx as usize].clone()),
+                    chateau: partition.chateau_ids[pattern.chateau_idx as usize].clone(),
                     start_stop_name: None,
                     end_stop_name: None,
                     route_name: None,
@@ -564,7 +557,7 @@ impl QueryGraph {
                         }
                         geom
                     },
-                })
+                }))
             }
         }
     }

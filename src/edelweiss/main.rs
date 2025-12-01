@@ -39,13 +39,13 @@ impl EdelweissService for EdelweissServer {
 
         for itinerary in &result.itineraries {
             for leg in &itinerary.legs {
-                if let (Some(id), Some(chateau)) = (&leg.start_stop_id, &leg.start_stop_chateau) {
+                if let (Some(id), Some(chateau)) = (leg.start_stop_id(), leg.start_stop_chateau()) {
                     stop_ids.push((chateau.clone(), id.clone()));
                 }
-                if let (Some(id), Some(chateau)) = (&leg.end_stop_id, &leg.end_stop_chateau) {
+                if let (Some(id), Some(chateau)) = (leg.end_stop_id(), leg.end_stop_chateau()) {
                     stop_ids.push((chateau.clone(), id.clone()));
                 }
-                if let (Some(id), Some(chateau)) = (&leg.route_id, &leg.chateau) {
+                if let (Some(id), Some(chateau)) = (leg.route_id(), leg.chateau()) {
                     route_ids.push((chateau.clone(), id.clone()));
                 }
             }
@@ -55,15 +55,16 @@ impl EdelweissService for EdelweissServer {
         if let Ok(stop_map) = self.hydrator.hydrate_stops(stop_ids).await {
             for itinerary in &mut result.itineraries {
                 for leg in &mut itinerary.legs {
-                    if let (Some(id), Some(chateau)) = (&leg.start_stop_id, &leg.start_stop_chateau)
+                    if let (Some(id), Some(chateau)) =
+                        (leg.start_stop_id(), leg.start_stop_chateau())
                     {
                         if let Some(name) = stop_map.get(&(chateau.clone(), id.clone())) {
-                            leg.start_stop_name = Some(name.clone());
+                            leg.set_start_stop_name(Some(name.clone()));
                         }
                     }
-                    if let (Some(id), Some(chateau)) = (&leg.end_stop_id, &leg.end_stop_chateau) {
+                    if let (Some(id), Some(chateau)) = (leg.end_stop_id(), leg.end_stop_chateau()) {
                         if let Some(name) = stop_map.get(&(chateau.clone(), id.clone())) {
-                            leg.end_stop_name = Some(name.clone());
+                            leg.set_end_stop_name(Some(name.clone()));
                         }
                     }
                 }
@@ -73,9 +74,9 @@ impl EdelweissService for EdelweissServer {
         if let Ok(route_map) = self.hydrator.hydrate_routes(route_ids).await {
             for itinerary in &mut result.itineraries {
                 for leg in &mut itinerary.legs {
-                    if let (Some(id), Some(chateau)) = (&leg.route_id, &leg.chateau) {
+                    if let (Some(id), Some(chateau)) = (leg.route_id(), leg.chateau()) {
                         if let Some(name) = route_map.get(&(chateau.clone(), id.clone())) {
-                            leg.route_name = Some(name.clone());
+                            leg.set_route_name(Some(name.clone()));
                         }
                     }
                 }

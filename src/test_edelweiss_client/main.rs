@@ -90,9 +90,9 @@ async fn main() -> anyhow::Result<()> {
         let mut features = Vec::new();
         for itinerary in &response.itineraries {
             for leg in &itinerary.legs {
-                if !leg.geometry.is_empty() {
+                if !leg.geometry().is_empty() {
                     let coords: Vec<Vec<f64>> = leg
-                        .geometry
+                        .geometry()
                         .iter()
                         .map(|(lat, lon)| vec![*lon, *lat])
                         .collect();
@@ -101,12 +101,12 @@ async fn main() -> anyhow::Result<()> {
                         "coordinates": coords
                     });
                     let properties = serde_json::json!({
-                        "mode": format!("{:?}", leg.mode),
-                        "route": leg.route_name,
-                        "trip": leg.trip_name,
-                        "from": leg.start_stop_name,
-                        "to": leg.end_stop_name,
-                        "duration": leg.duration_seconds
+                        "mode": format!("{:?}", leg.mode()),
+                        "route": leg.route_name(),
+                        "trip": leg.trip_name(),
+                        "from": leg.start_stop_name(),
+                        "to": leg.end_stop_name(),
+                        "duration": leg.duration_seconds()
                     });
                     features.push(serde_json::json!({
                         "type": "Feature",

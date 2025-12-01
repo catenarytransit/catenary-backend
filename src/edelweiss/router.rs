@@ -150,7 +150,7 @@ impl<'a> Router<'a> {
                     // Prepend Walk Leg
                     for itinerary in &mut dijkstra_itineraries {
                         if let Some(first_leg) = itinerary.legs.first() {
-                            if let Some(start_stop_id) = &first_leg.start_stop_id {
+                            if let Some(start_stop_id) = first_leg.start_stop_id() {
                                 // Find which start stop was used
                                 // We need to match start_stop_id to one of partition_start_stops
                                 // This is a bit inefficient, but robust.
@@ -162,26 +162,27 @@ impl<'a> Router<'a> {
                                     if let Some(stop) = start_partition.stops.get(*idx as usize) {
                                         if stop.gtfs_original_id == *start_stop_id {
                                             // Found match
-                                            let walk_leg = catenary::routing_common::api::Leg {
-                                                mode: TravelMode::Walk,
-                                                start_stop_id: None, // User Location
-                                                end_stop_id: Some(stop.gtfs_original_id.clone()),
-                                                start_stop_chateau: None,
-                                                end_stop_chateau: Some(
-                                                    start_partition.chateau_ids
-                                                        [stop.chateau_idx as usize]
-                                                        .clone(),
-                                                ),
-                                                route_id: None,
-                                                trip_id: None,
-                                                chateau: None,
-                                                start_stop_name: Some("Origin".to_string()),
-                                                end_stop_name: None,
-                                                route_name: None,
-                                                trip_name: None,
-                                                duration_seconds: *time as u64,
-                                                geometry: geom.clone(),
-                                            };
+                                            let walk_leg = catenary::routing_common::api::Leg::Osm(
+                                                catenary::routing_common::api::OsmLeg {
+                                                    start_time: req.time,
+                                                    end_time: req.time + *time as u64,
+                                                    mode: TravelMode::Walk,
+                                                    start_stop_id: None, // User Location
+                                                    end_stop_id: Some(
+                                                        stop.gtfs_original_id.clone(),
+                                                    ),
+                                                    start_stop_chateau: None,
+                                                    end_stop_chateau: Some(
+                                                        start_partition.chateau_ids
+                                                            [stop.chateau_idx as usize]
+                                                            .clone(),
+                                                    ),
+                                                    start_stop_name: Some("Origin".to_string()),
+                                                    end_stop_name: None,
+                                                    duration_seconds: *time as u64,
+                                                    geometry: geom.clone(),
+                                                },
+                                            );
                                             itinerary.legs.insert(0, walk_leg);
                                             // Itinerary start time is already set to req.time by Dijkstra?
                                             // Dijkstra sets start_time = start_time_unix (req.time).
@@ -475,24 +476,6 @@ impl<'a> Router<'a> {
                 }
                 curr_date = curr_date.succ_opt().unwrap();
             }
-        }
-    }
-
-    fn stitch_itineraries(&self, first: &Itinerary, second: &Itinerary) -> Itinerary {
-        let mut legs = first.legs.clone();
-        legs.extend(second.legs.clone());
-
-        let transfers = first.transfers + second.transfers + 1; // +1 for the connection itself? Or is it just a walk/wait?
-        // If the connection is a walk, it might be a transfer.
-        // For now, let's just sum them.
-
-        Itinerary {
-            start_time: first.start_time,
-            end_time: second.end_time,
-            duration_seconds: second.end_time - first.start_time,
-            transfers,
-            reliability_score: first.reliability_score.min(second.reliability_score),
-            legs,
         }
     }
 }
@@ -820,7 +803,7 @@ mod tests {
         let itin = &result.itineraries[0];
         let last_leg = itin.legs.last().unwrap();
         // Stop 0 in P1 has GTFS ID "S0" (inherited from create_test_partition)
-        assert_eq!(last_leg.end_stop_id.as_deref(), Some("S0"));
+        assert_eq!(last_leg.end_stop_id().as_deref(), Some("S0"));
     }
 }
 
@@ -989,7 +972,7 @@ fn test_multi_partition_selection() {
         2,
         "Should have Walk + Transit leg"
     );
-    assert_eq!(result.itineraries[0].legs[0].mode, TravelMode::Walk);
-    assert_eq!(result.itineraries[0].legs[1].mode, TravelMode::Transit);
+    assert_eq!(result.itineraries[0].legs[0].mode(), TravelMode::Walk);
+    assert_eq!(result.itineraries[0].legs[1].mode(), TravelMode::Transit);
     // Note: Access/Egress legs are implicit in start/end times but not in legs vec currently.
 }

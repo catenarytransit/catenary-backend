@@ -142,7 +142,10 @@ fn test_multi_partition_selection() {
         for (i, leg) in result.itineraries[0].legs.iter().enumerate() {
             println!(
                 "Leg {}: Mode={:?}, Start={:?}, End={:?}",
-                i, leg.mode, leg.start_stop_id, leg.end_stop_id
+                i,
+                leg.mode(),
+                leg.start_stop_id(),
+                leg.end_stop_id()
             );
         }
     }
@@ -156,7 +159,7 @@ fn test_multi_partition_selection() {
         2,
         "Should have Walk + Transit leg"
     );
-    assert_eq!(result.itineraries[0].legs[0].mode, TravelMode::Walk);
-    assert_eq!(result.itineraries[0].legs[1].mode, TravelMode::Transit);
+    assert_eq!(result.itineraries[0].legs[0].mode(), TravelMode::Walk);
+    assert_eq!(result.itineraries[0].legs[1].mode(), TravelMode::Transit);
     // Note: Walk legs might be 0 duration if start/end matches stop exactly, but structure remains.
 }
