@@ -1,4 +1,5 @@
 use crate::graph_loader::GraphManager;
+use crate::osm_router::OsmRouter;
 use crate::query_graph::{QueryGraph, ServiceContext};
 use catenary::routing_common::api::{Itinerary, RoutingRequest, RoutingResult, TravelMode};
 use catenary::routing_common::transit_graph::{
@@ -36,7 +37,8 @@ impl<'a> Router<'a> {
         );
 
         // Group start stops by partition
-        let mut start_stops_by_partition: HashMap<u32, Vec<(u32, u32, u32)>> = HashMap::new();
+        let mut start_stops_by_partition: HashMap<u32, Vec<(u32, u32, u32, Vec<(f64, f64)>)>> =
+            HashMap::new();
         for stop in start_stops {
             start_stops_by_partition
                 .entry(stop.0)
@@ -44,7 +46,8 @@ impl<'a> Router<'a> {
                 .push(stop);
         }
 
-        let end_pids: std::collections::HashSet<_> = end_stops.iter().map(|(p, _, _)| *p).collect();
+        let end_pids: std::collections::HashSet<_> =
+            end_stops.iter().map(|(p, _, _, _)| *p).collect();
         let mut itineraries = Vec::new();
         let mut tried_partitions = std::collections::HashSet::new();
 
@@ -76,7 +79,7 @@ impl<'a> Router<'a> {
                     // Add LTPs from Start Stops
                     let start_stops_simple: Vec<(u32, u32)> = partition_start_stops
                         .iter()
-                        .map(|(p, s, _)| (*p, *s))
+                        .map(|(p, s, _, _)| (*p, *s))
                         .collect();
                     query_graph.build_local(&start_partition, &start_stops_simple);
 
@@ -109,7 +112,7 @@ impl<'a> Router<'a> {
                     // For now, just start and end.
                     let window = 7200; // 2 hours
                     let mut service_contexts = HashMap::new();
-                    self.compute_service_contexts(
+                    self.compute_partition_service_contexts(
                         &start_partition,
                         req.time as i64,
                         window,
@@ -117,7 +120,7 @@ impl<'a> Router<'a> {
                     );
                     if let Some(end_part) = self.graph.get_transit_partition(end_pid) {
                         if *start_pid != end_pid {
-                            self.compute_service_contexts(
+                            self.compute_partition_service_contexts(
                                 &end_part,
                                 req.time as i64,
                                 window,
@@ -125,19 +128,72 @@ impl<'a> Router<'a> {
                             );
                         }
                     }
-                    let end_nodes_map: HashMap<(u32, u32), u32> = end_stops
+                    let end_nodes_map: HashMap<(u32, u32), (u32, Vec<(f64, f64)>)> = end_stops
                         .iter()
-                        .filter(|(p, _, _)| *p == end_pid)
-                        .map(|(p, s, t)| ((*p, *s), *t))
+                        .filter(|(p, _, _, _)| *p == end_pid)
+                        .map(|(p, s, t, g)| ((*p, *s), (*t, g.clone())))
                         .collect();
 
-                    let dijkstra_itineraries = query_graph.dijkstra(
-                        partition_start_stops,
+                    let start_nodes_for_dijkstra: Vec<(u32, u32, u32)> = partition_start_stops
+                        .iter()
+                        .map(|(p, s, t, _)| (*p, *s, *t))
+                        .collect();
+
+                    let mut dijkstra_itineraries = query_graph.dijkstra(
+                        &start_nodes_for_dijkstra,
                         &end_nodes_map,
                         req.time as i64,
                         self.graph,
-                        &service_contexts,
+                        &mut service_contexts,
                     );
+
+                    // Prepend Walk Leg
+                    for itinerary in &mut dijkstra_itineraries {
+                        if let Some(first_leg) = itinerary.legs.first() {
+                            if let Some(start_stop_id) = &first_leg.start_stop_id {
+                                // Find which start stop was used
+                                // We need to match start_stop_id to one of partition_start_stops
+                                // This is a bit inefficient, but robust.
+                                // Or we can use (pid, stop_idx) if we had it in Itinerary.
+                                // But Itinerary only has GTFS ID.
+                                // We can look up the stop in the partition to get GTFS ID.
+
+                                for (pid, idx, time, geom) in partition_start_stops {
+                                    if let Some(stop) = start_partition.stops.get(*idx as usize) {
+                                        if stop.gtfs_original_id == *start_stop_id {
+                                            // Found match
+                                            let walk_leg = catenary::routing_common::api::Leg {
+                                                mode: TravelMode::Walk,
+                                                start_stop_id: None, // User Location
+                                                end_stop_id: Some(stop.gtfs_original_id.clone()),
+                                                start_stop_chateau: None,
+                                                end_stop_chateau: Some(
+                                                    start_partition.chateau_ids
+                                                        [stop.chateau_idx as usize]
+                                                        .clone(),
+                                                ),
+                                                route_id: None,
+                                                trip_id: None,
+                                                chateau: None,
+                                                start_stop_name: Some("Origin".to_string()),
+                                                end_stop_name: None,
+                                                route_name: None,
+                                                trip_name: None,
+                                                duration_seconds: *time as u64,
+                                                geometry: geom.clone(),
+                                            };
+                                            itinerary.legs.insert(0, walk_leg);
+                                            // Itinerary start time is already set to req.time by Dijkstra?
+                                            // Dijkstra sets start_time = start_time_unix (req.time).
+                                            // The first transit leg starts at req.time + access_time + wait.
+                                            // So adding a walk leg of duration access_time fits perfectly.
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     itineraries.extend(dijkstra_itineraries);
                 }
@@ -153,9 +209,8 @@ impl<'a> Router<'a> {
         lon: f64,
         _mode: TravelMode,
         speed: f64,
-    ) -> Vec<(u32, u32, u32)> {
-        // Returns (partition_id, stop_idx, access_time_seconds)
-        // Simple Euclidean distance for now, should use OSM graph
+    ) -> Vec<(u32, u32, u32, Vec<(f64, f64)>)> {
+        // Returns (partition_id, stop_idx, access_time_seconds, geometry)
         let mut stops = Vec::new();
         let max_radius_meters = 2000.0; // 2km
         let max_radius_deg = max_radius_meters / 111000.0;
@@ -164,24 +219,58 @@ impl<'a> Router<'a> {
             .graph
             .find_partitions_for_point(lat, lon, max_radius_deg);
 
-        // If manifest exists, use candidate_pids.
-        // If not (e.g. test environment without manifest), fall back to loaded partitions?
-        // But we want to support dynamic loading.
-        // If manifest is present, we trust it.
-        // If not, we iterate over whatever is in memory (for tests).
         let pids_to_check: Vec<u32> = if self.graph.manifest.is_some() {
             candidate_pids
         } else {
-            self.graph.transit_partitions.keys().cloned().collect()
+            self.graph
+                .transit_partitions
+                .read()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect()
         };
+
+        let osm_router = OsmRouter::new(self.graph);
 
         for pid in pids_to_check {
             if let Some(partition) = self.graph.get_transit_partition(pid) {
+                // 1. Filter stops by Euclidean distance first
+                let mut candidate_stops = Vec::new();
                 for (idx, stop) in partition.stops.iter().enumerate() {
                     let dist = self.haversine_distance(lat, lon, stop.lat, stop.lon);
                     if dist <= max_radius_meters {
+                        candidate_stops.push((idx as u32, stop.lat, stop.lon));
+                    }
+                }
+
+                if candidate_stops.is_empty() {
+                    continue;
+                }
+
+                // 2. Run A* / Dijkstra on OSM graph
+                let max_duration = (max_radius_meters / speed) as u32;
+                let reached_opt = osm_router.find_reachable_stops(
+                    pid,
+                    lat,
+                    lon,
+                    &candidate_stops,
+                    max_duration,
+                    speed,
+                );
+
+                if let Some(reached) = reached_opt {
+                    for (stop_idx, duration, geometry) in reached {
+                        stops.push((pid, stop_idx, duration, geometry));
+                    }
+                } else {
+                    // Fallback to Euclidean if OSM data is missing
+                    for (idx, lat_s, lon_s) in candidate_stops {
+                        let dist = self.haversine_distance(lat, lon, lat_s, lon_s);
                         let time = (dist / speed) as u32;
-                        stops.push((pid, idx as u32, time));
+                        // Straight line geometry
+                        let geometry = vec![(lat, lon), (lat_s, lon_s)];
+                        stops.push((pid, idx, time, geometry));
                     }
                 }
             }
@@ -319,8 +408,14 @@ impl<'a> Router<'a> {
         gtfs_id: &str,
     ) -> Option<u32> {
         if let Some(partition) = self.graph.get_transit_partition(partition_id) {
+            let chateau_idx = partition
+                .chateau_ids
+                .iter()
+                .position(|c| c == chateau)
+                .map(|i| i as u32)?;
+
             for (idx, stop) in partition.stops.iter().enumerate() {
-                if stop.gtfs_original_id == gtfs_id && stop.chateau == chateau {
+                if stop.gtfs_original_id == gtfs_id && stop.chateau_idx == chateau_idx {
                     return Some(idx as u32);
                 }
             }
@@ -328,12 +423,12 @@ impl<'a> Router<'a> {
         None
     }
 
-    fn compute_service_contexts(
+    pub fn compute_partition_service_contexts(
         &self,
         partition: &TransitPartition,
         req_time: i64,
         window_seconds: u32,
-        service_contexts: &mut HashMap<(u32, i64), ServiceContext>,
+        service_contexts: &mut HashMap<(u32, u32, i64), ServiceContext>,
     ) {
         // Collect all timezones in this partition
         // We iterate over all patterns to find unique timezones?
@@ -360,7 +455,7 @@ impl<'a> Router<'a> {
                     .unwrap();
                 let base_unix = noon.timestamp() - 43200;
 
-                let key = (tz_idx as u32, base_unix);
+                let key = (partition.partition_id, tz_idx as u32, base_unix);
                 if !service_contexts.contains_key(&key) {
                     let weekday = curr_date.weekday().num_days_from_monday(); // 0=Mon
                     let day_mask = 1 << weekday;
@@ -419,7 +514,7 @@ mod tests {
         let stops = vec![
             TransitStop {
                 id: 0,
-                chateau: "test".to_string(),
+                chateau_idx: 0,
                 gtfs_original_id: "S0".to_string(),
                 is_hub: false,
                 is_border: false,
@@ -429,7 +524,7 @@ mod tests {
             },
             TransitStop {
                 id: 1,
-                chateau: "test".to_string(),
+                chateau_idx: 0,
                 gtfs_original_id: "S1".to_string(),
                 is_hub: false,
                 is_border: false,
@@ -439,7 +534,7 @@ mod tests {
             },
             TransitStop {
                 id: 2,
-                chateau: "test".to_string(),
+                chateau_idx: 0,
                 gtfs_original_id: "S2".to_string(),
                 is_hub: false,
                 is_border: false,
@@ -480,7 +575,7 @@ mod tests {
         ];
 
         let trip_patterns = vec![TripPattern {
-            chateau: "test".to_string(),
+            chateau_idx: 0,
             route_id: "R1".to_string(),
             direction_pattern_idx: 0,
             trips,
@@ -537,6 +632,7 @@ mod tests {
             ],
             timezones: vec!["UTC".to_string()],
             boundary: None,
+            chateau_ids: vec!["test".to_string()],
         }
     }
 
@@ -544,7 +640,11 @@ mod tests {
     fn test_simple_raptor() {
         let partition = create_test_partition();
         let mut graph = GraphManager::new();
-        graph.transit_partitions.insert(0, partition.clone());
+        graph
+            .transit_partitions
+            .write()
+            .unwrap()
+            .insert(0, std::sync::Arc::new(partition.clone()));
         let router = Router::new(&graph);
 
         // Request: Stop 0 to Stop 2, departing at 7:50
@@ -590,7 +690,11 @@ mod tests {
     fn test_profile_search() {
         let partition = create_test_partition();
         let mut graph = GraphManager::new();
-        graph.transit_partitions.insert(0, partition.clone());
+        graph
+            .transit_partitions
+            .write()
+            .unwrap()
+            .insert(0, std::sync::Arc::new(partition.clone()));
         let router = Router::new(&graph);
 
         // Request: 2024-01-01 7:50 UTC
@@ -626,27 +730,42 @@ mod tests {
         let mut partition0 = create_test_partition();
         partition0.partition_id = 0;
         partition0.stops[0].id = 0;
+        partition0.stops[0].chateau_idx = 0;
         partition0.stops[0].lat = 0.0;
         partition0.stops[0].lon = 0.0;
         partition0.stops[1].id = 1;
+        partition0.stops[1].chateau_idx = 0;
         partition0.stops[1].lat = 0.01;
         partition0.stops[1].lon = 0.0;
+        partition0.chateau_ids = vec!["test".to_string()];
         // Remove Stop 2 from P0 for clarity (though create_test_partition has 3 stops)
 
         // Partition 1: Stop 2 -> Stop 3
         let mut partition1 = create_test_partition();
         partition1.partition_id = 1;
         partition1.stops[0].id = 2; // Remap IDs
+        partition1.stops[0].chateau_idx = 0;
         partition1.stops[0].lat = 1.0; // Far away
         partition1.stops[0].lon = 0.0;
         partition1.stops[1].id = 3;
+        partition1.stops[1].chateau_idx = 0;
         partition1.stops[1].lat = 1.01;
         partition1.stops[1].lon = 0.0;
         partition1.stops[2].id = 4;
+        partition1.stops[2].chateau_idx = 0;
+        partition1.chateau_ids = vec!["test".to_string()];
 
         let mut graph = GraphManager::new();
-        graph.transit_partitions.insert(0, partition0);
-        graph.transit_partitions.insert(1, partition1);
+        graph
+            .transit_partitions
+            .write()
+            .unwrap()
+            .insert(0, std::sync::Arc::new(partition0));
+        graph
+            .transit_partitions
+            .write()
+            .unwrap()
+            .insert(1, std::sync::Arc::new(partition1));
 
         // Setup Global Index to connect P0 -> P1 via Stop 1
         let hub1 = catenary::routing_common::transit_graph::GlobalHub {
@@ -716,7 +835,7 @@ fn test_multi_partition_selection() {
     // Partition 0
     let stops_p0 = vec![TransitStop {
         id: 0,
-        chateau: "p0".to_string(),
+        chateau_idx: 0,
         gtfs_original_id: "S0_P0".to_string(),
         is_hub: false,
         is_border: false,
@@ -735,16 +854,28 @@ fn test_multi_partition_selection() {
         service_ids: vec![],
         service_exceptions: vec![],
         _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![],
+        local_transfer_patterns: vec![LocalTransferPattern {
+            from_stop_idx: 0,
+            edges: vec![DagEdge {
+                from_hub_idx: 0,
+                to_hub_idx: 1,
+                edge_type: Some(EdgeType::Transit(TransitEdge {
+                    trip_pattern_idx: 0,
+                    start_stop_idx: 0,
+                    end_stop_idx: 1,
+                })),
+            }],
+        }],
         timezones: vec!["UTC".to_string()],
         boundary: None,
+        chateau_ids: vec!["p0".to_string()],
     };
 
     // Partition 1
     let stops_p1 = vec![
         TransitStop {
             id: 0,
-            chateau: "p1".to_string(),
+            chateau_idx: 0,
             gtfs_original_id: "S0_P1".to_string(),
             is_hub: false,
             is_border: false,
@@ -754,7 +885,7 @@ fn test_multi_partition_selection() {
         },
         TransitStop {
             id: 1,
-            chateau: "p1".to_string(),
+            chateau_idx: 0,
             gtfs_original_id: "S1_P1".to_string(),
             is_hub: false,
             is_border: false,
@@ -781,7 +912,7 @@ fn test_multi_partition_selection() {
         wheelchair_accessible: 0,
     }];
     let trip_patterns_p1 = vec![TripPattern {
-        chateau: "p1".to_string(),
+        chateau_idx: 0,
         route_id: "R1_P1".to_string(),
         direction_pattern_idx: 0,
         trips: trips_p1,
@@ -813,11 +944,20 @@ fn test_multi_partition_selection() {
         }],
         timezones: vec!["UTC".to_string()],
         boundary: None,
+        chateau_ids: vec!["p1".to_string()],
     };
 
     let mut graph = GraphManager::new();
-    graph.transit_partitions.insert(0, partition0);
-    graph.transit_partitions.insert(1, partition1);
+    graph
+        .transit_partitions
+        .write()
+        .unwrap()
+        .insert(0, std::sync::Arc::new(partition0));
+    graph
+        .transit_partitions
+        .write()
+        .unwrap()
+        .insert(1, std::sync::Arc::new(partition1));
     let router = Router::new(&graph);
 
     // Request: (0,0) to (0.01, 0)
@@ -846,8 +986,10 @@ fn test_multi_partition_selection() {
     );
     assert_eq!(
         result.itineraries[0].legs.len(),
-        1,
-        "Transit leg only (access/egress not explicit legs in this router yet)"
+        2,
+        "Should have Walk + Transit leg"
     );
+    assert_eq!(result.itineraries[0].legs[0].mode, TravelMode::Walk);
+    assert_eq!(result.itineraries[0].legs[1].mode, TravelMode::Transit);
     // Note: Access/Egress legs are implicit in start/end times but not in legs vec currently.
 }

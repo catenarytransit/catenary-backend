@@ -1,7 +1,11 @@
 mod graph_loader;
 mod hydrator;
+mod osm_router;
 mod query_graph;
 mod router;
+
+#[cfg(test)]
+mod repro_test;
 
 use crate::graph_loader::GraphManager;
 use crate::hydrator::Hydrator;

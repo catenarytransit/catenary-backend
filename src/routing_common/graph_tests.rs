@@ -10,14 +10,14 @@ fn test_transit_partition_serialization() {
             id: 0,
             lat: 34.0,
             lon: -118.0,
-            chateau: "test_chateau".to_string(),
+            chateau_idx: 0,
             gtfs_original_id: "stop_1".to_string(),
             is_hub: true,
             is_border: false,
             is_external_gateway: false,
         }],
         trip_patterns: vec![TripPattern {
-            chateau: "test_chateau".to_string(),
+            chateau_idx: 0,
             route_id: "route_1".to_string(),
             direction_pattern_idx: 0,
             trips: vec![CompressedTrip {
@@ -46,6 +46,8 @@ fn test_transit_partition_serialization() {
         _deprecated_external_transfers: vec![],
         local_transfer_patterns: vec![],
         timezones: vec!["UTC".to_string()],
+        boundary: None,
+        chateau_ids: vec!["test_chateau".to_string()],
     };
 
     let encoded = partition.encode_to_vec();

@@ -17,25 +17,40 @@ impl Hydrator {
         &self,
         stop_ids: Vec<(String, String)>, // (chateau, gtfs_id)
     ) -> anyhow::Result<HashMap<(String, String), String>> {
+        use futures::stream::{self, StreamExt};
         use gtfs::stops::dsl::*;
-        let mut conn = self.pool.get().await?;
 
-        // Extract just the IDs for the IN clause
-        let ids: Vec<String> = stop_ids.iter().map(|(_, id)| id.clone()).collect();
+        // Group by chateau
+        let mut by_chateau: HashMap<String, Vec<String>> = HashMap::new();
+        for (c, id) in stop_ids {
+            by_chateau.entry(c).or_default().push(id);
+        }
 
-        let results = stops
-            .filter(gtfs_id.eq_any(&ids))
-            .select((chateau, gtfs_id, name))
-            .load::<(String, String, Option<String>)>(&mut conn)
-            .await?;
+        let results = stream::iter(by_chateau)
+            .map(|(c_val, ids)| {
+                let pool = self.pool.clone();
+                async move {
+                    let mut conn = pool.get().await.map_err(|e| anyhow::anyhow!(e))?;
+                    stops
+                        .filter(chateau.eq(c_val))
+                        .filter(gtfs_id.eq_any(ids))
+                        .select((chateau, gtfs_id, name))
+                        .load::<(String, String, Option<String>)>(&mut conn)
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e))
+                }
+            })
+            .buffer_unordered(32)
+            .collect::<Vec<_>>()
+            .await;
 
         let mut map = HashMap::new();
-        // Create a set of requested (chateau, id) for fast lookup if needed,
-        // but since we return a map keyed by (chateau, id), we can just insert all matches.
-        // The caller will only look up what they asked for.
-        for (c, id, name_opt) in results {
-            if let Some(n) = name_opt {
-                map.insert((c, id), n);
+        for res in results {
+            let rows = res?;
+            for (c, id, name_opt) in rows {
+                if let Some(n) = name_opt {
+                    map.insert((c, id), n);
+                }
             }
         }
         Ok(map)
@@ -45,26 +60,45 @@ impl Hydrator {
         &self,
         route_ids: Vec<(String, String)>, // (chateau, route_id)
     ) -> anyhow::Result<HashMap<(String, String), String>> {
+        use futures::stream::{self, StreamExt};
         use gtfs::routes::dsl::*;
-        let mut conn = self.pool.get().await?;
 
-        let ids: Vec<String> = route_ids.iter().map(|(_, id)| id.clone()).collect();
+        // Group by chateau
+        let mut by_chateau: HashMap<String, Vec<String>> = HashMap::new();
+        for (c, id) in route_ids {
+            by_chateau.entry(c).or_default().push(id);
+        }
 
-        let results = routes
-            .filter(route_id.eq_any(&ids))
-            .select((chateau, route_id, short_name, long_name))
-            .load::<(String, String, Option<String>, Option<String>)>(&mut conn)
-            .await?;
+        let results = stream::iter(by_chateau)
+            .map(|(c_val, ids)| {
+                let pool = self.pool.clone();
+                async move {
+                    let mut conn = pool.get().await.map_err(|e| anyhow::anyhow!(e))?;
+                    routes
+                        .filter(chateau.eq(c_val))
+                        .filter(route_id.eq_any(ids))
+                        .select((chateau, route_id, short_name, long_name))
+                        .load::<(String, String, Option<String>, Option<String>)>(&mut conn)
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e))
+                }
+            })
+            .buffer_unordered(32)
+            .collect::<Vec<_>>()
+            .await;
 
         let mut map = HashMap::new();
-        for (c, id, short, long) in results {
-            let name = match (short, long) {
-                (Some(s), Some(l)) => format!("{} - {}", s, l),
-                (Some(s), None) => s,
-                (None, Some(l)) => l,
-                (None, None) => "Unknown Route".to_string(),
-            };
-            map.insert((c, id), name);
+        for res in results {
+            let rows = res?;
+            for (c, id, short, long) in rows {
+                let name = match (short, long) {
+                    (Some(s), Some(l)) => format!("{} - {}", s, l),
+                    (Some(s), None) => s,
+                    (None, Some(l)) => l,
+                    (None, None) => "Unknown Route".to_string(),
+                };
+                map.insert((c, id), name);
+            }
         }
         Ok(map)
     }

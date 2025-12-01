@@ -147,10 +147,10 @@ impl QueryGraph {
     pub fn dijkstra(
         &self,
         start_nodes: &[(u32, u32, u32)], // (partition_id, stop_idx, access_time)
-        end_nodes: &HashMap<(u32, u32), u32>, // (partition_id, stop_idx) -> egress_time
+        end_nodes: &HashMap<(u32, u32), (u32, Vec<(f64, f64)>)>, // (partition_id, stop_idx) -> (egress_time, geometry)
         start_time_unix: i64,
         graph_manager: &GraphManager,
-        service_contexts: &HashMap<(u32, i64), ServiceContext>,
+        service_contexts: &mut HashMap<(u32, u32, i64), ServiceContext>,
     ) -> Vec<Itinerary> {
         let mut dist: HashMap<QueryNode, u64> = HashMap::new();
         let mut heap = BinaryHeap::new();
@@ -188,8 +188,8 @@ impl QueryGraph {
                 continue;
             }
 
-            if let Some(&egress_time) = end_nodes.get(&(partition_id, stop_idx)) {
-                let total_cost = cost + egress_time as u64;
+            if let Some((egress_time, _)) = end_nodes.get(&(partition_id, stop_idx)) {
+                let total_cost = cost + *egress_time as u64;
                 if total_cost < min_end_time {
                     min_end_time = total_cost;
                     best_end_node = Some(u.clone());
@@ -235,17 +235,21 @@ impl QueryGraph {
             legs.reverse();
 
             // Add Egress Leg
-            if let Some(&egress_time) = end_nodes.get(&(end_node.partition_id, end_node.stop_idx)) {
-                if egress_time > 0 {
+            if let Some((egress_time, geometry)) =
+                end_nodes.get(&(end_node.partition_id, end_node.stop_idx))
+            {
+                if *egress_time > 0 {
                     if let Some(partition) =
-                        graph_manager.transit_partitions.get(&end_node.partition_id)
+                        graph_manager.get_transit_partition(end_node.partition_id)
                     {
                         let stop = &partition.stops[end_node.stop_idx as usize];
                         legs.push(Leg {
                             mode: TravelMode::Walk,
                             start_stop_id: Some(stop.gtfs_original_id.clone()),
                             end_stop_id: None, // Destination
-                            start_stop_chateau: Some(stop.chateau.clone()),
+                            start_stop_chateau: Some(
+                                partition.chateau_ids[stop.chateau_idx as usize].clone(),
+                            ),
                             end_stop_chateau: None,
                             route_id: None,
                             trip_id: None,
@@ -254,8 +258,8 @@ impl QueryGraph {
                             end_stop_name: None,
                             route_name: None,
                             trip_name: None,
-                            duration_seconds: egress_time as u64,
-                            geometry: vec![],
+                            duration_seconds: *egress_time as u64,
+                            geometry: geometry.clone(),
                         });
                     }
                 }
@@ -284,14 +288,12 @@ impl QueryGraph {
         edge: &QueryEdge,
         current_time: u64,
         graph_manager: &GraphManager,
-        service_contexts: &HashMap<(u32, i64), ServiceContext>,
+        service_contexts: &mut HashMap<(u32, u32, i64), ServiceContext>,
     ) -> Option<u64> {
         match &edge.edge_type {
             EdgeType::Walk(w) => Some(current_time + w.duration_seconds as u64),
             EdgeType::Transit(t) => {
-                let partition = graph_manager
-                    .transit_partitions
-                    .get(&edge.from.partition_id)?;
+                let partition = graph_manager.get_transit_partition(edge.from.partition_id)?;
                 let pattern = if let Some(p) =
                     partition.trip_patterns.get(t.trip_pattern_idx as usize)
                 {
@@ -312,11 +314,127 @@ impl QueryGraph {
                 // We need to check all valid service contexts for this pattern's timezone
                 let tz_idx = pattern.timezone_idx;
 
+                // Ensure service contexts are computed for this partition/timezone
+                // This is a bit tricky inside evaluate_edge since we need to mutate service_contexts.
+                // But we passed it as mutable.
+                // We need to check if we have contexts for (partition_id, tz_idx).
+                // If not, we should compute them.
+                // However, computing them requires iterating the calendar, which we don't have easy access to here
+                // unless we duplicate the logic or call back to Router.
+                // But Router::compute_partition_service_contexts is available if we can access it.
+                // Or we just rely on them being pre-computed in Router::route.
+                // Router::route computes them for start/end partitions.
+                // But if we traverse into a NEW partition (lazy loading), we might miss contexts.
+                // For now, let's assume we pre-compute or compute on demand if we can.
+                // But we don't have the `req_time` here easily to compute window.
+                // Let's assume for now that `Router` computes them for ALL partitions it *might* touch?
+                // No, that's impossible for lazy loading.
+                // We need to compute them here if missing.
+                // We can infer `req_time` from `current_time`? No, `current_time` is dynamic.
+                // We need the original request time or a window around `current_time`.
+                // Let's use `current_time` as the center of a window?
+                // Or just fail if not present?
+                // The `Router` logic currently only computes for start/end.
+                // If we traverse a global edge to a middle partition, we need contexts.
+
+                // FIX: We need to compute contexts on demand.
+                // We can use `current_time` and a window.
+                // But we need to know if we already computed them for this partition/tz.
+                // We can check if any key matches (pid, tz_idx, *).
+
+                // For now, let's just iterate what we have.
+                // If we miss contexts, we won't find trips.
+                // This is a limitation of the current refactor unless we bring `compute_service_contexts` here.
+                // Let's bring a simplified version here or rely on the fact that we passed `service_contexts`.
+
+                // Actually, we can just check if we have any context for this (pid, tz_idx).
+                // If not, we are in trouble.
+                // But wait, `Router::route` computes for start/end.
+                // If we have a multi-hop global route P1 -> P2 -> P3, we need P2 contexts.
+                // We should probably compute contexts for the partition when we load it?
+                // Or when we first touch it here.
+
+                // Let's add a TODO and rely on pre-computation for now, or try to compute if we can.
+                // But we don't have `window` or `req_time`.
+                // Maybe we should pass `Router` or a `ContextManager`?
+                // For this task, let's stick to the plan: update the key and use what's passed.
+                // We will assume `Router` computes enough or we accept the limitation for now.
+                // (Actually, `Router` only computes for start/end, so intermediate partitions will fail).
+                // We should probably call `Router::compute_partition_service_contexts` from `Router` before calling `dijkstra` for ALL involved partitions?
+                // But we don't know ALL involved partitions until we traverse.
+
+                // Solution: We need to compute it here.
+                // We can use `current_time` as the target time.
+                // And a default window (e.g. 24h).
+                // But we need `partition.timezones`.
+
+                // Let's check if we have contexts.
+                let mut has_context = false;
+                for ((pid, t_idx, _), _) in service_contexts.iter() {
+                    if *pid == edge.from.partition_id && *t_idx == tz_idx {
+                        has_context = true;
+                        break;
+                    }
+                }
+
+                if !has_context {
+                    // Compute on demand!
+                    // We need to implement the logic here or call a helper.
+                    // Let's duplicate the logic for now or move it to a shared helper.
+                    // Since `Router` is not available here (we are in `QueryGraph`), we can't call `Router` methods.
+                    // We can implement a helper in `QueryGraph` or `transit_graph` utils?
+                    // Or just inline it.
+
+                    // Inline logic:
+                    use chrono::{Datelike, TimeZone};
+                    use chrono_tz::Tz;
+
+                    if let Some(tz_str) = partition.timezones.get(tz_idx as usize) {
+                        let tz: Tz = tz_str.parse().unwrap_or(chrono_tz::UTC);
+                        let req_time = current_time as i64;
+                        let window_seconds = 7200; // 2 hours
+
+                        let start_search = req_time - 172800;
+                        let end_search = req_time + window_seconds as i64 + 172800;
+
+                        let start_date = tz.timestamp_opt(start_search, 0).unwrap().date_naive();
+                        let end_date = tz.timestamp_opt(end_search, 0).unwrap().date_naive();
+
+                        let mut curr_date = start_date;
+                        while curr_date <= end_date {
+                            let noon = tz
+                                .from_local_datetime(&curr_date.and_hms_opt(12, 0, 0).unwrap())
+                                .unwrap();
+                            let base_unix = noon.timestamp() - 43200;
+
+                            let key = (edge.from.partition_id, tz_idx, base_unix);
+                            if !service_contexts.contains_key(&key) {
+                                let weekday = curr_date.weekday().num_days_from_monday(); // 0=Mon
+                                let day_mask = 1 << weekday;
+
+                                let service_date_int = (curr_date.year() as u32) * 10000
+                                    + (curr_date.month() as u32) * 100
+                                    + (curr_date.day() as u32);
+
+                                service_contexts.insert(
+                                    key,
+                                    ServiceContext {
+                                        base_unix_time: base_unix,
+                                        day_mask,
+                                        service_date_int,
+                                    },
+                                );
+                            }
+                            curr_date = curr_date.succ_opt().unwrap();
+                        }
+                    }
+                }
+
                 let mut best_arrival = u64::MAX;
                 let mut found = false;
 
-                for ((t_idx, _), context) in service_contexts {
-                    if *t_idx != tz_idx {
+                for ((pid, t_idx, _), context) in service_contexts.iter() {
+                    if *pid != edge.from.partition_id || *t_idx != tz_idx {
                         continue;
                     }
 
@@ -326,7 +444,7 @@ impl QueryGraph {
                         }
 
                         let dep_time = self.calculate_arrival_time_unix(
-                            partition,
+                            &partition,
                             trip,
                             t.start_stop_idx as usize,
                             context.base_unix_time,
@@ -334,7 +452,7 @@ impl QueryGraph {
 
                         if dep_time >= current_time as i64 {
                             let arr_time = self.calculate_arrival_time_unix(
-                                partition,
+                                &partition,
                                 trip,
                                 t.end_stop_idx as usize,
                                 context.base_unix_time,
@@ -362,32 +480,40 @@ impl QueryGraph {
         end_time: u64,
         graph_manager: &GraphManager,
     ) -> Option<Leg> {
-        let partition = graph_manager
-            .transit_partitions
-            .get(&edge.from.partition_id)?;
+        let partition = graph_manager.get_transit_partition(edge.from.partition_id)?;
         let start_stop = &partition.stops[edge.from.stop_idx as usize];
 
         match &edge.edge_type {
             EdgeType::Walk(_) => {
                 // For walk edges, the destination might be in a different partition (e.g. global DAG edge)
                 // or the same partition.
-                let end_stop = if edge.to.partition_id == edge.from.partition_id {
+                let (end_stop_id, end_stop_chateau) = if edge.to.partition_id
+                    == edge.from.partition_id
+                {
                     // Local walk
-                    partition.stops.get(edge.to.stop_idx as usize)?
+                    let stop = partition.stops.get(edge.to.stop_idx as usize)?;
+                    (
+                        stop.gtfs_original_id.clone(),
+                        partition.chateau_ids[stop.chateau_idx as usize].clone(),
+                    )
                 } else {
                     // Cross-partition walk (e.g. at a border)
-                    let to_partition = graph_manager
-                        .transit_partitions
-                        .get(&edge.to.partition_id)?;
-                    to_partition.stops.get(edge.to.stop_idx as usize)?
+                    let to_partition = graph_manager.get_transit_partition(edge.to.partition_id)?;
+                    let stop = to_partition.stops.get(edge.to.stop_idx as usize)?;
+                    (
+                        stop.gtfs_original_id.clone(),
+                        partition.chateau_ids[stop.chateau_idx as usize].clone(),
+                    )
                 };
 
                 Some(Leg {
                     mode: TravelMode::Walk,
                     start_stop_id: Some(start_stop.gtfs_original_id.clone()),
-                    end_stop_id: Some(end_stop.gtfs_original_id.clone()),
-                    start_stop_chateau: Some(start_stop.chateau.clone()),
-                    end_stop_chateau: Some(end_stop.chateau.clone()),
+                    end_stop_id: Some(end_stop_id),
+                    start_stop_chateau: Some(
+                        partition.chateau_ids[start_stop.chateau_idx as usize].clone(),
+                    ),
+                    end_stop_chateau: Some(end_stop_chateau),
                     route_id: None,
                     trip_id: None,
                     chateau: None,
@@ -415,17 +541,29 @@ impl QueryGraph {
                     mode: TravelMode::Transit,
                     start_stop_id: Some(start_stop.gtfs_original_id.clone()),
                     end_stop_id: Some(end_stop.gtfs_original_id.clone()),
-                    start_stop_chateau: Some(start_stop.chateau.clone()),
-                    end_stop_chateau: Some(end_stop.chateau.clone()),
+                    start_stop_chateau: Some(
+                        partition.chateau_ids[start_stop.chateau_idx as usize].clone(),
+                    ),
+                    end_stop_chateau: Some(
+                        partition.chateau_ids[end_stop.chateau_idx as usize].clone(),
+                    ),
                     route_id: Some(pattern.route_id.clone()),
                     trip_id: None,
-                    chateau: Some(pattern.chateau.clone()),
+                    chateau: Some(partition.chateau_ids[pattern.chateau_idx as usize].clone()),
                     start_stop_name: None,
                     end_stop_name: None,
                     route_name: None,
                     trip_name: None,
                     duration_seconds: end_time - start_time,
-                    geometry: vec![],
+                    geometry: {
+                        let mut geom = Vec::new();
+                        for i in t.start_stop_idx..=t.end_stop_idx {
+                            let s_idx = dir_pattern.stop_indices[i as usize];
+                            let stop = &partition.stops[s_idx as usize];
+                            geom.push((stop.lat, stop.lon));
+                        }
+                        geom
+                    },
                 })
             }
         }

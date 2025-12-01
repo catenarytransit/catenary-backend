@@ -123,6 +123,11 @@ pub struct TransitPartition {
     /// The geographic boundary of this partition.
     #[prost(message, optional, tag = "13")]
     pub boundary: Option<PartitionBoundary>,
+
+    /// List of unique Chateau IDs used in this partition.
+    /// Referenced by `TransitStop.chateau_idx`, `TripPattern.chateau_idx`, etc.
+    #[prost(string, repeated, tag = "14")]
+    pub chateau_ids: Vec<String>,
 }
 
 /// A transfer to a stop in a different Chateau.
@@ -132,9 +137,9 @@ pub struct ExternalTransfer {
     #[prost(uint32, tag = "1")]
     pub from_stop_idx: u32,
 
-    /// The ID of the target Chateau.
-    #[prost(string, tag = "2")]
-    pub to_chateau: String,
+    /// The Index of the target Chateau in `TransitPartition.chateau_ids`.
+    #[prost(uint32, tag = "2")]
+    pub to_chateau_idx: u32,
 
     /// The GTFS Stop ID in the target Chateau.
     #[prost(string, tag = "3")]
@@ -160,9 +165,9 @@ pub struct TransitStop {
     #[prost(uint64, tag = "1")]
     pub id: u64,
 
-    /// Linking Chateau
-    #[prost(string, tag = "2")]
-    pub chateau: String,
+    /// Index of the Chateau in `TransitPartition.chateau_ids`.
+    #[prost(uint32, tag = "2")]
+    pub chateau_idx: u32,
 
     /// The original GTFS Stop ID (string).
     /// Required for matching GTFS-Realtime updates.
@@ -206,8 +211,9 @@ pub struct DirectionPattern {
 /// sequence of stops. This is the primary unit of Trip-Based Routing.
 #[derive(Clone, PartialEq, Message)]
 pub struct TripPattern {
-    #[prost(string, tag = "1")]
-    pub chateau: String,
+    /// Index of the Chateau in `TransitPartition.chateau_ids`.
+    #[prost(uint32, tag = "1")]
+    pub chateau_idx: u32,
 
     #[prost(string, tag = "2")]
     pub route_id: String,

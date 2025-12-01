@@ -5,10 +5,11 @@ use catenary::routing_common::transit_graph::{
 };
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, RwLock};
 
 pub struct GraphManager {
-    pub transit_partitions: HashMap<u32, TransitPartition>,
-    pub street_partitions: HashMap<u32, StreetData>,
+    pub transit_partitions: RwLock<HashMap<u32, Arc<TransitPartition>>>,
+    pub street_partitions: RwLock<HashMap<u32, Arc<StreetData>>>,
     pub transfer_partitions: HashMap<u32, TransferChunk>,
     pub edge_partitions: HashMap<u32, Vec<EdgeEntry>>,
     pub global_index: Option<GlobalPatternIndex>,
@@ -19,8 +20,8 @@ pub struct GraphManager {
 impl GraphManager {
     pub fn new() -> Self {
         Self {
-            transit_partitions: HashMap::new(),
-            street_partitions: HashMap::new(),
+            transit_partitions: RwLock::new(HashMap::new()),
+            street_partitions: RwLock::new(HashMap::new()),
             transfer_partitions: HashMap::new(),
             edge_partitions: HashMap::new(),
             global_index: None,
@@ -56,13 +57,16 @@ impl GraphManager {
         Ok(())
     }
 
-    pub fn get_transit_partition(&self, partition_id: u32) -> Option<TransitPartition> {
-        // TODO: Implement caching
-        if let Some(partition) = self.transit_partitions.get(&partition_id) {
-            return Some(partition.clone());
+    pub fn get_transit_partition(&self, partition_id: u32) -> Option<Arc<TransitPartition>> {
+        // 1. Fast path: Check read lock
+        {
+            let map = self.transit_partitions.read().unwrap();
+            if let Some(partition) = map.get(&partition_id) {
+                return Some(partition.clone());
+            }
         }
 
-        // Try to load from disk
+        // 2. Slow path: Load from disk and insert
         if let Some(base_path) = &self.base_path {
             let filename = format!("transit_chunk_{}.pbf", partition_id);
             let path = base_path.join(filename);
@@ -71,9 +75,10 @@ impl GraphManager {
                 if let Ok(partition) =
                     transit_graph::load_pbf::<TransitPartition>(path.to_str().unwrap())
                 {
-                    // In a real implementation, we would insert into cache here.
-                    // For now, just return it.
-                    return Some(partition);
+                    let arc_partition = Arc::new(partition);
+                    let mut map = self.transit_partitions.write().unwrap();
+                    map.insert(partition_id, arc_partition.clone());
+                    return Some(arc_partition);
                 }
             }
         }
@@ -93,6 +98,31 @@ impl GraphManager {
                     transit_graph::load_pbf::<TransferChunk>(path.to_str().unwrap())
                 {
                     return Some(partition);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn get_street_partition(&self, partition_id: u32) -> Option<Arc<StreetData>> {
+        // 1. Fast path: Check read lock
+        {
+            let map = self.street_partitions.read().unwrap();
+            if let Some(partition) = map.get(&partition_id) {
+                return Some(partition.clone());
+            }
+        }
+
+        // 2. Slow path: Load from disk and insert
+        if let Some(base_path) = &self.base_path {
+            let filename = format!("osm_chunk_{}.pbf", partition_id);
+            let path = base_path.join(filename);
+            if path.exists() {
+                if let Ok(partition) = osm_graph::load_pbf::<StreetData>(path.to_str().unwrap()) {
+                    let arc_partition = Arc::new(partition);
+                    let mut map = self.street_partitions.write().unwrap();
+                    map.insert(partition_id, arc_partition.clone());
+                    return Some(arc_partition);
                 }
             }
         }

@@ -19,6 +19,7 @@ use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use geo::prelude::*;
 use geo::{ConvexHull, MultiPoint, Point};
 use rand::prelude::*;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -51,7 +52,7 @@ struct Args {
     output: PathBuf,
 
     /// Target cluster size (number of stops)
-    #[arg(long, default_value = "4000")]
+    #[arg(long, default_value = "1500")]
     cluster_size: usize,
 
     /// Run in stitch mode (rebuild global graph from chunks)
@@ -609,6 +610,17 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     // Generate unique partition IDs for each cluster
     let mut cluster_id_to_partition_id: Vec<u32> = Vec::with_capacity(clusters.len());
     let mut rng = rand::thread_rng();
+
+    // Initialize used_ids with existing partitions from manifest
+    let mut used_ids: HashSet<u32> = HashSet::new();
+    for p_list in existing_manifest.chateau_to_partitions.values() {
+        for &pid in p_list {
+            if !partitions_to_remove.contains(&pid) {
+                used_ids.insert(pid);
+            }
+        }
+    }
+
     for _ in 0..clusters.len() {
         let mut pid = rng.r#gen::<u32>();
         while used_ids.contains(&pid) {
@@ -735,7 +747,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         let num_subset_stops = local_stops.len();
         let dynamic_top_k = (num_subset_stops / 50).max(10).min(500); // Adjusted min/max
 
-        let sample_size = sample_size_override.unwrap_or_else(|| 2000 + (num_subset_stops / 5));
+        let sample_size = sample_size_override.unwrap_or_else(|| 1000 + (num_subset_stops / 10));
 
         println!(
             "  - Pass: {} | Stops: {} | Patterns: {} | Samples: {} | Top-K: {}",
@@ -872,6 +884,74 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         num_clusters
     );
 
+    // --- Re-clustering Check ---
+    println!("  > Checking partition quality and re-clustering if necessary...");
+    let mut new_clusters: Vec<Vec<usize>> = Vec::new();
+    let mut new_super_clusters: Vec<Vec<usize>> = Vec::new();
+    let mut recluster_count = 0;
+
+    for sc_indices in final_super_clusters {
+        let mut current_partitioning = Vec::new();
+        for &c_idx in &sc_indices {
+            current_partitioning.push(clusters[c_idx].clone());
+        }
+
+        if check_partition_quality(&current_partitioning, &db_stops) {
+            // Keep existing
+            let start_idx = new_clusters.len();
+            new_clusters.extend(current_partitioning);
+            let end_idx = new_clusters.len();
+            new_super_clusters.push((start_idx..end_idx).collect());
+        } else {
+            // Recluster
+            recluster_count += 1;
+            let all_stops: Vec<usize> = current_partitioning.into_iter().flatten().collect();
+            let new_parts = recluster_with_spatial_weights(
+                &all_stops,
+                &adjacency,
+                &db_stops,
+                args.cluster_size,
+            );
+
+            let start_idx = new_clusters.len();
+            new_clusters.extend(new_parts);
+            let end_idx = new_clusters.len();
+            new_super_clusters.push((start_idx..end_idx).collect());
+        }
+    }
+
+    // Shadowing with new values
+    let clusters = new_clusters;
+    let final_super_clusters = new_super_clusters;
+
+    if recluster_count > 0 {
+        println!(
+            "  > Re-clustered {} regions due to quality issues.",
+            recluster_count
+        );
+
+        // Regenerate Partition IDs
+        cluster_id_to_partition_id.clear();
+
+        used_ids.clear();
+        for p_list in existing_manifest.chateau_to_partitions.values() {
+            for &pid in p_list {
+                if !partitions_to_remove.contains(&pid) {
+                    used_ids.insert(pid);
+                }
+            }
+        }
+
+        for _ in 0..clusters.len() {
+            let mut pid = rng.r#gen::<u32>();
+            while used_ids.contains(&pid) {
+                pid = rng.r#gen::<u32>();
+            }
+            used_ids.insert(pid);
+            cluster_id_to_partition_id.push(pid);
+        }
+    }
+
     println!("  > Starting Regional Pass (Super-Clusters)...");
     for (i, sc) in final_super_clusters.iter().enumerate() {
         // Collect all stops in this super cluster
@@ -993,6 +1073,20 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         let mut chunk_stops: Vec<TransitStop> = Vec::new();
         let mut osm_links: Vec<OsmLink> = Vec::new();
 
+        let mut chateau_ids: Vec<String> = Vec::new();
+        let mut chateau_map: HashMap<String, u32> = HashMap::new();
+
+        let mut get_chateau_idx = |chateau: &str| -> u32 {
+            if let Some(&idx) = chateau_map.get(chateau) {
+                idx
+            } else {
+                let idx = chateau_ids.len() as u32;
+                chateau_ids.push(chateau.to_string());
+                chateau_map.insert(chateau.to_string(), idx);
+                idx
+            }
+        };
+
         let mut sorted_relevant_stops: Vec<u32> = relevant_stop_indices.into_iter().collect();
         sorted_relevant_stops.sort();
 
@@ -1012,7 +1106,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
             let t_stop = TransitStop {
                 id: local_idx as u64,
-                chateau: stop.chateau.clone(),
+                chateau_idx: get_chateau_idx(&stop.chateau),
                 gtfs_original_id: stop.gtfs_id.clone(),
                 is_hub,
                 is_border,
@@ -1127,7 +1221,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
                     external_transfers.push(ExternalTransfer {
                         from_stop_idx: stop.id as u32, // stop.id is local_idx as u64
-                        to_chateau: ext_stop.chateau.clone(),
+                        to_chateau_idx: get_chateau_idx(&ext_stop.chateau),
                         to_stop_gtfs_id: ext_stop.gtfs_id.clone(),
                         walk_seconds,
                         distance_meters: dist as u32,
@@ -1206,7 +1300,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             };
 
             chunk_patterns.push(TripPattern {
-                chateau: pat.chateau.clone(),
+                chateau_idx: get_chateau_idx(&pat.chateau),
                 route_id: pat.route_id.clone(),
                 direction_pattern_idx: dp_idx,
                 trips: pat.trips.clone(),
@@ -1233,6 +1327,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             local_transfer_patterns: Vec::new(),
             timezones: global_timezones.clone(),
             boundary: Some(boundary),
+            chateau_ids: chateau_ids.clone(),
         };
 
         // Save Transfer Chunk
@@ -1270,7 +1365,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 ) {
                     // Find pattern
                     for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
-                        if pattern.chateau == route_id.0 && pattern.route_id == route_id.1 {
+                        if partition.chateau_ids[pattern.chateau_idx as usize] == route_id.0
+                            && pattern.route_id == route_id.1
+                        {
                             let dp = &partition.direction_patterns
                                 [pattern.direction_pattern_idx as usize];
 
@@ -1304,7 +1401,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         // Compute Local Transfer Patterns
         compute_local_patterns_for_partition(&mut partition);
 
-        let filename = format!("transit_chunk_{}.pbf", cluster_id);
+        let filename = format!("transit_chunk_{}.pbf", partition_id);
         let path = args.output.join(filename);
         println!("Saving transit chunk to {}", path.display());
         save_pbf(&partition, path.to_str().unwrap())?;
@@ -1319,7 +1416,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     let mut partition_to_chateaux: HashMap<u32, Vec<String>> = HashMap::new();
 
     for (s_idx, stop) in db_stops.iter().enumerate() {
-        let pid = stop_to_cluster[s_idx] as u32;
+        let pid = cluster_id_to_partition_id[stop_to_cluster[s_idx]];
         chateau_to_partitions
             .entry(stop.chateau.clone())
             .or_default()
@@ -1380,7 +1477,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     let mut edges_by_partition: HashMap<u32, Vec<EdgeEntry>> = HashMap::new();
 
     for &((u, v), ref sig) in &cross_partition_edges {
-        let p_from = stop_to_cluster[u] as u32;
+        let p_from = cluster_id_to_partition_id[stop_to_cluster[u]];
         let s_from = &db_stops[u];
         let s_to = &db_stops[v];
 
@@ -2244,6 +2341,212 @@ fn lon_lat_to_tile(lon: f64, lat: f64, zoom: u8) -> (u32, u32) {
     (x, y)
 }
 
+// --- Geometry Helpers ---
+
+fn cross_product(o: &[f64; 2], a: &[f64; 2], b: &[f64; 2]) -> f64 {
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+}
+
+fn convex_hull(mut points: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+    let n = points.len();
+    if n <= 2 {
+        return points;
+    }
+
+    points.sort_by(|a, b| {
+        a[0].partial_cmp(&b[0])
+            .unwrap()
+            .then(a[1].partial_cmp(&b[1]).unwrap())
+    });
+
+    let mut hull = Vec::new();
+
+    // Lower hull
+    for p in &points {
+        while hull.len() >= 2
+            && cross_product(&hull[hull.len() - 2], &hull[hull.len() - 1], p) <= 0.0
+        {
+            hull.pop();
+        }
+        hull.push(*p);
+    }
+
+    // Upper hull
+    let t = hull.len() + 1;
+    for p in points.iter().rev() {
+        while hull.len() >= t
+            && cross_product(&hull[hull.len() - 2], &hull[hull.len() - 1], p) <= 0.0
+        {
+            hull.pop();
+        }
+        hull.push(*p);
+    }
+
+    hull.pop();
+    hull
+}
+
+fn point_in_polygon(point: &[f64; 2], polygon: &[[f64; 2]]) -> bool {
+    let x = point[0];
+    let y = point[1];
+    let mut inside = false;
+    let mut j = polygon.len() - 1;
+
+    for i in 0..polygon.len() {
+        let xi = polygon[i][0];
+        let yi = polygon[i][1];
+        let xj = polygon[j][0];
+        let yj = polygon[j][1];
+
+        let intersect = ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+        if intersect {
+            inside = !inside;
+        }
+        j = i;
+    }
+
+    inside
+}
+
+// --- Quality Check Logic ---
+
+fn check_partition_quality(clusters: &[Vec<usize>], stops: &[Stop]) -> bool {
+    if clusters.is_empty() {
+        return true;
+    }
+
+    // 1. Balance Check
+    let mut min_size = usize::MAX;
+    let mut max_size = 0;
+    for c in clusters {
+        let size = c.len();
+        if size < min_size {
+            min_size = size;
+        }
+        if size > max_size {
+            max_size = size;
+        }
+    }
+
+    if min_size > 0 && (max_size as f64 / min_size as f64) > 5.0 {
+        // println!("  ! Balance check failed: Max/Min ratio = {:.2}", max_size as f64 / min_size as f64);
+        return false;
+    }
+
+    // 2. Concavity/Overlap Check
+    // For each pair, check if one "bites" into another.
+    // Heuristic: If a significant fraction of points of Cluster A are inside the Convex Hull of Cluster B,
+    // it suggests B is wrapping around A, or they are intertwined.
+    // Actually, if A is inside B's hull, B is concave.
+
+    // Precompute hulls
+    let mut hulls = Vec::new();
+    for c in clusters {
+        let points: Vec<[f64; 2]> = c
+            .iter()
+            .filter_map(|&idx| {
+                let s = &stops[idx];
+                s.point.as_ref().map(|p| [p.x, p.y])
+            })
+            .collect();
+        hulls.push(convex_hull(points));
+    }
+
+    for i in 0..clusters.len() {
+        for j in 0..clusters.len() {
+            if i == j {
+                continue;
+            }
+
+            let hull_j = &hulls[j];
+            if hull_j.len() < 3 {
+                continue;
+            }
+
+            let mut points_in_hull = 0;
+            let mut total_points = 0;
+
+            for &idx in &clusters[i] {
+                let s = &stops[idx];
+                if let Some(p) = &s.point {
+                    total_points += 1;
+                    if point_in_polygon(&[p.x, p.y], hull_j) {
+                        points_in_hull += 1;
+                    }
+                }
+            }
+
+            if total_points > 0 {
+                let fraction = points_in_hull as f64 / total_points as f64;
+                // If > 30% of A is inside B's hull, that's suspicious.
+                if fraction > 0.3 {
+                    // println!("  ! Concavity check failed: Cluster {} is {}% inside Cluster {}'s hull", i, fraction * 100.0, j);
+                    return false;
+                }
+            }
+        }
+    }
+
+    true
+}
+
+fn recluster_with_spatial_weights(
+    stop_indices: &[usize],
+    original_adjacency: &HashMap<(usize, usize), u32>,
+    stops: &[Stop],
+    max_size: usize,
+) -> Vec<Vec<usize>> {
+    // 1. Map Global <-> Local
+    let mut global_to_local = HashMap::new();
+    let mut local_to_global = Vec::new();
+    for (i, &g_idx) in stop_indices.iter().enumerate() {
+        global_to_local.insert(g_idx, i);
+        local_to_global.push(g_idx);
+    }
+
+    // 2. Build Weighted Adjacency
+    let mut sub_adjacency: HashMap<(usize, usize), u32> = HashMap::new();
+
+    // We need to find edges between these stops.
+    // Iterating the entire original_adjacency might be slow if it's huge, but it's the simplest way without an index.
+    // Given the constraints, we'll try this.
+    for (&(u, v), &w) in original_adjacency {
+        if let (Some(&lu), Some(&lv)) = (global_to_local.get(&u), global_to_local.get(&v)) {
+            let s1 = &stops[u];
+            let s2 = &stops[v];
+
+            let dist = if let (Some(p1), Some(p2)) = (&s1.point, &s2.point) {
+                haversine_distance(p1.y, p1.x, p2.y, p2.x)
+            } else {
+                0.0
+            };
+
+            // Penalty: Reduce weight by distance factor
+            // weight / (1 + (dist_km)^2) to punish long links heavily?
+            // Or just linear?
+            let dist_km = dist / 1000.0;
+            // Heuristic: 10km distance reduces weight by factor of 11.
+            let penalty = 1.0 + dist_km;
+
+            let new_weight = (w as f64 / penalty) as u32;
+
+            if new_weight > 0 {
+                let (min, max) = if lu < lv { (lu, lv) } else { (lv, lu) };
+                sub_adjacency.insert((min, max), new_weight);
+            }
+        }
+    }
+
+    // 3. Run Clustering
+    let local_clusters = merge_based_clustering(stop_indices.len(), &sub_adjacency, max_size);
+
+    // 4. Map back
+    local_clusters
+        .into_iter()
+        .map(|c| c.into_iter().map(|l_idx| local_to_global[l_idx]).collect())
+        .collect()
+}
+
 fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let r = 6371000.0;
     let d_lat = (lat2 - lat1).to_radians();
@@ -2794,10 +3097,25 @@ fn identify_hubs_time_dependent(
 
     // 1. Build Temporary Partition
     let mut t_stops = Vec::new();
+
+    let mut chateau_ids: Vec<String> = Vec::new();
+    let mut chateau_map: HashMap<String, u32> = HashMap::new();
+
+    let mut get_chateau_idx = |chateau: &str| -> u32 {
+        if let Some(&idx) = chateau_map.get(chateau) {
+            idx
+        } else {
+            let idx = chateau_ids.len() as u32;
+            chateau_ids.push(chateau.to_string());
+            chateau_map.insert(chateau.to_string(), idx);
+            idx
+        }
+    };
+
     for (i, s) in stops.iter().enumerate() {
         t_stops.push(TransitStop {
             id: i as u64,
-            chateau: s.chateau.clone(),
+            chateau_idx: get_chateau_idx(&s.chateau),
             gtfs_original_id: s.gtfs_id.clone(),
             is_hub: false,
             is_border: false,
@@ -2824,7 +3142,7 @@ fn identify_hubs_time_dependent(
         };
 
         t_patterns.push(TripPattern {
-            chateau: "temp".to_string(),
+            chateau_idx: get_chateau_idx("temp"),
             route_id: pat.route_id.clone(),
             direction_pattern_idx: dp_idx,
             trips: pat.trips.clone(),
@@ -2903,6 +3221,7 @@ fn identify_hubs_time_dependent(
         local_transfer_patterns: Vec::new(),
         timezones: vec!["UTC".to_string()], // Dummy, not used for centrality
         boundary: Some(boundary),
+        chateau_ids,
     };
 
     // Precompute stop -> patterns
@@ -2916,80 +3235,71 @@ fn identify_hubs_time_dependent(
     }
 
     // 3. Run Random Queries
-    let mut centrality = vec![0; stops.len()];
-    let mut rng = rand::rng();
     let num_stops = stops.len();
 
     println!("  - Running {} random queries...", sample_size);
 
-    for _ in 0..sample_size {
-        let start_node = rng.random_range(0..num_stops) as u32;
-        let end_node = rng.random_range(0..num_stops) as u32;
+    let centrality_updates: Vec<Vec<usize>> = (0..sample_size)
+        .into_par_iter()
+        .map(|_| {
+            let mut rng = rand::rng();
+            let mut local_hubs = Vec::new();
+            let start_node = rng.random_range(0..num_stops) as u32;
+            let end_node = rng.random_range(0..num_stops) as u32;
 
-        if start_node == end_node {
-            continue;
-        }
-
-        // Random time between 7:00 AM and 10:00 AM
-        let start_time = rng.random_range(25200..36000);
-
-        // Run Raptor
-        let edges = run_raptor(
-            &partition,
-            start_node,
-            &[end_node],
-            start_time,
-            &stop_to_patterns,
-        );
-        // Reconstruct path to check for self-transfers
-        // Edges are: (u, v, sig)
-        // We want to count nodes v where Incoming Sig != Outgoing Sig
-        // But `edges` is a bag of edges, not ordered?
-        // `run_raptor` returns `edges` reconstructed from `predecessors`.
-        // They are ordered from target back to start? No, `run_raptor` pushes them as it backtracks.
-        // So they are (prev, curr).
-        // Let's organize them into a map or just iterate if it's a single path.
-        // Since we passed a single target, it should be a single path (linear).
-        // Edges: (n-1 -> n), (n-2 -> n-1), ... (start -> n-k)
-        // Wait, `run_raptor` loop: `while curr != start_node ... edges.push(edge) ... curr = prev`.
-        // So edges are pushed in reverse order: (last -> target), (second_last -> last), ...
-        // Let's reverse them to get forward path.
-
-        let mut forward_edges = edges.clone();
-        forward_edges.reverse();
-
-        // Path: Start -> (Edge 0) -> Node 1 -> (Edge 1) -> Node 2 ...
-        // Centrality for Node i:
-        // Check Edge (i-1 -> i) and Edge (i -> i+1).
-        // If Sig(i-1 -> i) != Sig(i -> i+1), increment centrality for i.
-
-        #[derive(PartialEq, Eq, Clone, Copy)]
-        enum PatternId {
-            Transit(u32),
-            Walk,
-        }
-
-        let mut last_pattern: Option<PatternId> = None;
-
-        for edge in &forward_edges {
-            let current_pattern = match &edge.edge_type {
-                Some(EdgeType::Transit(t)) => PatternId::Transit(t.trip_pattern_idx),
-                Some(EdgeType::Walk(_)) => PatternId::Walk,
-                None => PatternId::Walk, // Should not happen
-            };
-
-            if let Some(last) = last_pattern {
-                if last != current_pattern {
-                    // Transfer between different patterns (or pattern/walk)
-                    // The transfer happens at the start of the current edge
-                    centrality[edge.from_hub_idx as usize] += 1;
-                }
+            if start_node == end_node {
+                return local_hubs;
             }
 
-            last_pattern = Some(current_pattern);
-        }
+            // Random time between 7:00 AM and 10:00 AM
+            let start_time = rng.random_range(25200..36000);
 
-        // No flush needed for pure transfer centrality
+            // Run Raptor
+            let edges = run_raptor(
+                &partition,
+                start_node,
+                &[end_node],
+                start_time,
+                &stop_to_patterns,
+            );
+
+            let mut forward_edges = edges.clone();
+            forward_edges.reverse();
+
+            #[derive(PartialEq, Eq, Clone, Copy)]
+            enum PatternId {
+                Transit(u32),
+                Walk,
+            }
+
+            let mut last_pattern: Option<PatternId> = None;
+
+            for edge in &forward_edges {
+                let current_pattern = match &edge.edge_type {
+                    Some(EdgeType::Transit(t)) => PatternId::Transit(t.trip_pattern_idx),
+                    Some(EdgeType::Walk(_)) => PatternId::Walk,
+                    None => PatternId::Walk, // Should not happen
+                };
+
+                if let Some(last) = last_pattern {
+                    if last != current_pattern {
+                        // Transfer between different patterns (or pattern/walk)
+                        // The transfer happens at the start of the current edge
+                        local_hubs.push(edge.from_hub_idx as usize);
+                    }
+                }
+
+                last_pattern = Some(current_pattern);
+            }
+            local_hubs
+        })
+        .collect();
+
+    let mut centrality = vec![0; stops.len()];
+    for hubs in centrality_updates {
+        for hub_idx in hubs {
+            centrality[hub_idx] += 1;
+        }
     }
 
     // 4. Select Top K
@@ -3042,7 +3352,10 @@ async fn stitch_graph(args: &Args) -> Result<()> {
 
         for (local_idx, stop) in partition.stops.iter().enumerate() {
             global_node_map.insert(
-                (stop.chateau.clone(), stop.gtfs_original_id.clone()),
+                (
+                    partition.chateau_ids[stop.chateau_idx as usize].clone(),
+                    stop.gtfs_original_id.clone(),
+                ),
                 (pid, local_idx as u32),
             );
 

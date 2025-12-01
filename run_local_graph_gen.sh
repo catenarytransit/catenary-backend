@@ -143,6 +143,7 @@ if [ "$GENTIAN_ONLY" = false ]; then
     "f-9qhf-bigbear~ca~us"
     "f-antelope~valley~transit~authority"
     "f-9q54-goldcoasttransit"
+    "f-9q5-metro~losangeles~rail"
     "f-9q5-ladot"
     "f-9q5c-bigbluebus"
     "f-9q5c-culvercitybus"
@@ -164,10 +165,10 @@ if [ "$GENTIAN_ONLY" = false ]; then
     OSM_TEMP="$TEMP_DIR/osm_temp"
     mkdir -p "$OSM_TEMP"
 
-    "$AVENS_BIN" \
-        --region north-america/us/california/socal \
-        --output-dir "$OSM_CHUNKS_DIR" \
-        --temp-dir "$OSM_TEMP"
+  #  "$AVENS_BIN" \
+   #     --region north-america/us/california/socal \
+   #     --output-dir "$OSM_CHUNKS_DIR" \
+    #    --temp-dir "$OSM_TEMP"
 else
     echo "Skipping Maple and Avens (Gentian Only mode)"
 fi
