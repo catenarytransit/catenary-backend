@@ -16,5 +16,5 @@ services:
 
 networks:
   default:
-    name: test_graph_gen_default
+    name: catenary_common
     external: true

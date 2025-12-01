@@ -1,33 +1,20 @@
 version: '3.8'
 
 services:
-  postgres:
-    image: postgis/postgis:16-3.4
-    environment:
-      POSTGRES_USER: catenary
-      POSTGRES_PASSWORD: catenary
-      POSTGRES_DB: catenary
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U catenary" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   test_runner:
     build:
       context: ../../
       dockerfile: containers/test_graph_gen/Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       DATABASE_URL: postgres://catenary:catenary@postgres/catenary
     volumes:
       # Output directories
       - ./output:/catenary/graph_output
       - ./osm_chunks:/catenary/osm_chunks
+    networks:
+      - default
 
-volumes:
-  postgres_data:
+networks:
+  default:
+    name: catenary_common
+    external: true
