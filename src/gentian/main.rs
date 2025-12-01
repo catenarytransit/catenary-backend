@@ -493,13 +493,50 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 continue;
             }
 
-            // Add to Adjacency Graph
-            let trip_count = trips.len() as u32;
+            // Filter out long-distance or high-speed trips for clustering
+            let mut total_distance = 0.0;
             for i in 0..stop_indices.len() - 1 {
                 let u = stop_indices[i] as usize;
                 let v = stop_indices[i + 1] as usize;
-                let (min, max) = if u < v { (u, v) } else { (v, u) };
-                *adjacency.entry((min, max)).or_default() += trip_count;
+                if let (Some(p1), Some(p2)) = (&db_stops[u].point, &db_stops[v].point) {
+                    let gp1 = geo::Point::new(p1.x, p1.y);
+                    let gp2 = geo::Point::new(p2.x, p2.y);
+                    total_distance += gp1.haversine_distance(&gp2);
+                }
+            }
+
+            let start_time = rows
+                .get(0)
+                .and_then(|r| r.departure_time_since_start)
+                .unwrap_or(0);
+            let end_time = rows
+                .last()
+                .and_then(|r| r.arrival_time_since_start)
+                .unwrap_or(0);
+            let duration = if end_time > start_time {
+                end_time - start_time
+            } else {
+                0
+            };
+
+            let avg_speed_kmh = if duration > 0 {
+                (total_distance / duration as f64) * 3.6
+            } else {
+                0.0
+            };
+
+            let is_long_distance = total_distance > 100_000.0; // 100km
+            let is_high_speed = avg_speed_kmh > 50.0 && total_distance > 50_000.0; // 50km/h & 50km
+
+            if !is_long_distance && !is_high_speed {
+                // Add to Adjacency Graph
+                let trip_count = trips.len() as u32;
+                for i in 0..stop_indices.len() - 1 {
+                    let u = stop_indices[i] as usize;
+                    let v = stop_indices[i + 1] as usize;
+                    let (min, max) = if u < v { (u, v) } else { (v, u) };
+                    *adjacency.entry((min, max)).or_default() += trip_count;
+                }
             }
 
             let mut deltas: Vec<u32> = Vec::new();
@@ -1377,6 +1414,12 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             }
         }
 
+        println!(
+            "Computing intra partition connectivity between partition {} and {} stops",
+            partition_id,
+            partition.stops.len()
+        );
+
         // Compute Intra-Partition Connectivity
         let local_edges = compute_intra_partition_connectivity(&partition, &sorted_relevant_stops);
         intra_partition_edges.extend(local_edges);
@@ -2113,7 +2156,13 @@ fn merge_based_clustering(
             if let Some(target) = best_neighbor {
                 // Force Merge c_idx into target
                 // Note: This might exceed max_size, but that's acceptable to avoid orphans.
-                // println!("    - Merging orphan cluster {} (size {}) into {} (size {})", c_idx, size, target, clusters[target].len());
+                println!(
+                    "    - Merging orphan cluster {} (size {}) into {} (size {})",
+                    c_idx,
+                    size,
+                    target,
+                    clusters[target].len()
+                );
 
                 let stops_to_move = clusters[c_idx].clone();
                 for &stop in &stops_to_move {
@@ -2292,7 +2341,11 @@ async fn find_osm_link(
 }
 
 fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
-    // println!("    - Computing LTPs for partition {} ({} stops)...", partition.partition_id, partition.stops.len());
+    println!(
+        "    - Computing LTPs for partition {} ({} stops)...",
+        partition.partition_id,
+        partition.stops.len()
+    );
 
     let hubs: Vec<u32> = partition
         .stops
@@ -2634,59 +2687,7 @@ fn check_partition_quality(clusters: &[Vec<usize>], stops: &[Stop]) -> bool {
         return false;
     }
 
-    // 2. Concavity/Overlap Check
-    // For each pair, check if one "bites" into another.
-    // Heuristic: If a significant fraction of points of Cluster A are inside the Convex Hull of Cluster B,
-    // it suggests B is wrapping around A, or they are intertwined.
-    // Actually, if A is inside B's hull, B is concave.
-
-    // Precompute hulls
-    let mut hulls = Vec::new();
-    for c in clusters {
-        let points: Vec<[f64; 2]> = c
-            .iter()
-            .filter_map(|&idx| {
-                let s = &stops[idx];
-                s.point.as_ref().map(|p| [p.x, p.y])
-            })
-            .collect();
-        hulls.push(convex_hull(points));
-    }
-
-    for i in 0..clusters.len() {
-        for j in 0..clusters.len() {
-            if i == j {
-                continue;
-            }
-
-            let hull_j = &hulls[j];
-            if hull_j.len() < 3 {
-                continue;
-            }
-
-            let mut points_in_hull = 0;
-            let mut total_points = 0;
-
-            for &idx in &clusters[i] {
-                let s = &stops[idx];
-                if let Some(p) = &s.point {
-                    total_points += 1;
-                    if point_in_polygon(&[p.x, p.y], hull_j) {
-                        points_in_hull += 1;
-                    }
-                }
-            }
-
-            if total_points > 0 {
-                let fraction = points_in_hull as f64 / total_points as f64;
-                // If > 30% of A is inside B's hull, that's suspicious.
-                if fraction > 0.3 {
-                    // println!("  ! Concavity check failed: Cluster {} is {}% inside Cluster {}'s hull", i, fraction * 100.0, j);
-                    return false;
-                }
-            }
-        }
-    }
+    // Concavity check removed as per user request (concavity has nothing to do with physical geometry)
 
     true
 }
