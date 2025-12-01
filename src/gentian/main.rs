@@ -31,6 +31,8 @@ pub mod connectivity;
 pub mod osm;
 pub mod reduce_borders;
 pub mod test_hub;
+#[cfg(test)]
+pub mod test_reduce_borders;
 pub mod trip_based;
 pub mod utils;
 
@@ -712,7 +714,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     // 4b. Reduce Borders by Merging (Post-Processing)
     // Target max size for merged clusters: 20,000 (as per paper/plan)
-    let clusters = reduce_borders_by_merging(clusters, &adjacency, 20_000);
+    let clusters = reduce_borders_by_merging(clusters, &adjacency, 20_000, db_stops.len(), 30);
     println!(
         "Reduced to {} clusters after border reduction",
         clusters.len()

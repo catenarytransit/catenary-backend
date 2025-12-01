@@ -1,3 +1,5 @@
+use crate::reduce_borders::reduce_borders_by_merging;
+use ahash::AHashMap as HashMap;
 
 #[test]
 fn test_reduce_borders_by_merging() {
@@ -28,7 +30,7 @@ fn test_reduce_borders_by_merging() {
     // C1 <-> C2 (Weak)
     adjacency.insert((2, 4), 1);
 
-    let new_clusters = reduce_borders_by_merging(clusters, &adjacency, 10);
+    let new_clusters = reduce_borders_by_merging(clusters, &adjacency, 10, 6, 2);
 
     // Expect C0 and C1 to merge. C2 stays separate.
     // Result: 2 clusters.

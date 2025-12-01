@@ -5,9 +5,11 @@ pub fn reduce_borders_by_merging(
     mut clusters: Vec<Vec<usize>>,
     adjacency: &HashMap<(usize, usize), u32>,
     max_cluster_size: usize,
+    total_node_count: usize,
+    min_reduction_threshold: usize,
 ) -> Vec<Vec<usize>> {
     println!("Reducing borders by merging clusters...");
-    let num_stops = clusters.iter().map(|c| c.len()).sum();
+    let num_stops = total_node_count;
     let mut stop_to_cluster = vec![0; num_stops];
     let mut cluster_active = vec![true; clusters.len()];
 
@@ -158,7 +160,8 @@ pub fn reduce_borders_by_merging(
             // OR
             // 2. Very high reduction > 100 (Dense city merge)
 
-            let is_candidate = (reduction > 30 && ratio > 0.2) || (reduction > 100);
+            let is_candidate =
+                (reduction > min_reduction_threshold && ratio > 0.2) || (reduction > 100);
 
             if is_candidate {
                 // Score: prioritize high reduction, penalize size slightly?
