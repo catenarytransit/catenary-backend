@@ -123,6 +123,32 @@ impl QueryGraph {
                 }
             }
         }
+
+        for dag in &global_index.long_distance_dags {
+            if dag.from_partition == start_pid && dag.to_partition == end_pid {
+                for edge in &dag.edges {
+                    let from_hub = &dag.hubs[edge.from_hub_idx as usize];
+                    let to_hub = &dag.hubs[edge.to_hub_idx as usize];
+
+                    let from_node = QueryNode {
+                        partition_id: from_hub.original_partition_id,
+                        stop_idx: from_hub.stop_idx_in_partition,
+                    };
+                    let to_node = QueryNode {
+                        partition_id: to_hub.original_partition_id,
+                        stop_idx: to_hub.stop_idx_in_partition,
+                    };
+
+                    if let Some(edge_type) = &edge.edge_type {
+                        self.add_edge(QueryEdge {
+                            from: from_node,
+                            to: to_node,
+                            edge_type: edge_type.clone(),
+                        });
+                    }
+                }
+            }
+        }
     }
 
     fn add_dag_edge(&mut self, partition_id: u32, dag_edge: &DagEdge) {
@@ -467,6 +493,121 @@ impl QueryGraph {
 
                 if found { Some(best_arrival) } else { None }
             }
+            EdgeType::LongDistanceTransit(t) => {
+                let partition = graph_manager.get_transit_partition(edge.from.partition_id)?;
+                let pattern = if let Some(p) = partition
+                    .long_distance_trip_patterns
+                    .get(t.trip_pattern_idx as usize)
+                {
+                    p
+                } else {
+                    tracing::warn!(
+                        "Invalid long_distance_trip_pattern_idx {} for partition {} (len: {}). Edge: {:?} -> {:?}",
+                        t.trip_pattern_idx,
+                        edge.from.partition_id,
+                        partition.long_distance_trip_patterns.len(),
+                        edge.from,
+                        edge.to
+                    );
+                    return None;
+                };
+
+                // Same logic as Transit, but using the long_distance pattern
+                let tz_idx = pattern.timezone_idx;
+
+                // (Service Context Logic - Duplicated for now)
+                let mut has_context = false;
+                for ((pid, t_idx, _), _) in service_contexts.iter() {
+                    if *pid == edge.from.partition_id && *t_idx == tz_idx {
+                        has_context = true;
+                        break;
+                    }
+                }
+
+                if !has_context {
+                    use chrono::{Datelike, TimeZone};
+                    use chrono_tz::Tz;
+
+                    if let Some(tz_str) = partition.timezones.get(tz_idx as usize) {
+                        let tz: Tz = tz_str.parse().unwrap_or(chrono_tz::UTC);
+                        let req_time = current_time as i64;
+                        let window_seconds = 7200; // 2 hours
+
+                        let start_search = req_time - 172800;
+                        let end_search = req_time + window_seconds as i64 + 172800;
+
+                        let start_date = tz.timestamp_opt(start_search, 0).unwrap().date_naive();
+                        let end_date = tz.timestamp_opt(end_search, 0).unwrap().date_naive();
+
+                        let mut curr_date = start_date;
+                        while curr_date <= end_date {
+                            let noon = tz
+                                .from_local_datetime(&curr_date.and_hms_opt(12, 0, 0).unwrap())
+                                .unwrap();
+                            let base_unix = noon.timestamp() - 43200;
+
+                            let key = (edge.from.partition_id, tz_idx, base_unix);
+                            if !service_contexts.contains_key(&key) {
+                                let weekday = curr_date.weekday().num_days_from_monday(); // 0=Mon
+                                let day_mask = 1 << weekday;
+
+                                let service_date_int = (curr_date.year() as u32) * 10000
+                                    + (curr_date.month() as u32) * 100
+                                    + (curr_date.day() as u32);
+
+                                service_contexts.insert(
+                                    key,
+                                    ServiceContext {
+                                        base_unix_time: base_unix,
+                                        day_mask,
+                                        service_date_int,
+                                    },
+                                );
+                            }
+                            curr_date = curr_date.succ_opt().unwrap();
+                        }
+                    }
+                }
+
+                let mut best_arrival = u64::MAX;
+                let mut found = false;
+
+                for ((pid, t_idx, _), context) in service_contexts.iter() {
+                    if *pid != edge.from.partition_id || *t_idx != tz_idx {
+                        continue;
+                    }
+
+                    for trip in &pattern.trips {
+                        if !self.is_trip_active(trip, context, &partition.service_exceptions) {
+                            continue;
+                        }
+
+                        let dep_time = self.calculate_arrival_time_unix(
+                            &partition,
+                            trip,
+                            t.start_stop_idx as usize,
+                            context.base_unix_time,
+                        );
+
+                        if dep_time >= current_time as i64 {
+                            let arr_time = self.calculate_arrival_time_unix(
+                                &partition,
+                                trip,
+                                t.end_stop_idx as usize,
+                                context.base_unix_time,
+                            );
+
+                            if (arr_time as u64) < best_arrival {
+                                best_arrival = arr_time as u64;
+                                found = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                if found { Some(best_arrival) } else { None }
+            }
         }
     }
 
@@ -525,6 +666,43 @@ impl QueryGraph {
                 // For Transit edges, the `end_stop_idx` in `TransitEdge` refers to the index
                 // within the PATTERN's stop sequence, NOT the global partition stop index.
                 // We must resolve it to the partition stop index first.
+                let dir_pattern =
+                    &partition.direction_patterns[pattern.direction_pattern_idx as usize];
+                let end_stop_idx_in_partition = dir_pattern.stop_indices[t.end_stop_idx as usize];
+
+                let end_stop = &partition.stops[end_stop_idx_in_partition as usize];
+
+                Some(Leg::Transit(TransitLeg {
+                    start_time,
+                    end_time,
+                    mode: TravelMode::Transit,
+                    start_stop_id: start_stop.gtfs_original_id.clone(),
+                    end_stop_id: end_stop.gtfs_original_id.clone(),
+                    start_stop_chateau: partition.chateau_ids[start_stop.chateau_idx as usize]
+                        .clone(),
+                    end_stop_chateau: partition.chateau_ids[end_stop.chateau_idx as usize].clone(),
+                    route_id: pattern.route_id.clone(),
+                    trip_id: None,
+                    chateau: partition.chateau_ids[pattern.chateau_idx as usize].clone(),
+                    start_stop_name: None,
+                    end_stop_name: None,
+                    route_name: None,
+                    trip_name: None,
+                    duration_seconds: end_time - start_time,
+                    geometry: {
+                        let mut geom = Vec::new();
+                        for i in t.start_stop_idx..=t.end_stop_idx {
+                            let s_idx = dir_pattern.stop_indices[i as usize];
+                            let stop = &partition.stops[s_idx as usize];
+                            geom.push((stop.lat, stop.lon));
+                        }
+                        geom
+                    },
+                }))
+            }
+            EdgeType::LongDistanceTransit(t) => {
+                let pattern = &partition.long_distance_trip_patterns[t.trip_pattern_idx as usize];
+
                 let dir_pattern =
                     &partition.direction_patterns[pattern.direction_pattern_idx as usize];
                 let end_stop_idx_in_partition = dir_pattern.stop_indices[t.end_stop_idx as usize];

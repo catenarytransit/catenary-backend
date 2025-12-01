@@ -2,8 +2,8 @@ use ahash::AHashMap as HashMap;
 use ahash::AHashSet as HashSet;
 use catenary::routing_common::osm_graph::save_pbf;
 use catenary::routing_common::transit_graph::{
-    CompressedTrip, DagEdge, EdgeType, GlobalHub, GlobalPatternIndex, LocalTransferPattern,
-    PartitionDag, TransitEdge, TransitPartition, TransitStop, WalkEdge,
+    DagEdge, EdgeType, GlobalHub, GlobalPatternIndex, LocalTransferPattern, PartitionDag,
+    TransitEdge, TransitPartition, TransitStop, WalkEdge,
 };
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -138,6 +138,7 @@ pub fn compute_global_patterns(
                             let weight = if let Some(et) = edge_types.get(&(u, v)) {
                                 match et {
                                     EdgeType::Transit(t) => t.min_duration,
+                                    EdgeType::LongDistanceTransit(t) => t.min_duration,
                                     EdgeType::Walk(w) => w.duration_seconds,
                                 }
                             } else {
@@ -244,7 +245,10 @@ pub fn compute_global_patterns(
 
     println!("  - Generated {} Partition DAGs", dag_count);
 
-    let global_index = GlobalPatternIndex { partition_dags };
+    let global_index = GlobalPatternIndex {
+        partition_dags,
+        long_distance_dags: Vec::new(),
+    };
 
     let path = output_dir.join("global_patterns.pbf");
     if let Err(e) = save_pbf(&global_index, path.to_str().unwrap()) {
@@ -378,15 +382,15 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         return;
     }
 
-    // Precompute stop -> patterns map
-    let mut stop_to_patterns: Vec<Vec<usize>> = vec![Vec::new(); partition.stops.len()];
-    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
-        let stop_indices =
-            &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
-        for &s_idx in stop_indices {
-            stop_to_patterns[s_idx as usize].push(p_idx);
-        }
-    }
+    // 1. Compute Transfers (Trip-Based Preprocessing)
+    let mut transfers = crate::trip_based::compute_initial_transfers(partition);
+    crate::trip_based::remove_u_turn_transfers(partition, &mut transfers);
+    crate::trip_based::refine_transfers(partition, &mut transfers);
+
+    println!(
+        "      - Computed {} transfers for Trip-Based Routing",
+        transfers.len()
+    );
 
     let mut ltps = Vec::new();
 
@@ -394,8 +398,10 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     for start_node in 0..partition.stops.len() {
         let start_node = start_node as u32;
 
-        // Run simplified Raptor at 8:00 AM (28800s)
-        let edges = run_raptor(partition, start_node, &hubs, 28800, &stop_to_patterns);
+        // Run Trip-Based Profile Query at 8:00 AM (28800s)
+        let edges = crate::trip_based::compute_profile_query(
+            partition, &transfers, start_node, 28800, &hubs,
+        );
 
         if !edges.is_empty() {
             ltps.push(LocalTransferPattern {
@@ -406,210 +412,4 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     }
 
     partition.local_transfer_patterns = ltps;
-}
-
-pub fn run_raptor(
-    partition: &TransitPartition,
-    start_node: u32,
-    targets: &[u32],
-    start_time: u32,
-    stop_to_patterns: &[Vec<usize>],
-) -> Vec<DagEdge> {
-    let num_stops = partition.stops.len();
-    let mut earliest_arrival = vec![u32::MAX; num_stops];
-    earliest_arrival[start_node as usize] = start_time;
-
-    let mut marked_stops = HashSet::new();
-    marked_stops.insert(start_node);
-
-    // Track predecessors: stop_idx -> (prev_stop_idx, EdgeType)
-    let mut predecessors: Vec<Option<(u32, EdgeType)>> = vec![None; num_stops];
-
-    for _round in 0..5 {
-        // Max 5 transfers
-        if marked_stops.is_empty() {
-            break;
-        }
-
-        let mut next_marked = HashSet::new();
-
-        // 1. Route Scanning
-        let mut routes_to_scan: HashMap<usize, u32> = HashMap::new(); // pattern_idx -> min_stop_index_in_pattern
-
-        for &stop in &marked_stops {
-            if let Some(patterns) = stop_to_patterns.get(stop as usize) {
-                for &p_idx in patterns {
-                    let pattern = &partition.trip_patterns[p_idx];
-                    let stop_indices = &partition.direction_patterns
-                        [pattern.direction_pattern_idx as usize]
-                        .stop_indices;
-                    // Find index of stop in pattern
-                    if let Some(idx_in_pattern) = stop_indices.iter().position(|&s| s == stop) {
-                        let current_min =
-                            routes_to_scan.entry(p_idx).or_insert(idx_in_pattern as u32);
-                        if (idx_in_pattern as u32) < *current_min {
-                            *current_min = idx_in_pattern as u32;
-                        }
-                    }
-                }
-            }
-        }
-
-        for (p_idx, start_idx) in routes_to_scan {
-            let pattern = &partition.trip_patterns[p_idx];
-            let stop_indices =
-                &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
-            let mut current_trip: Option<&CompressedTrip> = None;
-            let mut boarded_at_stop = 0;
-            let mut boarded_at_idx = 0; // Track index in pattern
-
-            for i in (start_idx as usize)..stop_indices.len() {
-                let stop_idx = stop_indices[i];
-
-                // Check if we can board a trip
-                if let Some(trip) = current_trip {
-                    // We are on a trip, check arrival
-                    let arrival = calculate_arrival_time(partition, trip, i);
-
-                    if arrival < earliest_arrival[stop_idx as usize] {
-                        earliest_arrival[stop_idx as usize] = arrival;
-
-                        // Calculate min_duration
-                        let mut min_duration = u32::MAX;
-                        for trip in &pattern.trips {
-                            let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
-                            let mut duration = 0;
-                            if 2 * i < delta_seq.deltas.len() {
-                                for k in (boarded_at_idx + 1)..=i {
-                                    duration += delta_seq.deltas[2 * k];
-                                    if k > boarded_at_idx + 1 {
-                                        duration += delta_seq.deltas[2 * (k - 1) + 1];
-                                    }
-                                }
-                            }
-                            if duration < min_duration {
-                                min_duration = duration;
-                            }
-                        }
-                        if min_duration == u32::MAX {
-                            min_duration = 0;
-                        }
-
-                        let edge = TransitEdge {
-                            trip_pattern_idx: p_idx as u32,
-                            start_stop_idx: boarded_at_idx as u32,
-                            end_stop_idx: i as u32,
-                            min_duration,
-                        };
-                        predecessors[stop_idx as usize] =
-                            Some((boarded_at_stop, EdgeType::Transit(edge)));
-                        next_marked.insert(stop_idx);
-                    }
-                }
-
-                // Can we board an earlier trip?
-                if earliest_arrival[stop_idx as usize] != u32::MAX {
-                    for trip in &pattern.trips {
-                        let dep_time = calculate_arrival_time(partition, trip, i); // Arr = Dep
-                        if dep_time >= earliest_arrival[stop_idx as usize] {
-                            // Found a trip
-                            if current_trip.is_none()
-                                || dep_time
-                                    < calculate_arrival_time(partition, current_trip.unwrap(), i)
-                            {
-                                current_trip = Some(trip);
-                                boarded_at_stop = stop_idx;
-                                boarded_at_idx = i;
-                            }
-                            break; // Trips are sorted
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Transfers (Footpaths)
-        let stops_to_transfer: Vec<u32> = next_marked.iter().cloned().collect();
-        for stop in stops_to_transfer {
-            // Check internal transfers
-            for transfer in &partition.internal_transfers {
-                if transfer.from_stop_idx == stop {
-                    let arrival = earliest_arrival[stop as usize] + transfer.duration_seconds;
-                    if arrival < earliest_arrival[transfer.to_stop_idx as usize] {
-                        earliest_arrival[transfer.to_stop_idx as usize] = arrival;
-
-                        let edge = WalkEdge {
-                            duration_seconds: transfer.duration_seconds,
-                        };
-
-                        predecessors[transfer.to_stop_idx as usize] =
-                            Some((stop, EdgeType::Walk(edge)));
-                        next_marked.insert(transfer.to_stop_idx);
-                    }
-                }
-            }
-        }
-
-        marked_stops = next_marked;
-    }
-
-    // Reconstruct DAG (Path) for targets
-    let mut edges = Vec::new();
-    let mut visited_nodes = HashSet::new();
-
-    for &target in targets {
-        if earliest_arrival[target as usize] != u32::MAX {
-            let mut curr = target;
-            while curr != start_node {
-                if visited_nodes.contains(&curr) {
-                    // Already traced this branch
-                    break;
-                }
-                visited_nodes.insert(curr);
-
-                if let Some((prev, ref edge_type)) = predecessors[curr as usize] {
-                    let edge = DagEdge {
-                        from_hub_idx: prev, // Using local stop idx
-                        to_hub_idx: curr,   // Using local stop idx
-                        edge_type: Some(edge_type.clone()),
-                    };
-                    edges.push(edge);
-                    curr = prev;
-                } else {
-                    break; // Should not happen if reachable
-                }
-            }
-        }
-    }
-
-    edges
-}
-
-fn calculate_arrival_time(
-    partition: &TransitPartition,
-    trip: &CompressedTrip,
-    stop_idx_in_pattern: usize,
-) -> u32 {
-    let mut time = trip.start_time;
-    let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
-    for k in 0..=stop_idx_in_pattern {
-        if k < delta_seq.deltas.len() {
-            // Add travel time to k (2*k)
-            if 2 * k < delta_seq.deltas.len() {
-                time += delta_seq.deltas[2 * k];
-            }
-            // Add dwell time at k (2*k+1) IF we are not at the target stop yet?
-            // Wait, arrival time at stop K includes travel TO K.
-            // It does NOT include dwell AT K.
-            // But the loop goes up to stop_idx_in_pattern.
-            // If k == stop_idx_in_pattern, we added travel TO k. We stop.
-            // If k < stop_idx_in_pattern, we add travel TO k AND dwell AT k.
-            if k < stop_idx_in_pattern {
-                if 2 * k + 1 < delta_seq.deltas.len() {
-                    time += delta_seq.deltas[2 * k + 1];
-                }
-            }
-        }
-    }
-    time
 }

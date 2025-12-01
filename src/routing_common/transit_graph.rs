@@ -118,6 +118,11 @@ pub struct TransitPartition {
     #[prost(message, repeated, tag = "10")]
     pub local_transfer_patterns: Vec<LocalTransferPattern>,
 
+    /// Long Distance Trip Patterns.
+    /// Stored separately from standard trip patterns.
+    #[prost(message, repeated, tag = "15")]
+    pub long_distance_trip_patterns: Vec<TripPattern>,
+
     /// List of unique timezones used in this partition (e.g., "America/Los_Angeles").
     /// Referenced by `TripPattern.timezone_idx`.
     #[prost(string, repeated, tag = "12")]
@@ -191,6 +196,11 @@ pub struct TransitStop {
     /// If true, this stop has transfers to another Chateau.
     #[prost(bool, tag = "8")]
     pub is_external_gateway: bool,
+
+    /// Is this a "Long Distance Station"?
+    /// If true, this stop is served by long-distance routes.
+    #[prost(bool, tag = "9")]
+    pub is_long_distance: bool,
 
     /// Latitude (WGS84).
     #[prost(double, tag = "5")]
@@ -344,6 +354,11 @@ pub struct GlobalPatternIndex {
     /// A DAG for every pair of partitions that have connectivity.
     #[prost(message, repeated, tag = "1")]
     pub partition_dags: Vec<PartitionDag>,
+
+    /// Long Distance Transfer Patterns.
+    /// DAGs connecting long-distance stations between partitions.
+    #[prost(message, repeated, tag = "2")]
+    pub long_distance_dags: Vec<PartitionDag>,
 }
 
 /// The Directed Acyclic Graph connecting two partitions.
@@ -385,7 +400,7 @@ pub struct DagEdge {
 
     /// The "Transfer Pattern" used here.
     /// Replaces the old string-based signature with a structured reference.
-    #[prost(oneof = "EdgeType", tags = "3, 4")]
+    #[prost(oneof = "EdgeType", tags = "3,4,5")]
     pub edge_type: Option<EdgeType>,
 }
 
@@ -419,6 +434,8 @@ pub struct WalkEdge {
 pub enum EdgeType {
     #[prost(message, tag = "3")]
     Transit(TransitEdge),
+    #[prost(message, tag = "5")]
+    LongDistanceTransit(TransitEdge),
     #[prost(message, tag = "4")]
     Walk(WalkEdge),
 }

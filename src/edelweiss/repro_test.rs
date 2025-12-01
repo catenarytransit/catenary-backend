@@ -20,6 +20,7 @@ fn test_multi_partition_selection() {
         is_hub: false,
         is_border: false,
         is_external_gateway: false,
+        is_long_distance: false,
         lat: -0.01,
         lon: 0.0, // Further from start/end
     }];
@@ -29,12 +30,14 @@ fn test_multi_partition_selection() {
         trip_patterns: vec![], // No trips
         time_deltas: vec![],
         direction_patterns: vec![],
+
         internal_transfers: vec![],
         osm_links: vec![],
         service_ids: vec![],
         service_exceptions: vec![],
         _deprecated_external_transfers: vec![],
         local_transfer_patterns: vec![],
+        long_distance_trip_patterns: vec![],
         timezones: vec!["UTC".to_string()],
         boundary: None,
         chateau_ids: vec!["p0".to_string()],
@@ -49,6 +52,7 @@ fn test_multi_partition_selection() {
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
+            is_long_distance: false,
             lat: 0.001, // Slightly further (approx 111m)
             lon: 0.0,
         },
@@ -59,6 +63,7 @@ fn test_multi_partition_selection() {
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
+            is_long_distance: false,
             lat: 0.01, // Destination
             lon: 0.0,
         },
@@ -108,9 +113,11 @@ fn test_multi_partition_selection() {
                     trip_pattern_idx: 0,
                     start_stop_idx: 0,
                     end_stop_idx: 1,
+                    min_duration: 0,
                 })),
             }],
         }],
+        long_distance_trip_patterns: vec![],
         timezones: vec!["UTC".to_string()],
         boundary: None,
         chateau_ids: vec!["p1".to_string()],

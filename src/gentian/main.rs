@@ -5,13 +5,12 @@ use catenary::models::{
     Agency, Calendar, CompressedTrip as DbCompressedTrip, ItineraryPatternRow, Route, Stop,
 };
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
-use catenary::routing_common::osm_graph::{StreetData, load_pbf, save_pbf};
+use catenary::routing_common::osm_graph::{load_pbf, save_pbf};
 use catenary::routing_common::transit_graph::BoundaryPoint;
 use catenary::routing_common::transit_graph::{
-    CompressedTrip, DagEdge, DirectionPattern, EdgeEntry, EdgeType, ExternalTransfer, GlobalHub,
-    GlobalPatternIndex, LocalTransferPattern, Manifest, OsmLink, PartitionBoundary, PartitionDag,
-    StaticTransfer, TimeDeltaSequence, TransferChunk, TransitEdge, TransitPartition, TransitStop,
-    TripPattern, WalkEdge,
+    CompressedTrip, DagEdge, DirectionPattern, EdgeEntry, EdgeType, ExternalTransfer,
+    GlobalPatternIndex, Manifest, OsmLink, PartitionBoundary, StaticTransfer, TimeDeltaSequence,
+    TransferChunk, TransitEdge, TransitPartition, TransitStop, TripPattern, WalkEdge,
 };
 use clap::Parser;
 use diesel::prelude::*;
@@ -20,7 +19,6 @@ use geo::prelude::*;
 use geo::{ConvexHull, MultiPoint, Point};
 use rand::prelude::*;
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fs::File;
@@ -28,16 +26,18 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-mod clustering;
-mod connectivity;
-mod osm;
-mod reduce_borders;
-mod utils;
+pub mod clustering;
+pub mod connectivity;
+pub mod osm;
+pub mod reduce_borders;
+pub mod test_hub;
+pub mod trip_based;
+pub mod utils;
 
 use clustering::merge_based_clustering;
 use connectivity::{
     compute_border_patterns, compute_global_patterns, compute_intra_partition_connectivity,
-    compute_local_patterns_for_partition, run_raptor,
+    compute_local_patterns_for_partition,
 };
 use osm::{ChunkCache, find_osm_link};
 use reduce_borders::reduce_borders_by_merging;
@@ -1221,6 +1221,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 is_hub,
                 is_border,
                 is_external_gateway: false,
+                is_long_distance: false,
                 lat: stop.point.as_ref().map(|p| p.y).unwrap_or(0.0),
                 lon: stop.point.as_ref().map(|p| p.x).unwrap_or(0.0),
             };
@@ -1433,6 +1434,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             service_exceptions: Vec::new(),
             _deprecated_external_transfers: Vec::new(),
             local_transfer_patterns: Vec::new(),
+            long_distance_trip_patterns: Vec::new(),
             timezones: global_timezones.clone(),
             boundary: Some(boundary),
             chateau_ids: chateau_ids.clone(),
@@ -1681,7 +1683,6 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
 use rstar::RTree;
 use rstar::primitives::GeomWithData;
-use std::collections::VecDeque;
 
 // --- Geometry Helpers ---
 
@@ -1726,28 +1727,6 @@ fn convex_hull(mut points: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
 
     hull.pop();
     hull
-}
-
-fn point_in_polygon(point: &[f64; 2], polygon: &[[f64; 2]]) -> bool {
-    let x = point[0];
-    let y = point[1];
-    let mut inside = false;
-    let mut j = polygon.len() - 1;
-
-    for i in 0..polygon.len() {
-        let xi = polygon[i][0];
-        let yi = polygon[i][1];
-        let xj = polygon[j][0];
-        let yj = polygon[j][1];
-
-        let intersect = ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-        if intersect {
-            inside = !inside;
-        }
-        j = i;
-    }
-
-    inside
 }
 
 // --- Quality Check Logic ---
@@ -2288,86 +2267,6 @@ mod tests {
     }
 }
 
-fn identify_hubs(
-    num_stops: usize,
-    adjacency: &HashMap<(usize, usize), u32>,
-    sample_size: usize,
-    top_k: usize,
-) -> HashSet<usize> {
-    // Build adjacency list
-    let mut adj_list = vec![vec![]; num_stops];
-    for (&(u, v), &w) in adjacency {
-        adj_list[u].push((v, w));
-        adj_list[v].push((u, w));
-    }
-
-    let mut centrality = vec![0; num_stops];
-    let mut rng = rand::rng();
-    let all_stops: Vec<usize> = (0..num_stops).collect();
-
-    // Handle small graphs
-    let actual_sample_size = sample_size.min(num_stops);
-    let sample = all_stops.choose_multiple(&mut rng, actual_sample_size);
-
-    for &start_node in sample {
-        // Dijkstra
-        let mut dist = vec![u32::MAX; num_stops];
-        let mut parent = vec![None; num_stops];
-        dist[start_node] = 0;
-        let mut pq = BinaryHeap::new();
-        pq.push(std::cmp::Reverse((0, start_node)));
-
-        while let Some(std::cmp::Reverse((d, u))) = pq.pop() {
-            if d > dist[u] {
-                continue;
-            }
-
-            for &(v, weight) in &adj_list[u] {
-                // Invert weight for "connectivity"?
-                // Adjacency weight is "Trip Count". Higher is better.
-                // Dijkstra minimizes cost. Cost = 1 / weight? Or just 1 (hops)?
-                // If we want "Centrality" in terms of "Transfer Hub", we want nodes that are on many paths.
-                // Paths are usually "fastest".
-                // But we don't have time here, only trip count.
-                // Let's assume cost = 1 (Topological Centrality) or cost = 1000 / weight.
-                // Let's use cost = 1 for simplicity (Hops).
-                let cost = 1;
-
-                if dist[u] + cost < dist[v] {
-                    dist[v] = dist[u] + cost;
-                    parent[v] = Some(u);
-                    pq.push(std::cmp::Reverse((dist[v], v)));
-                }
-            }
-        }
-
-        // Reconstruct paths to all reachable nodes and increment centrality
-        for i in 0..num_stops {
-            if i == start_node || dist[i] == u32::MAX {
-                continue;
-            }
-            let mut curr = i;
-            while let Some(p) = parent[curr] {
-                centrality[p] += 1;
-                curr = p;
-                if curr == start_node {
-                    break;
-                }
-            }
-        }
-    }
-
-    // Select top K
-    let mut indexed_centrality: Vec<(usize, usize)> = centrality.into_iter().enumerate().collect();
-    indexed_centrality.sort_by(|a, b| b.1.cmp(&a.1)); // Descending
-
-    indexed_centrality
-        .iter()
-        .take(top_k)
-        .map(|(i, _)| *i)
-        .collect()
-}
-
 fn identify_hubs_time_dependent(
     stops: &[Stop],
     patterns: &[ProcessedPattern],
@@ -2403,6 +2302,7 @@ fn identify_hubs_time_dependent(
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
+            is_long_distance: false,
             lat: s.point.as_ref().map(|p| p.y).unwrap_or(0.0),
             lon: s.point.as_ref().map(|p| p.x).unwrap_or(0.0),
         });
@@ -2502,6 +2402,7 @@ fn identify_hubs_time_dependent(
         service_exceptions: Vec::new(),
         _deprecated_external_transfers: Vec::new(),
         local_transfer_patterns: Vec::new(),
+        long_distance_trip_patterns: Vec::new(),
         timezones: vec!["UTC".to_string()], // Dummy, not used for centrality
         boundary: Some(boundary),
         chateau_ids,
@@ -2516,6 +2417,11 @@ fn identify_hubs_time_dependent(
             stop_to_patterns[s_idx as usize].push(p_idx);
         }
     }
+
+    // Compute Transfers for Trip-Based Routing
+    let mut transfers = trip_based::compute_initial_transfers(&partition);
+    trip_based::remove_u_turn_transfers(&partition, &mut transfers);
+    trip_based::refine_transfers(&partition, &mut transfers);
 
     // 3. Run Random Queries
     let num_stops = stops.len();
@@ -2537,19 +2443,19 @@ fn identify_hubs_time_dependent(
             // Random time between 7:00 AM and 10:00 AM
             let start_time = rng.random_range(25200..36000);
 
-            // Run Raptor
-            let edges = run_raptor(
+            // Run Trip-Based Profile Query
+            let edges = trip_based::compute_profile_query(
                 &partition,
+                &transfers,
                 start_node,
-                &[end_node],
                 start_time,
-                &stop_to_patterns,
+                &[end_node],
             );
 
             let mut forward_edges = edges.clone();
             forward_edges.reverse();
 
-            #[derive(PartialEq, Eq, Clone, Copy)]
+            #[derive(PartialEq, Eq, Clone, Copy, Debug)]
             enum PatternId {
                 Transit(u32),
                 Walk,
@@ -2557,18 +2463,32 @@ fn identify_hubs_time_dependent(
 
             let mut last_pattern: Option<PatternId> = None;
 
-            for edge in &forward_edges {
+            for (i, edge) in forward_edges.iter().enumerate() {
                 let current_pattern = match &edge.edge_type {
                     Some(EdgeType::Transit(t)) => PatternId::Transit(t.trip_pattern_idx),
+                    Some(EdgeType::LongDistanceTransit(t)) => {
+                        PatternId::Transit(t.trip_pattern_idx)
+                    }
                     Some(EdgeType::Walk(_)) => PatternId::Walk,
                     None => PatternId::Walk, // Should not happen
                 };
 
                 if let Some(last) = last_pattern {
                     if last != current_pattern {
-                        // Transfer between different patterns (or pattern/walk)
-                        // The transfer happens at the start of the current edge
-                        local_hubs.push(edge.from_hub_idx as usize);
+                        // Filter out Access (Walk -> Transit at the very beginning)
+                        let is_access = if let PatternId::Walk = last {
+                            if let PatternId::Transit(_) = current_pattern {
+                                i == 1
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                        if !is_access {
+                            local_hubs.push(edge.from_hub_idx as usize);
+                        }
                     }
                 }
 
