@@ -311,8 +311,18 @@ impl<'a> Router<'a> {
         let mut time = trip.start_time;
         let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
         for k in 0..=stop_idx_in_pattern {
-            if k < delta_seq.deltas.len() {
-                time += delta_seq.deltas[k];
+            let travel_idx = 2 * k;
+            let dwell_idx = 2 * k + 1;
+
+            if travel_idx < delta_seq.deltas.len() {
+                time += delta_seq.deltas[travel_idx];
+            }
+
+            // Add dwell time if this is not the target stop (we depart from it)
+            if k < stop_idx_in_pattern {
+                if dwell_idx < delta_seq.deltas.len() {
+                    time += delta_seq.deltas[dwell_idx];
+                }
             }
         }
         time
@@ -531,9 +541,12 @@ mod tests {
             stop_indices: vec![0, 1, 2],
         }];
 
-        // Time deltas: [0, 600, 600] (0 wait at start, 10 min to next, 10 min to next)
+        // Time deltas: [Travel0, Dwell0, Travel1, Dwell1, Travel2, Dwell2]
+        // Stop 0: Travel=0, Dwell=0
+        // Stop 1: Travel=10min (600), Dwell=0
+        // Stop 2: Travel=10min (600), Dwell=0
         let time_deltas = vec![TimeDeltaSequence {
-            deltas: vec![0, 600, 600],
+            deltas: vec![0, 0, 600, 0, 600, 0],
         }];
 
         let trips = vec![
@@ -803,7 +816,7 @@ mod tests {
         let itin = &result.itineraries[0];
         let last_leg = itin.legs.last().unwrap();
         // Stop 0 in P1 has GTFS ID "S0" (inherited from create_test_partition)
-        assert_eq!(last_leg.end_stop_id().as_deref(), Some("S0"));
+        assert_eq!(last_leg.end_stop_id().unwrap().as_str(), "S0");
     }
 }
 
@@ -823,8 +836,8 @@ fn test_multi_partition_selection() {
         is_hub: false,
         is_border: false,
         is_external_gateway: false,
-        lat: 0.0,
-        lon: 0.0, // Very close to start (0,0)
+        lat: -0.01,
+        lon: 0.0, // Further from start/end
     }];
     let partition0 = TransitPartition {
         partition_id: 0,
@@ -883,7 +896,7 @@ fn test_multi_partition_selection() {
         stop_indices: vec![0, 1],
     }];
     let time_deltas_p1 = vec![TimeDeltaSequence {
-        deltas: vec![0, 600],
+        deltas: vec![0, 0, 600, 0],
     }]; // 10 min travel
     let trips_p1 = vec![CompressedTrip {
         gtfs_trip_id: "T1_P1".to_string(),
@@ -955,7 +968,7 @@ fn test_multi_partition_selection() {
         end_lat: 0.01,
         end_lon: 0.0,
         mode: TravelMode::Transit,
-        time: 1704095400, // 7:50
+        time: 1704095880, // 7:58 (2 min wait)
         speed_mps: 1.0,
         is_departure_time: true,
         wheelchair_accessible: false,

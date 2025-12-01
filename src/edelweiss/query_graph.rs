@@ -572,8 +572,18 @@ impl QueryGraph {
         let mut time = trip.start_time;
         let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
         for k in 0..=stop_idx_in_pattern {
-            if k < delta_seq.deltas.len() {
-                time += delta_seq.deltas[k];
+            let travel_idx = 2 * k;
+            let dwell_idx = 2 * k + 1;
+
+            if travel_idx < delta_seq.deltas.len() {
+                time += delta_seq.deltas[travel_idx];
+            }
+
+            // Add dwell time if this is not the target stop (we depart from it)
+            if k < stop_idx_in_pattern {
+                if dwell_idx < delta_seq.deltas.len() {
+                    time += delta_seq.deltas[dwell_idx];
+                }
             }
         }
         time

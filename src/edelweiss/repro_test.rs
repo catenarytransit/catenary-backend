@@ -20,8 +20,8 @@ fn test_multi_partition_selection() {
         is_hub: false,
         is_border: false,
         is_external_gateway: false,
-        lat: 0.0,
-        lon: 0.0, // Very close to start (0,0)
+        lat: -0.01,
+        lon: 0.0, // Further from start/end
     }];
     let partition0 = TransitPartition {
         partition_id: 0,
@@ -91,7 +91,7 @@ fn test_multi_partition_selection() {
         stops: stops_p1,
         trip_patterns: trip_patterns_p1,
         time_deltas: vec![TimeDeltaSequence {
-            deltas: vec![0, 600],
+            deltas: vec![0, 0, 600, 0],
         }],
         direction_patterns: direction_patterns_p1,
         internal_transfers: vec![],
@@ -99,7 +99,18 @@ fn test_multi_partition_selection() {
         service_ids: vec!["daily".to_string()],
         service_exceptions: vec![],
         _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![],
+        local_transfer_patterns: vec![LocalTransferPattern {
+            from_stop_idx: 0,
+            edges: vec![DagEdge {
+                from_hub_idx: 0,
+                to_hub_idx: 1,
+                edge_type: Some(EdgeType::Transit(TransitEdge {
+                    trip_pattern_idx: 0,
+                    start_stop_idx: 0,
+                    end_stop_idx: 1,
+                })),
+            }],
+        }],
         timezones: vec!["UTC".to_string()],
         boundary: None,
         chateau_ids: vec!["p1".to_string()],
@@ -130,7 +141,7 @@ fn test_multi_partition_selection() {
         end_lat: 0.01,
         end_lon: 0.0,
         mode: TravelMode::Transit,
-        time: 1704095400, // 7:50
+        time: 1704095880, // 7:58 (2 min wait)
         speed_mps: 1.0,
         is_departure_time: true,
         wheelchair_accessible: false,

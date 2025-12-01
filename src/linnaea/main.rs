@@ -1,4 +1,4 @@
-//cargo run --bin linnaea --release -- --input containers/test_graph_gen/output --output transit_viz.geojson
+// cargo run --bin linnaea --release -- --input containers/test_graph_gen/output --output transit_viz.geojson
 
 use catenary::routing_common::transit_graph::TransitPartition;
 use clap::Parser;
@@ -18,6 +18,16 @@ struct Args {
     /// Output GeoJSON file
     #[arg(short, long)]
     output: PathBuf,
+}
+
+/// Helper to resolve a chateau name from its index.
+/// Falls back to a placeholder if the index is out of bounds.
+fn resolve_chateau<'a>(partition: &'a TransitPartition, chateau_idx: u32) -> &'a str {
+    partition
+        .chateau_ids
+        .get(chateau_idx as usize)
+        .map(String::as_str)
+        .unwrap_or("<unknown_chateau>")
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,10 +53,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Index stops
                 for (_idx, stop) in partition.stops.iter().enumerate() {
+                    let chateau = resolve_chateau(&partition, stop.chateau_idx);
+
                     if stop.is_border {
                         let mut properties = JsonObject::new();
                         properties.insert("type".to_string(), "border_node".into());
-                        properties.insert("chateau".to_string(), stop.chateau.clone().into());
+                        properties.insert("chateau".to_string(), chateau.into());
                         properties
                             .insert("gtfs_id".to_string(), stop.gtfs_original_id.clone().into());
                         properties
@@ -65,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         hub_count += 1;
                         let mut properties = JsonObject::new();
                         properties.insert("type".to_string(), "hub_node".into());
-                        properties.insert("chateau".to_string(), stop.chateau.clone().into());
+                        properties.insert("chateau".to_string(), chateau.into());
                         properties
                             .insert("gtfs_id".to_string(), stop.gtfs_original_id.clone().into());
                         properties
@@ -83,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if stop.is_external_gateway {
                         let mut properties = JsonObject::new();
                         properties.insert("type".to_string(), "external_gateway".into());
-                        properties.insert("chateau".to_string(), stop.chateau.clone().into());
+                        properties.insert("chateau".to_string(), chateau.into());
                         properties
                             .insert("gtfs_id".to_string(), stop.gtfs_original_id.clone().into());
                         properties
@@ -126,12 +138,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 partitions.push(partition);
-            } else if filename.starts_with("transit_chunk_") && filename.ends_with(".pbf") {
-                // ... (rest of file loading logic is fine, but we don't need transfer chunks anymore if we aren't outputting them?
-                // Actually, the user just said "don't output it", not "don't load it".
-                // But to be safe, I'll leave the loading logic as is for now, or just ignore transfer chunks if I don't use them.
-                // The prompt says "Output all the convexes, hubs, and borders."
-                // I will skip loading transfer chunks to save time if they aren't used.
             } else if filename.starts_with("transfer_chunk_") && filename.ends_with(".pbf") {
                 // Skip loading transfer chunks as we don't output them
             } else if filename == "global_patterns.pbf" {

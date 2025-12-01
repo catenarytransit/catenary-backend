@@ -503,10 +503,32 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             }
 
             let mut deltas: Vec<u32> = Vec::new();
-            deltas.push(0);
+            // Stop 0: Travel=0, Dwell = Dep - Arr
+            let s0_arr = rows[0].arrival_time_since_start.unwrap_or(0);
+            let s0_dep = rows[0].departure_time_since_start.unwrap_or(s0_arr);
+            deltas.push(0); // Travel to 0
+            deltas.push((s0_dep - s0_arr) as u32); // Dwell at 0
+
             for i in 1..rows.len() {
-                let curr = rows[i].arrival_time_since_start.unwrap_or(0);
-                deltas.push(curr as u32);
+                let prev_dep = rows[i - 1]
+                    .departure_time_since_start
+                    .unwrap_or(rows[i - 1].arrival_time_since_start.unwrap_or(0));
+                let curr_arr = rows[i].arrival_time_since_start.unwrap_or(prev_dep);
+                let curr_dep = rows[i].departure_time_since_start.unwrap_or(curr_arr);
+
+                let travel = if curr_arr >= prev_dep {
+                    curr_arr - prev_dep
+                } else {
+                    0
+                };
+                let dwell = if curr_dep >= curr_arr {
+                    curr_dep - curr_arr
+                } else {
+                    0
+                };
+
+                deltas.push(travel as u32);
+                deltas.push(dwell as u32);
             }
 
             // Timezone
@@ -2717,9 +2739,12 @@ mod tests {
 
         let patterns = vec![p1, p2];
 
-        // Time Deltas (All 0 for simplicity, instant travel)
+        // Time deltas: [Travel0, Dwell0, Travel1, Dwell1, Travel2, Dwell2]
+        // Stop 0: Travel=0, Dwell=0
+        // Stop 1: Travel=10min (600), Dwell=0
+        // Stop 2: Travel=10min (600), Dwell=0
         let time_deltas = vec![TimeDeltaSequence {
-            deltas: vec![0; 20],
+            deltas: vec![0, 0, 600, 0, 600, 0],
         }];
 
         let calendar = vec![];

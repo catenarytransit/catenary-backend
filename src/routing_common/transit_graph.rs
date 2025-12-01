@@ -22,6 +22,9 @@ use std::path::Path;
 // ===========================================================================
 
 /// A sequence of time deltas for a trip.
+/// Stores interleaved [travel_time, dwell_time] pairs.
+/// Index 2*i: Travel time from Stop i-1 (Departure) to Stop i (Arrival). (0 for i=0).
+/// Index 2*i+1: Dwell time at Stop i (Departure - Arrival).
 #[derive(Clone, PartialEq, Message)]
 pub struct TimeDeltaSequence {
     #[prost(uint32, repeated, tag = "1")]
