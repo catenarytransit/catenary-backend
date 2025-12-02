@@ -120,6 +120,21 @@ pub fn compute_initial_transfers(partition: &TransitPartition) -> Vec<Transfer> 
                                             true
                                         };
 
+                                        // Fix: Skip transfers from the first stop
+                                        if i == 0 {
+                                            continue;
+                                        }
+
+                                        // Fix: Skip transfers to the last stop
+                                        let cand_pattern =
+                                            &partition.trip_patterns[cand.pattern_idx];
+                                        let cand_stops = &partition.direction_patterns
+                                            [cand_pattern.direction_pattern_idx as usize]
+                                            .stop_indices;
+                                        if cand.stop_idx_in_pattern + 1 == cand_stops.len() {
+                                            continue;
+                                        }
+
                                         if valid {
                                             transfers.push(Transfer {
                                                 from_pattern_idx: p_idx,
@@ -173,7 +188,16 @@ pub fn remove_u_turn_transfers(partition: &TransitPartition, transfers: &mut Vec
             let arr_t_prev = get_arrival_time(partition, t_trip, tr.from_stop_idx_in_pattern - 1);
             let dep_u_next = get_departure_time(partition, u_trip, tr.to_stop_idx_in_pattern + 1);
 
-            let walk_time = 0;
+            // Fix: Use actual change time (self-transfer duration)
+            let prev_stop_global_idx = prev_stop_idx; // This is already the global index
+            let walk_time = partition
+                .internal_transfers
+                .iter()
+                .find(|t| {
+                    t.from_stop_idx == prev_stop_global_idx && t.to_stop_idx == prev_stop_global_idx
+                })
+                .map(|t| t.duration_seconds)
+                .unwrap_or(0);
 
             if arr_t_prev + walk_time <= dep_u_next {
                 return false;
@@ -186,7 +210,6 @@ pub fn remove_u_turn_transfers(partition: &TransitPartition, transfers: &mut Vec
 /// Algorithm 3: Arrival Time Improvement (Refine Transfers)
 pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transfer>) {
     // 1. Sort transfers to allow efficient lookup by (pattern, trip, stop)
-    // We sort by from_pattern, from_trip, from_stop_idx_in_pattern
     transfers.sort_by(|a, b| {
         a.from_pattern_idx
             .cmp(&b.from_pattern_idx)
@@ -194,10 +217,7 @@ pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transf
             .then(a.from_stop_idx_in_pattern.cmp(&b.from_stop_idx_in_pattern))
     });
 
-    // 2. Build index for fast lookup: (pattern, trip) -> start_index in transfers
-    // We can just use binary search or a simple offset map since we iterate trips.
-    // Let's build a map for O(1) lookup of the slice.
-    // (pattern_idx, trip_idx) -> range of indices in transfers
+    // 2. Build index for fast lookup
     let mut trip_transfer_ranges: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
     let mut start = 0;
     while start < transfers.len() {
@@ -214,101 +234,220 @@ pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transf
         start = end;
     }
 
-    // 3. Global Arrival Time Array (tau_A)
-    // Initialize with infinity
-    let mut arrival_time = vec![u32::MAX; partition.stops.len()];
+    // 3. Precompute Footpaths and Change Times
+    let mut footpaths: Vec<Vec<(u32, u32)>> = vec![Vec::new(); partition.stops.len()];
+    let mut change_times: Vec<u32> = vec![0; partition.stops.len()];
 
-    // 4. Collect all trips and sort by start_time descending
-    struct TripRef {
-        pattern_idx: usize,
-        trip_idx: usize,
-        start_time: u32,
-    }
-    let mut all_trips = Vec::new();
-    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
-        for (t_idx, trip) in pattern.trips.iter().enumerate() {
-            all_trips.push(TripRef {
-                pattern_idx: p_idx,
-                trip_idx: t_idx,
-                start_time: trip.start_time,
-            });
+    for tr in &partition.internal_transfers {
+        if tr.from_stop_idx == tr.to_stop_idx {
+            change_times[tr.from_stop_idx as usize] = tr.duration_seconds;
+        } else {
+            footpaths[tr.from_stop_idx as usize].push((tr.to_stop_idx, tr.duration_seconds));
         }
     }
-    all_trips.sort_by_key(|t| std::cmp::Reverse(t.start_time));
 
-    // 5. Iterate trips descending
+    // 4. Per-Trip State Buffers
+    let mut tau_a = vec![u32::MAX; partition.stops.len()];
+    let mut tau_c = vec![u32::MAX; partition.stops.len()];
+    let mut visited_stops = Vec::new();
+
+    // Helper to update tau and track visited
+    let mut update_tau = |stop_idx: usize,
+                          arr_time: u32,
+                          change_time: u32,
+                          tau_a: &mut Vec<u32>,
+                          tau_c: &mut Vec<u32>,
+                          visited: &mut Vec<usize>|
+     -> bool {
+        let mut improved = false;
+        if arr_time < tau_a[stop_idx] {
+            if tau_a[stop_idx] == u32::MAX && tau_c[stop_idx] == u32::MAX {
+                visited.push(stop_idx);
+            }
+            tau_a[stop_idx] = arr_time;
+            improved = true;
+        }
+        let c_time = arr_time.saturating_add(change_time);
+        if c_time < tau_c[stop_idx] {
+            if tau_a[stop_idx] == u32::MAX && tau_c[stop_idx] == u32::MAX {
+                visited.push(stop_idx); // Should already be pushed if tau_a improved, but check
+            }
+            tau_c[stop_idx] = c_time;
+            improved = true;
+        }
+        improved
+    };
+
     let mut to_remove = vec![false; transfers.len()];
 
-    for trip_ref in all_trips {
-        let pattern = &partition.trip_patterns[trip_ref.pattern_idx];
-        let trip = &pattern.trips[trip_ref.trip_idx];
+    // 5. Iterate all trips
+    // Order doesn't strictly matter for correctness since it's per-trip, but we iterate all.
+    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
         let stop_indices =
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
 
-        // 5a. Compute arrival times along the trip
-        // We calculate them but DO NOT update global arrival_time yet.
-        // We must check transfers against the *previous* arrival times (from later trips).
-        let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
-        let mut current_time = trip.start_time;
+        for (t_idx, trip) in pattern.trips.iter().enumerate() {
+            // Reset state for this trip
+            for &s in &visited_stops {
+                tau_a[s] = u32::MAX;
+                tau_c[s] = u32::MAX;
+            }
+            visited_stops.clear();
 
-        let mut trip_arrivals = Vec::with_capacity(stop_indices.len());
-
-        for (i, &_stop_idx) in stop_indices.iter().enumerate() {
-            // Arrival at stop i
-            if i > 0 {
-                if 2 * i < delta_seq.deltas.len() {
-                    current_time += delta_seq.deltas[2 * i];
+            // Compute arrival times along the trip (for easy lookup)
+            let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
+            let mut current_time = trip.start_time;
+            let mut trip_arrivals = Vec::with_capacity(stop_indices.len());
+            for (i, _) in stop_indices.iter().enumerate() {
+                if i > 0 {
+                    if 2 * i < delta_seq.deltas.len() {
+                        current_time += delta_seq.deltas[2 * i];
+                    }
+                }
+                trip_arrivals.push(current_time);
+                if 2 * i + 1 < delta_seq.deltas.len() {
+                    current_time += delta_seq.deltas[2 * i + 1];
                 }
             }
-            trip_arrivals.push(current_time);
 
-            // Prepare for next stop (departure)
-            if 2 * i + 1 < delta_seq.deltas.len() {
-                current_time += delta_seq.deltas[2 * i + 1];
-            }
-        }
+            // Scan stops backwards
+            for i in (0..stop_indices.len()).rev() {
+                let stop_idx = stop_indices[i] as usize;
+                let arr_time = trip_arrivals[i];
 
-        // 5b. Iterate stops backwards and check transfers
-        // We look at transfers originating FROM this trip.
-        if let Some(&(start_idx, end_idx)) =
-            trip_transfer_ranges.get(&(trip_ref.pattern_idx, trip_ref.trip_idx))
-        {
-            // The transfers are sorted by from_stop_idx_in_pattern.
-            // We can iterate the slice.
-            // But we need to iterate stops backwards.
-            // Let's just iterate the transfers for this trip and check.
-            // Since it's sorted by stop_idx, we can iterate backwards.
-            for tr_idx in (start_idx..end_idx).rev() {
-                let tr = &transfers[tr_idx];
-                // Departure time from u
-                let dep_time = get_departure_time(partition, trip, tr.from_stop_idx_in_pattern);
+                // Update tau for current stop (staying on trip)
+                let mut changed = update_tau(
+                    stop_idx,
+                    arr_time,
+                    change_times[stop_idx],
+                    &mut tau_a,
+                    &mut tau_c,
+                    &mut visited_stops,
+                );
 
-                // Arrival at target v
-                // The transfer connects to (to_pattern, to_trip, to_stop_in_pattern).
-                // We need the global stop index of the target.
-                let target_pattern = &partition.trip_patterns[tr.to_pattern_idx];
-                let target_stops = &partition.direction_patterns
-                    [target_pattern.direction_pattern_idx as usize]
-                    .stop_indices;
-                let target_stop_idx = target_stops[tr.to_stop_idx_in_pattern];
-
-                let arr_at_target = dep_time + tr.duration;
-
-                if arr_at_target < arrival_time[target_stop_idx as usize] {
-                    // Useful transfer
-                    arrival_time[target_stop_idx as usize] = arr_at_target;
-                } else {
-                    // Redundant transfer
-                    to_remove[tr_idx] = true;
+                // Propagate to footpaths
+                if changed {
+                    for &(neighbor, walk) in &footpaths[stop_idx] {
+                        update_tau(
+                            neighbor as usize,
+                            arr_time + walk,
+                            change_times[neighbor as usize],
+                            &mut tau_a,
+                            &mut tau_c,
+                            &mut visited_stops,
+                        );
+                    }
                 }
-            }
-        }
 
-        // 5c. Update global arrival time from this trip
-        for (i, &stop_idx) in stop_indices.iter().enumerate() {
-            let t = trip_arrivals[i];
-            if t < arrival_time[stop_idx as usize] {
-                arrival_time[stop_idx as usize] = t;
+                // Check transfers originating from this stop
+                if let Some(&(start_tr, end_tr)) = trip_transfer_ranges.get(&(p_idx, t_idx)) {
+                    // Iterate transfers from this stop
+                    // Transfers are sorted by from_stop_idx_in_pattern.
+                    // We need to find the range for `i`.
+                    // Since we iterate `i` backwards, and transfers are sorted by `i`, we can optimize this.
+                    // But binary search or linear scan in the small range is fine.
+                    for tr_idx in start_tr..end_tr {
+                        let tr = &transfers[tr_idx];
+                        if tr.from_stop_idx_in_pattern != i {
+                            continue;
+                        }
+
+                        // Simulate riding target trip u
+                        let target_pattern = &partition.trip_patterns[tr.to_pattern_idx];
+                        let target_trip = &target_pattern.trips[tr.to_trip_idx];
+                        let target_stops = &partition.direction_patterns
+                            [target_pattern.direction_pattern_idx as usize]
+                            .stop_indices;
+
+                        // Calculate arrival at target stop (boarding point)
+                        // Actually we need to simulate the WHOLE trip from boarding point onwards.
+                        let boarding_stop_idx = tr.to_stop_idx_in_pattern;
+                        let boarding_time = get_departure_time(partition, trip, i) + tr.duration;
+
+                        // Check if we can actually make the transfer?
+                        // The transfer generation (Alg 1) checked this.
+                        // But we should verify if we need to? No, assume valid.
+
+                        // We need arrival times at downstream stops of u
+                        let target_delta_seq =
+                            &partition.time_deltas[target_trip.time_delta_idx as usize];
+
+                        // Reconstruct time for target trip
+                        // Optimization: get_arrival_time is slow in loop.
+                        // Better: compute relative offsets once?
+                        // Or just iterate forward from boarding stop.
+
+                        let mut u_current_time = target_trip.start_time;
+                        // Fast forward to boarding stop
+                        for k in 0..=boarding_stop_idx {
+                            if k > 0 {
+                                if 2 * k < target_delta_seq.deltas.len() {
+                                    u_current_time += target_delta_seq.deltas[2 * k];
+                                }
+                            }
+                            if k < boarding_stop_idx {
+                                if 2 * k + 1 < target_delta_seq.deltas.len() {
+                                    u_current_time += target_delta_seq.deltas[2 * k + 1];
+                                }
+                            }
+                        }
+                        // u_current_time is now Arrival at boarding stop.
+                        // Wait, we board at `boarding_stop_idx`.
+                        // We need to depart.
+                        // Departure from boarding stop:
+                        let mut u_dep_time = u_current_time;
+                        if 2 * boarding_stop_idx + 1 < target_delta_seq.deltas.len() {
+                            u_dep_time += target_delta_seq.deltas[2 * boarding_stop_idx + 1];
+                        }
+
+                        // Iterate downstream stops
+                        let mut u_time = u_dep_time;
+                        let mut transfer_useful = false;
+
+                        for k in (boarding_stop_idx + 1)..target_stops.len() {
+                            // Travel to k
+                            if 2 * k < target_delta_seq.deltas.len() {
+                                u_time += target_delta_seq.deltas[2 * k];
+                            }
+                            let u_arr_time = u_time;
+                            let u_stop_idx = target_stops[k] as usize;
+
+                            // Check improvement
+                            if update_tau(
+                                u_stop_idx,
+                                u_arr_time,
+                                change_times[u_stop_idx],
+                                &mut tau_a,
+                                &mut tau_c,
+                                &mut visited_stops,
+                            ) {
+                                transfer_useful = true;
+                                // Propagate to neighbors
+                                for &(neighbor, walk) in &footpaths[u_stop_idx] {
+                                    if update_tau(
+                                        neighbor as usize,
+                                        u_arr_time + walk,
+                                        change_times[neighbor as usize],
+                                        &mut tau_a,
+                                        &mut tau_c,
+                                        &mut visited_stops,
+                                    ) {
+                                        transfer_useful = true;
+                                    }
+                                }
+                            }
+
+                            // Dwell at k (for next iteration)
+                            if 2 * k + 1 < target_delta_seq.deltas.len() {
+                                u_time += target_delta_seq.deltas[2 * k + 1];
+                            }
+                        }
+
+                        if !transfer_useful {
+                            to_remove[tr_idx] = true;
+                        }
+                    }
+                }
             }
         }
     }
@@ -318,6 +457,8 @@ pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transf
     transfers.retain(|_| !*keep_iter.next().unwrap());
 }
 
+/// Profile Query (Trip-Based One-To-All Profile)
+/// Computes all Pareto-optimal paths from start_stop to targets for departures >= start_time.
 /// Profile Query (Trip-Based One-To-All Profile)
 /// Computes all Pareto-optimal paths from start_stop to targets for departures >= start_time.
 pub fn compute_profile_query(
@@ -332,21 +473,25 @@ pub fn compute_profile_query(
         .trip_patterns
         .iter()
         .map(|p| p.trips.len())
-        .sum::<usize>(); // Approximate, actually we need max trip index?
+        .sum::<usize>();
+
     // Trip indices are per-pattern. We need a global trip ID or (pattern, trip).
-    // Let's use (pattern_idx, trip_idx) as key.
-    // Or flatten: flat_trip_id.
     // Let's use a flat mapping for arrays.
     let mut pattern_trip_offset = Vec::with_capacity(partition.trip_patterns.len());
     let mut total_trips = 0;
-    for pattern in &partition.trip_patterns {
+    // Precompute flat_id -> (pattern_idx, trip_idx)
+    let mut flat_id_to_pattern_trip = Vec::with_capacity(num_trips);
+
+    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
         pattern_trip_offset.push(total_trips);
+        for t_idx in 0..pattern.trips.len() {
+            flat_id_to_pattern_trip.push((p_idx, t_idx));
+        }
         total_trips += pattern.trips.len();
     }
 
     // Helpers for flat trip ID
     let get_flat_id = |p: usize, t: usize| -> usize { pattern_trip_offset[p] + t };
-    // let get_pattern_trip = |id: usize| -> (usize, usize) { ... }; // Not strictly needed if we iterate carefully
 
     // 1. Build Transfer Index (if not passed in optimized form)
     // The `transfers` arg is a slice. We assume it's sorted by (from_pattern, from_trip, from_stop)
@@ -429,15 +574,16 @@ pub fn compute_profile_query(
     seeds.sort_by_key(|s| std::cmp::Reverse(s.dep_time));
 
     // 5. Trip-Based Profile Search
-    const MAX_TRANSFERS: usize = 8;
+    const MAX_TRANSFERS: usize = 16; // Increased from 8
     // R[n][flat_trip_idx] = min_stop_idx
     let mut r_labels = vec![vec![usize::MAX; total_trips]; MAX_TRANSFERS + 1];
 
     // Tracking used graph components
-    // used_segments: flat_trip_idx -> (min_entry_idx, Vec<exit_idx>)
-    let mut used_segments: HashMap<usize, (usize, Vec<usize>)> = HashMap::new();
-    // used_transfers: Set<(from_flat, from_stop_idx, to_flat, to_stop_idx)>
-    let mut used_transfers: HashSet<(usize, usize, usize, usize)> = HashSet::new();
+    // used_segments: flat_trip_idx -> Set<(entry_idx, exit_idx)>
+    // We use a Vec and deduplicate later or just append.
+    let mut used_segments: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    // used_transfers: Set<transfer_idx>
+    let mut used_transfers: HashSet<usize> = HashSet::new();
     // used_initial_walks: Set<(to_stop)>
     let mut used_initial_walks: HashSet<u32> = HashSet::new();
 
@@ -451,11 +597,10 @@ pub fn compute_profile_query(
 
             // Record usage
             used_initial_walks.insert(seed.stop_id);
-            let entry = used_segments
-                .entry(flat_id)
-                .or_insert((usize::MAX, Vec::new()));
-            entry.0 = std::cmp::min(entry.0, seed.stop_idx);
-            // No exit recorded yet, but we are on the trip.
+
+            // We don't record segment here yet, we record it when we reach a target or transfer.
+            // But we need to know the entry point.
+            // The stack stores `stop_idx` which IS the entry point for the scan.
 
             // Propagate
             // Stack stores (n, flat_trip_id, start_scan_stop_idx_in_pattern, old_r_value_for_this_trip)
@@ -464,14 +609,7 @@ pub fn compute_profile_query(
 
             while let Some((n, flat_id, stop_idx, old_r_val)) = stack.pop() {
                 // println!("Pop: n={}, flat_id={}, stop_idx={}, old_r_val={}", n, flat_id, stop_idx, old_r_val);
-                // Need to reverse map flat_id to p_idx and t_idx
-                let mut p_idx = 0;
-                while p_idx < pattern_trip_offset.len() - 1
-                    && pattern_trip_offset[p_idx + 1] <= flat_id
-                {
-                    p_idx += 1;
-                }
-                let t_idx = flat_id - pattern_trip_offset[p_idx];
+                let (p_idx, t_idx) = flat_id_to_pattern_trip[flat_id];
 
                 let pattern = &partition.trip_patterns[p_idx];
                 let stop_indices = &partition.direction_patterns
@@ -499,14 +637,10 @@ pub fn compute_profile_query(
                     // Check if this stop is a target
                     if is_target[current_stop_global_id as usize] {
                         // println!("  Reached target {} at stop_idx {} on trip (p{},t{}) with {} transfers", current_stop_global_id, i, p_idx, t_idx, n);
-                        let entry = used_segments
+                        used_segments
                             .entry(flat_id)
-                            .or_insert_with(|| (usize::MAX, Vec::new()));
-                        if stop_idx < entry.0 {
-                            // Update min entry if current start is better
-                            entry.0 = stop_idx;
-                        }
-                        entry.1.push(i); // Record this stop as an exit point
+                            .or_default()
+                            .push((stop_idx, i));
                     }
 
                     // Process transfers from this stop
@@ -535,17 +669,14 @@ pub fn compute_profile_query(
                                 r_labels[next_n][target_flat] = target_stop_idx;
                                 stack.push((next_n, target_flat, target_stop_idx, old_target_r));
 
-                                // Mark transfer as used
-                                used_transfers.insert((flat_id, i, target_flat, target_stop_idx));
+                                // Mark transfer as used (store index)
+                                used_transfers.insert(tr_ptr);
 
                                 // Also mark the segment on current trip as used up to this transfer
-                                let entry = used_segments
+                                used_segments
                                     .entry(flat_id)
-                                    .or_insert_with(|| (usize::MAX, Vec::new()));
-                                if stop_idx < entry.0 {
-                                    entry.0 = stop_idx;
-                                }
-                                entry.1.push(i); // Record this stop as an exit point for the transfer
+                                    .or_default()
+                                    .push((stop_idx, i));
                             }
 
                             tr_ptr += 1;
@@ -602,32 +733,24 @@ pub fn compute_profile_query(
     }
 
     // Add Trip Segments
-    for (flat_id, (entry_idx, exits)) in &used_segments {
-        if *entry_idx == usize::MAX || exits.is_empty() {
-            continue;
-        }
-        let mut p_idx = 0;
-        while p_idx < pattern_trip_offset.len() - 1 && pattern_trip_offset[p_idx + 1] <= *flat_id {
-            p_idx += 1;
-        }
-        let t_idx = *flat_id - pattern_trip_offset[p_idx];
+    for (flat_id, segments) in &used_segments {
+        let (p_idx, t_idx) = flat_id_to_pattern_trip[*flat_id];
 
         let pattern = &partition.trip_patterns[p_idx];
         let stop_indices =
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
 
-        let u = stop_indices[*entry_idx];
-
-        for &exit_idx in exits {
-            if exit_idx <= *entry_idx {
+        for &(entry_idx, exit_idx) in segments {
+            if exit_idx <= entry_idx {
                 continue;
             }
+            let u = stop_indices[entry_idx];
             let v = stop_indices[exit_idx];
 
             // Calculate min_duration
             let trip = &pattern.trips[t_idx];
             let arr = get_arrival_time(partition, trip, exit_idx);
-            let dep = get_departure_time(partition, trip, *entry_idx);
+            let dep = get_departure_time(partition, trip, entry_idx);
             let dur = arr.saturating_sub(dep);
 
             // Create Transit Edge
@@ -636,7 +759,7 @@ pub fn compute_profile_query(
                 to_hub_idx: v,
                 edge_type: Some(EdgeType::Transit(TransitEdge {
                     trip_pattern_idx: p_idx as u32,
-                    start_stop_idx: *entry_idx as u32,
+                    start_stop_idx: entry_idx as u32,
                     end_stop_idx: exit_idx as u32,
                     min_duration: dur,
                 })),
@@ -648,36 +771,24 @@ pub fn compute_profile_query(
     }
 
     // Add Transfers
-    for &(from_flat, from_idx, to_flat, to_idx) in &used_transfers {
-        let mut p_from = 0;
-        while p_from < pattern_trip_offset.len() - 1 && pattern_trip_offset[p_from + 1] <= from_flat
-        {
-            p_from += 1;
-        }
-        let mut p_to = 0;
-        while p_to < pattern_trip_offset.len() - 1 && pattern_trip_offset[p_to + 1] <= to_flat {
-            p_to += 1;
-        }
+    for &tr_idx in &used_transfers {
+        let tr = &transfers[tr_idx];
+        let (p_from, _) =
+            flat_id_to_pattern_trip[get_flat_id(tr.from_pattern_idx, tr.from_trip_idx)];
+        let (p_to, _) = flat_id_to_pattern_trip[get_flat_id(tr.to_pattern_idx, tr.to_trip_idx)];
 
         let u = partition.direction_patterns
             [partition.trip_patterns[p_from].direction_pattern_idx as usize]
-            .stop_indices[from_idx];
+            .stop_indices[tr.from_stop_idx_in_pattern];
         let v = partition.direction_patterns
             [partition.trip_patterns[p_to].direction_pattern_idx as usize]
-            .stop_indices[to_idx];
-
-        // Find duration from transfers list?
-        // We assume 0 for now as most transfers are 0 or walk.
-        // If we want exact, we need to look it up.
-        // The `used_transfers` set only stores indices, not the full transfer object.
-        // To get the duration, we'd need to iterate the original `transfers` slice
-        // or store the duration in `used_transfers`. For now, use 0.
+            .stop_indices[tr.to_stop_idx_in_pattern];
 
         let edge = DagEdge {
             from_hub_idx: u,
             to_hub_idx: v,
             edge_type: Some(EdgeType::Walk(WalkEdge {
-                duration_seconds: 0, // Placeholder
+                duration_seconds: tr.duration,
             })),
         };
 

@@ -33,6 +33,7 @@ pub mod reduce_borders;
 pub mod test_hub;
 #[cfg(test)]
 pub mod test_reduce_borders;
+pub mod test_trip_based;
 pub mod trip_based;
 pub mod utils;
 
