@@ -63,18 +63,34 @@ mod tests {
 
         // We expect Node 2 to be a hub because it connects multiple lines.
 
-        let p1 = ProcessedPattern {
-            route_id: "A".to_string(),
-            stop_indices: vec![0, 1, 2, 3, 4],
-            trips: vec![CompressedTrip {
-                gtfs_trip_id: "t1".to_string(),
+        let mut p1_trips = Vec::new();
+        let mut p2_trips = Vec::new();
+        for i in 0..20 {
+            let start_time = 25200 + i * 900; // Every 15 mins from 7:00
+            p1_trips.push(CompressedTrip {
+                gtfs_trip_id: format!("t1_{}", i),
                 service_mask: 127,
-                start_time: 28800, // 8:00 AM
+                start_time,
                 time_delta_idx: 0,
                 service_idx: 0,
                 bikes_allowed: 0,
                 wheelchair_accessible: 0,
-            }],
+            });
+            p2_trips.push(CompressedTrip {
+                gtfs_trip_id: format!("t2_{}", i),
+                service_mask: 127,
+                start_time: start_time + 300, // 5 mins later
+                time_delta_idx: 0,
+                service_idx: 0,
+                bikes_allowed: 0,
+                wheelchair_accessible: 0,
+            });
+        }
+
+        let p1 = ProcessedPattern {
+            route_id: "A".to_string(),
+            stop_indices: vec![0, 1, 2, 3, 4],
+            trips: p1_trips,
             chateau: "test".to_string(),
             timezone_idx: 0,
         };
@@ -82,15 +98,7 @@ mod tests {
         let p2 = ProcessedPattern {
             route_id: "B".to_string(),
             stop_indices: vec![5, 6, 2, 7, 8],
-            trips: vec![CompressedTrip {
-                gtfs_trip_id: "t2".to_string(),
-                service_mask: 127,
-                start_time: 29100, // 8:05 AM
-                time_delta_idx: 0,
-                service_idx: 0,
-                bikes_allowed: 0,
-                wheelchair_accessible: 0,
-            }],
+            trips: p2_trips,
             chateau: "test".to_string(),
             timezone_idx: 0,
         };

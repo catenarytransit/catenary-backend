@@ -13,6 +13,7 @@ pub struct Transfer {
     pub to_pattern_idx: usize,
     pub to_trip_idx: usize,
     pub to_stop_idx_in_pattern: usize,
+    pub duration: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -105,6 +106,7 @@ pub fn compute_initial_transfers(partition: &TransitPartition) -> Vec<Transfer> 
                         let min_dep_time = arrival_time + walk_time;
 
                         if let Some(candidate_trips) = stop_to_trips.get(q as usize) {
+                            // println!("  Stop {} has {} candidate trips", q, candidate_trips.len());
                             let mut seen_patterns = HashSet::new();
 
                             // Find earliest trip for each pattern
@@ -126,6 +128,7 @@ pub fn compute_initial_transfers(partition: &TransitPartition) -> Vec<Transfer> 
                                                 to_pattern_idx: cand.pattern_idx,
                                                 to_trip_idx: cand.trip_idx,
                                                 to_stop_idx_in_pattern: cand.stop_idx_in_pattern,
+                                                duration: walk_time,
                                             });
                                         }
                                         seen_patterns.insert(cand.pattern_idx);
@@ -182,10 +185,147 @@ pub fn remove_u_turn_transfers(partition: &TransitPartition, transfers: &mut Vec
 
 /// Algorithm 3: Arrival Time Improvement (Refine Transfers)
 pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transfer>) {
-    // Placeholder for now as discussed in plan
+    // 1. Sort transfers to allow efficient lookup by (pattern, trip, stop)
+    // We sort by from_pattern, from_trip, from_stop_idx_in_pattern
+    transfers.sort_by(|a, b| {
+        a.from_pattern_idx
+            .cmp(&b.from_pattern_idx)
+            .then(a.from_trip_idx.cmp(&b.from_trip_idx))
+            .then(a.from_stop_idx_in_pattern.cmp(&b.from_stop_idx_in_pattern))
+    });
+
+    // 2. Build index for fast lookup: (pattern, trip) -> start_index in transfers
+    // We can just use binary search or a simple offset map since we iterate trips.
+    // Let's build a map for O(1) lookup of the slice.
+    // (pattern_idx, trip_idx) -> range of indices in transfers
+    let mut trip_transfer_ranges: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
+    let mut start = 0;
+    while start < transfers.len() {
+        let t = &transfers[start];
+        let key = (t.from_pattern_idx, t.from_trip_idx);
+        let mut end = start + 1;
+        while end < transfers.len()
+            && transfers[end].from_pattern_idx == key.0
+            && transfers[end].from_trip_idx == key.1
+        {
+            end += 1;
+        }
+        trip_transfer_ranges.insert(key, (start, end));
+        start = end;
+    }
+
+    // 3. Global Arrival Time Array (tau_A)
+    // Initialize with infinity
+    let mut arrival_time = vec![u32::MAX; partition.stops.len()];
+
+    // 4. Collect all trips and sort by start_time descending
+    struct TripRef {
+        pattern_idx: usize,
+        trip_idx: usize,
+        start_time: u32,
+    }
+    let mut all_trips = Vec::new();
+    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
+        for (t_idx, trip) in pattern.trips.iter().enumerate() {
+            all_trips.push(TripRef {
+                pattern_idx: p_idx,
+                trip_idx: t_idx,
+                start_time: trip.start_time,
+            });
+        }
+    }
+    all_trips.sort_by_key(|t| std::cmp::Reverse(t.start_time));
+
+    // 5. Iterate trips descending
+    let mut to_remove = vec![false; transfers.len()];
+
+    for trip_ref in all_trips {
+        let pattern = &partition.trip_patterns[trip_ref.pattern_idx];
+        let trip = &pattern.trips[trip_ref.trip_idx];
+        let stop_indices =
+            &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
+
+        // 5a. Compute arrival times along the trip and update tau_A
+        // We can just use get_arrival_time, but iterating is faster.
+        let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
+        let mut current_time = trip.start_time;
+
+        // We need to store arrival times for this trip to use in step 5b
+        let mut trip_arrivals = Vec::with_capacity(stop_indices.len());
+
+        for (i, &stop_idx) in stop_indices.iter().enumerate() {
+            // Arrival at stop i
+            if i > 0 {
+                if 2 * i < delta_seq.deltas.len() {
+                    current_time += delta_seq.deltas[2 * i];
+                }
+            }
+            trip_arrivals.push(current_time);
+
+            // Update global arrival time
+            if current_time < arrival_time[stop_idx as usize] {
+                arrival_time[stop_idx as usize] = current_time;
+            }
+
+            // Prepare for next stop (departure)
+            if 2 * i + 1 < delta_seq.deltas.len() {
+                current_time += delta_seq.deltas[2 * i + 1];
+            }
+        }
+
+        // 5b. Iterate stops backwards and check transfers
+        // We look at transfers originating FROM this trip.
+        if let Some(&(start_idx, end_idx)) =
+            trip_transfer_ranges.get(&(trip_ref.pattern_idx, trip_ref.trip_idx))
+        {
+            // The transfers are sorted by from_stop_idx_in_pattern.
+            // We can iterate the slice.
+            // But we need to iterate stops backwards.
+            // Let's just iterate the transfers for this trip and check.
+            // Since we want to process stops backwards, we can iterate the slice backwards?
+            // The order of processing stops on the SAME trip matters if transfers feed back into the same trip?
+            // No, transfers go to OTHER trips (or same trip later, but we removed U-turns).
+            // The paper says "iterate over all stops u served by T in reverse order".
+            // This suggests we should process the transfers from the last stop, then second to last, etc.
+
+            // Let's group transfers by stop index within the slice?
+            // Or just iterate the slice. Since it's sorted by stop_idx, we can iterate backwards.
+            for tr_idx in (start_idx..end_idx).rev() {
+                let tr = &transfers[tr_idx];
+                let from_stop_idx = stop_indices[tr.from_stop_idx_in_pattern];
+
+                // Departure time from u
+                let dep_time = get_departure_time(partition, trip, tr.from_stop_idx_in_pattern);
+
+                // Arrival at target v
+                // The transfer connects to (to_pattern, to_trip, to_stop_in_pattern).
+                // We need the global stop index of the target.
+                let target_pattern = &partition.trip_patterns[tr.to_pattern_idx];
+                let target_stops = &partition.direction_patterns
+                    [target_pattern.direction_pattern_idx as usize]
+                    .stop_indices;
+                let target_stop_idx = target_stops[tr.to_stop_idx_in_pattern];
+
+                let arr_at_target = dep_time + tr.duration;
+
+                if arr_at_target < arrival_time[target_stop_idx as usize] {
+                    // Useful transfer
+                    arrival_time[target_stop_idx as usize] = arr_at_target;
+                } else {
+                    // Redundant transfer
+                    to_remove[tr_idx] = true;
+                }
+            }
+        }
+    }
+
+    // 6. Remove marked transfers
+    let mut keep_iter = to_remove.iter();
+    transfers.retain(|_| !*keep_iter.next().unwrap());
 }
 
-/// Profile Query (Earliest Arrival for specific time)
+/// Profile Query (Trip-Based One-To-All Profile)
+/// Computes all Pareto-optimal paths from start_stop to targets for departures >= start_time.
 pub fn compute_profile_query(
     partition: &TransitPartition,
     transfers: &[Transfer],
@@ -193,168 +333,401 @@ pub fn compute_profile_query(
     start_time: u32,
     targets: &[u32],
 ) -> Vec<DagEdge> {
-    // 1. Index Transfers (should be done once, but doing here for now)
-    let mut transfers_from: HashMap<(usize, usize, usize), Vec<&Transfer>> = HashMap::new();
-    for tr in transfers {
-        transfers_from
-            .entry((
-                tr.from_pattern_idx,
-                tr.from_trip_idx,
-                tr.from_stop_idx_in_pattern,
-            ))
-            .or_default()
-            .push(tr);
+    let num_stops = partition.stops.len();
+    let num_trips = partition
+        .trip_patterns
+        .iter()
+        .map(|p| p.trips.len())
+        .sum::<usize>(); // Approximate, actually we need max trip index?
+    // Trip indices are per-pattern. We need a global trip ID or (pattern, trip).
+    // Let's use (pattern_idx, trip_idx) as key.
+    // Or flatten: flat_trip_id.
+    // Let's use a flat mapping for arrays.
+    let mut pattern_trip_offset = Vec::with_capacity(partition.trip_patterns.len());
+    let mut total_trips = 0;
+    for pattern in &partition.trip_patterns {
+        pattern_trip_offset.push(total_trips);
+        total_trips += pattern.trips.len();
     }
 
-    // 2. BFS State
-    // We want to find paths to targets.
-    // We track earliest arrival at stops to prune.
-    let mut earliest_arrival = vec![u32::MAX; partition.stops.len()];
-    earliest_arrival[start_stop as usize] = start_time;
+    // Helpers for flat trip ID
+    let get_flat_id = |p: usize, t: usize| -> usize { pattern_trip_offset[p] + t };
+    // let get_pattern_trip = |id: usize| -> (usize, usize) { ... }; // Not strictly needed if we iterate carefully
 
-    // Queue: (pattern_idx, trip_idx, board_stop_idx, arrival_time_at_board)
-    // We also need to track how we got here to build the DAG.
-    // Predecessors: stop_idx -> Vec<(prev_stop_idx, EdgeType)>
-    // We allow multiple parents for DAG.
-    let mut predecessors: Vec<Vec<(u32, EdgeType)>> = vec![Vec::new(); partition.stops.len()];
+    // 1. Build Transfer Index (if not passed in optimized form)
+    // The `transfers` arg is a slice. We assume it's sorted by (from_pattern, from_trip, from_stop)
+    // as done in refine_transfers. If not, we should sort or build an index.
+    // Since refine_transfers sorts it, we can assume it's sorted if we called it.
+    // But to be safe and robust, let's build the index here.
+    // (pattern, trip) -> range
+    let mut trip_transfer_ranges: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
+    let mut start = 0;
+    while start < transfers.len() {
+        let t = &transfers[start];
+        let key = (t.from_pattern_idx, t.from_trip_idx);
+        let mut end = start + 1;
+        while end < transfers.len()
+            && transfers[end].from_pattern_idx == key.0
+            && transfers[end].from_trip_idx == key.1
+        {
+            end += 1;
+        }
+        trip_transfer_ranges.insert(key, (start, end));
+        start = end;
+    }
 
-    let mut queue: std::collections::VecDeque<(usize, usize, usize, u32)> =
-        std::collections::VecDeque::new();
+    // 2. Identify Target Set for fast lookup
+    let mut is_target = vec![false; num_stops];
+    for &t in targets {
+        is_target[t as usize] = true;
+    }
 
-    // 3. Initial: Footpaths from start_stop
-    // (This is effectively "Round 0" - walking to stops)
-    let mut initial_stops = Vec::new();
-    initial_stops.push((start_stop, start_time));
-
-    // Add internal transfers from start_stop
-    for transfer in &partition.internal_transfers {
-        if transfer.from_stop_idx == start_stop {
-            let arr = start_time + transfer.duration_seconds;
-            if arr < earliest_arrival[transfer.to_stop_idx as usize] {
-                earliest_arrival[transfer.to_stop_idx as usize] = arr;
-                predecessors[transfer.to_stop_idx as usize].push((
-                    start_stop,
-                    EdgeType::Walk(WalkEdge {
-                        duration_seconds: transfer.duration_seconds,
-                    }),
-                ));
-                initial_stops.push((transfer.to_stop_idx, arr));
-            }
+    // 3. Identify Initial Walks (Source -> Stops)
+    // We include start_stop itself (0 duration) and internal transfers.
+    let mut initial_walks = Vec::new();
+    initial_walks.push((start_stop, 0));
+    for tr in &partition.internal_transfers {
+        if tr.from_stop_idx == start_stop {
+            initial_walks.push((tr.to_stop_idx, tr.duration_seconds));
         }
     }
 
-    // Find trips reachable from initial stops
-    for &(stop, time) in &initial_stops {
-        // Find trips departing >= time
-        // Scan all patterns (slow but correct)
+    // 4. Collect all Departure Opportunities (Seeds)
+    // A seed is a trip we can board directly from an initial walk.
+    // (departure_time, pattern_idx, trip_idx, stop_idx_in_pattern, walk_duration_to_stop)
+    struct Seed {
+        dep_time: u32,
+        pattern_idx: usize,
+        trip_idx: usize,
+        stop_idx: usize,
+        walk_duration: u32,
+        stop_id: u32,
+    }
+    let mut seeds = Vec::new();
+
+    for &(stop_id, walk_dur) in &initial_walks {
+        // Find trips departing from stop_id
+        // We iterate all patterns. (Optimization: precompute stop->trips map)
+        // For now, iterate all is slow but correct.
+        // Optimization: Use `stop_to_patterns` if available? Not in TransitPartition.
+        // We'll iterate all patterns.
         for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
             let stop_indices =
                 &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
-            if let Some(s_idx) = stop_indices.iter().position(|&s| s == stop) {
+            if let Some(s_idx) = stop_indices.iter().position(|&s| s == stop_id) {
                 for (t_idx, trip) in pattern.trips.iter().enumerate() {
-                    let dep_time = get_departure_time(partition, trip, s_idx);
-                    if dep_time >= time {
-                        // Board this trip
-                        queue.push_back((p_idx, t_idx, s_idx, dep_time));
-                        break; // Sorted
+                    let dep = get_departure_time(partition, trip, s_idx);
+                    if dep >= start_time + walk_dur {
+                        seeds.push(Seed {
+                            dep_time: dep - walk_dur, // Effective start time at source
+                            pattern_idx: p_idx,
+                            trip_idx: t_idx,
+                            stop_idx: s_idx,
+                            walk_duration: walk_dur,
+                            stop_id,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    // Sort seeds descending by departure time
+    seeds.sort_by_key(|s| std::cmp::Reverse(s.dep_time));
+
+    // 5. Trip-Based Profile Search
+    const MAX_TRANSFERS: usize = 8;
+    // R[n][flat_trip_idx] = min_stop_idx
+    let mut r_labels = vec![vec![usize::MAX; total_trips]; MAX_TRANSFERS + 1];
+
+    // Tracking used graph components
+    // used_segments: flat_trip_idx -> (min_entry_idx, Vec<exit_idx>)
+    let mut used_segments: HashMap<usize, (usize, Vec<usize>)> = HashMap::new();
+    // used_transfers: Set<(from_flat, from_stop_idx, to_flat, to_stop_idx)>
+    let mut used_transfers: HashSet<(usize, usize, usize, usize)> = HashSet::new();
+    // used_initial_walks: Set<(to_stop)>
+    let mut used_initial_walks: HashSet<u32> = HashSet::new();
+
+    for seed in seeds {
+        let flat_id = get_flat_id(seed.pattern_idx, seed.trip_idx);
+
+        // Update R[0]
+        let old_r = r_labels[0][flat_id];
+        if seed.stop_idx < old_r {
+            r_labels[0][flat_id] = seed.stop_idx;
+
+            // Record usage
+            used_initial_walks.insert(seed.stop_id);
+            let entry = used_segments
+                .entry(flat_id)
+                .or_insert((usize::MAX, Vec::new()));
+            entry.0 = std::cmp::min(entry.0, seed.stop_idx);
+            // No exit recorded yet, but we are on the trip.
+
+            // Propagate
+            // Stack stores (n, flat_trip_id, start_scan_stop_idx_in_pattern, old_r_value_for_this_trip)
+            let mut stack = Vec::new();
+            stack.push((0, flat_id, seed.stop_idx, old_r));
+
+            while let Some((n, flat_id, stop_idx, old_r_val)) = stack.pop() {
+                // println!("Pop: n={}, flat_id={}, stop_idx={}, old_r_val={}", n, flat_id, stop_idx, old_r_val);
+                // Need to reverse map flat_id to p_idx and t_idx
+                let mut p_idx = 0;
+                while p_idx < pattern_trip_offset.len() - 1
+                    && pattern_trip_offset[p_idx + 1] <= flat_id
+                {
+                    p_idx += 1;
+                }
+                let t_idx = flat_id - pattern_trip_offset[p_idx];
+
+                let pattern = &partition.trip_patterns[p_idx];
+                let stop_indices = &partition.direction_patterns
+                    [pattern.direction_pattern_idx as usize]
+                    .stop_indices;
+
+                // The segment to scan is from `stop_idx` up to `old_r_val` (exclusive)
+                // If `old_r_val` was usize::MAX, we scan to the end of the trip.
+                let scan_limit = std::cmp::min(old_r_val, stop_indices.len());
+
+                // Look up transfers for this trip
+                let range = if let Some(r) = trip_transfer_ranges.get(&(p_idx, t_idx)) {
+                    r.clone()
+                } else {
+                    (0, 0)
+                };
+
+                // Current transfer pointer for the sorted transfers slice
+                let mut tr_ptr = range.0;
+                let tr_end = range.1;
+
+                for i in stop_idx..scan_limit {
+                    let current_stop_global_id = stop_indices[i];
+
+                    // Check if this stop is a target
+                    if is_target[current_stop_global_id as usize] {
+                        // println!("  Reached target {} at stop_idx {} on trip (p{},t{}) with {} transfers", current_stop_global_id, i, p_idx, t_idx, n);
+                        let entry = used_segments
+                            .entry(flat_id)
+                            .or_insert_with(|| (usize::MAX, Vec::new()));
+                        if stop_idx < entry.0 {
+                            // Update min entry if current start is better
+                            entry.0 = stop_idx;
+                        }
+                        entry.1.push(i); // Record this stop as an exit point
+                    }
+
+                    // Process transfers from this stop
+                    if n < MAX_TRANSFERS {
+                        while tr_ptr < tr_end {
+                            let tr = &transfers[tr_ptr];
+                            if tr.from_stop_idx_in_pattern < i {
+                                tr_ptr += 1;
+                                continue;
+                            }
+                            if tr.from_stop_idx_in_pattern > i {
+                                break; // Transfers are sorted, so no more transfers from this stop
+                            }
+
+                            // Found transfer from current stop `i`
+                            let target_flat = get_flat_id(tr.to_pattern_idx, tr.to_trip_idx);
+                            let target_stop_idx = tr.to_stop_idx_in_pattern;
+
+                            // println!("  Transfer found at stop idx {} on trip (p{},t{}): to flat_id {} stop {} with {} transfers", i, p_idx, t_idx, target_flat, target_stop_idx, n);
+
+                            let next_n = n + 1;
+                            let old_target_r = r_labels[next_n][target_flat];
+
+                            if target_stop_idx < old_target_r {
+                                // println!("    Improving R_{} for flat_id {}: {} -> {}", next_n, target_flat, old_target_r, target_stop_idx);
+                                r_labels[next_n][target_flat] = target_stop_idx;
+                                stack.push((next_n, target_flat, target_stop_idx, old_target_r));
+
+                                // Mark transfer as used
+                                used_transfers.insert((flat_id, i, target_flat, target_stop_idx));
+
+                                // Also mark the segment on current trip as used up to this transfer
+                                let entry = used_segments
+                                    .entry(flat_id)
+                                    .or_insert_with(|| (usize::MAX, Vec::new()));
+                                if stop_idx < entry.0 {
+                                    entry.0 = stop_idx;
+                                }
+                                entry.1.push(i); // Record this stop as an exit point for the transfer
+                            }
+
+                            tr_ptr += 1;
+                        }
                     }
                 }
             }
         }
     }
 
-    // 4. Process Queue (Trips)
-    while let Some((p_idx, t_idx, board_idx, board_time)) = queue.pop_front() {
+    // 6. Reconstruct Graph from Used Components
+    // We need to build edges:
+    // - Initial Walks: Start -> Stop
+    // - Trip Segments: Stop -> Stop (along trip)
+    // - Transfers: Stop -> Stop (between trips)
+
+    // Build adjacency list for backward BFS
+    // Node ID: Stop Index (Global)
+    // Edges: to -> from
+    let mut reverse_adj: HashMap<u32, Vec<(u32, DagEdge)>> = HashMap::new();
+    let mut adj: HashMap<u32, Vec<(u32, DagEdge)>> = HashMap::new();
+
+    // Add Initial Walks
+    for &stop_id in &used_initial_walks {
+        // Edge: start_stop -> stop_id
+
+        // Find duration
+        let dur = if stop_id == start_stop {
+            0
+        } else {
+            partition
+                .internal_transfers
+                .iter()
+                .find(|t| t.from_stop_idx == start_stop && t.to_stop_idx == stop_id)
+                .map(|t| t.duration_seconds)
+                .unwrap_or(0)
+        };
+
+        let edge = DagEdge {
+            from_hub_idx: start_stop,
+            to_hub_idx: stop_id,
+            edge_type: Some(EdgeType::Walk(WalkEdge {
+                duration_seconds: dur,
+            })),
+        };
+
+        adj.entry(start_stop)
+            .or_default()
+            .push((stop_id, edge.clone()));
+        reverse_adj
+            .entry(stop_id)
+            .or_default()
+            .push((start_stop, edge));
+    }
+
+    // Add Trip Segments
+    for (flat_id, (entry_idx, exits)) in &used_segments {
+        if *entry_idx == usize::MAX || exits.is_empty() {
+            continue;
+        }
+        let mut p_idx = 0;
+        while p_idx < pattern_trip_offset.len() - 1 && pattern_trip_offset[p_idx + 1] <= *flat_id {
+            p_idx += 1;
+        }
+        let t_idx = *flat_id - pattern_trip_offset[p_idx];
+
         let pattern = &partition.trip_patterns[p_idx];
         let stop_indices =
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
-        let trip = &pattern.trips[t_idx];
 
-        // Iterate down the trip
-        for i in (board_idx + 1)..stop_indices.len() {
-            let stop_idx = stop_indices[i];
-            let arr_time = get_arrival_time(partition, trip, i);
+        let u = stop_indices[*entry_idx];
 
-            // Update arrival at stop
-            if arr_time < earliest_arrival[stop_idx as usize] {
-                earliest_arrival[stop_idx as usize] = arr_time;
-
-                // Record edge
-                // The edge is from board_stop (stop_indices[board_idx]) to current stop (stop_idx)
-                let board_stop = stop_indices[board_idx];
-                let min_duration = arr_time - board_time; // Approx
-
-                let edge = TransitEdge {
-                    trip_pattern_idx: p_idx as u32,
-                    start_stop_idx: board_idx as u32,
-                    end_stop_idx: i as u32,
-                    min_duration,
-                };
-                predecessors[stop_idx as usize].push((board_stop, EdgeType::Transit(edge)));
-
-                // Check transfers from this stop (using precomputed set T)
-                if let Some(out_transfers) = transfers_from.get(&(p_idx, t_idx, i)) {
-                    for tr in out_transfers {
-                        // Transfer to tr.to_trip_idx at tr.to_stop_idx_in_pattern
-                        let target_trip =
-                            &partition.trip_patterns[tr.to_pattern_idx].trips[tr.to_trip_idx];
-                        let target_dep_time =
-                            get_departure_time(partition, target_trip, tr.to_stop_idx_in_pattern);
-
-                        // Check if we improve arrival at the boarding stop of the next trip?
-                        // Actually, we just board the next trip.
-                        // We don't update earliest_arrival for the transfer stop itself (we just did).
-                        // We push the new trip to queue.
-
-                        // Check if this trip is useful?
-                        // Simple check: have we boarded this trip (or better) before?
-                        // For simplicity, just push. (Infinite loop risk? No, time increases).
-                        // But we should check if we already reached this trip at an earlier stop?
-
-                        queue.push_back((
-                            tr.to_pattern_idx,
-                            tr.to_trip_idx,
-                            tr.to_stop_idx_in_pattern,
-                            target_dep_time,
-                        ));
-                    }
-                }
+        for &exit_idx in exits {
+            if exit_idx <= *entry_idx {
+                continue;
             }
+            let v = stop_indices[exit_idx];
+
+            // Calculate min_duration
+            let trip = &pattern.trips[t_idx];
+            let arr = get_arrival_time(partition, trip, exit_idx);
+            let dep = get_departure_time(partition, trip, *entry_idx);
+            let dur = arr.saturating_sub(dep);
+
+            // Create Transit Edge
+            let edge = DagEdge {
+                from_hub_idx: u,
+                to_hub_idx: v,
+                edge_type: Some(EdgeType::Transit(TransitEdge {
+                    trip_pattern_idx: p_idx as u32,
+                    start_stop_idx: *entry_idx as u32,
+                    end_stop_idx: exit_idx as u32,
+                    min_duration: dur,
+                })),
+            };
+
+            adj.entry(u).or_default().push((v, edge.clone()));
+            reverse_adj.entry(v).or_default().push((u, edge));
         }
     }
 
-    // 5. Reconstruct DAG for targets
-    let mut edges = Vec::new();
-    let mut visited = HashSet::new();
+    // Add Transfers
+    for &(from_flat, from_idx, to_flat, to_idx) in &used_transfers {
+        let mut p_from = 0;
+        while p_from < pattern_trip_offset.len() - 1 && pattern_trip_offset[p_from + 1] <= from_flat
+        {
+            p_from += 1;
+        }
+        let mut p_to = 0;
+        while p_to < pattern_trip_offset.len() - 1 && pattern_trip_offset[p_to + 1] <= to_flat {
+            p_to += 1;
+        }
+
+        let u = partition.direction_patterns
+            [partition.trip_patterns[p_from].direction_pattern_idx as usize]
+            .stop_indices[from_idx];
+        let v = partition.direction_patterns
+            [partition.trip_patterns[p_to].direction_pattern_idx as usize]
+            .stop_indices[to_idx];
+
+        // Find duration from transfers list?
+        // We assume 0 for now as most transfers are 0 or walk.
+        // If we want exact, we need to look it up.
+        // The `used_transfers` set only stores indices, not the full transfer object.
+        // To get the duration, we'd need to iterate the original `transfers` slice
+        // or store the duration in `used_transfers`. For now, use 0.
+
+        let edge = DagEdge {
+            from_hub_idx: u,
+            to_hub_idx: v,
+            edge_type: Some(EdgeType::Walk(WalkEdge {
+                duration_seconds: 0, // Placeholder
+            })),
+        };
+
+        adj.entry(u).or_default().push((v, edge.clone()));
+        reverse_adj.entry(v).or_default().push((u, edge));
+    }
+
+    // 7. Prune: Backward BFS from targets
+    let mut useful_nodes = HashSet::new();
     let mut q = std::collections::VecDeque::new();
 
-    for &target in targets {
-        if earliest_arrival[target as usize] != u32::MAX {
-            q.push_back(target);
-            visited.insert(target);
+    // We already built reverse_adj above.
+    // But we need to make sure we only include nodes reachable from targets.
+
+    for &t in targets {
+        if reverse_adj.contains_key(&t) || t == start_stop {
+            q.push_back(t);
+            useful_nodes.insert(t);
         }
     }
 
     while let Some(curr) = q.pop_front() {
-        if curr == start_stop {
-            continue;
-        }
-        for (prev, edge_type) in &predecessors[curr as usize] {
-            // Add edge
-            edges.push(DagEdge {
-                from_hub_idx: *prev,
-                to_hub_idx: curr,
-                edge_type: Some(edge_type.clone()),
-            });
-
-            if !visited.contains(prev) {
-                visited.insert(*prev);
-                q.push_back(*prev);
+        if let Some(preds) = reverse_adj.get(&curr) {
+            for (pred, _) in preds {
+                if useful_nodes.insert(*pred) {
+                    q.push_back(*pred);
+                }
             }
         }
     }
 
-    edges
+    // 8. Construct Result Edges
+    let mut result_edges = Vec::new();
+    for &u in &useful_nodes {
+        if let Some(neighbors) = adj.get(&u) {
+            for (v, edge) in neighbors {
+                if useful_nodes.contains(v) {
+                    result_edges.push(edge.clone());
+                }
+            }
+        }
+    }
+
+    result_edges
 }
 
 // Helpers

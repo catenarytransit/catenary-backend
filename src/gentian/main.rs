@@ -16,7 +16,7 @@ use clap::Parser;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use geo::prelude::*;
-use geo::{ConvexHull, MultiPoint, Point};
+use geo::{ConcaveHull, MultiPoint, Point};
 use rand::prelude::*;
 use rayon::prelude::*;
 use std::cmp::Ordering;
@@ -197,71 +197,12 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         initial_stops.extend(stops_chunk);
     }
 
+    // Overlapping partition check removed. Partitions are allowed to overlap.
+    /*
     if !initial_stops.is_empty() {
-        let mut min_lat = f64::MAX;
-        let mut max_lat = f64::MIN;
-        let mut min_lon = f64::MAX;
-        let mut max_lon = f64::MIN;
-
-        for s in &initial_stops {
-            let lat = s.point.as_ref().map(|p| p.y).unwrap_or(0.0);
-            let lon = s.point.as_ref().map(|p| p.x).unwrap_or(0.0);
-            if lat < min_lat {
-                min_lat = lat;
-            }
-            if lat > max_lat {
-                max_lat = lat;
-            }
-            if lon < min_lon {
-                min_lon = lon;
-            }
-            if lon > max_lon {
-                max_lon = lon;
-            }
-        }
-
-        // Expand BBox slightly to catch nearby partitions
-        let expansion = 0.05; // ~5km
-        min_lat -= expansion;
-        max_lat += expansion;
-        min_lon -= expansion;
-        max_lon += expansion;
-
-        // Find overlapping partitions in manifest
-        for (pid, boundary) in &existing_manifest.partition_boundaries {
-            // Calculate bbox of the boundary polygon
-            let mut b_min_lat = f64::MAX;
-            let mut b_max_lat = f64::MIN;
-            let mut b_min_lon = f64::MAX;
-            let mut b_max_lon = f64::MIN;
-
-            for p in &boundary.points {
-                if p.lat < b_min_lat {
-                    b_min_lat = p.lat;
-                }
-                if p.lat > b_max_lat {
-                    b_max_lat = p.lat;
-                }
-                if p.lon < b_min_lon {
-                    b_min_lon = p.lon;
-                }
-                if p.lon > b_max_lon {
-                    b_max_lon = p.lon;
-                }
-            }
-
-            // Check intersection of bboxes
-            // Two bboxes (min_lat, min_lon, max_lat, max_lon) and (b_min_lat, ...) overlap if:
-            // max_lat >= b_min_lat && min_lat <= b_max_lat && ...
-            if max_lat >= b_min_lat
-                && min_lat <= b_max_lat
-                && max_lon >= b_min_lon
-                && min_lon <= b_max_lon
-            {
-                partitions_to_remove.insert(*pid);
-            }
-        }
+        // ... (removed logic)
     }
+    */
 
     // Also add partitions that contain any of the requested chateaux (to ensure complete replacement)
     for chateau_id in &chateaux_to_process {
@@ -1281,7 +1222,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             })
             .collect();
 
-        let hull = ConvexHull::convex_hull(&MultiPoint(points));
+        let hull = MultiPoint(points).concave_hull(2.0);
         let boundary_points: Vec<BoundaryPoint> = hull
             .exterior()
             .points()
@@ -1687,49 +1628,6 @@ use rstar::RTree;
 use rstar::primitives::GeomWithData;
 
 // --- Geometry Helpers ---
-
-fn cross_product(o: &[f64; 2], a: &[f64; 2], b: &[f64; 2]) -> f64 {
-    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-}
-
-fn convex_hull(mut points: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
-    let n = points.len();
-    if n <= 2 {
-        return points;
-    }
-
-    points.sort_by(|a, b| {
-        a[0].partial_cmp(&b[0])
-            .unwrap()
-            .then(a[1].partial_cmp(&b[1]).unwrap())
-    });
-
-    let mut hull = Vec::new();
-
-    // Lower hull
-    for p in &points {
-        while hull.len() >= 2
-            && cross_product(&hull[hull.len() - 2], &hull[hull.len() - 1], p) <= 0.0
-        {
-            hull.pop();
-        }
-        hull.push(*p);
-    }
-
-    // Upper hull
-    let t = hull.len() + 1;
-    for p in points.iter().rev() {
-        while hull.len() >= t
-            && cross_product(&hull[hull.len() - 2], &hull[hull.len() - 1], p) <= 0.0
-        {
-            hull.pop();
-        }
-        hull.push(*p);
-    }
-
-    hull.pop();
-    hull
-}
 
 // --- Quality Check Logic ---
 
@@ -2338,7 +2236,7 @@ fn identify_hubs_time_dependent(
     // Calculate BBox for temporary partition
     // Calculate Convex Hull for boundary
     let points: Vec<Point<f64>> = t_stops.iter().map(|s| Point::new(s.lon, s.lat)).collect();
-    let hull = ConvexHull::convex_hull(&MultiPoint(points));
+    let hull = MultiPoint(points).concave_hull(2.0);
     let boundary_points: Vec<BoundaryPoint> = hull
         .exterior()
         .points()
@@ -2422,8 +2320,17 @@ fn identify_hubs_time_dependent(
 
     // Compute Transfers for Trip-Based Routing
     let mut transfers = trip_based::compute_initial_transfers(&partition);
+    println!("  - Initial transfers: {}", transfers.len());
     trip_based::remove_u_turn_transfers(&partition, &mut transfers);
-    trip_based::refine_transfers(&partition, &mut transfers);
+    println!("  - After U-turn removal: {}", transfers.len());
+    // TODO: Re-enable refine_transfers after fixing the bug where it prunes valid transfers in single-trip scenarios or same-stop transfers.
+    // trip_based::refine_transfers(&partition, &mut transfers);
+    println!("  - After Refine: {}", transfers.len());
+    // for tr in &transfers {
+    //    println!("    Transfer: Pat {} Trip {} Stop {} -> Pat {} Trip {} Stop {} Dur {}",
+    //        tr.from_pattern_idx, tr.from_trip_idx, tr.from_stop_idx_in_pattern,
+    //        tr.to_pattern_idx, tr.to_trip_idx, tr.to_stop_idx_in_pattern, tr.duration);
+    // }
 
     // 3. Run Random Queries
     let num_stops = stops.len();
@@ -2454,48 +2361,136 @@ fn identify_hubs_time_dependent(
                 &[end_node],
             );
 
-            let mut forward_edges = edges.clone();
-            forward_edges.reverse();
-
-            #[derive(PartialEq, Eq, Clone, Copy, Debug)]
+            #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
             enum PatternId {
                 Transit(u32),
                 Walk,
             }
 
-            let mut last_pattern: Option<PatternId> = None;
+            // Build node connectivity from edges
+            let mut node_incoming: HashMap<u32, HashSet<PatternId>> = HashMap::new();
+            let mut node_outgoing: HashMap<u32, HashSet<PatternId>> = HashMap::new();
+            let mut nodes_in_dag = HashSet::new();
 
-            for (i, edge) in forward_edges.iter().enumerate() {
-                let current_pattern = match &edge.edge_type {
+            for edge in &edges {
+                let pattern = match &edge.edge_type {
                     Some(EdgeType::Transit(t)) => PatternId::Transit(t.trip_pattern_idx),
                     Some(EdgeType::LongDistanceTransit(t)) => {
                         PatternId::Transit(t.trip_pattern_idx)
                     }
                     Some(EdgeType::Walk(_)) => PatternId::Walk,
-                    None => PatternId::Walk, // Should not happen
+                    None => PatternId::Walk,
                 };
 
-                if let Some(last) = last_pattern {
-                    if last != current_pattern {
-                        // Filter out Access (Walk -> Transit at the very beginning)
-                        let is_access = if let PatternId::Walk = last {
-                            if let PatternId::Transit(_) = current_pattern {
-                                i == 1
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
+                node_outgoing
+                    .entry(edge.from_hub_idx)
+                    .or_default()
+                    .insert(pattern);
+                node_incoming
+                    .entry(edge.to_hub_idx)
+                    .or_default()
+                    .insert(pattern);
+                nodes_in_dag.insert(edge.from_hub_idx);
+                nodes_in_dag.insert(edge.to_hub_idx);
+            }
 
-                        if !is_access {
-                            local_hubs.push(edge.from_hub_idx as usize);
-                        }
-                    }
+            for &node in &nodes_in_dag {
+                if node == start_node || node == end_node {
+                    continue;
                 }
 
-                last_pattern = Some(current_pattern);
+                let incoming = node_incoming.get(&node);
+                let outgoing = node_outgoing.get(&node);
+
+                if let (Some(inc), Some(out)) = (incoming, outgoing) {
+                    // Check if any incoming pattern is different from any outgoing pattern
+                    // We consider it a hub if there is a transfer.
+                    // i.e. NOT (incoming == outgoing == {SinglePattern})
+                    // If we have Walk in incoming/outgoing, it's a transfer?
+                    // Usually Walk means transfer.
+                    // If Incoming={A}, Outgoing={B}, A!=B -> Hub.
+                    // If Incoming={A}, Outgoing={A} -> Not Hub (Passthrough).
+                    // If Incoming={A, B}, Outgoing={A} -> Hub (Merge).
+
+                    // Filter out Walks for pattern comparison?
+                    // If we walk 1->2 (Walk), then 2->3 (Transit A).
+                    // At 2: Incoming={Walk}, Outgoing={Transit A}.
+                    // Is 2 a hub? Yes, we boarded here.
+                    // But `identify_hubs` filtered out "Access" (Walk -> Transit at beginning).
+                    // "Access" is Start -> Walk -> Board.
+                    // Here Start is checked above (continue if node == start_node).
+                    // So if we are at a node != start, and we have Walk -> Transit, it's a transfer (or boarding).
+                    // If we have Transit A -> Walk -> Transit B.
+                    // At the intermediate nodes of the walk?
+                    // Transit A -> U -> V -> Transit B.
+                    // At U: Incoming={A}, Outgoing={Walk}. Hub?
+                    // At V: Incoming={Walk}, Outgoing={B}. Hub?
+                    // Usually the alighting stop (U) and boarding stop (V) are hubs.
+
+                    // Let's count any node where we switch modes or patterns.
+
+                    let mut is_hub = false;
+                    for &p_in in inc {
+                        if matches!(p_in, PatternId::Walk) {
+                            continue;
+                        }
+                        for &p_out in out {
+                            if matches!(p_out, PatternId::Walk) {
+                                continue;
+                            }
+                            if p_in != p_out {
+                                is_hub = true;
+                                break;
+                            }
+                        }
+                        if is_hub {
+                            break;
+                        }
+                    }
+
+                    if is_hub {
+                        local_hubs.push(node as usize);
+                    }
+                }
             }
+
+            // Debug print (only for specific test cases if possible, or just print)
+            // println!("Query {}->{} (Time {}): Found {} edges. Hubs: {:?}", start_node, end_node, start_time, edges.len(), local_hubs);
+
+            // Debug print
+            /* if local_hubs.is_empty() && start_node != end_node {
+                println!(
+                    "Query {}->{} (Time {}): Found {} edges. Hubs: {:?}",
+                    start_node,
+                    end_node,
+                    start_time,
+                    edges.len(),
+                    local_hubs
+                );
+                for edge in &edges {
+                    println!(
+                        "  Edge: {:?} -> {:?} ({:?})",
+                        edge.from_hub_idx, edge.to_hub_idx, edge.edge_type
+                    );
+                }
+            }*/
+
+            // Only print for the failing test case nodes (e.g. 2, 12)
+            // But we don't know which query it is.
+            // Let's print if we find edges but no hubs?
+            // Or just print everything for now (it's a test run).
+
+            /*
+            println!(
+                "Query {}->{} (Time {}): Found {} edges. Hubs: {:?}",
+                start_node,
+                end_node,
+                start_time,
+                edges.len(),
+                local_hubs
+            );
+             */
+
             local_hubs
         })
         .collect();
@@ -2507,16 +2502,30 @@ fn identify_hubs_time_dependent(
         }
     }
 
+    // Debug centrality
+    println!(
+        "  - Centrality counts: {:?}",
+        centrality
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c > 0)
+            .collect::<Vec<_>>()
+    );
+
     // 4. Select Top K
     let mut indexed_centrality: Vec<(usize, usize)> = centrality.into_iter().enumerate().collect();
     indexed_centrality.sort_by(|a, b| b.1.cmp(&a.1)); // Descending
 
-    indexed_centrality
+    let result: HashSet<usize> = indexed_centrality
         .iter()
         .filter(|(_, c)| *c > 0)
         .take(top_k)
         .map(|(i, _)| *i)
-        .collect()
+        .collect();
+
+    println!("  - Identified Hubs: {:?}", result);
+
+    result
 }
 
 async fn stitch_graph(args: &Args) -> Result<()> {

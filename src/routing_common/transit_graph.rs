@@ -167,7 +167,7 @@ pub struct ExternalTransfer {
 }
 
 /// A Transit Stop (Platform, Station, or Pole).
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct TransitStop {
     /// Local Index (0..N) within this partition.
     #[prost(uint64, tag = "1")]
@@ -222,7 +222,7 @@ pub struct DirectionPattern {
 
 /// A "Trip Pattern" is a collection of trips that visit the EXACT same
 /// sequence of stops. This is the primary unit of Trip-Based Routing.
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct TripPattern {
     /// Index of the Chateau in `TransitPartition.chateau_ids`.
     #[prost(uint32, tag = "1")]
@@ -248,7 +248,7 @@ pub struct TripPattern {
 
 /// A single Trip instance (e.g., "The 8:05 AM Bus").
 /// Highly compressed to keep the "Hot Path" small.
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct CompressedTrip {
     /// The original GTFS Trip ID.
     /// Essential for mapping Realtime Delays (TripUpdates) to this static struct.
@@ -381,7 +381,7 @@ pub struct PartitionDag {
     pub edges: Vec<DagEdge>,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct GlobalHub {
     #[prost(uint32, tag = "1")]
     pub original_partition_id: u32,
@@ -389,7 +389,7 @@ pub struct GlobalHub {
     pub stop_idx_in_partition: u32,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct DagEdge {
     /// Index into the `hubs` vector of this DAG.
     #[prost(uint32, tag = "1")]
@@ -443,7 +443,7 @@ pub enum EdgeType {
 /// Local Transfer Patterns (LTPs).
 /// Precomputed DAGs for optimal routes within the cluster.
 /// Used to accelerate long-distance queries and for local queries.
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct LocalTransferPattern {
     /// The source stop index (local) for this DAG.
     #[prost(uint32, tag = "1")]
