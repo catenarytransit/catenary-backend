@@ -1,0 +1,869 @@
+warning: unused manifest key: library
+   Compiling catenary-backend v0.4.0 (/home/kyler/catenary-backend)
+warning: unused `#[macro_use]` import
+  --> src/lib.rs:37:1
+   |
+37 | #[macro_use]
+   | ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::net::IpAddr`
+  --> src/aspen/lib.rs:15:5
+   |
+15 | use std::net::IpAddr;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FeedEntity` and `FeedMessage`
+ --> src/id_cleanup/mod.rs:2:21
+  |
+2 | use gtfs_realtime::{FeedEntity, FeedMessage};
+  |                     ^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused import: `Utc`
+ --> src/custom_alerts/metrolink_alerts.rs:1:24
+  |
+1 | use chrono::{TimeZone, Utc};
+  |                        ^^^
+
+warning: unused import: `self`
+ --> src/custom_alerts/metrolink_alerts.rs:3:23
+  |
+3 | use futures::stream::{self, StreamExt};
+  |                       ^^^^
+
+warning: unused import: `gtfs_realtime::FeedEntity`
+ --> src/custom_alerts/metrolink_alerts.rs:4:5
+  |
+4 | use gtfs_realtime::FeedEntity;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `auth::Credentials` and `cat::CatIndicesParts`
+ --> src/elasticutils/mod.rs:3:5
+  |
+3 |     auth::Credentials,
+  |     ^^^^^^^^^^^^^^^^^
+4 |     cat::CatIndicesParts,
+  |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `schema::gtfs::trip_frequencies::start_time`
+  --> src/lib.rs:71:5
+   |
+71 | use schema::gtfs::trip_frequencies::start_time;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::BTreeSet`
+  --> src/lib.rs:73:5
+   |
+73 | use std::collections::BTreeSet;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::BTreeMap`
+ --> src/schedule_filtering/mod.rs:4:5
+  |
+4 | use std::collections::BTreeMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> src/schedule_filtering/mod.rs:6:5
+  |
+6 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary parentheses around `if` condition
+  --> src/schedule_filtering/mod.rs:91:8
+   |
+91 |     if (delete_shapes_and_stops) {
+   |        ^                       ^
+   |
+   = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+   |
+91 -     if (delete_shapes_and_stops) {
+91 +     if delete_shapes_and_stops {
+   |
+
+warning: unused import: `crate::models::TileStorage`
+ --> src/tile_save_and_get.rs:1:5
+  |
+1 | use crate::models::TileStorage;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `prost::Message`
+ --> src/timestamp_extraction.rs:1:5
+  |
+1 | use prost::Message;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused import: `gtfs_realtime::FeedHeader`
+ --> src/timestamp_extraction.rs:3:5
+  |
+3 | use gtfs_realtime::FeedHeader;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `gtfs_realtime::FeedMessage`
+ --> src/timestamp_extraction.rs:4:5
+  |
+4 | use gtfs_realtime::FeedMessage;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::path::PathBuf`
+  --> src/lib.rs:94:5
+   |
+94 | use std::path::PathBuf;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::RtCacheEntry`
+ --> src/aspen_dataset.rs:1:5
+  |
+1 | use crate::RtCacheEntry;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::RtKey`
+ --> src/aspen_dataset.rs:2:5
+  |
+2 | use crate::RtKey;
+  |     ^^^^^^^^^^^^
+
+warning: unused import: `gtfs_realtime::FeedEntity`
+ --> src/aspen_dataset.rs:6:5
+  |
+6 | use gtfs_realtime::FeedEntity;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::sync::Arc`
+ --> src/aspen_dataset.rs:8:5
+  |
+8 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused doc comment
+   --> src/lib.rs:747:5
+    |
+747 |     ///Date(1729199040000)/
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+748 |     //extract all the numbers
+749 |     let mut numbers = date.chars().filter(|x| x.is_numeric()).collect::<String>();
+    |     ------------------------------------------------------------------------------ rustdoc does not generate documentation for statements
+    |
+    = help: use `//` for a plain comment
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of deprecated trait `geo::HaversineDestination`: Please use the `Haversine.destination` method from the `Destination` trait instead
+   --> src/lib.rs:865:10
+    |
+865 | use geo::HaversineDestination;
+    |          ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: unused variable: `finished_id_list`
+   --> src/custom_alerts/metrolink_alerts.rs:609:13
+    |
+609 |     let mut finished_id_list = raw_from_homepage.iter().map(|x| x.id.clone()).collect_vec();
+    |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_finished_id_list`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/custom_alerts/metrolink_alerts.rs:609:9
+    |
+609 |     let mut finished_id_list = raw_from_homepage.iter().map(|x| x.id.clone()).collect_vec();
+    |         ----^^^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `delete_response`
+  --> src/elasticutils/mod.rs:32:13
+   |
+32 |         let delete_response = client
+   |             ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delete_response`
+
+warning: unused variable: `delete_from_pg`
+  --> src/shape_fetcher/mod.rs:68:9
+   |
+68 |     let delete_from_pg = diesel::delete(
+   |         ^^^^^^^^^^^^^^
+   |
+help: if this is intentional, prefix it with an underscore
+   |
+68 |     let _delete_from_pg = diesel::delete(
+   |         +
+help: you might have meant to pattern match on the similarly named constant `BUFFER_SIZE`
+   |
+68 -     let delete_from_pg = diesel::delete(
+68 +     let hashfolder::BUFFER_SIZE = diesel::delete(
+   |
+
+warning: unused variable: `conn`
+  --> src/tile_save_and_get.rs:49:5
+   |
+49 |     conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
+   |     ^^^^ help: if this is intentional, prefix it with an underscore: `_conn`
+
+warning: unused variable: `conn`
+  --> src/tile_save_and_get.rs:69:5
+   |
+69 |     conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
+   |     ^^^^ help: if this is intentional, prefix it with an underscore: `_conn`
+
+warning: unused variable: `z`
+  --> src/tile_save_and_get.rs:71:5
+   |
+71 |     z: u8,
+   |     ^ help: if this is intentional, prefix it with an underscore: `_z`
+
+warning: use of deprecated method `geo::HaversineDestination::haversine_destination`: Please use the `Haversine.destination` method from the `Destination` trait instead
+   --> src/lib.rs:872:37
+    |
+872 |     let distance_calc_point = point.haversine_destination(direction, distance_metres);
+    |                                     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `rayon::prelude`
+ --> src/gtfs_rt_rough_hash/mod.rs:3:5
+  |
+3 | use rayon::prelude::*;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused import: `StreamExt`
+ --> src/custom_alerts/metrolink_alerts.rs:3:29
+  |
+3 | use futures::stream::{self, StreamExt};
+  |                             ^^^^^^^^^
+
+warning: unused variable: `stop_headsign_reference_idx`
+   --> src/maple_syrup/mod.rs:196:13
+    |
+196 |         let stop_headsign_reference_idx = if stop_headsigns_unique_list.len() <= 1 {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_stop_headsign_reference_idx`
+
+warning: value assigned to `current_range` is never read
+   --> src/maple_syrup/mod.rs:405:25
+    |
+405 |                         current_range = vec![];
+    |                         ^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/maple_syrup/mod.rs:371:21
+    |
+371 |                 let mut itinerary = entry.get_mut();
+    |                     ----^^^^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: unused variable: `desc`
+   --> src/custom_alerts/metrolink_alerts.rs:504:39
+    |
+504 | pub fn determine_effect(header: &str, desc: Option<&str>) -> i32 {
+    |                                       ^^^^ help: if this is intentional, prefix it with an underscore: `_desc`
+
+warning: unused variable: `route_id`
+  --> src/schedule_filtering/mod.rs:18:19
+   |
+18 |         .filter(|(route_id, route)| route_types.contains(&route.route_type))
+   |                   ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
+
+warning: unused variable: `route`
+  --> src/schedule_filtering/mod.rs:19:26
+   |
+19 |         .map(|(route_id, route)| route_id)
+   |                          ^^^^^ help: if this is intentional, prefix it with an underscore: `_route`
+
+warning: unused variable: `trip_id`
+  --> src/schedule_filtering/mod.rs:32:19
+   |
+32 |         .filter(|(trip_id, trip)| route_ids_to_keep.contains(&trip.route_id))
+   |                   ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip`
+  --> src/schedule_filtering/mod.rs:33:25
+   |
+33 |         .map(|(trip_id, trip)| trip_id)
+   |                         ^^^^ help: if this is intentional, prefix it with an underscore: `_trip`
+
+warning: unused variable: `route`
+  --> src/schedule_filtering/mod.rs:82:29
+   |
+82 |         .filter(|(route_id, route)| route_ids_to_keep.contains(route_id))
+   |                             ^^^^^ help: if this is intentional, prefix it with an underscore: `_route`
+
+warning: unused variable: `trip`
+  --> src/schedule_filtering/mod.rs:88:28
+   |
+88 |         .filter(|(trip_id, trip)| trips_to_keep.contains(trip_id))
+   |                            ^^^^ help: if this is intentional, prefix it with an underscore: `_trip`
+
+warning: unused variable: `stop`
+  --> src/schedule_filtering/mod.rs:95:32
+   |
+95 |             .filter(|(stop_id, stop)| keep_stop_ids.contains(stop_id))
+   |                                ^^^^ help: if this is intentional, prefix it with an underscore: `_stop`
+
+warning: unused variable: `shape`
+   --> src/schedule_filtering/mod.rs:101:33
+    |
+101 |             .filter(|(shape_id, shape)| keep_shapes.contains(shape_id))
+    |                                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_shape`
+
+warning: unused variable: `trip_id`
+   --> src/schedule_filtering/mod.rs:191:10
+    |
+191 |     for (trip_id, trip) in &gtfs.trips {
+    |          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: variable does not need to be mutable
+   --> src/schedule_filtering/mod.rs:181:9
+    |
+181 |     let mut trips_removed: BTreeSet<String> = gtfs
+    |         ----^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `bbox`
+   --> src/tile_save_and_get.rs:117:9
+    |
+117 |     let bbox = slippy_map_tiles::BBox::new(
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_bbox`
+
+warning: unused variable: `conn`
+   --> src/tile_save_and_get.rs:111:5
+    |
+111 |     conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_conn`
+
+warning: unused variable: `z`
+   --> src/tile_save_and_get.rs:113:5
+    |
+113 |     z: u8,
+    |     ^ help: if this is intentional, prefix it with an underscore: `_z`
+
+warning: unused variable: `c`
+   --> src/tile_save_and_get.rs:114:5
+    |
+114 |     c: TileCategory,
+    |     ^ help: if this is intentional, prefix it with an underscore: `_c`
+
+warning: unused variable: `prev_trip_id`
+   --> src/lib.rs:144:25
+    |
+144 |             if let Some(prev_trip_id) = current_trip_id {
+    |                         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_prev_trip_id`
+
+warning: unused variable: `prev_trip_id`
+   --> src/lib.rs:174:17
+    |
+174 |     if let Some(prev_trip_id) = current_trip_id {
+    |                 ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_prev_trip_id`
+
+warning: unreachable pattern
+   --> src/lib.rs:247:17
+    |
+246 |                 _ => None,
+    |                 - matches any value
+247 |                 None => None,
+    |                 ^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:567:21
+    |
+567 |                 let mut calendar_unified = oe.get_mut();
+    |                     ----^^^^^^^^^^^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:578:38
+    |
+578 |             btree_map::Entry::Vacant(mut ve) => {
+    |                                      ----^^
+    |                                      |
+    |                                      help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:937:29
+    |
+937 |                         let mut calendar_unified = oe.get_mut();
+    |                             ----^^^^^^^^^^^^^^^^
+    |                             |
+    |                             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:948:46
+    |
+948 |                     btree_map::Entry::Vacant(mut ve) => {
+    |                                              ----^^
+    |                                              |
+    |                                              help: remove this `mut`
+
+warning: static variable `throw_away_start_dates` should have an upper case name
+   --> src/lib.rs:103:12
+    |
+103 | pub static throw_away_start_dates: &[&str] = &["san-francisco-bay-area"];
+    |            ^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper case: `THROW_AWAY_START_DATES`
+    |
+    = note: `#[warn(non_upper_case_globals)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: `catenary-backend` (lib) generated 59 warnings (run `cargo fix --lib -p catenary-backend` to apply 28 suggestions)
+warning: unused import: `super::*`
+ --> src/gentian/test_hub.rs:3:9
+  |
+3 |     use super::*;
+  |         ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Calendar`
+ --> src/gentian/test_hub.rs:6:28
+  |
+6 |     use catenary::models::{Calendar, Stop};
+  |                            ^^^^^^^^
+
+warning: unused import: `PointZ`
+ --> src/gentian/test_hub.rs:8:40
+  |
+8 |     use postgis_diesel::types::{Point, PointZ};
+  |                                        ^^^^^^
+
+warning: unused import: `std::collections::HashSet`
+ --> src/gentian/test_hub.rs:9:9
+  |
+9 |     use std::collections::HashSet;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `CompressedTrip as DbCompressedTrip`
+ --> src/gentian/utils.rs:2:34
+  |
+2 | use catenary::models::{Calendar, CompressedTrip as DbCompressedTrip};
+  |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `rand::thread_rng`: Renamed to `rng`
+   --> src/gentian/main.rs:666:25
+    |
+666 |     let mut rng = rand::thread_rng();
+    |                         ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `geo::HaversineDistance::haversine_distance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+   --> src/gentian/main.rs:491:43
+    |
+491 |                     total_distance += gp1.haversine_distance(&gp2);
+    |                                           ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `rand::Rng::r#gen`: Renamed to `random` to avoid conflict with the new `gen` keyword in Rust 2024.
+   --> src/gentian/main.rs:679:27
+    |
+679 |         let mut pid = rng.r#gen::<u32>();
+    |                           ^^^^^
+
+warning: use of deprecated method `rand::Rng::r#gen`: Renamed to `random` to avoid conflict with the new `gen` keyword in Rust 2024.
+   --> src/gentian/main.rs:681:23
+    |
+681 |             pid = rng.r#gen::<u32>();
+    |                       ^^^^^
+
+warning: use of deprecated method `rand::Rng::r#gen`: Renamed to `random` to avoid conflict with the new `gen` keyword in Rust 2024.
+    --> src/gentian/main.rs:1000:31
+     |
+1000 |             let mut pid = rng.r#gen::<u32>();
+     |                               ^^^^^
+
+warning: use of deprecated method `rand::Rng::r#gen`: Renamed to `random` to avoid conflict with the new `gen` keyword in Rust 2024.
+    --> src/gentian/main.rs:1002:27
+     |
+1002 |                 pid = rng.r#gen::<u32>();
+     |                           ^^^^^
+
+warning: unused variable: `used_ids`
+   --> src/gentian/main.rs:175:13
+    |
+175 |     let mut used_ids: HashSet<u32> = existing_manifest
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_used_ids`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `processed_chateaux`
+   --> src/gentian/main.rs:185:13
+    |
+185 |     let mut processed_chateaux: HashSet<String> = HashSet::new();
+    |             ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_processed_chateaux`
+
+warning: unused variable: `processed_patterns`
+   --> src/gentian/main.rs:445:13
+    |
+445 |     let mut processed_patterns: Vec<ProcessedPattern> = Vec::new();
+    |             ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_processed_patterns`
+
+warning: unused variable: `partitions`
+    --> src/gentian/main.rs:1096:13
+     |
+1096 |     let mut partitions: HashMap<u32, TransitPartition> = HashMap::new();
+     |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_partitions`
+
+warning: unused variable: `local_idx`
+    --> src/gentian/main.rs:1266:18
+     |
+1266 |             for (local_idx, stop) in chunk_stops.iter_mut().enumerate() {
+     |                  ^^^^^^^^^
+     |
+help: if this is intentional, prefix it with an underscore
+     |
+1266 |             for (_local_idx, stop) in chunk_stops.iter_mut().enumerate() {
+     |                  +
+help: you might have meant to pattern match on the similarly named constant `MAX_TRANSFERS`
+     |
+1266 -             for (local_idx, stop) in chunk_stops.iter_mut().enumerate() {
+1266 +             for (trip_based::compute_profile_query::MAX_TRANSFERS, stop) in chunk_stops.iter_mut().enumerate() {
+     |
+
+warning: variable does not need to be mutable
+   --> src/gentian/main.rs:789:21
+    |
+789 |                 let mut new_pat = ProcessedPattern {
+    |                     ----^^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/gentian/main.rs:175:9
+    |
+175 |     let mut used_ids: HashSet<u32> = existing_manifest
+    |         ----^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/gentian/main.rs:185:9
+    |
+185 |     let mut processed_chateaux: HashSet<String> = HashSet::new();
+    |         ----^^^^^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/gentian/main.rs:346:9
+    |
+346 |     let mut loaded_stops: HashSet<(String, String)> = db_stops
+    |         ----^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/gentian/main.rs:445:9
+    |
+445 |     let mut processed_patterns: Vec<ProcessedPattern> = Vec::new();
+    |         ----^^^^^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> src/gentian/main.rs:1096:9
+     |
+1096 |     let mut partitions: HashMap<u32, TransitPartition> = HashMap::new();
+     |         ----^^^^^^^^^^
+     |         |
+     |         help: remove this `mut`
+
+warning: unused variable: `partition`
+    --> src/gentian/main.rs:2612:17
+     |
+2612 |             let partition = loaded_partitions.get(&pid).unwrap();
+     |                 ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_partition`
+
+warning: unused variable: `weight`
+  --> src/gentian/reduce_borders.rs:68:26
+   |
+68 |         for (&(c1, c2), &weight) in &cluster_adj {
+   |                          ^^^^^^ help: if this is intentional, prefix it with an underscore: `_weight`
+
+warning: unused variable: `from_stop_idx`
+   --> src/gentian/trip_based.rs:299:21
+    |
+299 |                 let from_stop_idx = stop_indices[tr.from_stop_idx_in_pattern];
+    |                     ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_from_stop_idx`
+
+warning: unused variable: `num_trips`
+   --> src/gentian/trip_based.rs:341:9
+    |
+341 |     let num_trips = partition
+    |         ^^^^^^^^^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+341 |     let _num_trips = partition
+    |         +
+help: you might have meant to pattern match on the similarly named constant `MAX_TRANSFERS`
+    |
+341 -     let num_trips = partition
+341 +     let trip_based::compute_profile_query::MAX_TRANSFERS = partition
+    |
+
+warning: unused variable: `stops`
+    --> src/gentian/main.rs:1634:53
+     |
+1634 | fn check_partition_quality(clusters: &[Vec<usize>], stops: &[Stop]) -> bool {
+     |                                                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_stops`
+
+warning: variable does not need to be mutable
+    --> src/gentian/main.rs:2078:13
+     |
+2078 |         let mut deltas = vec![0; 100];
+     |             ----^^^^^^
+     |             |
+     |             help: remove this `mut`
+
+warning: unused variable: `calendar`
+    --> src/gentian/main.rs:2174:5
+     |
+2174 |     calendar: &[Calendar],
+     |     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_calendar`
+
+warning: field `walk_duration` is never read
+   --> src/gentian/trip_based.rs:407:9
+    |
+402 |     struct Seed {
+    |            ---- field in this struct
+...
+407 |         walk_duration: u32,
+    |         ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `catenary-backend` (bin "gentian" test) generated 30 warnings (run `cargo fix --bin "gentian" --tests` to apply 14 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.77s
+warning: the following packages contain code that will be rejected by a future version of Rust: buf_redux v0.8.4, multipart v0.18.0
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/gentian/main.rs (target/debug/deps/gentian-6461544ddda4f671)
+
+running 1 test
+  - Building temporary graph for centrality analysis...
+  - Generated 0 internal transfers for simulation
+compute_initial_transfers: 2 patterns
+  - Initial transfers: 1
+  - After U-turn removal: 1
+  - After Refine: 1
+  - Running 100 random queries...
+Query 5->2 (Time 26920): Found 2 edges. Hubs: []
+  Edge: 5 -> 5 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 5 -> 2 (Some(Transit(TransitEdge { trip_pattern_idx: 1, start_stop_idx: 0, end_stop_idx: 2, min_duration: 0 })))
+Query 4->8 (Time 28316): Found 0 edges. Hubs: []
+Query 2->3 (Time 27284): Found 3 edges. Hubs: []
+Query 5->2 (Time 26920): Found 2 edges. Hubs: []
+Query 7->8 (Time 26739): Found 2 edges. Hubs: []
+Query 1->6 (Time 30274): Found 0 edges. Hubs: []
+Query 1->6 (Time 30274): Found 0 edges. Hubs: []
+Query 9->2 (Time 27704): Found 0 edges. Hubs: []
+Query 9->2 (Time 27704): Found 0 edges. Hubs: []
+Query 7->5 (Time 31422): Found 0 edges. Hubs: []
+Query 4->5 (Time 30518): Found 0 edges. Hubs: []
+Query 4->5 (Time 30518): Found 0 edges. Hubs: []
+Query 2->0 (Time 27665): Found 0 edges. Hubs: []
+Query 2->0 (Time 27665): Found 0 edges. Hubs: []
+Query 2->9 (Time 31695): Found 0 edges. Hubs: []
+Query 7->5 (Time 31422): Found 0 edges. Hubs: []
+  Edge: 2 -> 2 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 2 -> 3 (Some(Transit(TransitEdge { trip_pattern_idx: 0, start_stop_idx: 2, end_stop_idx: 3, min_duration: 0 })))
+  Edge: 2 -> 2 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+Query 2->3 (Time 27284): Found 3 edges. Hubs: []
+Query 5->9 (Time 30620): Found 0 edges. Hubs: []
+Query 5->9 (Time 30620): Found 0 edges. Hubs: []
+Query 5->7 (Time 28449): Found 2 edges. Hubs: []
+  Edge: 5 -> 5 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 5 -> 7 (Some(Transit(TransitEdge { trip_pattern_idx: 1, start_stop_idx: 0, end_stop_idx: 3, min_duration: 0 })))
+Query 5->7 (Time 28449): Found 2 edges. Hubs: []
+  Edge: 7 -> 7 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 7 -> 8 (Some(Transit(TransitEdge { trip_pattern_idx: 1, start_stop_idx: 3, end_stop_idx: 4, min_duration: 0 })))
+Query 7->8 (Time 26739): Found 2 edges. Hubs: []
+Query 8->4 (Time 25780): Found 0 edges. Hubs: []
+Query 8->0 (Time 33432): Found 0 edges. Hubs: []
+Query 8->0 (Time 33432): Found 0 edges. Hubs: []
+Query 8->4 (Time 25780): Found 0 edges. Hubs: []
+Query 5->6 (Time 34452): Found 0 edges. Hubs: []
+Query 5->6 (Time 34452): Found 0 edges. Hubs: []
+Query 2->4 (Time 28737): Found 3 edges. Hubs: []
+Query 3->6 (Time 27887): Found 0 edges. Hubs: []
+Query 3->6 (Time 27887): Found 0 edges. Hubs: []
+Query 6->0 (Time 32801): Found 0 edges. Hubs: []
+  Edge: 2 -> 2 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+Query 6->0 (Time 32801): Found 0 edges. Hubs: []
+Query 5->3 (Time 35863): Found 0 edges. Hubs: []
+Query 5->3 (Time 35863): Found 0 edges. Hubs: []
+Query 8->0 (Time 31109): Found 0 edges. Hubs: []
+Query 5->3 (Time 26515): Found 0 edges. Hubs: []
+Query 5->3 (Time 26515): Found 0 edges. Hubs: []
+Query 0->9 (Time 25516): Found 0 edges. Hubs: []
+Query 8->0 (Time 31109): Found 0 edges. Hubs: []
+Query 8->3 (Time 33089): Found 0 edges. Hubs: []
+Query 8->3 (Time 33089): Found 0 edges. Hubs: []
+Query 8->2 (Time 33456): Found 0 edges. Hubs: []
+Query 5->8 (Time 32245): Found 0 edges. Hubs: []
+Query 5->8 (Time 32245): Found 0 edges. Hubs: []
+Query 8->2 (Time 33456): Found 0 edges. Hubs: []
+Query 5->4 (Time 31909): Found 0 edges. Hubs: []
+Query 5->4 (Time 31909): Found 0 edges. Hubs: []
+Query 9->5 (Time 30671): Found 0 edges. Hubs: []
+Query 0->3 (Time 29878): Found 0 edges. Hubs: []
+Query 0->3 (Time 29878): Found 0 edges. Hubs: []
+Query 9->5 (Time 30671): Found 0 edges. Hubs: []
+Query 3->9 (Time 33926): Found 0 edges. Hubs: []
+Query 3->9 (Time 33926): Found 0 edges. Hubs: []
+Query 3->0 (Time 35842): Found 0 edges. Hubs: []
+Query 4->6 (Time 31324): Found 0 edges. Hubs: []
+Query 4->6 (Time 31324): Found 0 edges. Hubs: []
+Query 3->0 (Time 35842): Found 0 edges. Hubs: []
+Query 7->5 (Time 33546): Found 0 edges. Hubs: []
+Query 7->5 (Time 33546): Found 0 edges. Hubs: []
+Query 5->4 (Time 25728): Found 0 edges. Hubs: []
+Query 7->6 (Time 32157): Found 0 edges. Hubs: []
+Query 5->4 (Time 25728): Found 0 edges. Hubs: []
+Query 7->6 (Time 32157): Found 0 edges. Hubs: []
+Query 7->3 (Time 26874): Found 0 edges. Hubs: []
+Query 4->2 (Time 32828): Found 0 edges. Hubs: []
+Query 4->2 (Time 32828): Found 0 edges. Hubs: []
+Query 9->6 (Time 30810): Found 0 edges. Hubs: []
+Query 9->6 (Time 30810): Found 0 edges. Hubs: []
+Query 7->3 (Time 26874): Found 0 edges. Hubs: []
+Query 9->7 (Time 27714): Found 0 edges. Hubs: []
+Query 9->7 (Time 27714): Found 0 edges. Hubs: []
+Query 5->9 (Time 35653): Found 0 edges. Hubs: []
+Query 8->0 (Time 27606): Found 0 edges. Hubs: []
+Query 8->0 (Time 27606): Found 0 edges. Hubs: []
+Query 8->3 (Time 28201): Found 0 edges. Hubs: []
+Query 8->3 (Time 28201): Found 0 edges. Hubs: []
+Query 5->9 (Time 35653): Found 0 edges. Hubs: []
+Query 8->5 (Time 32007): Found 0 edges. Hubs: []
+Query 8->5 (Time 32007): Found 0 edges. Hubs: []
+Query 2->9 (Time 31695): Found 0 edges. Hubs: []
+Query 2->7 (Time 33026): Found 0 edges. Hubs: []
+Query 2->7 (Time 33026): Found 0 edges. Hubs: []
+Query 2->7 (Time 35298): Found 0 edges. Hubs: []
+Query 5->8 (Time 33683): Found 0 edges. Hubs: []
+Query 2->7 (Time 35298): Found 0 edges. Hubs: []
+Query 6->2 (Time 27256): Found 2 edges. Hubs: []
+  Edge: 6 -> 6 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 6 -> 2 (Some(Transit(TransitEdge { trip_pattern_idx: 1, start_stop_idx: 1, end_stop_idx: 2, min_duration: 0 })))
+Query 6->2 (Time 27256): Found 2 edges. Hubs: []
+Query 4->8 (Time 28316): Found 0 edges. Hubs: []
+Query 5->8 (Time 25397): Found 2 edges. Hubs: []
+Query 9->7 (Time 30730): Found 0 edges. Hubs: []
+Query 9->7 (Time 30730): Found 0 edges. Hubs: []
+  Edge: 5 -> 5 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 5 -> 8 (Some(Transit(TransitEdge { trip_pattern_idx: 1, start_stop_idx: 0, end_stop_idx: 4, min_duration: 0 })))
+Query 5->8 (Time 25397): Found 2 edges. Hubs: []
+Query 7->0 (Time 27791): Found 0 edges. Hubs: []
+Query 7->0 (Time 27791): Found 0 edges. Hubs: []
+Query 5->2 (Time 25995): Found 2 edges. Hubs: []
+Query 5->4 (Time 26563): Found 0 edges. Hubs: []
+Query 5->4 (Time 26563): Found 0 edges. Hubs: []
+Query 1->8 (Time 28478): Found 4 edges. Hubs: [2]
+Query 0->9 (Time 25516): Found 0 edges. Hubs: []
+Query 0->9 (Time 25635): Found 0 edges. Hubs: []
+Query 0->9 (Time 25635): Found 0 edges. Hubs: []
+Query 4->9 (Time 30909): Found 0 edges. Hubs: []
+Query 4->9 (Time 30909): Found 0 edges. Hubs: []
+Query 2->3 (Time 28128): Found 3 edges. Hubs: []
+  Edge: 2 -> 2 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 2 -> 3 (Some(Transit(TransitEdge { trip_pattern_idx: 0, start_stop_idx: 2, end_stop_idx: 3, min_duration: 0 })))
+  Edge: 2 -> 2 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+Query 2->3 (Time 28128): Found 3 edges. Hubs: []
+Query 5->8 (Time 33683): Found 0 edges. Hubs: []
+Query 0->3 (Time 35098): Found 0 edges. Hubs: []
+Query 0->3 (Time 35098): Found 0 edges. Hubs: []
+Query 8->0 (Time 26473): Found 0 edges. Hubs: []
+Query 8->9 (Time 31746): Found 0 edges. Hubs: []
+Query 8->9 (Time 31746): Found 0 edges. Hubs: []
+Query 8->0 (Time 26473): Found 0 edges. Hubs: []
+Query 2->6 (Time 30320): Found 0 edges. Hubs: []
+Query 6->8 (Time 32088): Found 0 edges. Hubs: []
+Query 2->6 (Time 30320): Found 0 edges. Hubs: []
+Query 5->6 (Time 30752): Found 0 edges. Hubs: []
+Query 3->9 (Time 35645): Found 0 edges. Hubs: []
+Query 3->9 (Time 35645): Found 0 edges. Hubs: []
+Query 2->6 (Time 27855): Found 0 edges. Hubs: []
+Query 2->6 (Time 27855): Found 0 edges. Hubs: []
+  Edge: 2 -> 4 (Some(Transit(TransitEdge { trip_pattern_idx: 0, start_stop_idx: 2, end_stop_idx: 4, min_duration: 0 })))
+  Edge: 2 -> 2 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+Query 2->4 (Time 28737): Found 3 edges. Hubs: []
+Query 6->0 (Time 35824): Found 0 edges. Hubs: []
+Query 8->6 (Time 27068): Found 0 edges. Hubs: []
+Query 8->6 (Time 27068): Found 0 edges. Hubs: []
+Query 6->0 (Time 35824): Found 0 edges. Hubs: []
+Query 6->5 (Time 32053): Found 0 edges. Hubs: []
+Query 6->5 (Time 32053): Found 0 edges. Hubs: []
+Query 3->8 (Time 29772): Found 0 edges. Hubs: []
+Query 3->8 (Time 29772): Found 0 edges. Hubs: []
+Query 4->7 (Time 26626): Found 0 edges. Hubs: []
+Query 4->7 (Time 26626): Found 0 edges. Hubs: []
+Query 9->2 (Time 34289): Found 0 edges. Hubs: []
+Query 9->2 (Time 30439): Found 0 edges. Hubs: []
+Query 9->2 (Time 30439): Found 0 edges. Hubs: []
+Query 4->7 (Time 32435): Found 0 edges. Hubs: []
+Query 4->7 (Time 32435): Found 0 edges. Hubs: []
+Query 9->0 (Time 34901): Found 0 edges. Hubs: []
+Query 0->1 (Time 27978): Found 2 edges. Hubs: []
+  Edge: 0 -> 0 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 0 -> 1 (Some(Transit(TransitEdge { trip_pattern_idx: 0, start_stop_idx: 0, end_stop_idx: 1, min_duration: 0 })))
+Query 0->1 (Time 27978): Found 2 edges. Hubs: []
+Query 5->6 (Time 30752): Found 0 edges. Hubs: []
+Query 2->3 (Time 28199): Found 3 edges. Hubs: []
+  Edge: 2 -> 2 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 2 -> 3 (Some(Transit(TransitEdge { trip_pattern_idx: 0, start_stop_idx: 2, end_stop_idx: 3, min_duration: 0 })))
+  Edge: 2 -> 2 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+Query 2->7 (Time 35938): Found 0 edges. Hubs: []
+Query 2->7 (Time 35938): Found 0 edges. Hubs: []
+Query 9->2 (Time 33115): Found 0 edges. Hubs: []
+Query 9->8 (Time 33115): Found 0 edges. Hubs: []
+Query 9->8 (Time 33115): Found 0 edges. Hubs: []
+Query 7->9 (Time 25264): Found 0 edges. Hubs: []
+Query 7->9 (Time 25264): Found 0 edges. Hubs: []
+Query 2->5 (Time 35232): Found 0 edges. Hubs: []
+Query 2->5 (Time 35232): Found 0 edges. Hubs: []
+Query 9->2 (Time 34289): Found 0 edges. Hubs: []
+Query 5->7 (Time 26254): Found 2 edges. Hubs: []
+  Edge: 5 -> 5 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 5 -> 7 (Some(Transit(TransitEdge { trip_pattern_idx: 1, start_stop_idx: 0, end_stop_idx: 3, min_duration: 0 })))
+Query 9->0 (Time 34901): Found 0 edges. Hubs: []
+Query 6->8 (Time 32088): Found 0 edges. Hubs: []
+Query 5->8 (Time 26671): Found 2 edges. Hubs: []
+  Edge: 5 -> 5 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 5 -> 8 (Some(Transit(TransitEdge { trip_pattern_idx: 1, start_stop_idx: 0, end_stop_idx: 4, min_duration: 0 })))
+Query 5->8 (Time 26671): Found 2 edges. Hubs: []
+Query 6->0 (Time 30056): Found 0 edges. Hubs: []
+Query 6->0 (Time 30056): Found 0 edges. Hubs: []
+Query 2->3 (Time 28199): Found 3 edges. Hubs: []
+  Edge: 5 -> 5 (Some(Walk(WalkEdge { duration_seconds: 0 })))
+  Edge: 5 -> 2 (Some(Transit(TransitEdge { trip_pattern_idx: 1, start_stop_idx: 0, end_stop_idx: 2, min_duration: 0 })))
+Query 5->2 (Time 25995): Found 2 edges. Hubs: []
+Query 3->9 (Time 30318): Found 0 edges. Hubs: []
+Query 3->9 (Time 30318): Found 0 edges. Hubs: []
+Query 0->4 (Time 35880): Found 0 edges. Hubs: []
+Query 0->4 (Time 35880): Found 0 edges. Hubs: []
+Query 8->7 (Time 35345): Found 0 edges. Hubs: []
+Query 8->7 (Time 35345): Found 0 edges. Hubs: []
+Query 9->7 (Time 35312): Found 0 edges. Hubs: []
+Query 8->6 (Time 29328): Found 0 edges. Hubs: []
+Query 8->6 (Time 29328): Found 0 edges. Hubs: []
+Query 9->2 (Time 33115): Found 0 edges. Hubs: []
+Query 3->5 (Time 30170): Found 0 edges. Hubs: []
+Query 3->5 (Time 30170): Found 0 edges. Hubs: []
+Query 9->4 (Time 25705): Found 0 edges. Hubs: []
+Query 9->4 (Time 25705): Found 0 edges. Hubs: []
+Query 9->7 (Time 35312): Found 0 edges. Hubs: []
+Query 4->5 (Time 27400): Found 0 edges. Hubs: []
+Query 4->5 (Time 27400): Found 0 edges. Hubs: []
+Query 5->7 (Time 26254): Found 2 edges. Hubs: []
+  - Centrality counts: [(2, 1)]
+  - Identified Hubs: {2}
+test test_hub::tests::test_hub_identification ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.01s
+
