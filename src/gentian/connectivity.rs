@@ -392,21 +392,63 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         transfers.len()
     );
 
+    // Precompute auxiliary structures for Trip-Based Routing
+    let num_trips = partition
+        .trip_patterns
+        .iter()
+        .map(|p| p.trips.len())
+        .sum::<usize>();
+    let mut pattern_trip_offset = Vec::with_capacity(partition.trip_patterns.len());
+    let mut flat_id_to_pattern_trip = Vec::with_capacity(num_trips);
+    let mut total_trips = 0;
+    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
+        pattern_trip_offset.push(total_trips);
+        for t_idx in 0..pattern.trips.len() {
+            flat_id_to_pattern_trip.push((p_idx, t_idx));
+        }
+        total_trips += pattern.trips.len();
+    }
+
+    let mut stop_to_patterns: Vec<Vec<(usize, usize)>> = vec![Vec::new(); partition.stops.len()];
+    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
+        let stop_indices =
+            &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
+        for (i, &s_idx) in stop_indices.iter().enumerate() {
+            stop_to_patterns[s_idx as usize].push((p_idx, i));
+        }
+    }
+
     let mut ltps = Vec::new();
 
     // For each stop, run profile search to hubs
     for start_node in 0..partition.stops.len() {
         let start_node = start_node as u32;
 
-        // Run Trip-Based Profile Query at 8:00 AM (28800s)
-        let edges = crate::trip_based::compute_profile_query(
-            partition, &transfers, start_node, 28800, &hubs,
-        );
+        let mut all_edges = HashSet::new();
 
-        if !edges.is_empty() {
+        // Timestep through a day (every 1 hour)
+        for hour in 0..=24 {
+            let start_time = hour * 3600;
+            let edges = crate::trip_based::compute_profile_query(
+                partition,
+                &transfers,
+                start_node,
+                start_time,
+                &hubs,
+                &stop_to_patterns,
+                &flat_id_to_pattern_trip,
+                &pattern_trip_offset,
+                6,
+            );
+            for edge in edges {
+                all_edges.insert(edge);
+            }
+        }
+
+        if !all_edges.is_empty() {
             ltps.push(LocalTransferPattern {
                 from_stop_idx: start_node,
-                edges,
+                edges: all_edges.into_iter().collect(),
             });
         }
     }

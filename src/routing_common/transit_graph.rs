@@ -389,7 +389,7 @@ pub struct GlobalHub {
     pub stop_idx_in_partition: u32,
 }
 
-#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Message, serde::Serialize, serde::Deserialize)]
 pub struct DagEdge {
     /// Index into the `hubs` vector of this DAG.
     #[prost(uint32, tag = "1")]
@@ -404,7 +404,7 @@ pub struct DagEdge {
     pub edge_type: Option<EdgeType>,
 }
 
-#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Message, serde::Serialize, serde::Deserialize)]
 pub struct TransitEdge {
     /// Index into the source partition's `trip_patterns`.
     #[prost(uint32, tag = "1")]
@@ -424,13 +424,13 @@ pub struct TransitEdge {
     pub min_duration: u32,
 }
 
-#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Message, serde::Serialize, serde::Deserialize)]
 pub struct WalkEdge {
     #[prost(uint32, tag = "1")]
     pub duration_seconds: u32,
 }
 
-#[derive(Clone, PartialEq, prost::Oneof, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, prost::Oneof, serde::Serialize, serde::Deserialize)]
 pub enum EdgeType {
     #[prost(message, tag = "3")]
     Transit(TransitEdge),

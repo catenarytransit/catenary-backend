@@ -467,31 +467,16 @@ pub fn compute_profile_query(
     start_stop: u32,
     start_time: u32,
     targets: &[u32],
+    stop_to_patterns: &[Vec<(usize, usize)>],
+    flat_id_to_pattern_trip: &[(usize, usize)],
+    pattern_trip_offset: &[usize],
+    max_transfers: usize,
 ) -> Vec<DagEdge> {
     let num_stops = partition.stops.len();
-    let num_trips = partition
-        .trip_patterns
-        .iter()
-        .map(|p| p.trips.len())
-        .sum::<usize>();
-
-    // Trip indices are per-pattern. We need a global trip ID or (pattern, trip).
-    // Let's use a flat mapping for arrays.
-    let mut pattern_trip_offset = Vec::with_capacity(partition.trip_patterns.len());
-    let mut total_trips = 0;
-    // Precompute flat_id -> (pattern_idx, trip_idx)
-    let mut flat_id_to_pattern_trip = Vec::with_capacity(num_trips);
-
-    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
-        pattern_trip_offset.push(total_trips);
-        for t_idx in 0..pattern.trips.len() {
-            flat_id_to_pattern_trip.push((p_idx, t_idx));
-        }
-        total_trips += pattern.trips.len();
-    }
 
     // Helpers for flat trip ID
     let get_flat_id = |p: usize, t: usize| -> usize { pattern_trip_offset[p] + t };
+    let total_trips = flat_id_to_pattern_trip.len();
 
     // 1. Build Transfer Index (if not passed in optimized form)
     // The `transfers` arg is a slice. We assume it's sorted by (from_pattern, from_trip, from_stop)
@@ -545,18 +530,29 @@ pub fn compute_profile_query(
     let mut seeds = Vec::new();
 
     for &(stop_id, walk_dur) in &initial_walks {
-        // Find trips departing from stop_id
-        // We iterate all patterns. (Optimization: precompute stop->trips map)
-        // For now, iterate all is slow but correct.
-        // Optimization: Use `stop_to_patterns` if available? Not in TransitPartition.
-        // We'll iterate all patterns.
-        for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
-            let stop_indices =
-                &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
-            if let Some(s_idx) = stop_indices.iter().position(|&s| s == stop_id) {
+        // Use precomputed stop -> patterns map
+        if let Some(patterns) = stop_to_patterns.get(stop_id as usize) {
+            for &(p_idx, s_idx) in patterns {
+                let pattern = &partition.trip_patterns[p_idx];
+
+                // Find the earliest trip that departs after start_time + walk_dur
+                // Trips are sorted by start_time. We can use binary search or linear scan.
+                // Since we need to compute departure time at s_idx, which depends on time_deltas,
+                // and time_deltas might vary (though usually consistent for a pattern),
+                // strictly speaking we should check departure times.
+                // However, pattern.trips are sorted by start_time.
+                // Departure at s_idx is monotonic with start_time (usually).
+
+                // We'll use a linear scan for now, but break early.
+                // Optimization: Binary search could be better if many trips.
+
+                let min_dep = start_time + walk_dur;
+
+                // Find first trip with dep >= min_dep
                 for (t_idx, trip) in pattern.trips.iter().enumerate() {
                     let dep = get_departure_time(partition, trip, s_idx);
-                    if dep >= start_time + walk_dur {
+                    if dep >= min_dep {
+                        // Found the earliest valid trip.
                         seeds.push(Seed {
                             dep_time: dep - walk_dur, // Effective start time at source
                             pattern_idx: p_idx,
@@ -565,6 +561,10 @@ pub fn compute_profile_query(
                             walk_duration: walk_dur,
                             stop_id,
                         });
+                        // Optimization: Only take the earliest trip per pattern!
+                        // The propagation logic (or just the fact that we only need one path per pattern)
+                        // means we don't need to seed later trips.
+                        break;
                     }
                 }
             }
@@ -574,9 +574,8 @@ pub fn compute_profile_query(
     seeds.sort_by_key(|s| std::cmp::Reverse(s.dep_time));
 
     // 5. Trip-Based Profile Search
-    const MAX_TRANSFERS: usize = 16; // Increased from 8
     // R[n][flat_trip_idx] = min_stop_idx
-    let mut r_labels = vec![vec![usize::MAX; total_trips]; MAX_TRANSFERS + 1];
+    let mut r_labels = vec![vec![usize::MAX; total_trips]; max_transfers + 1];
 
     // Tracking used graph components
     // used_segments: flat_trip_idx -> Set<(entry_idx, exit_idx)>
@@ -644,7 +643,7 @@ pub fn compute_profile_query(
                     }
 
                     // Process transfers from this stop
-                    if n < MAX_TRANSFERS {
+                    if n < max_transfers {
                         while tr_ptr < tr_end {
                             let tr = &transfers[tr_ptr];
                             if tr.from_stop_idx_in_pattern < i {

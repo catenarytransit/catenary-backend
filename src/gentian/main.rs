@@ -2309,14 +2309,31 @@ fn identify_hubs_time_dependent(
         chateau_ids,
     };
 
-    // Precompute stop -> patterns
-    let mut stop_to_patterns: Vec<Vec<usize>> = vec![Vec::new(); partition.stops.len()];
+    // Precompute stop -> patterns (pattern_idx, stop_idx_in_pattern)
+    let mut stop_to_patterns: Vec<Vec<(usize, usize)>> = vec![Vec::new(); partition.stops.len()];
     for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
         let stop_indices =
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
-        for &s_idx in stop_indices {
-            stop_to_patterns[s_idx as usize].push(p_idx);
+        for (i, &s_idx) in stop_indices.iter().enumerate() {
+            stop_to_patterns[s_idx as usize].push((p_idx, i));
         }
+    }
+
+    // Precompute flat_id mappings
+    let num_trips = partition
+        .trip_patterns
+        .iter()
+        .map(|p| p.trips.len())
+        .sum::<usize>();
+    let mut pattern_trip_offset = Vec::with_capacity(partition.trip_patterns.len());
+    let mut flat_id_to_pattern_trip = Vec::with_capacity(num_trips);
+    let mut total_trips = 0;
+    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
+        pattern_trip_offset.push(total_trips);
+        for t_idx in 0..pattern.trips.len() {
+            flat_id_to_pattern_trip.push((p_idx, t_idx));
+        }
+        total_trips += pattern.trips.len();
     }
 
     // Compute Transfers for Trip-Based Routing
@@ -2360,6 +2377,10 @@ fn identify_hubs_time_dependent(
                 start_node,
                 start_time,
                 &[end_node],
+                &stop_to_patterns,
+                &flat_id_to_pattern_trip,
+                &pattern_trip_offset,
+                16,
             );
 
             #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]

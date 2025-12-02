@@ -107,6 +107,33 @@ pub mod tests {
             duration: 60, // 60s walk
         }];
 
+        // Precompute auxiliary
+        let num_trips = partition
+            .trip_patterns
+            .iter()
+            .map(|p| p.trips.len())
+            .sum::<usize>();
+        let mut pattern_trip_offset = Vec::with_capacity(partition.trip_patterns.len());
+        let mut flat_id_to_pattern_trip = Vec::with_capacity(num_trips);
+        let mut total_trips = 0;
+        for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
+            pattern_trip_offset.push(total_trips);
+            for t_idx in 0..pattern.trips.len() {
+                flat_id_to_pattern_trip.push((p_idx, t_idx));
+            }
+            total_trips += pattern.trips.len();
+        }
+
+        let mut stop_to_patterns: Vec<Vec<(usize, usize)>> =
+            vec![Vec::new(); partition.stops.len()];
+        for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
+            let stop_indices =
+                &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
+            for (i, &s_idx) in stop_indices.iter().enumerate() {
+                stop_to_patterns[s_idx as usize].push((p_idx, i));
+            }
+        }
+
         println!("Running compute_profile_query for 0 -> 8...");
         let edges = trip_based::compute_profile_query(
             &partition,
@@ -114,6 +141,10 @@ pub mod tests {
             0,    // Start at 0
             900,  // Start time
             &[8], // Target 8
+            &stop_to_patterns,
+            &flat_id_to_pattern_trip,
+            &pattern_trip_offset,
+            16,
         );
 
         println!("Found {} edges:", edges.len());
