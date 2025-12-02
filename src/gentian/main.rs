@@ -1237,8 +1237,8 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         };
         partition_boundaries.insert(cluster_id_to_partition_id[cluster_id], boundary.clone());
 
-        // Expand BBox by ~500m (approx 0.005 deg)
-        let expansion = 0.005;
+        // Expand BBox by ~1000m (approx 0.01 deg)
+        let expansion = 0.01;
         let search_min_lat = min_lat - expansion;
         let search_max_lat = max_lat + expansion;
         let search_min_lon = min_lon - expansion;

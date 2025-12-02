@@ -245,15 +245,15 @@ pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transf
         let stop_indices =
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
 
-        // 5a. Compute arrival times along the trip and update tau_A
-        // We can just use get_arrival_time, but iterating is faster.
+        // 5a. Compute arrival times along the trip
+        // We calculate them but DO NOT update global arrival_time yet.
+        // We must check transfers against the *previous* arrival times (from later trips).
         let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
         let mut current_time = trip.start_time;
 
-        // We need to store arrival times for this trip to use in step 5b
         let mut trip_arrivals = Vec::with_capacity(stop_indices.len());
 
-        for (i, &stop_idx) in stop_indices.iter().enumerate() {
+        for (i, &_stop_idx) in stop_indices.iter().enumerate() {
             // Arrival at stop i
             if i > 0 {
                 if 2 * i < delta_seq.deltas.len() {
@@ -261,11 +261,6 @@ pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transf
                 }
             }
             trip_arrivals.push(current_time);
-
-            // Update global arrival time
-            if current_time < arrival_time[stop_idx as usize] {
-                arrival_time[stop_idx as usize] = current_time;
-            }
 
             // Prepare for next stop (departure)
             if 2 * i + 1 < delta_seq.deltas.len() {
@@ -282,18 +277,9 @@ pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transf
             // We can iterate the slice.
             // But we need to iterate stops backwards.
             // Let's just iterate the transfers for this trip and check.
-            // Since we want to process stops backwards, we can iterate the slice backwards?
-            // The order of processing stops on the SAME trip matters if transfers feed back into the same trip?
-            // No, transfers go to OTHER trips (or same trip later, but we removed U-turns).
-            // The paper says "iterate over all stops u served by T in reverse order".
-            // This suggests we should process the transfers from the last stop, then second to last, etc.
-
-            // Let's group transfers by stop index within the slice?
-            // Or just iterate the slice. Since it's sorted by stop_idx, we can iterate backwards.
+            // Since it's sorted by stop_idx, we can iterate backwards.
             for tr_idx in (start_idx..end_idx).rev() {
                 let tr = &transfers[tr_idx];
-                let from_stop_idx = stop_indices[tr.from_stop_idx_in_pattern];
-
                 // Departure time from u
                 let dep_time = get_departure_time(partition, trip, tr.from_stop_idx_in_pattern);
 
@@ -315,6 +301,14 @@ pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transf
                     // Redundant transfer
                     to_remove[tr_idx] = true;
                 }
+            }
+        }
+
+        // 5c. Update global arrival time from this trip
+        for (i, &stop_idx) in stop_indices.iter().enumerate() {
+            let t = trip_arrivals[i];
+            if t < arrival_time[stop_idx as usize] {
+                arrival_time[stop_idx as usize] = t;
             }
         }
     }
