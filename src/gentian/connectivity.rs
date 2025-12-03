@@ -131,8 +131,9 @@ pub fn compute_global_patterns(
         // But we want to aggregate them into PartitionDAGs.
         // Let's run from each start hub and aggregate edges.
 
-        // Store useful edges for (p_start, p_end)
-        let mut useful_edges_by_pair: HashMap<u32, HashSet<(usize, usize)>> = HashMap::new();
+        // Store useful edges for (p_start, p_end) with their costs
+        // Map: p_end -> (u, v) -> cost
+        let mut useful_edges_by_pair: HashMap<u32, HashMap<(usize, usize), u32>> = HashMap::new();
         let mut useful_nodes_by_pair: HashMap<u32, HashSet<usize>> = HashMap::new();
 
         for &start_node in start_hubs {
@@ -205,16 +206,6 @@ pub fn compute_global_patterns(
                 if let Some(&(pid, l_idx)) = global_to_partition_map.get(&u) {
                     if let Some(partition) = loaded_partitions.get(&pid) {
                         // Find LocalTransferPattern starting at l_idx
-                        // LocalTransferPatterns are stored in a Vec, but we don't have a map.
-                        // We need to find the one with from_stop_idx == l_idx.
-                        // Optimization: Build a map or use direct indexing if sorted/aligned.
-                        // compute_local_patterns_for_partition pushes in order of stops?
-                        // No, it iterates 0..num_stops. So index matches stop_idx?
-                        // "local_transfer_patterns.push(LocalTransferPattern { from_stop_idx: start_node ... })"
-                        // But it only pushes if !edges.is_empty().
-                        // So we need to search or build a map.
-                        // Let's assume we can find it.
-
                         if let Some(local_transfer_pattern) = partition
                             .local_transfer_patterns
                             .iter()
@@ -265,10 +256,6 @@ pub fn compute_global_patterns(
                                 }
 
                                 // Expand edges in LocalTransferPattern from local_u
-                                // LocalTransferPattern edges are flat list? No, they are edges.
-                                // We need an adjacency list for the LocalTransferPattern.
-                                // Building it every time is slow.
-                                // But LocalTransferPattern is small.
                                 for edge in &local_transfer_pattern.edges {
                                     if edge.from_hub_idx == local_u {
                                         let weight = match &edge.edge_type {
@@ -328,15 +315,28 @@ pub fn compute_global_patterns(
                             }
                             if let Some(preds) = predecessors.get(&curr) {
                                 for &pred in preds {
-                                    if useful_edges_by_pair
+                                    // Calculate edge cost
+                                    let pred_dist = *dist.get(&pred).unwrap_or(&0);
+                                    let curr_dist = *dist.get(&curr).unwrap_or(&0);
+                                    let edge_cost = if curr_dist >= pred_dist {
+                                        curr_dist - pred_dist
+                                    } else {
+                                        0
+                                    };
+
+                                    let entry = useful_edges_by_pair
                                         .entry(p_end)
                                         .or_default()
-                                        .insert((pred, curr))
-                                    {
-                                        useful_nodes_by_pair.entry(p_end).or_default().insert(pred);
-                                        if visited_back.insert(pred) {
-                                            q.push_back(pred);
-                                        }
+                                        .entry((pred, curr))
+                                        .or_insert(u32::MAX);
+
+                                    if edge_cost < *entry {
+                                        *entry = edge_cost;
+                                    }
+
+                                    useful_nodes_by_pair.entry(p_end).or_default().insert(pred);
+                                    if visited_back.insert(pred) {
+                                        q.push_back(pred);
                                     }
                                 }
                             }
@@ -352,8 +352,70 @@ pub fn compute_global_patterns(
                 continue;
             }
 
-            if let Some(edges) = useful_edges_by_pair.get(&p_end) {
+            if let Some(edges_map) = useful_edges_by_pair.get_mut(&p_end) {
                 let nodes = useful_nodes_by_pair.get(&p_end).unwrap();
+
+                // --- Pruning Logic ---
+                // Prune direct edges A->B if A->H->B exists and is better/equal.
+                // We iterate over all triplets (u, v, w) in the local DAG.
+                // Since the DAG is relatively small (hubs only), this is feasible.
+
+                let nodes_vec: Vec<usize> = nodes.iter().cloned().collect();
+
+                // We need to check if edge (u, v) exists and if path u->w->v exists.
+                // Iterate all w.
+                for &w in &nodes_vec {
+                    // Check all incoming edges to w: u -> w
+                    // Check all outgoing edges from w: w -> v
+                    // If u -> v exists, compare cost.
+
+                    // To do this efficiently, let's build adjacency lists for the current set of edges
+                    let mut incoming: HashMap<usize, Vec<usize>> = HashMap::new();
+                    let mut outgoing: HashMap<usize, Vec<usize>> = HashMap::new();
+
+                    for (&(u, v), _) in edges_map.iter() {
+                        outgoing.entry(u).or_default().push(v);
+                        incoming.entry(v).or_default().push(u);
+                    }
+
+                    if let (Some(preds), Some(succs)) = (incoming.get(&w), outgoing.get(&w)) {
+                        for &u in preds {
+                            if u == w {
+                                continue;
+                            }
+                            for &v in succs {
+                                if v == w || v == u {
+                                    continue;
+                                }
+
+                                // Check if direct edge u->v exists
+                                if let Some(&direct_cost) = edges_map.get(&(u, v)) {
+                                    let cost_u_w =
+                                        edges_map.get(&(u, w)).cloned().unwrap_or(u32::MAX);
+                                    let cost_w_v =
+                                        edges_map.get(&(w, v)).cloned().unwrap_or(u32::MAX);
+
+                                    if cost_u_w != u32::MAX && cost_w_v != u32::MAX {
+                                        let indirect_cost = cost_u_w + cost_w_v;
+                                        // Prune if indirect path is better or equal (prefer hub)
+                                        // Actually, usually we prune if indirect is strictly better.
+                                        // But if equal, hub path might be preferred to reduce edges?
+                                        // Or direct path preferred for simplicity?
+                                        // User said: "worse than going through a hub".
+                                        // So if Direct > Indirect, prune Direct.
+                                        // If Direct == Indirect, keep Direct?
+                                        // Let's stick to strict inequality for safety, or <= if we want to force hub.
+                                        // "worse than" usually implies strictly worse.
+                                        if direct_cost > indirect_cost {
+                                            // Prune u->v
+                                            edges_map.remove(&(u, v));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 let mut dag_hubs_vec: Vec<usize> = nodes.iter().cloned().collect();
                 dag_hubs_vec.sort();
@@ -363,7 +425,10 @@ pub fn compute_global_patterns(
                 }
 
                 let mut dag_edges = Vec::new();
-                for &(u, v) in edges {
+                for ((u, v), _) in edges_map {
+                    let u = *u;
+                    let v = *v;
+
                     // Determine edge type
                     // If u and v are in same partition, it's LocalTransferPattern (Transit/Walk)
                     // If different, it's Cross (Walk)
@@ -379,27 +444,33 @@ pub fn compute_global_patterns(
                     }
 
                     // Check Intra (LocalTransferPattern)
-                    // This is tricky because we abstracted LocalTransferPattern as a single edge u->v in the global graph,
-                    // but u->v might be a path in LocalTransferPattern.
-                    // Wait, in my Dijkstra above, I added `predecessors.insert(global_v, vec![u])`.
-                    // `u` was the entry to the LocalTransferPattern. `global_v` is the exit.
-                    // So `u -> global_v` represents a path through the LocalTransferPattern.
-                    // We should probably represent this as a "Transit" edge with duration = cost difference.
-                    // Or better, we should store the actual LocalTransferPattern edges?
-                    // The user wants "Transfer Patterns".
-                    // If we just store u->v, we lose the internal transfers.
-                    // But `PartitionDag` is supposed to be the result.
-                    // If `PartitionDag` edges are just "hops", then u->v is a "Cluster Hop".
-                    // Let's create a synthetic TransitEdge for u->v.
+                    if edge_type.is_none() {
+                        if let (Some(&(pid_u, l_u)), Some(&(pid_v, l_v))) = (
+                            global_to_partition_map.get(&u),
+                            global_to_partition_map.get(&v),
+                        ) {
+                            if pid_u == pid_v {
+                                // Same partition, look up in LocalTransferPattern
+                                if let Some(partition) = loaded_partitions.get(&pid_u) {
+                                    if let Some(ltp) = partition
+                                        .local_transfer_patterns
+                                        .iter()
+                                        .find(|p| p.from_stop_idx == l_u)
+                                    {
+                                        // Find edge to l_v
+                                        if let Some(edge) =
+                                            ltp.edges.iter().find(|e| e.to_hub_idx == l_v)
+                                        {
+                                            edge_type = edge.edge_type.clone();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     if edge_type.is_none() {
-                        // Assume Intra-Cluster
-                        // Calculate duration
-                        // We don't have the duration here easily without re-running or storing it.
-                        // But we know it's intra-cluster.
-                        // Let's just use a dummy WalkEdge or TransitEdge with 0 duration for now,
-                        // or better, store duration in predecessors?
-                        // For now, let's just mark it as Walk for simplicity or fix later.
+                        // Fallback (should not happen if logic is correct)
                         edge_type = Some(EdgeType::Walk(WalkEdge {
                             duration_seconds: 0,
                         }));
@@ -706,6 +777,14 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     let mut local_transfer_patterns = Vec::new();
     let mut scratch = crate::trip_based::ProfileScratch::new(partition.stops.len(), num_trips, 6);
 
+    // Collect hubs
+    let mut hubs = HashSet::new();
+    for (i, stop) in partition.stops.iter().enumerate() {
+        if stop.is_hub {
+            hubs.insert(i as u32);
+        }
+    }
+
     // For each stop in the partition, run profile search to all other stops
     let all_stops: Vec<u32> = (0..partition.stops.len() as u32).collect();
     println!(
@@ -715,6 +794,8 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     for &start_node in &all_stops {
         // Full reset for this source
         scratch.reset();
+
+        let is_source_hub = hubs.contains(&start_node);
 
         // One profile over [0, end_of_day], like the paper’s 24h profiles
         let edges = crate::trip_based::compute_profile_query(
@@ -729,6 +810,8 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
             &pattern_trip_offset,
             6,
             &mut scratch,
+            &hubs,
+            is_source_hub,
         );
 
         if !edges.is_empty() {

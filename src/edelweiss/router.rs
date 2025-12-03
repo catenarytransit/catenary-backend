@@ -494,8 +494,8 @@ impl<'a> Router<'a> {
 mod tests {
     use super::*;
     use catenary::routing_common::transit_graph::{
-        CompressedTrip, DirectionPattern, TimeDeltaSequence, TransitPartition, TransitStop,
-        TripPattern,
+        CompressedTrip, DagEdge, DirectionPattern, EdgeType, LocalTransferPattern,
+        TimeDeltaSequence, TransitEdge, TransitPartition, TransitStop, TripPattern,
     };
 
     fn create_test_partition() -> TransitPartition {
@@ -1276,4 +1276,81 @@ fn test_long_distance_routing() {
 
     assert_eq!(itin.start_time, 35000);
     assert_eq!(itin.end_time, 39600);
+}
+
+#[test]
+fn test_hub_routing_repro() {
+    // Graph: A (0) -> Hub (1) -> B (2)
+    // LTPs:
+    // A: [A -> Hub]
+    // Hub: [Hub -> B]
+    // We want to route A -> B.
+    // Current implementation loads A's LTP, gets A->Hub.
+    // It does NOT load Hub's LTP, so it can't go Hub->B.
+    // This test should fail before the fix.
+
+    let mut partition = create_test_partition();
+    // Modify stops
+    partition.stops[1].is_hub = true; // Stop 1 is Hub
+
+    // Modify LTPs
+    partition.local_transfer_patterns = vec![
+        LocalTransferPattern {
+            from_stop_idx: 0,
+            edges: vec![DagEdge {
+                from_hub_idx: 0,
+                to_hub_idx: 1, // A -> Hub
+                edge_type: Some(EdgeType::Transit(TransitEdge {
+                    trip_pattern_idx: 0,
+                    start_stop_idx: 0,
+                    end_stop_idx: 1,
+                    min_duration: 0,
+                })),
+            }],
+        },
+        LocalTransferPattern {
+            from_stop_idx: 1,
+            edges: vec![DagEdge {
+                from_hub_idx: 1,
+                to_hub_idx: 2, // Hub -> B
+                edge_type: Some(EdgeType::Transit(TransitEdge {
+                    trip_pattern_idx: 0,
+                    start_stop_idx: 1,
+                    end_stop_idx: 2,
+                    min_duration: 0,
+                })),
+            }],
+        },
+        // No LTP for A -> B directly
+    ];
+
+    let mut graph = GraphManager::new();
+    graph
+        .transit_partitions
+        .write()
+        .unwrap()
+        .insert(0, std::sync::Arc::new(partition));
+    let router = Router::new(&graph);
+
+    let req = RoutingRequest {
+        start_lat: 0.0,
+        start_lon: 0.0,
+        end_lat: 0.02,
+        end_lon: 0.0,
+        mode: TravelMode::Transit,
+        time: 1704095400,
+        speed_mps: 1.0,
+        is_departure_time: true,
+        wheelchair_accessible: false,
+    };
+
+    let result = router.route(&req);
+
+    // Should find itinerary A -> Hub -> B
+    assert!(
+        !result.itineraries.is_empty(),
+        "Should find itinerary via Hub"
+    );
+    let itin = &result.itineraries[0];
+    assert_eq!(itin.end_time, 1704097200);
 }

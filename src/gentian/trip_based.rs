@@ -515,6 +515,8 @@ pub fn compute_profile_query(
     pattern_trip_offset: &[usize],
     max_transfers: usize,
     scratch: &mut ProfileScratch,
+    hubs: &HashSet<u32>,
+    is_source_hub: bool,
 ) -> Vec<DagEdge> {
     let num_stops = partition.stops.len();
     let total_trips = flat_id_to_pattern_trip.len();
@@ -592,16 +594,28 @@ pub fn compute_profile_query(
     // Stack for propagation: (n, flat_id, entry_stop_idx, old_r_val)
     let mut stack = Vec::new();
 
+    const INACTIVE_MASK: u32 = 0x80000000;
+    const IDX_MASK: u32 = !INACTIVE_MASK;
+
     for seed in &scratch.seeds {
         let flat_id = get_flat_id(seed.pattern_idx, seed.trip_idx);
 
         // Update R[0]
-        let old_r = scratch.r_labels[0][flat_id] as usize;
-        if seed.stop_idx < old_r {
-            scratch.r_labels[0][flat_id] = seed.stop_idx as u32;
-            stack.push((0, flat_id, seed.stop_idx, old_r));
+        let old_r = scratch.r_labels[0][flat_id];
+        let old_r_idx = old_r & IDX_MASK;
 
-            while let Some((n, flat_id, stop_idx, old_r_val)) = stack.pop() {
+        // Seeds are always active initially (unless we start AT a hub? No, even then).
+        // If we start at a hub, is_source_hub is true, so we don't prune.
+        // If we start at a non-hub, we are active until we hit a hub.
+
+        if (seed.stop_idx as u32) < old_r_idx {
+            scratch.r_labels[0][flat_id] = seed.stop_idx as u32;
+            stack.push((0, flat_id, seed.stop_idx as u32, old_r));
+
+            while let Some((n, flat_id, stop_idx_raw, old_r_val)) = stack.pop() {
+                let stop_idx = (stop_idx_raw & IDX_MASK) as usize;
+                let is_inactive = (stop_idx_raw & INACTIVE_MASK) != 0;
+
                 let (p_idx, t_idx) = flat_id_to_pattern_trip[flat_id];
 
                 let pattern = &partition.trip_patterns[p_idx];
@@ -609,7 +623,8 @@ pub fn compute_profile_query(
                     [pattern.direction_pattern_idx as usize]
                     .stop_indices;
 
-                let scan_limit = std::cmp::min(old_r_val, stop_indices.len());
+                let old_r_idx = (old_r_val & IDX_MASK) as usize;
+                let scan_limit = std::cmp::min(old_r_idx, stop_indices.len());
 
                 // Look up transfers for this trip
                 let range = if let Some(r) = trip_transfer_ranges.get(&(p_idx, t_idx)) {
@@ -622,6 +637,15 @@ pub fn compute_profile_query(
                 let tr_end = range.1;
 
                 for i in stop_idx..scan_limit {
+                    // Check if we become inactive at this stop
+                    // "The local search additionally marks labels stemming from labels at transfer nodes of hubs as inactive"
+                    // If we are at a hub, and we transfer, the NEW label is inactive.
+                    // But wait, if we are ALREADY inactive, we stay inactive.
+
+                    let current_stop_global = stop_indices[i];
+                    let becomes_inactive =
+                        hubs.contains(&current_stop_global) && current_stop_global != start_stop;
+
                     // Process transfers from this stop
                     if n < max_transfers {
                         while tr_ptr < tr_end {
@@ -636,34 +660,51 @@ pub fn compute_profile_query(
 
                             // Found transfer
                             let target_flat = get_flat_id(tr.to_pattern_idx, tr.to_trip_idx);
-                            let target_stop_idx = tr.to_stop_idx_in_pattern;
+                            let target_stop_idx = tr.to_stop_idx_in_pattern as u32;
 
                             let next_n = n + 1;
-                            let old_target_r = scratch.r_labels[next_n][target_flat] as usize;
+                            let old_target_r = scratch.r_labels[next_n][target_flat];
+                            let old_target_r_idx = old_target_r & IDX_MASK;
 
-                            if target_stop_idx < old_target_r {
-                                scratch.r_labels[next_n][target_flat] = target_stop_idx as u32;
-                                stack.push((next_n, target_flat, target_stop_idx, old_target_r));
+                            if target_stop_idx < old_target_r_idx {
+                                // Determine new state
+                                let next_inactive = is_inactive || becomes_inactive;
+                                let mut next_val = target_stop_idx;
+                                if next_inactive {
+                                    next_val |= INACTIVE_MASK;
+                                }
+
+                                scratch.r_labels[next_n][target_flat] = next_val;
+                                stack.push((next_n, target_flat, next_val, old_target_r));
                             }
 
                             tr_ptr += 1;
                         }
                     }
+
+                    // If we are inactive, and all unsettled labels are inactive, we stop?
+                    // The paper says: "stops as soon as all unsettled labels are inactive".
+                    // Here we are just exploring. If we are inactive, we continue exploring inactive paths
+                    // because they might dominate non-optimal paths around hubs (Note 8).
+                    // So we just propagate the inactive bit.
                 }
             }
         }
     }
 
     // 6. Backtracking Phase (Identify Pareto-Optimal Edges)
-    // best_arrivals[stop_idx] = Vec<(transfers, arrival_time)>
-    let mut best_arrivals: Vec<Vec<(usize, u32)>> = vec![Vec::new(); num_stops];
+    // best_arrivals[stop_idx] = Vec<(transfers, arrival_time, is_inactive)>
+    let mut best_arrivals: Vec<Vec<(usize, u32, bool)>> = vec![Vec::new(); num_stops];
 
     // Step 6a: Compute Pareto Frontier for each target stop
     for n in 0..=max_transfers {
-        for (flat_id, &entry_idx) in scratch.r_labels[n].iter().enumerate() {
-            if entry_idx == u32::MAX {
+        for (flat_id, &entry_val) in scratch.r_labels[n].iter().enumerate() {
+            if entry_val == u32::MAX {
                 continue;
             }
+            let entry_idx = (entry_val & IDX_MASK) as usize;
+            let is_inactive = (entry_val & INACTIVE_MASK) != 0;
+
             let (p_idx, t_idx) = flat_id_to_pattern_trip[flat_id];
             let pattern = &partition.trip_patterns[p_idx];
             let stop_indices =
@@ -674,21 +715,22 @@ pub fn compute_profile_query(
             let mut current_time = trip.start_time;
 
             // Fast forward to entry_idx
-            for k in 0..=entry_idx as usize {
+            for k in 0..=entry_idx {
                 if k > 0 {
                     if 2 * k < delta_seq.deltas.len() {
                         current_time += delta_seq.deltas[2 * k];
                     }
                 }
-                if k < entry_idx as usize {
+                if k < entry_idx {
                     if 2 * k + 1 < delta_seq.deltas.len() {
                         current_time += delta_seq.deltas[2 * k + 1];
                     }
                 }
             }
 
-            for k in (entry_idx as usize)..stop_indices.len() {
-                if k > entry_idx as usize {
+            let mut passed_hub = false;
+            for k in entry_idx..stop_indices.len() {
+                if k > entry_idx {
                     if 2 * k < delta_seq.deltas.len() {
                         current_time += delta_seq.deltas[2 * k];
                     }
@@ -698,18 +740,49 @@ pub fn compute_profile_query(
 
                 if scratch.is_target[stop_id] {
                     // Update Pareto frontier for stop_id
+                    let effective_inactive = is_inactive || passed_hub;
                     let mut dominated = false;
-                    for &(existing_n, existing_time) in &best_arrivals[stop_id] {
+                    for &(existing_n, existing_time, existing_inactive) in &best_arrivals[stop_id] {
+                        // If existing is better (less transfers, earlier time)
+                        // AND (existing is active OR we are inactive)
+                        // If existing is inactive, it can dominate active? No.
+                        // Active dominates Inactive? Yes.
+                        // Inactive dominates Inactive? Yes.
+
+                        // Wait, Note 8: "Inactive labels are needed to dominate non-optimal paths around hubs."
+                        // So Inactive CAN dominate Active if it's strictly better?
+                        // "Inactive labels are ignored when the transfer patterns are read off."
+                        // So we store them in best_arrivals to prevent worse paths from being added,
+                        // but we mark them as inactive.
+
                         if existing_n <= n && existing_time <= arr_time {
-                            dominated = true;
-                            break;
+                            if !existing_inactive || effective_inactive {
+                                dominated = true;
+                                break;
+                            }
                         }
                     }
                     if !dominated {
-                        best_arrivals[stop_id].retain(|&(existing_n, existing_time)| {
-                            !(n <= existing_n && arr_time <= existing_time)
-                        });
-                        best_arrivals[stop_id].push((n, arr_time));
+                        best_arrivals[stop_id].retain(
+                            |&(existing_n, existing_time, existing_inactive)| {
+                                // Remove if we dominate existing
+                                // We dominate if we are better AND (we are active OR existing is inactive)
+                                let strictly_better = n <= existing_n && arr_time <= existing_time;
+                                if strictly_better {
+                                    if !effective_inactive || existing_inactive {
+                                        return false; // Remove existing
+                                    }
+                                }
+                                true
+                            },
+                        );
+                        best_arrivals[stop_id].push((n, arr_time, effective_inactive));
+                    }
+                }
+
+                if !is_source_hub || stop_id != start_stop as usize {
+                    if hubs.contains(&(stop_id as u32)) {
+                        passed_hub = true;
                     }
                 }
 
@@ -726,10 +799,13 @@ pub fn compute_profile_query(
 
     // Re-scan to mark useful trips based on best_arrivals
     for n in 0..=max_transfers {
-        for (flat_id, &entry_idx) in scratch.r_labels[n].iter().enumerate() {
-            if entry_idx == u32::MAX {
+        for (flat_id, &entry_val) in scratch.r_labels[n].iter().enumerate() {
+            if entry_val == u32::MAX {
                 continue;
             }
+            let entry_idx = (entry_val & IDX_MASK) as usize;
+            let is_inactive = (entry_val & INACTIVE_MASK) != 0;
+
             let (p_idx, t_idx) = flat_id_to_pattern_trip[flat_id];
             let pattern = &partition.trip_patterns[p_idx];
             let stop_indices =
@@ -738,21 +814,22 @@ pub fn compute_profile_query(
 
             let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
             let mut current_time = trip.start_time;
-            for k in 0..=entry_idx as usize {
+            for k in 0..=entry_idx {
                 if k > 0 {
                     if 2 * k < delta_seq.deltas.len() {
                         current_time += delta_seq.deltas[2 * k];
                     }
                 }
-                if k < entry_idx as usize {
+                if k < entry_idx {
                     if 2 * k + 1 < delta_seq.deltas.len() {
                         current_time += delta_seq.deltas[2 * k + 1];
                     }
                 }
             }
 
-            for k in (entry_idx as usize)..stop_indices.len() {
-                if k > entry_idx as usize {
+            let mut passed_hub = false;
+            for k in entry_idx..stop_indices.len() {
+                if k > entry_idx {
                     if 2 * k < delta_seq.deltas.len() {
                         current_time += delta_seq.deltas[2 * k];
                     }
@@ -761,11 +838,55 @@ pub fn compute_profile_query(
                 let stop_id = stop_indices[k] as usize;
 
                 if scratch.is_target[stop_id] {
-                    if best_arrivals[stop_id].contains(&(n, arr_time)) {
-                        let entry = useful_trips.entry((n, flat_id)).or_insert(0);
-                        *entry = std::cmp::max(*entry, k);
+                    // Check if this arrival is in the Pareto frontier
+                    // AND if it should be stored (Active, or Hub Access)
+
+                    let mut is_optimal = false;
+                    let mut is_target_inactive = false;
+
+                    let effective_inactive = is_inactive || passed_hub;
+
+                    for &(best_n, best_time, best_inactive) in &best_arrivals[stop_id] {
+                        if best_n == n
+                            && best_time == arr_time
+                            && best_inactive == effective_inactive
+                        {
+                            is_optimal = true;
+                            is_target_inactive = best_inactive;
+                            break;
+                        }
+                    }
+
+                    if is_optimal {
+                        // "Inactive labels are ignored when the transfer patterns are read off."
+                        // UNLESS it's an access station?
+                        // "If any of the C_i is a hub, we do not store this pattern anymore. The hub C_i with minimal i is called an access station of A."
+                        // "We store transfer patterns A...C_i and C_i...B into and out of the access station."
+
+                        // If we are inactive, it means we passed through a hub already.
+                        // If we are active, we store it.
+                        // If we are inactive, we DO NOT store it.
+                        // BUT, if the *current stop* is the FIRST hub we hit, we are still active arriving at it?
+                        // No, `becomes_inactive` happens on TRANSFER at a hub.
+                        // If we just arrive at a hub on an active trip, we are active.
+                        // So if `is_inactive` is false, we store.
+
+                        // What if we are inactive?
+                        // Then we don't store.
+
+                        if !is_target_inactive {
+                            let entry = useful_trips.entry((n, flat_id)).or_insert(0);
+                            *entry = std::cmp::max(*entry, k);
+                        }
                     }
                 }
+
+                if !is_source_hub || stop_id != start_stop as usize {
+                    if hubs.contains(&(stop_id as u32)) {
+                        passed_hub = true;
+                    }
+                }
+
                 if 2 * k + 1 < delta_seq.deltas.len() {
                     current_time += delta_seq.deltas[2 * k + 1];
                 }
@@ -781,12 +902,16 @@ pub fn compute_profile_query(
             let target_flat = get_flat_id(tr.to_pattern_idx, tr.to_trip_idx);
 
             if let Some(&max_idx) = useful_trips.get(&(n, target_flat)) {
-                if tr.to_stop_idx_in_pattern == scratch.r_labels[n][target_flat] as usize {
-                    let source_flat = get_flat_id(tr.from_pattern_idx, tr.from_trip_idx);
-                    let source_entry = scratch.r_labels[n - 1][source_flat];
+                let r_val = scratch.r_labels[n][target_flat];
+                let r_idx = (r_val & IDX_MASK) as usize;
 
-                    if source_entry != u32::MAX
-                        && (source_entry as usize) <= tr.from_stop_idx_in_pattern
+                if tr.to_stop_idx_in_pattern == r_idx {
+                    let source_flat = get_flat_id(tr.from_pattern_idx, tr.from_trip_idx);
+                    let source_entry_val = scratch.r_labels[n - 1][source_flat];
+                    let source_entry_idx = (source_entry_val & IDX_MASK) as usize;
+
+                    if source_entry_val != u32::MAX
+                        && source_entry_idx <= tr.from_stop_idx_in_pattern
                     {
                         let entry = useful_trips.entry((n - 1, source_flat)).or_insert(0);
                         *entry = std::cmp::max(*entry, tr.from_stop_idx_in_pattern);
@@ -857,7 +982,9 @@ pub fn compute_profile_query(
             if scratch.is_target[stop_id] {
                 let trip = &pattern.trips[t_idx];
                 let arr = get_arrival_time(partition, trip, k);
-                if best_arrivals[stop_id].contains(&(*n, arr)) {
+                if best_arrivals[stop_id].contains(&(*n, arr, false))
+                    || best_arrivals[stop_id].contains(&(*n, arr, true))
+                {
                     relevant_indices.push(k);
                 }
             }

@@ -167,6 +167,8 @@ pub mod tests {
             &pattern_trip_offset,
             16,
             &mut scratch,
+            &ahash::AHashSet::new(),
+            false,
         );
 
         println!("Found {} edges:", edges.len());
