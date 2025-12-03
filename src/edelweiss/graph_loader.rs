@@ -11,7 +11,7 @@ pub struct GraphManager {
     pub transit_partitions: RwLock<HashMap<u32, Arc<TransitPartition>>>,
     pub street_partitions: RwLock<HashMap<u32, Arc<StreetData>>>,
     pub transfer_partitions: HashMap<u32, TransferChunk>,
-    pub edge_partitions: HashMap<u32, Vec<EdgeEntry>>,
+    pub edge_partitions: RwLock<HashMap<u32, Arc<Vec<EdgeEntry>>>>,
     pub global_index: Option<GlobalPatternIndex>,
     pub global_timetable: Option<catenary::routing_common::transit_graph::GlobalTimetable>,
     pub manifest: Option<catenary::routing_common::transit_graph::Manifest>,
@@ -24,7 +24,7 @@ impl GraphManager {
             transit_partitions: RwLock::new(HashMap::new()),
             street_partitions: RwLock::new(HashMap::new()),
             transfer_partitions: HashMap::new(),
-            edge_partitions: HashMap::new(),
+            edge_partitions: RwLock::new(HashMap::new()),
             global_index: None,
             global_timetable: None,
             manifest: None,
@@ -115,6 +115,34 @@ impl GraphManager {
         None
     }
 
+    pub fn get_edge_partition(&self, partition_id: u32) -> Option<Arc<Vec<EdgeEntry>>> {
+        // 1. Fast path: Check read lock
+        {
+            let map = self.edge_partitions.read().unwrap();
+            if let Some(edges) = map.get(&partition_id) {
+                return Some(edges.clone());
+            }
+        }
+
+        // 2. Slow path: Load from disk and insert
+        if let Some(base_path) = &self.base_path {
+            let filename = format!("edges_chunk_{}.json", partition_id);
+            let path = base_path.join(filename);
+            if path.exists() {
+                if let Ok(file) = std::fs::File::open(&path) {
+                    let reader = std::io::BufReader::new(file);
+                    if let Ok(edges) = serde_json::from_reader::<_, Vec<EdgeEntry>>(reader) {
+                        let arc_edges = Arc::new(edges);
+                        let mut map = self.edge_partitions.write().unwrap();
+                        map.insert(partition_id, arc_edges.clone());
+                        return Some(arc_edges);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn get_street_partition(&self, partition_id: u32) -> Option<Arc<StreetData>> {
         // 1. Fast path: Check read lock
         {
@@ -181,5 +209,17 @@ impl GraphManager {
             }
         }
         partitions
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_edge_partition_loading_api() {
+        let manager = GraphManager::new();
+        let edges = manager.get_edge_partition(999);
+        assert!(edges.is_none());
     }
 }

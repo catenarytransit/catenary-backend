@@ -112,7 +112,7 @@ async fn main() -> Result<()> {
     } else {
         generate_chunks(&args, pool).await?;
         // Always stitch after generation to ensure global connectivity is up to date
-        stitch_graph(&args).await?;
+        // stitch_graph(&args).await?;
     }
 
     Ok(())
@@ -803,12 +803,8 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             // Recluster
             recluster_count += 1;
             let all_stops: Vec<usize> = current_partitioning.into_iter().flatten().collect();
-            let new_parts = recluster_with_spatial_weights(
-                &all_stops,
-                &adjacency,
-                &db_stops,
-                args.cluster_size,
-            );
+            let new_parts =
+                recluster_without_weights(&all_stops, &adjacency, &db_stops, args.cluster_size);
 
             let start_idx = new_clusters.len();
             new_clusters.extend(new_parts);
@@ -1676,11 +1672,10 @@ fn check_partition_quality(clusters: &[Vec<usize>], stops: &[Stop]) -> bool {
 
     true
 }
-
-fn recluster_with_spatial_weights(
+fn recluster_without_weights(
     stop_indices: &[usize],
     original_adjacency: &HashMap<(usize, usize), u32>,
-    stops: &[Stop],
+    _stops: &[Stop],
     max_size: usize,
 ) -> Vec<Vec<usize>> {
     // 1. Map Global <-> Local
@@ -1691,40 +1686,16 @@ fn recluster_with_spatial_weights(
         local_to_global.push(g_idx);
     }
 
-    // 2. Build Weighted Adjacency
+    // 2. Build subgraph adjacency with *original* weights
     let mut sub_adjacency: HashMap<(usize, usize), u32> = HashMap::new();
-
-    // We need to find edges between these stops.
-    // Iterating the entire original_adjacency might be slow if it's huge, but it's the simplest way without an index.
-    // Given the constraints, we'll try this.
     for (&(u, v), &w) in original_adjacency {
         if let (Some(&lu), Some(&lv)) = (global_to_local.get(&u), global_to_local.get(&v)) {
-            let s1 = &stops[u];
-            let s2 = &stops[v];
-
-            let dist = if let (Some(p1), Some(p2)) = (&s1.point, &s2.point) {
-                haversine_distance(p1.y, p1.x, p2.y, p2.x)
-            } else {
-                0.0
-            };
-
-            // Penalty: Reduce weight by distance factor
-            // weight / (1 + (dist_km)^2) to punish long links heavily?
-            // Or just linear?
-            let dist_km = dist / 1000.0;
-            // Heuristic: 10km distance reduces weight by factor of 11.
-            let penalty = 1.0 + dist_km;
-
-            let new_weight = (w as f64 / penalty) as u32;
-
-            if new_weight > 0 {
-                let (min, max) = if lu < lv { (lu, lv) } else { (lv, lu) };
-                sub_adjacency.insert((min, max), new_weight);
-            }
+            let (min, max) = if lu < lv { (lu, lv) } else { (lv, lu) };
+            *sub_adjacency.entry((min, max)).or_default() += w;
         }
     }
 
-    // 3. Run Clustering
+    // 3. Run clustering
     let local_clusters = merge_based_clustering(stop_indices.len(), &sub_adjacency, max_size);
 
     // 4. Map back
