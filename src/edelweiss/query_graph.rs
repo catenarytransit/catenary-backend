@@ -316,297 +316,289 @@ impl QueryGraph {
         match &edge.edge_type {
             EdgeType::Walk(w) => Some(current_time + w.duration_seconds as u64),
             EdgeType::Transit(t) => {
-                let partition = graph_manager.get_transit_partition(edge.from.partition_id)?;
-                let pattern = if let Some(p) =
-                    partition.trip_patterns.get(t.trip_pattern_idx as usize)
+                // 1. Try to get loaded partition
+                if let Some(partition) = graph_manager.get_transit_partition(edge.from.partition_id)
                 {
-                    p
-                } else {
-                    tracing::warn!(
-                        "Invalid trip_pattern_idx {} for partition {} (len: {}). Edge: {:?} -> {:?}",
-                        t.trip_pattern_idx,
+                    let pattern =
+                        if let Some(p) = partition.trip_patterns.get(t.trip_pattern_idx as usize) {
+                            p
+                        } else {
+                            return None;
+                        };
+
+                    self.ensure_service_context(
                         edge.from.partition_id,
-                        partition.trip_patterns.len(),
-                        edge.from,
-                        edge.to
+                        pattern.timezone_idx,
+                        &partition.timezones,
+                        current_time,
+                        service_contexts,
                     );
-                    return None;
-                };
 
-                // Find next trip
-                // We need to check all valid service contexts for this pattern's timezone
-                let tz_idx = pattern.timezone_idx;
+                    let mut best_arrival = u64::MAX;
+                    let mut found = false;
 
-                // Ensure service contexts are computed for this partition/timezone
-                // This is a bit tricky inside evaluate_edge since we need to mutate service_contexts.
-                // But we passed it as mutable.
-                // We need to check if we have contexts for (partition_id, tz_idx).
-                // If not, we should compute them.
-                // However, computing them requires iterating the calendar, which we don't have easy access to here
-                // unless we duplicate the logic or call back to Router.
-                // But Router::compute_partition_service_contexts is available if we can access it.
-                // Or we just rely on them being pre-computed in Router::route.
-                // Router::route computes them for start/end partitions.
-                // But if we traverse into a NEW partition (lazy loading), we might miss contexts.
-                // For now, let's assume we pre-compute or compute on demand if we can.
-                // But we don't have the `req_time` here easily to compute window.
-                // Let's assume for now that `Router` computes them for ALL partitions it *might* touch?
-                // No, that's impossible for lazy loading.
-                // We need to compute them here if missing.
-                // We can infer `req_time` from `current_time`? No, `current_time` is dynamic.
-                // We need the original request time or a window around `current_time`.
-                // Let's use `current_time` as the center of a window?
-                // Or just fail if not present?
-                // The `Router` logic currently only computes for start/end.
-                // If we traverse a global edge to a middle partition, we need contexts.
-
-                // FIX: We need to compute contexts on demand.
-                // We can use `current_time` and a window.
-                // But we need to know if we already computed them for this partition/tz.
-                // We can check if any key matches (pid, tz_idx, *).
-
-                // For now, let's just iterate what we have.
-                // If we miss contexts, we won't find trips.
-                // This is a limitation of the current refactor unless we bring `compute_service_contexts` here.
-                // Let's bring a simplified version here or rely on the fact that we passed `service_contexts`.
-
-                // Actually, we can just check if we have any context for this (pid, tz_idx).
-                // If not, we are in trouble.
-                // But wait, `Router::route` computes for start/end.
-                // If we have a multi-hop global route P1 -> P2 -> P3, we need P2 contexts.
-                // We should probably compute contexts for the partition when we load it?
-                // Or when we first touch it here.
-
-                // Let's add a TODO and rely on pre-computation for now, or try to compute if we can.
-                // But we don't have `window` or `req_time`.
-                // Maybe we should pass `Router` or a `ContextManager`?
-                // For this task, let's stick to the plan: update the key and use what's passed.
-                // We will assume `Router` computes enough or we accept the limitation for now.
-                // (Actually, `Router` only computes for start/end, so intermediate partitions will fail).
-                // We should probably call `Router::compute_partition_service_contexts` from `Router` before calling `dijkstra` for ALL involved partitions?
-                // But we don't know ALL involved partitions until we traverse.
-
-                // Solution: We need to compute it here.
-                // We can use `current_time` as the target time.
-                // And a default window (e.g. 24h).
-                // But we need `partition.timezones`.
-
-                // Let's check if we have contexts.
-                let mut has_context = false;
-                for ((pid, t_idx, _), _) in service_contexts.iter() {
-                    if *pid == edge.from.partition_id && *t_idx == tz_idx {
-                        has_context = true;
-                        break;
-                    }
-                }
-
-                if !has_context {
-                    // Compute on demand!
-                    // We need to implement the logic here or call a helper.
-                    // Let's duplicate the logic for now or move it to a shared helper.
-                    // Since `Router` is not available here (we are in `QueryGraph`), we can't call `Router` methods.
-                    // We can implement a helper in `QueryGraph` or `transit_graph` utils?
-                    // Or just inline it.
-
-                    // Inline logic:
-                    use chrono::{Datelike, TimeZone};
-                    use chrono_tz::Tz;
-
-                    if let Some(tz_str) = partition.timezones.get(tz_idx as usize) {
-                        let tz: Tz = tz_str.parse().unwrap_or(chrono_tz::UTC);
-                        let req_time = current_time as i64;
-                        let window_seconds = 7200; // 2 hours
-
-                        let start_search = req_time - 172800;
-                        let end_search = req_time + window_seconds as i64 + 172800;
-
-                        let start_date = tz.timestamp_opt(start_search, 0).unwrap().date_naive();
-                        let end_date = tz.timestamp_opt(end_search, 0).unwrap().date_naive();
-
-                        let mut curr_date = start_date;
-                        while curr_date <= end_date {
-                            let noon = tz
-                                .from_local_datetime(&curr_date.and_hms_opt(12, 0, 0).unwrap())
-                                .unwrap();
-                            let base_unix = noon.timestamp() - 43200;
-
-                            let key = (edge.from.partition_id, tz_idx, base_unix);
-                            if !service_contexts.contains_key(&key) {
-                                let weekday = curr_date.weekday().num_days_from_monday(); // 0=Mon
-                                let day_mask = 1 << weekday;
-
-                                let service_date_int = (curr_date.year() as u32) * 10000
-                                    + (curr_date.month() as u32) * 100
-                                    + (curr_date.day() as u32);
-
-                                service_contexts.insert(
-                                    key,
-                                    ServiceContext {
-                                        base_unix_time: base_unix,
-                                        day_mask,
-                                        service_date_int,
-                                    },
-                                );
-                            }
-                            curr_date = curr_date.succ_opt().unwrap();
-                        }
-                    }
-                }
-
-                let mut best_arrival = u64::MAX;
-                let mut found = false;
-
-                for ((pid, t_idx, _), context) in service_contexts.iter() {
-                    if *pid != edge.from.partition_id || *t_idx != tz_idx {
-                        continue;
-                    }
-
-                    for trip in &pattern.trips {
-                        if !self.is_trip_active(trip, context, &partition.service_exceptions) {
+                    for ((pid, t_idx, _), context) in service_contexts.iter() {
+                        if *pid != edge.from.partition_id || *t_idx != pattern.timezone_idx {
                             continue;
                         }
 
-                        let dep_time = self.calculate_arrival_time_unix(
-                            &partition,
-                            trip,
-                            t.start_stop_idx as usize,
-                            context.base_unix_time,
-                        );
+                        for trip in &pattern.trips {
+                            if !self.is_trip_active(trip, context, &partition.service_exceptions) {
+                                continue;
+                            }
 
-                        if dep_time >= current_time as i64 {
-                            let arr_time = self.calculate_arrival_time_unix(
+                            let dep_time = self.calculate_arrival_time_unix(
                                 &partition,
                                 trip,
-                                t.end_stop_idx as usize,
+                                t.start_stop_idx as usize,
                                 context.base_unix_time,
                             );
 
-                            if (arr_time as u64) < best_arrival {
-                                best_arrival = arr_time as u64;
-                                found = true;
+                            if dep_time >= current_time as i64 {
+                                let arr_time = self.calculate_arrival_time_unix(
+                                    &partition,
+                                    trip,
+                                    t.end_stop_idx as usize,
+                                    context.base_unix_time,
+                                );
+
+                                if (arr_time as u64) < best_arrival {
+                                    best_arrival = arr_time as u64;
+                                    found = true;
+                                }
+                                break;
                             }
-                            // Trips are sorted, so first valid one is best for this day
-                            break;
                         }
                     }
-                }
+                    if found { Some(best_arrival) } else { None }
+                } else if let Some(global_timetable) = &graph_manager.global_timetable {
+                    // 2. Try Global Timetable
+                    // Find partition timetable
+                    if let Some(part_tt) = global_timetable
+                        .partition_timetables
+                        .iter()
+                        .find(|pt| pt.partition_id == edge.from.partition_id)
+                    {
+                        // Find pattern timetable
+                        if let Some(pat_tt) = part_tt
+                            .pattern_timetables
+                            .iter()
+                            .find(|pt| pt.pattern_idx == t.trip_pattern_idx)
+                        {
+                            self.ensure_service_context(
+                                edge.from.partition_id,
+                                pat_tt.timezone_idx,
+                                &part_tt.timezones,
+                                current_time,
+                                service_contexts,
+                            );
 
-                if found { Some(best_arrival) } else { None }
+                            let mut best_arrival = u64::MAX;
+                            let mut found = false;
+
+                            for ((pid, t_idx, _), context) in service_contexts.iter() {
+                                if *pid != edge.from.partition_id || *t_idx != pat_tt.timezone_idx {
+                                    continue;
+                                }
+
+                                for (i, &start_time) in pat_tt.trip_start_times.iter().enumerate() {
+                                    let service_mask = pat_tt.service_masks[i];
+                                    // Check service mask (simplified, no exceptions for global yet?)
+                                    // GlobalTimetable doesn't store exceptions currently.
+                                    if (service_mask & context.day_mask) == 0 {
+                                        continue;
+                                    }
+
+                                    // Calculate times
+                                    // We need time deltas.
+                                    let delta_idx = pat_tt.trip_time_delta_indices[i];
+                                    let delta_seq = &part_tt.time_deltas[delta_idx as usize];
+
+                                    // Calculate relative departure time
+                                    let mut rel_dep_time = start_time;
+                                    for k in 0..=t.start_stop_idx as usize {
+                                        let travel_idx = 2 * k;
+                                        let dwell_idx = 2 * k + 1;
+                                        if travel_idx < delta_seq.deltas.len() {
+                                            rel_dep_time += delta_seq.deltas[travel_idx];
+                                        }
+                                        if k < t.start_stop_idx as usize {
+                                            if dwell_idx < delta_seq.deltas.len() {
+                                                rel_dep_time += delta_seq.deltas[dwell_idx];
+                                            }
+                                        }
+                                    }
+                                    let dep_time = context.base_unix_time + rel_dep_time as i64;
+
+                                    if dep_time >= current_time as i64 {
+                                        // Calculate relative arrival time
+                                        let mut rel_arr_time = start_time;
+                                        for k in 0..=t.end_stop_idx as usize {
+                                            let travel_idx = 2 * k;
+                                            let dwell_idx = 2 * k + 1;
+                                            if travel_idx < delta_seq.deltas.len() {
+                                                rel_arr_time += delta_seq.deltas[travel_idx];
+                                            }
+                                            if k < t.end_stop_idx as usize {
+                                                if dwell_idx < delta_seq.deltas.len() {
+                                                    rel_arr_time += delta_seq.deltas[dwell_idx];
+                                                }
+                                            }
+                                        }
+                                        let arr_time = context.base_unix_time + rel_arr_time as i64;
+
+                                        if (arr_time as u64) < best_arrival {
+                                            best_arrival = arr_time as u64;
+                                            found = true;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            if found { Some(best_arrival) } else { None }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }
             EdgeType::LongDistanceTransit(t) => {
-                let partition = graph_manager.get_transit_partition(edge.from.partition_id)?;
-                let pattern = if let Some(p) = partition
-                    .long_distance_trip_patterns
-                    .get(t.trip_pattern_idx as usize)
+                // 1. Try to get loaded partition
+                if let Some(partition) = graph_manager.get_transit_partition(edge.from.partition_id)
                 {
-                    p
-                } else {
-                    tracing::warn!(
-                        "Invalid long_distance_trip_pattern_idx {} for partition {} (len: {}). Edge: {:?} -> {:?}",
-                        t.trip_pattern_idx,
+                    let pattern = if let Some(p) = partition
+                        .long_distance_trip_patterns
+                        .get(t.trip_pattern_idx as usize)
+                    {
+                        p
+                    } else {
+                        return None;
+                    };
+
+                    self.ensure_service_context(
                         edge.from.partition_id,
-                        partition.long_distance_trip_patterns.len(),
-                        edge.from,
-                        edge.to
+                        pattern.timezone_idx,
+                        &partition.timezones,
+                        current_time,
+                        service_contexts,
                     );
-                    return None;
-                };
 
-                // Same logic as Transit, but using the long_distance pattern
-                let tz_idx = pattern.timezone_idx;
+                    let mut best_arrival = u64::MAX;
+                    let mut found = false;
 
-                // (Service Context Logic - Duplicated for now)
-                let mut has_context = false;
-                for ((pid, t_idx, _), _) in service_contexts.iter() {
-                    if *pid == edge.from.partition_id && *t_idx == tz_idx {
-                        has_context = true;
-                        break;
-                    }
-                }
-
-                if !has_context {
-                    use chrono::{Datelike, TimeZone};
-                    use chrono_tz::Tz;
-
-                    if let Some(tz_str) = partition.timezones.get(tz_idx as usize) {
-                        let tz: Tz = tz_str.parse().unwrap_or(chrono_tz::UTC);
-                        let req_time = current_time as i64;
-                        let window_seconds = 7200; // 2 hours
-
-                        let start_search = req_time - 172800;
-                        let end_search = req_time + window_seconds as i64 + 172800;
-
-                        let start_date = tz.timestamp_opt(start_search, 0).unwrap().date_naive();
-                        let end_date = tz.timestamp_opt(end_search, 0).unwrap().date_naive();
-
-                        let mut curr_date = start_date;
-                        while curr_date <= end_date {
-                            let noon = tz
-                                .from_local_datetime(&curr_date.and_hms_opt(12, 0, 0).unwrap())
-                                .unwrap();
-                            let base_unix = noon.timestamp() - 43200;
-
-                            let key = (edge.from.partition_id, tz_idx, base_unix);
-                            if !service_contexts.contains_key(&key) {
-                                let weekday = curr_date.weekday().num_days_from_monday(); // 0=Mon
-                                let day_mask = 1 << weekday;
-
-                                let service_date_int = (curr_date.year() as u32) * 10000
-                                    + (curr_date.month() as u32) * 100
-                                    + (curr_date.day() as u32);
-
-                                service_contexts.insert(
-                                    key,
-                                    ServiceContext {
-                                        base_unix_time: base_unix,
-                                        day_mask,
-                                        service_date_int,
-                                    },
-                                );
-                            }
-                            curr_date = curr_date.succ_opt().unwrap();
-                        }
-                    }
-                }
-
-                let mut best_arrival = u64::MAX;
-                let mut found = false;
-
-                for ((pid, t_idx, _), context) in service_contexts.iter() {
-                    if *pid != edge.from.partition_id || *t_idx != tz_idx {
-                        continue;
-                    }
-
-                    for trip in &pattern.trips {
-                        if !self.is_trip_active(trip, context, &partition.service_exceptions) {
+                    for ((pid, t_idx, _), context) in service_contexts.iter() {
+                        if *pid != edge.from.partition_id || *t_idx != pattern.timezone_idx {
                             continue;
                         }
 
-                        let dep_time = self.calculate_arrival_time_unix(
-                            &partition,
-                            trip,
-                            t.start_stop_idx as usize,
-                            context.base_unix_time,
-                        );
+                        for trip in &pattern.trips {
+                            if !self.is_trip_active(trip, context, &partition.service_exceptions) {
+                                continue;
+                            }
 
-                        if dep_time >= current_time as i64 {
-                            let arr_time = self.calculate_arrival_time_unix(
+                            let dep_time = self.calculate_arrival_time_unix(
                                 &partition,
                                 trip,
-                                t.end_stop_idx as usize,
+                                t.start_stop_idx as usize,
                                 context.base_unix_time,
                             );
 
-                            if (arr_time as u64) < best_arrival {
-                                best_arrival = arr_time as u64;
-                                found = true;
+                            if dep_time >= current_time as i64 {
+                                let arr_time = self.calculate_arrival_time_unix(
+                                    &partition,
+                                    trip,
+                                    t.end_stop_idx as usize,
+                                    context.base_unix_time,
+                                );
+
+                                if (arr_time as u64) < best_arrival {
+                                    best_arrival = arr_time as u64;
+                                    found = true;
+                                }
+                                break;
                             }
-                            break;
                         }
                     }
+                    if found { Some(best_arrival) } else { None }
+                } else {
+                    // Long distance patterns are NOT in GlobalTimetable currently (based on my read of connectivity.rs).
+                    // connectivity.rs only populates used_patterns from partition_dags, not long_distance_dags?
+                    // Let's check connectivity.rs.
+                    // "for dag in &global_index.partition_dags { ... }"
+                    // It does NOT iterate long_distance_dags.
+                    // So GlobalTimetable only supports local patterns used in global DAGs.
+                    // If we have LongDistanceTransit edges, we MUST load the partition?
+                    // Or we should have added them to GlobalTimetable.
+                    // For now, return None if not loaded.
+                    None
                 }
+            }
+        }
+    }
 
-                if found { Some(best_arrival) } else { None }
+    fn ensure_service_context(
+        &self,
+        partition_id: u32,
+        timezone_idx: u32,
+        timezones: &[String],
+        current_time: u64,
+        service_contexts: &mut HashMap<(u32, u32, i64), ServiceContext>,
+    ) {
+        // Check if we have context
+        let mut has_context = false;
+        for ((pid, t_idx, _), _) in service_contexts.iter() {
+            if *pid == partition_id && *t_idx == timezone_idx {
+                has_context = true;
+                break;
+            }
+        }
+
+        if !has_context {
+            use chrono::{Datelike, TimeZone};
+            use chrono_tz::Tz;
+
+            if let Some(tz_str) = timezones.get(timezone_idx as usize) {
+                let tz: Tz = tz_str.parse().unwrap_or(chrono_tz::UTC);
+                let req_time = current_time as i64;
+                let window_seconds = 7200; // 2 hours
+
+                let start_search = req_time - 172800;
+                let end_search = req_time + window_seconds as i64 + 172800;
+
+                let start_date = tz.timestamp_opt(start_search, 0).unwrap().date_naive();
+                let end_date = tz.timestamp_opt(end_search, 0).unwrap().date_naive();
+
+                let mut curr_date = start_date;
+                while curr_date <= end_date {
+                    let noon = tz
+                        .from_local_datetime(&curr_date.and_hms_opt(12, 0, 0).unwrap())
+                        .unwrap();
+                    let base_unix = noon.timestamp() - 43200;
+
+                    let key = (partition_id, timezone_idx, base_unix);
+                    if !service_contexts.contains_key(&key) {
+                        let weekday = curr_date.weekday().num_days_from_monday(); // 0=Mon
+                        let day_mask = 1 << weekday;
+
+                        let service_date_int = (curr_date.year() as u32) * 10000
+                            + (curr_date.month() as u32) * 100
+                            + (curr_date.day() as u32);
+
+                        service_contexts.insert(
+                            key,
+                            ServiceContext {
+                                base_unix_time: base_unix,
+                                day_mask,
+                                service_date_int,
+                            },
+                        );
+                    }
+                    curr_date = curr_date.succ_opt().unwrap();
+                }
             }
         }
     }
@@ -809,5 +801,77 @@ impl QueryGraph {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use catenary::routing_common::transit_graph::{
+        GlobalTimetable, PartitionTimetable, PatternTimetable, TimeDeltaSequence, TransitEdge,
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_evaluate_edge_global_timetable() {
+        // Setup GlobalTimetable
+        let pattern_tt = PatternTimetable {
+            pattern_idx: 10,
+            trip_start_times: vec![3600], // 1:00 AM relative to base
+            trip_time_delta_indices: vec![0],
+            service_masks: vec![127], // Every day (bits 0-6 set)
+            timezone_idx: 0,
+        };
+
+        let partition_tt = PartitionTimetable {
+            partition_id: 1,
+            pattern_timetables: vec![pattern_tt],
+            time_deltas: vec![TimeDeltaSequence {
+                deltas: vec![0, 600, 0],
+            }], // 0 wait, 600 travel, 0 dwell
+            timezones: vec!["UTC".to_string()],
+        };
+
+        let global_tt = GlobalTimetable {
+            partition_timetables: vec![partition_tt],
+        };
+
+        let mut graph_manager = GraphManager::new();
+        graph_manager.global_timetable = Some(global_tt);
+
+        let query_graph = QueryGraph::new();
+        let edge = QueryEdge {
+            from: QueryNode {
+                partition_id: 1,
+                stop_idx: 0,
+            },
+            to: QueryNode {
+                partition_id: 1,
+                stop_idx: 1,
+            },
+            edge_type: EdgeType::Transit(TransitEdge {
+                trip_pattern_idx: 10,
+                start_stop_idx: 0,
+                end_stop_idx: 1,
+                min_duration: 600,
+            }),
+        };
+
+        let mut service_contexts = HashMap::new();
+        // 2024-01-01 00:50:00 UTC = 1704070200
+        // This is a Monday.
+        let current_time = 1704070200;
+
+        let arrival =
+            query_graph.evaluate_edge(&edge, current_time, &graph_manager, &mut service_contexts);
+
+        assert!(arrival.is_some());
+
+        // Base time for 2024-01-01 is 00:00:00 UTC = 1704067200
+        // Trip start: 3600s after base = 01:00:00 UTC = 1704070800
+        // Travel time: 600s
+        // Arrival: 1704071400 (01:10:00 UTC)
+
+        assert_eq!(arrival.unwrap(), 1704071400);
     }
 }

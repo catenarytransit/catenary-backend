@@ -13,6 +13,7 @@ pub struct GraphManager {
     pub transfer_partitions: HashMap<u32, TransferChunk>,
     pub edge_partitions: HashMap<u32, Vec<EdgeEntry>>,
     pub global_index: Option<GlobalPatternIndex>,
+    pub global_timetable: Option<catenary::routing_common::transit_graph::GlobalTimetable>,
     pub manifest: Option<catenary::routing_common::transit_graph::Manifest>,
     pub base_path: Option<std::path::PathBuf>,
 }
@@ -25,6 +26,7 @@ impl GraphManager {
             transfer_partitions: HashMap::new(),
             edge_partitions: HashMap::new(),
             global_index: None,
+            global_timetable: None,
             manifest: None,
             base_path: None,
         }
@@ -40,6 +42,15 @@ impl GraphManager {
             println!("Loading global patterns from {:?}", global_path);
             let index: GlobalPatternIndex = transit_graph::load_pbf(global_path.to_str().unwrap())?;
             self.global_index = Some(index);
+        }
+
+        // Load Global Timetable
+        let timetable_path = path.join("global_timetable.pbf");
+        if timetable_path.exists() {
+            println!("Loading global timetable from {:?}", timetable_path);
+            let timetable: transit_graph::GlobalTimetable =
+                transit_graph::load_pbf(timetable_path.to_str().unwrap())?;
+            self.global_timetable = Some(timetable);
         }
 
         // Load Manifest

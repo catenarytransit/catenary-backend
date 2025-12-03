@@ -507,6 +507,10 @@ pub struct PartitionTimetable {
     pub pattern_timetables: Vec<PatternTimetable>,
     #[prost(message, repeated, tag = "3")]
     pub time_deltas: Vec<TimeDeltaSequence>,
+    /// List of unique timezones used in this partition (e.g., "America/Los_Angeles").
+    /// Referenced by `PatternTimetable.timezone_idx`.
+    #[prost(string, repeated, tag = "4")]
+    pub timezones: Vec<String>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -527,4 +531,8 @@ pub struct PatternTimetable {
     /// If present, must match length of trip_start_times.
     #[prost(uint32, repeated, tag = "4")]
     pub service_masks: Vec<u32>,
+
+    /// Index into `PartitionTimetable.timezones`.
+    #[prost(uint32, tag = "5")]
+    pub timezone_idx: u32,
 }

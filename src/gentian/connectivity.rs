@@ -466,6 +466,7 @@ pub fn compute_global_patterns(
                         trip_start_times,
                         trip_time_delta_indices,
                         service_masks,
+                        timezone_idx: pattern.timezone_idx,
                     });
                 }
             }
@@ -474,6 +475,7 @@ pub fn compute_global_patterns(
                 partition_id: pid,
                 pattern_timetables,
                 time_deltas,
+                timezones: partition.timezones.clone(),
             });
         }
     }
