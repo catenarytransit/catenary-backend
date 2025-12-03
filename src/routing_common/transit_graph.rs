@@ -486,3 +486,45 @@ pub struct Manifest {
     pub partition_to_chateaux: std::collections::HashMap<u32, Vec<String>>,
     pub partition_boundaries: std::collections::HashMap<u32, PartitionBoundary>,
 }
+
+// ===========================================================================
+// 3. GLOBAL TIMETABLE (The Schedule)
+// ===========================================================================
+
+/// A separate file storing the actual departure times for patterns used in the Global Graph.
+/// Used for fast lookup during query time without loading the full partition.
+#[derive(Clone, PartialEq, Message)]
+pub struct GlobalTimetable {
+    #[prost(message, repeated, tag = "1")]
+    pub partition_timetables: Vec<PartitionTimetable>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct PartitionTimetable {
+    #[prost(uint32, tag = "1")]
+    pub partition_id: u32,
+    #[prost(message, repeated, tag = "2")]
+    pub pattern_timetables: Vec<PatternTimetable>,
+    #[prost(message, repeated, tag = "3")]
+    pub time_deltas: Vec<TimeDeltaSequence>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct PatternTimetable {
+    /// The index of the pattern in the partition's `trip_patterns`.
+    #[prost(uint32, tag = "1")]
+    pub pattern_idx: u32,
+
+    /// Sorted list of trip start times (seconds past midnight).
+    #[prost(uint32, repeated, tag = "2")]
+    pub trip_start_times: Vec<u32>,
+
+    /// Index into `PartitionTimetable.time_deltas` for each trip.
+    #[prost(uint32, repeated, tag = "3")]
+    pub trip_time_delta_indices: Vec<u32>,
+
+    /// Service masks for each trip (optional, for calendar filtering).
+    /// If present, must match length of trip_start_times.
+    #[prost(uint32, repeated, tag = "4")]
+    pub service_masks: Vec<u32>,
+}

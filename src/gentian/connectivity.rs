@@ -2,8 +2,9 @@ use ahash::AHashMap as HashMap;
 use ahash::AHashSet as HashSet;
 use catenary::routing_common::osm_graph::save_pbf;
 use catenary::routing_common::transit_graph::{
-    DagEdge, EdgeType, GlobalHub, GlobalPatternIndex, LocalTransferPattern, PartitionDag,
-    TransitEdge, TransitPartition, TransitStop, WalkEdge,
+    DagEdge, EdgeType, GlobalHub, GlobalPatternIndex, GlobalTimetable, LocalTransferPattern,
+    PartitionDag, PartitionTimetable, PatternTimetable, TimeDeltaSequence, TransitEdge,
+    TransitPartition, TransitStop, WalkEdge,
 };
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -402,6 +403,90 @@ pub fn compute_global_patterns(
         eprintln!("Failed to save global patterns: {}", e);
     } else {
         println!("  - Global Patterns: Saved index to {:?}", path);
+    }
+
+    // 3. Build Global Timetable
+    println!("  - Building Global Timetable...");
+    let mut partition_timetables = Vec::new();
+
+    // Identify used patterns per partition
+    let mut used_patterns: HashMap<u32, HashSet<u32>> = HashMap::new();
+
+    for dag in &global_index.partition_dags {
+        for edge in &dag.edges {
+            if let Some(EdgeType::Transit(t)) = &edge.edge_type {
+                // Find partition for this edge
+                // The edge connects from_hub_idx to to_hub_idx.
+                // from_hub_idx is index into dag.hubs.
+                let u_hub = &dag.hubs[edge.from_hub_idx as usize];
+                let pid = u_hub.original_partition_id;
+                used_patterns
+                    .entry(pid)
+                    .or_default()
+                    .insert(t.trip_pattern_idx);
+            }
+        }
+    }
+
+    // Populate Timetables
+    for (pid, pattern_indices) in used_patterns {
+        if let Some(partition) = loaded_partitions.get(&pid) {
+            let mut pattern_timetables = Vec::new();
+            let mut time_deltas = Vec::new();
+            let mut delta_map: HashMap<usize, u32> = HashMap::new(); // Original Delta Idx -> New Delta Idx
+
+            let mut sorted_indices: Vec<u32> = pattern_indices.into_iter().collect();
+            sorted_indices.sort();
+
+            for p_idx in sorted_indices {
+                if let Some(pattern) = partition.trip_patterns.get(p_idx as usize) {
+                    let mut trip_start_times = Vec::with_capacity(pattern.trips.len());
+                    let mut trip_time_delta_indices = Vec::with_capacity(pattern.trips.len());
+                    let mut service_masks = Vec::with_capacity(pattern.trips.len());
+
+                    for trip in &pattern.trips {
+                        trip_start_times.push(trip.start_time);
+                        service_masks.push(trip.service_mask);
+
+                        // Handle Time Delta
+                        let original_delta_idx = trip.time_delta_idx as usize;
+                        let new_delta_idx = if let Some(&idx) = delta_map.get(&original_delta_idx) {
+                            idx
+                        } else {
+                            let idx = time_deltas.len() as u32;
+                            time_deltas.push(partition.time_deltas[original_delta_idx].clone());
+                            delta_map.insert(original_delta_idx, idx);
+                            idx
+                        };
+                        trip_time_delta_indices.push(new_delta_idx);
+                    }
+
+                    pattern_timetables.push(PatternTimetable {
+                        pattern_idx: p_idx,
+                        trip_start_times,
+                        trip_time_delta_indices,
+                        service_masks,
+                    });
+                }
+            }
+
+            partition_timetables.push(PartitionTimetable {
+                partition_id: pid,
+                pattern_timetables,
+                time_deltas,
+            });
+        }
+    }
+
+    let global_timetable = GlobalTimetable {
+        partition_timetables,
+    };
+
+    let path_tt = output_dir.join("global_timetable.pbf");
+    if let Err(e) = save_pbf(&global_timetable, path_tt.to_str().unwrap()) {
+        eprintln!("Failed to save global timetable: {}", e);
+    } else {
+        println!("  - Global Timetable: Saved to {:?}", path_tt);
     }
 }
 
