@@ -519,12 +519,12 @@ pub fn compute_profile_query(
     let num_stops = partition.stops.len();
     let total_trips = flat_id_to_pattern_trip.len();
 
-    // Cheap per-call resets (heavy stuff is in scratch.reset)
+    // Cheap per-call resets
     scratch.initial_walks.clear();
     scratch.seeds.clear();
+    // We don't use used_segments/used_transfers in the forward pass anymore
     scratch.used_segments.clear();
     scratch.used_transfers.clear();
-    scratch.used_initial_walks.clear();
 
     if scratch.is_target.len() != num_stops {
         scratch.is_target.resize(num_stops, false);
@@ -534,7 +534,7 @@ pub fn compute_profile_query(
     // Helpers for flat trip ID
     let get_flat_id = |p: usize, t: usize| -> usize { pattern_trip_offset[p] + t };
 
-    // 2. Identify Target Set for fast lookup
+    // 2. Identify Target Set
     for &t in targets {
         scratch.is_target[t as usize] = true;
     }
@@ -577,19 +577,20 @@ pub fn compute_profile_query(
     // Sort seeds descending by departure time
     scratch.seeds.sort_by_key(|s| std::cmp::Reverse(s.dep_time));
 
-    // 5. Trip-Based Profile Search
-    // Ensure size
+    // 5. Trip-Based Profile Search (Forward Pass)
     if scratch.r_labels.len() <= max_transfers {
         scratch
             .r_labels
             .resize(max_transfers + 1, vec![u32::MAX; total_trips]);
     }
-    // Ensure inner vectors are large enough (should be handled by new/reset, but check)
     if scratch.r_labels[0].len() < total_trips {
         for level in &mut scratch.r_labels {
             level.resize(total_trips, u32::MAX);
         }
     }
+
+    // Stack for propagation: (n, flat_id, entry_stop_idx, old_r_val)
+    let mut stack = Vec::new();
 
     for seed in &scratch.seeds {
         let flat_id = get_flat_id(seed.pattern_idx, seed.trip_idx);
@@ -598,12 +599,6 @@ pub fn compute_profile_query(
         let old_r = scratch.r_labels[0][flat_id] as usize;
         if seed.stop_idx < old_r {
             scratch.r_labels[0][flat_id] = seed.stop_idx as u32;
-
-            // Record usage
-            scratch.used_initial_walks.insert(seed.stop_id);
-
-            // Propagate
-            let mut stack = Vec::new();
             stack.push((0, flat_id, seed.stop_idx, old_r));
 
             while let Some((n, flat_id, stop_idx, old_r_val)) = stack.pop() {
@@ -627,17 +622,6 @@ pub fn compute_profile_query(
                 let tr_end = range.1;
 
                 for i in stop_idx..scan_limit {
-                    let current_stop_global_id = stop_indices[i];
-
-                    // Check if this stop is a target
-                    if scratch.is_target[current_stop_global_id as usize] {
-                        scratch
-                            .used_segments
-                            .entry(flat_id)
-                            .or_default()
-                            .push((stop_idx, i));
-                    }
-
                     // Process transfers from this stop
                     if n < max_transfers {
                         while tr_ptr < tr_end {
@@ -660,14 +644,6 @@ pub fn compute_profile_query(
                             if target_stop_idx < old_target_r {
                                 scratch.r_labels[next_n][target_flat] = target_stop_idx as u32;
                                 stack.push((next_n, target_flat, target_stop_idx, old_target_r));
-
-                                scratch.used_transfers.insert(tr_ptr);
-
-                                scratch
-                                    .used_segments
-                                    .entry(flat_id)
-                                    .or_default()
-                                    .push((stop_idx, i));
                             }
 
                             tr_ptr += 1;
@@ -678,7 +654,167 @@ pub fn compute_profile_query(
         }
     }
 
-    // 6. Reconstruct Graph from Used Components
+    // 6. Backtracking Phase (Identify Pareto-Optimal Edges)
+    // best_arrivals[stop_idx] = Vec<(transfers, arrival_time)>
+    let mut best_arrivals: Vec<Vec<(usize, u32)>> = vec![Vec::new(); num_stops];
+
+    // Step 6a: Compute Pareto Frontier for each target stop
+    for n in 0..=max_transfers {
+        for (flat_id, &entry_idx) in scratch.r_labels[n].iter().enumerate() {
+            if entry_idx == u32::MAX {
+                continue;
+            }
+            let (p_idx, t_idx) = flat_id_to_pattern_trip[flat_id];
+            let pattern = &partition.trip_patterns[p_idx];
+            let stop_indices =
+                &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
+            let trip = &pattern.trips[t_idx];
+
+            let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
+            let mut current_time = trip.start_time;
+
+            // Fast forward to entry_idx
+            for k in 0..=entry_idx as usize {
+                if k > 0 {
+                    if 2 * k < delta_seq.deltas.len() {
+                        current_time += delta_seq.deltas[2 * k];
+                    }
+                }
+                if k < entry_idx as usize {
+                    if 2 * k + 1 < delta_seq.deltas.len() {
+                        current_time += delta_seq.deltas[2 * k + 1];
+                    }
+                }
+            }
+
+            for k in (entry_idx as usize)..stop_indices.len() {
+                if k > entry_idx as usize {
+                    if 2 * k < delta_seq.deltas.len() {
+                        current_time += delta_seq.deltas[2 * k];
+                    }
+                }
+                let arr_time = current_time;
+                let stop_id = stop_indices[k] as usize;
+
+                if scratch.is_target[stop_id] {
+                    // Update Pareto frontier for stop_id
+                    let mut dominated = false;
+                    for &(existing_n, existing_time) in &best_arrivals[stop_id] {
+                        if existing_n <= n && existing_time <= arr_time {
+                            dominated = true;
+                            break;
+                        }
+                    }
+                    if !dominated {
+                        best_arrivals[stop_id].retain(|&(existing_n, existing_time)| {
+                            !(n <= existing_n && arr_time <= existing_time)
+                        });
+                        best_arrivals[stop_id].push((n, arr_time));
+                    }
+                }
+
+                if 2 * k + 1 < delta_seq.deltas.len() {
+                    current_time += delta_seq.deltas[2 * k + 1];
+                }
+            }
+        }
+    }
+
+    // Step 6b: Mark Useful Trips and Backtrack
+    // useful_trips: Map<(n, flat_id), max_stop_idx>
+    let mut useful_trips: HashMap<(usize, usize), usize> = HashMap::new();
+
+    // Re-scan to mark useful trips based on best_arrivals
+    for n in 0..=max_transfers {
+        for (flat_id, &entry_idx) in scratch.r_labels[n].iter().enumerate() {
+            if entry_idx == u32::MAX {
+                continue;
+            }
+            let (p_idx, t_idx) = flat_id_to_pattern_trip[flat_id];
+            let pattern = &partition.trip_patterns[p_idx];
+            let stop_indices =
+                &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
+            let trip = &pattern.trips[t_idx];
+
+            let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
+            let mut current_time = trip.start_time;
+            for k in 0..=entry_idx as usize {
+                if k > 0 {
+                    if 2 * k < delta_seq.deltas.len() {
+                        current_time += delta_seq.deltas[2 * k];
+                    }
+                }
+                if k < entry_idx as usize {
+                    if 2 * k + 1 < delta_seq.deltas.len() {
+                        current_time += delta_seq.deltas[2 * k + 1];
+                    }
+                }
+            }
+
+            for k in (entry_idx as usize)..stop_indices.len() {
+                if k > entry_idx as usize {
+                    if 2 * k < delta_seq.deltas.len() {
+                        current_time += delta_seq.deltas[2 * k];
+                    }
+                }
+                let arr_time = current_time;
+                let stop_id = stop_indices[k] as usize;
+
+                if scratch.is_target[stop_id] {
+                    if best_arrivals[stop_id].contains(&(n, arr_time)) {
+                        let entry = useful_trips.entry((n, flat_id)).or_insert(0);
+                        *entry = std::cmp::max(*entry, k);
+                    }
+                }
+                if 2 * k + 1 < delta_seq.deltas.len() {
+                    current_time += delta_seq.deltas[2 * k + 1];
+                }
+            }
+        }
+    }
+
+    // Step 6c: Recursive Backtracking
+    for n in (1..=max_transfers).rev() {
+        // Collect useful trips for this level
+        // We iterate all transfers to find predecessors
+        for (tr_idx, tr) in transfers.iter().enumerate() {
+            let target_flat = get_flat_id(tr.to_pattern_idx, tr.to_trip_idx);
+
+            if let Some(&max_idx) = useful_trips.get(&(n, target_flat)) {
+                if tr.to_stop_idx_in_pattern == scratch.r_labels[n][target_flat] as usize {
+                    let source_flat = get_flat_id(tr.from_pattern_idx, tr.from_trip_idx);
+                    let source_entry = scratch.r_labels[n - 1][source_flat];
+
+                    if source_entry != u32::MAX
+                        && (source_entry as usize) <= tr.from_stop_idx_in_pattern
+                    {
+                        let entry = useful_trips.entry((n - 1, source_flat)).or_insert(0);
+                        *entry = std::cmp::max(*entry, tr.from_stop_idx_in_pattern);
+
+                        scratch.used_transfers.insert(tr_idx);
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 6d: Mark Initial Walks
+    for ((n, flat_id), _) in &useful_trips {
+        if *n == 0 {
+            let entry_idx = scratch.r_labels[0][*flat_id] as usize;
+            let (p_idx, t_idx) = flat_id_to_pattern_trip[*flat_id];
+
+            // Iterate seeds to find the source
+            for seed in &scratch.seeds {
+                if seed.pattern_idx == p_idx && seed.trip_idx == t_idx && seed.stop_idx == entry_idx
+                {
+                    scratch.used_initial_walks.insert(seed.stop_id);
+                }
+            }
+        }
+    }
+
+    // 7. Reconstruct Graph from Used Components
     let mut result_edges = Vec::new();
 
     // Add Initial Walks
@@ -704,27 +840,54 @@ pub fn compute_profile_query(
     }
 
     // Add Trip Segments
-    for (flat_id, segments) in &mut scratch.used_segments {
-        // Deduplicate segments
-        segments.sort();
-        segments.dedup();
-
+    for ((n, flat_id), &max_idx) in &useful_trips {
+        let entry_idx = scratch.r_labels[*n][*flat_id] as usize;
         let (p_idx, t_idx) = flat_id_to_pattern_trip[*flat_id];
-
         let pattern = &partition.trip_patterns[p_idx];
         let stop_indices =
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
 
-        for &(entry_idx, exit_idx) in segments.iter() {
-            if exit_idx <= entry_idx {
-                continue;
+        // Collect relevant stops
+        let mut relevant_indices = Vec::new();
+        relevant_indices.push(entry_idx);
+
+        // Check targets
+        for k in (entry_idx)..=max_idx {
+            let stop_id = stop_indices[k] as usize;
+            if scratch.is_target[stop_id] {
+                let trip = &pattern.trips[t_idx];
+                let arr = get_arrival_time(partition, trip, k);
+                if best_arrivals[stop_id].contains(&(*n, arr)) {
+                    relevant_indices.push(k);
+                }
             }
-            let u = stop_indices[entry_idx];
-            let v = stop_indices[exit_idx];
+        }
+
+        // Check transfers (sources)
+        for &tr_idx in &scratch.used_transfers {
+            let tr = &transfers[tr_idx];
+            if tr.from_pattern_idx == p_idx
+                && tr.from_trip_idx == t_idx
+                && tr.from_stop_idx_in_pattern >= entry_idx
+                && tr.from_stop_idx_in_pattern <= max_idx
+            {
+                relevant_indices.push(tr.from_stop_idx_in_pattern);
+            }
+        }
+
+        relevant_indices.sort();
+        relevant_indices.dedup();
+
+        for w in 0..relevant_indices.len() - 1 {
+            let idx1 = relevant_indices[w];
+            let idx2 = relevant_indices[w + 1];
+
+            let u = stop_indices[idx1];
+            let v = stop_indices[idx2];
 
             let trip = &pattern.trips[t_idx];
-            let arr = get_arrival_time(partition, trip, exit_idx);
-            let dep = get_departure_time(partition, trip, entry_idx);
+            let arr = get_arrival_time(partition, trip, idx2);
+            let dep = get_departure_time(partition, trip, idx1);
             let dur = arr.saturating_sub(dep);
 
             result_edges.push(DagEdge {
@@ -732,8 +895,8 @@ pub fn compute_profile_query(
                 to_hub_idx: v,
                 edge_type: Some(EdgeType::Transit(TransitEdge {
                     trip_pattern_idx: p_idx as u32,
-                    start_stop_idx: entry_idx as u32,
-                    end_stop_idx: exit_idx as u32,
+                    start_stop_idx: idx1 as u32,
+                    end_stop_idx: idx2 as u32,
                     min_duration: dur,
                 })),
             });

@@ -643,15 +643,7 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         partition.stops.len()
     );
 
-    let global_nodes: Vec<u32> = partition
-        .stops
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.is_hub || s.is_border)
-        .map(|(i, _)| i as u32)
-        .collect();
-
-    if global_nodes.is_empty() {
+    if partition.stops.is_empty() {
         return;
     }
 
@@ -714,12 +706,13 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     let mut local_transfer_patterns = Vec::new();
     let mut scratch = crate::trip_based::ProfileScratch::new(partition.stops.len(), num_trips, 6);
 
-    // For each global node (hub/border), run profile search to other global nodes
+    // For each stop in the partition, run profile search to all other stops
+    let all_stops: Vec<u32> = (0..partition.stops.len() as u32).collect();
     println!(
-        "      - Running profile search from {} global nodes (hubs/borders)",
-        global_nodes.len()
+        "      - Running profile search from {} stops (all stops)",
+        all_stops.len()
     );
-    for &start_node in &global_nodes {
+    for &start_node in &all_stops {
         // Full reset for this source
         scratch.reset();
 
@@ -730,7 +723,7 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
             &trip_transfer_ranges,
             start_node,
             0, // departures >= 0
-            &global_nodes,
+            &all_stops,
             &stop_to_patterns,
             &flat_id_to_pattern_trip,
             &pattern_trip_offset,

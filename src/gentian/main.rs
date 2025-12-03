@@ -37,6 +37,7 @@ pub mod osm;
 pub mod reduce_borders;
 pub mod repro_hub;
 pub mod test_hub;
+pub mod test_local_patterns;
 #[cfg(test)]
 pub mod test_reduce_borders;
 pub mod test_trip_based;
