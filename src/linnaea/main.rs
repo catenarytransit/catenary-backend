@@ -67,28 +67,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let partition_map: HashMap<u32, &TransitPartition> =
         partitions.iter().map(|p| (p.partition_id, p)).collect();
 
-  
-
     if let Some(manifest) = &manifest {
         for (partition_id, boundary) in &manifest.partition_boundaries {
-              let mut properties = JsonObject::new();
-                properties.insert("type".to_string(), "partition_boundary".into());
-                properties.insert("partition_id".to_string(), partition_id.clone().into());
-                properties.insert("style".to_string(), "convex_fallback".into());
+            let mut properties = JsonObject::new();
+            properties.insert("type".to_string(), "partition_boundary".into());
+            properties.insert("partition_id".to_string(), partition_id.clone().into());
+            properties.insert("style".to_string(), "convex_fallback".into());
 
-                let ring: Vec<Vec<f64>> =
-                    boundary.points.iter().map(|p| vec![p.lon, p.lat]).collect();
+            let ring: Vec<Vec<f64>> = boundary.points.iter().map(|p| vec![p.lon, p.lat]).collect();
 
-                features.push(Feature {
-                    bbox: None,
-                    geometry: Some(Geometry::new(Value::Polygon(vec![ring]))),
-                    id: None,
-                    properties: Some(properties),
-                    foreign_members: None,
-                });
+            features.push(Feature {
+                bbox: None,
+                geometry: Some(Geometry::new(Value::Polygon(vec![ring]))),
+                id: None,
+                properties: Some(properties),
+                foreign_members: None,
+            });
         }
-           
-        }
+    }
 
     // 2. Process Global DAGs
     if let Some(gp) = global_patterns {
