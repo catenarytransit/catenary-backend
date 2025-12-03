@@ -66,7 +66,7 @@ impl<'a> Router<'a> {
                     // Case B: Different Cluster or Non-Convex -> Global Query
 
                     // We treat everything as Case B (Global/Non-Convex) for now as we lack is_convex flag.
-                    // Even for intra-partition (start_pid == end_pid), we build the graph using LTPs.
+                    // Even for intra-partition (start_pid == end_pid), we build the graph using LocalTransferPatterns.
 
                     let mut query_graph = QueryGraph::new();
                     let mut involved_partitions = HashSet::new();
@@ -76,7 +76,7 @@ impl<'a> Router<'a> {
                     // Step 2: Graph Construction
 
                     // 2a. Source to Border (and Source to Target if same partition)
-                    // Add LTPs from Start Stops
+                    // Add LocalTransferPatterns from Start Stops
                     let start_stops_simple: Vec<(u32, u32)> = partition_start_stops
                         .iter()
                         .map(|(p, s, _, _)| (*p, *s))
@@ -92,11 +92,11 @@ impl<'a> Router<'a> {
                                 border_stops.push((end_pid, idx as u32));
                             }
                         }
-                        // Add LTPs from Border Stops in End Partition
+                        // Add LocalTransferPatterns from Border Stops in End Partition
                         // Note: This adds edges FROM border stops.
                         // If we are routing TO target, we need edges that lead TO target.
-                        // LTPs are "From X -> Y".
-                        // So adding LTPs from Border Stops allows us to reach Target if Target is reachable from Border.
+                        // LocalTransferPatterns are "From X -> Y".
+                        // So adding LocalTransferPatterns from Border Stops allows us to reach Target if Target is reachable from Border.
                         query_graph.build_local(&end_partition, &border_stops);
                     }
 
@@ -597,7 +597,7 @@ mod tests {
                     from_stop_idx: 0,
                     edges: vec![
                         DagEdge {
-                            from_hub_idx: 0, // Not used for LTP
+                            from_hub_idx: 0, // Not used for LocalTransferPattern
                             to_hub_idx: 1,   // Stop 1
                             edge_type: Some(EdgeType::Transit(TransitEdge {
                                 trip_pattern_idx: 0,

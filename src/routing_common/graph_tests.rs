@@ -15,6 +15,7 @@ fn test_transit_partition_serialization() {
             is_hub: true,
             is_border: false,
             is_external_gateway: false,
+            is_long_distance: false,
         }],
         trip_patterns: vec![TripPattern {
             chateau_idx: 0,
@@ -45,6 +46,7 @@ fn test_transit_partition_serialization() {
         }],
         _deprecated_external_transfers: vec![],
         local_transfer_patterns: vec![],
+        long_distance_trip_patterns: vec![],
         timezones: vec!["UTC".to_string()],
         boundary: None,
         chateau_ids: vec!["test_chateau".to_string()],

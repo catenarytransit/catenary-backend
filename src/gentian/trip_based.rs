@@ -27,7 +27,7 @@ pub struct Seed {
 }
 
 pub struct ProfileScratch {
-    pub r_labels: Vec<Vec<usize>>,
+    pub r_labels: Vec<Vec<u32>>,
     pub used_segments: HashMap<usize, Vec<(usize, usize)>>,
     pub used_transfers: HashSet<usize>,
     pub used_initial_walks: HashSet<u32>,
@@ -39,7 +39,7 @@ pub struct ProfileScratch {
 impl ProfileScratch {
     pub fn new(num_stops: usize, total_trips: usize, max_transfers: usize) -> Self {
         Self {
-            r_labels: vec![vec![usize::MAX; total_trips]; max_transfers + 1],
+            r_labels: vec![vec![u32::MAX; total_trips]; max_transfers + 1],
             used_segments: HashMap::new(),
             used_transfers: HashSet::new(),
             used_initial_walks: HashSet::new(),
@@ -52,7 +52,7 @@ impl ProfileScratch {
     pub fn reset(&mut self) {
         for level in &mut self.r_labels {
             for r in level.iter_mut() {
-                *r = usize::MAX;
+                *r = u32::MAX;
             }
         }
         // The maps and vectors are cleared in compute_profile_query now,
@@ -582,12 +582,12 @@ pub fn compute_profile_query(
     if scratch.r_labels.len() <= max_transfers {
         scratch
             .r_labels
-            .resize(max_transfers + 1, vec![usize::MAX; total_trips]);
+            .resize(max_transfers + 1, vec![u32::MAX; total_trips]);
     }
     // Ensure inner vectors are large enough (should be handled by new/reset, but check)
     if scratch.r_labels[0].len() < total_trips {
         for level in &mut scratch.r_labels {
-            level.resize(total_trips, usize::MAX);
+            level.resize(total_trips, u32::MAX);
         }
     }
 
@@ -595,9 +595,9 @@ pub fn compute_profile_query(
         let flat_id = get_flat_id(seed.pattern_idx, seed.trip_idx);
 
         // Update R[0]
-        let old_r = scratch.r_labels[0][flat_id];
+        let old_r = scratch.r_labels[0][flat_id] as usize;
         if seed.stop_idx < old_r {
-            scratch.r_labels[0][flat_id] = seed.stop_idx;
+            scratch.r_labels[0][flat_id] = seed.stop_idx as u32;
 
             // Record usage
             scratch.used_initial_walks.insert(seed.stop_id);
@@ -655,10 +655,10 @@ pub fn compute_profile_query(
                             let target_stop_idx = tr.to_stop_idx_in_pattern;
 
                             let next_n = n + 1;
-                            let old_target_r = scratch.r_labels[next_n][target_flat];
+                            let old_target_r = scratch.r_labels[next_n][target_flat] as usize;
 
                             if target_stop_idx < old_target_r {
-                                scratch.r_labels[next_n][target_flat] = target_stop_idx;
+                                scratch.r_labels[next_n][target_flat] = target_stop_idx as u32;
                                 stack.push((next_n, target_flat, target_stop_idx, old_target_r));
 
                                 scratch.used_transfers.insert(tr_ptr);

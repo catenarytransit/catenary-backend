@@ -2154,6 +2154,7 @@ mod tests {
         let mut loaded_partitions = HashMap::new();
 
         // Partition 0
+        // Partition 0
         let mut p0 = TransitPartition::default();
         p0.partition_id = 0;
         p0.stops.push(TransitStop {
@@ -2166,6 +2167,28 @@ mod tests {
             is_long_distance: true,
             lat: 0.0,
             lon: 0.0,
+        });
+        // Add dummy stop for long distance
+        p0.stops.push(TransitStop {
+            id: 1,
+            chateau_idx: 0,
+            gtfs_original_id: "s0_dummy".to_string(),
+            is_hub: false,
+            is_border: false,
+            is_external_gateway: false,
+            is_long_distance: false,
+            lat: 1.0, // ~111km away
+            lon: 0.0,
+        });
+        p0.direction_patterns.push(DirectionPattern {
+            stop_indices: vec![0, 1],
+        });
+        p0.trip_patterns.push(TripPattern {
+            chateau_idx: 0,
+            route_id: "r0".to_string(),
+            direction_pattern_idx: 0,
+            trips: vec![],
+            timezone_idx: 0,
         });
         loaded_partitions.insert(0, p0);
 
@@ -2182,6 +2205,28 @@ mod tests {
             is_long_distance: true,
             lat: 0.0,
             lon: 0.0,
+        });
+        // Add dummy stop for long distance
+        p1.stops.push(TransitStop {
+            id: 1,
+            chateau_idx: 0,
+            gtfs_original_id: "s1_dummy".to_string(),
+            is_hub: false,
+            is_border: false,
+            is_external_gateway: false,
+            is_long_distance: false,
+            lat: 1.0,
+            lon: 0.0,
+        });
+        p1.direction_patterns.push(DirectionPattern {
+            stop_indices: vec![0, 1],
+        });
+        p1.trip_patterns.push(TripPattern {
+            chateau_idx: 0,
+            route_id: "r1".to_string(),
+            direction_pattern_idx: 0,
+            trips: vec![],
+            timezone_idx: 0,
         });
         loaded_partitions.insert(1, p1);
 
@@ -2526,13 +2571,7 @@ fn identify_hubs_time_dependent(
 
                         let mut is_hub = false;
                         for &p_in in inc {
-                            if matches!(p_in, PatternId::Walk) {
-                                continue;
-                            }
                             for &p_out in out {
-                                if matches!(p_out, PatternId::Walk) {
-                                    continue;
-                                }
                                 if p_in != p_out {
                                     is_hub = true;
                                     break;

@@ -25,7 +25,7 @@ pub fn compute_border_patterns(border_nodes: &HashMap<u32, Vec<TransitStop>>) {
 pub fn compute_global_patterns(
     border_nodes: &HashMap<u32, Vec<TransitStop>>,
     cross_edges: &[((usize, usize), DagEdge)],
-    _intra_edges: &[((usize, usize), DagEdge)], // Unused now, we use LTPs
+    _intra_edges: &[((usize, usize), DagEdge)], // Unused now, we use LocalTransferPatterns
     global_to_partition_map: &HashMap<usize, (u32, u32)>,
     loaded_partitions: &HashMap<u32, TransitPartition>,
     output_dir: &PathBuf,
@@ -39,13 +39,52 @@ pub fn compute_global_patterns(
     }
 
     // 2. Identify Long-Distance Stations (Global Indices)
+    // Precompute long-distance stops for each partition
+    let mut long_distance_stops_per_partition: HashMap<u32, HashSet<u32>> = HashMap::new();
+
+    for (&pid, partition) in loaded_partitions {
+        let mut long_dist_stop_indices = HashSet::new();
+
+        for pattern in &partition.trip_patterns {
+            let dir_idx = pattern.direction_pattern_idx as usize;
+            if dir_idx >= partition.direction_patterns.len() {
+                continue;
+            }
+            let stop_indices = &partition.direction_patterns[dir_idx].stop_indices;
+
+            if stop_indices.len() < 2 {
+                continue;
+            }
+
+            let mut total_dist = 0.0;
+            for i in 0..stop_indices.len() - 1 {
+                let s1 = &partition.stops[stop_indices[i] as usize];
+                let s2 = &partition.stops[stop_indices[i + 1] as usize];
+                total_dist += super::utils::haversine_distance(s1.lat, s1.lon, s2.lat, s2.lon);
+            }
+
+            if total_dist > 100000.0 {
+                // 100km
+                for &s_idx in stop_indices {
+                    long_dist_stop_indices.insert(s_idx);
+                }
+            }
+        }
+        long_distance_stops_per_partition.insert(pid, long_dist_stop_indices);
+    }
+
     let mut long_distance_stations: Vec<usize> = Vec::new();
     for (&g_idx, &(pid, l_idx)) in global_to_partition_map {
         if let Some(partition) = loaded_partitions.get(&pid) {
             if l_idx < partition.stops.len() as u32 {
                 let stop = &partition.stops[l_idx as usize];
                 if stop.is_hub {
-                    long_distance_stations.push(g_idx);
+                    // Check if it serves a long distance route
+                    if let Some(valid_stops) = long_distance_stops_per_partition.get(&pid) {
+                        if valid_stops.contains(&l_idx) {
+                            long_distance_stations.push(g_idx);
+                        }
+                    }
                 }
             }
         }
@@ -99,16 +138,16 @@ pub fn compute_global_patterns(
         for &start_node in start_hubs {
             // Run Profile Search from start_node
             // We use a simplified Dijkstra here because we are exploring the "Transfer Pattern Graph".
-            // The edges in LTP are already optimal. We just need to link them.
+            // The edges in LocalTransferPattern are already optimal. We just need to link them.
             // However, we need to respect time.
             // For now, let's use min_duration to find the structural DAG, as the full profile search might be too heavy
             // and we want to "precompute how you can travel between them (as a transfer pattern)".
-            // If we use min_duration, we are essentially doing what we did before but using LTPs as edges.
+            // If we use min_duration, we are essentially doing what we did before but using LocalTransferPatterns as edges.
             // The user said: "run a profile search ... until all optimal connections ... are known".
             // But if we just want the DAG structure, maybe min_duration is enough?
             // "Goal: precompute how you can travel ... (as a transfer pattern)".
             // The result is a DAG.
-            // Let's stick to min_duration for the topology, but use LTPs.
+            // Let's stick to min_duration for the topology, but use LocalTransferPatterns.
 
             let mut dist: HashMap<usize, u32> = HashMap::new();
             let mut predecessors: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -162,30 +201,30 @@ pub fn compute_global_patterns(
                     }
                 }
 
-                // 2. Intra-Partition (LTP)
+                // 2. Intra-Partition (LocalTransferPattern)
                 if let Some(&(pid, l_idx)) = global_to_partition_map.get(&u) {
                     if let Some(partition) = loaded_partitions.get(&pid) {
-                        // Find LTP starting at l_idx
-                        // LTPs are stored in a Vec, but we don't have a map.
+                        // Find LocalTransferPattern starting at l_idx
+                        // LocalTransferPatterns are stored in a Vec, but we don't have a map.
                         // We need to find the one with from_stop_idx == l_idx.
                         // Optimization: Build a map or use direct indexing if sorted/aligned.
                         // compute_local_patterns_for_partition pushes in order of stops?
                         // No, it iterates 0..num_stops. So index matches stop_idx?
-                        // "ltps.push(LocalTransferPattern { from_stop_idx: start_node ... })"
+                        // "local_transfer_patterns.push(LocalTransferPattern { from_stop_idx: start_node ... })"
                         // But it only pushes if !edges.is_empty().
                         // So we need to search or build a map.
                         // Let's assume we can find it.
 
-                        if let Some(ltp) = partition
+                        if let Some(local_transfer_pattern) = partition
                             .local_transfer_patterns
                             .iter()
                             .find(|p| p.from_stop_idx == l_idx)
                         {
-                            // Traverse LTP DAG
+                            // Traverse LocalTransferPattern DAG
                             // We need to run a local search on this DAG to update global neighbors.
-                            // The LTP DAG contains local indices.
+                            // The LocalTransferPattern DAG contains local indices.
 
-                            // Local Dijkstra on LTP
+                            // Local Dijkstra on LocalTransferPattern
                             let mut local_dist: HashMap<u32, u32> = HashMap::new();
                             let mut local_pq = BinaryHeap::new();
 
@@ -212,7 +251,7 @@ pub fn compute_global_patterns(
                                         let total_cost = cost + local_cost;
                                         if total_cost < *dist.get(&global_v).unwrap_or(&u32::MAX) {
                                             dist.insert(global_v, total_cost);
-                                            predecessors.insert(global_v, vec![u]); // Predecessor is u (the entry to LTP)
+                                            predecessors.insert(global_v, vec![u]); // Predecessor is u (the entry to LocalTransferPattern)
                                             pq.push(State {
                                                 cost: total_cost,
                                                 node: global_v,
@@ -225,12 +264,12 @@ pub fn compute_global_patterns(
                                     }
                                 }
 
-                                // Expand edges in LTP from local_u
-                                // LTP edges are flat list? No, they are edges.
-                                // We need an adjacency list for the LTP.
+                                // Expand edges in LocalTransferPattern from local_u
+                                // LocalTransferPattern edges are flat list? No, they are edges.
+                                // We need an adjacency list for the LocalTransferPattern.
                                 // Building it every time is slow.
-                                // But LTP is small.
-                                for edge in &ltp.edges {
+                                // But LocalTransferPattern is small.
+                                for edge in &local_transfer_pattern.edges {
                                     if edge.from_hub_idx == local_u {
                                         let weight = match &edge.edge_type {
                                             Some(EdgeType::Transit(t)) => t.min_duration,
@@ -326,7 +365,7 @@ pub fn compute_global_patterns(
                 let mut dag_edges = Vec::new();
                 for &(u, v) in edges {
                     // Determine edge type
-                    // If u and v are in same partition, it's LTP (Transit/Walk)
+                    // If u and v are in same partition, it's LocalTransferPattern (Transit/Walk)
                     // If different, it's Cross (Walk)
                     // We need to recover the edge type.
 
@@ -339,14 +378,14 @@ pub fn compute_global_patterns(
                         }
                     }
 
-                    // Check Intra (LTP)
-                    // This is tricky because we abstracted LTP as a single edge u->v in the global graph,
-                    // but u->v might be a path in LTP.
+                    // Check Intra (LocalTransferPattern)
+                    // This is tricky because we abstracted LocalTransferPattern as a single edge u->v in the global graph,
+                    // but u->v might be a path in LocalTransferPattern.
                     // Wait, in my Dijkstra above, I added `predecessors.insert(global_v, vec![u])`.
-                    // `u` was the entry to the LTP. `global_v` is the exit.
-                    // So `u -> global_v` represents a path through the LTP.
+                    // `u` was the entry to the LocalTransferPattern. `global_v` is the exit.
+                    // So `u -> global_v` represents a path through the LocalTransferPattern.
                     // We should probably represent this as a "Transit" edge with duration = cost difference.
-                    // Or better, we should store the actual LTP edges?
+                    // Or better, we should store the actual LocalTransferPattern edges?
                     // The user wants "Transfer Patterns".
                     // If we just store u->v, we lose the internal transfers.
                     // But `PartitionDag` is supposed to be the result.
@@ -599,14 +638,20 @@ pub fn compute_intra_partition_connectivity(
 
 pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     println!(
-        "    - Computing LTPs for partition {} ({} stops)...",
+        "    - Computing LocalTransferPatterns for partition {} ({} stops)...",
         partition.partition_id,
         partition.stops.len()
     );
 
-    let hubs: Vec<u32> = (0..partition.stops.len() as u32).collect();
+    let global_nodes: Vec<u32> = partition
+        .stops
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.is_hub || s.is_border)
+        .map(|(i, _)| i as u32)
+        .collect();
 
-    if hubs.is_empty() {
+    if global_nodes.is_empty() {
         return;
     }
 
@@ -666,14 +711,15 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         start = end;
     }
 
-    let mut ltps = Vec::new();
+    let mut local_transfer_patterns = Vec::new();
     let mut scratch = crate::trip_based::ProfileScratch::new(partition.stops.len(), num_trips, 6);
 
-    // For each stop, run profile search to hubs
-    println!("      - Running profile search to {} hubs", hubs.len());
-    for start_node in 0..partition.stops.len() {
-        let start_node = start_node as u32;
-
+    // For each global node (hub/border), run profile search to other global nodes
+    println!(
+        "      - Running profile search from {} global nodes (hubs/borders)",
+        global_nodes.len()
+    );
+    for &start_node in &global_nodes {
         // Full reset for this source
         scratch.reset();
 
@@ -684,7 +730,7 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
             &trip_transfer_ranges,
             start_node,
             0, // departures >= 0
-            &hubs,
+            &global_nodes,
             &stop_to_patterns,
             &flat_id_to_pattern_trip,
             &pattern_trip_offset,
@@ -693,12 +739,12 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         );
 
         if !edges.is_empty() {
-            ltps.push(LocalTransferPattern {
+            local_transfer_patterns.push(LocalTransferPattern {
                 from_stop_idx: start_node,
                 edges, // already Vec<DagEdge>
             });
         }
     }
 
-    partition.local_transfer_patterns = ltps;
+    partition.local_transfer_patterns = local_transfer_patterns;
 }

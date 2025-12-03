@@ -114,7 +114,7 @@ pub struct TransitPartition {
     #[prost(message, repeated, tag = "9")]
     pub _deprecated_external_transfers: Vec<ExternalTransfer>,
 
-    /// Local Transfer Patterns (LTPs).
+    /// Local Transfer Patterns.
     #[prost(message, repeated, tag = "10")]
     pub local_transfer_patterns: Vec<LocalTransferPattern>,
 
@@ -440,7 +440,7 @@ pub enum EdgeType {
     Walk(WalkEdge),
 }
 
-/// Local Transfer Patterns (LTPs).
+/// Local Transfer Patterns.
 /// Precomputed DAGs for optimal routes within the cluster.
 /// Used to accelerate long-distance queries and for local queries.
 #[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
