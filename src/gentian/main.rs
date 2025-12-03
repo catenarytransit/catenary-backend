@@ -1469,8 +1469,8 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                                     cross_partition_edges.push((
                                         (u, v),
                                         DagEdge {
-                                            from_hub_idx: u as u32,
-                                            to_hub_idx: v as u32,
+                                            from_node_idx: u as u32,
+                                            to_node_idx: v as u32,
                                             edge_type: Some(EdgeType::Transit(transit_edge)),
                                         },
                                     ));
@@ -1495,6 +1495,20 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             partition_id,
             start_timer_local_patterns.elapsed().as_millis()
         );
+
+        println!(
+            "Partition {} has {} stops, {} trip_patterns, {} time_deltas, {} direction patterns, {} internal transfers, {} osm links, {} local transfer patterns, {} long distance patterns",
+            partition_id,
+            partition.stops.len(),
+            partition.trip_patterns.len(),
+            partition.time_deltas.len(),
+            partition.direction_patterns.len(),
+            partition.internal_transfers.len(),
+            partition.osm_links.len(),
+            partition.local_transfer_patterns.len(),
+            partition.long_distance_trip_patterns.len()
+        );
+
         partitions.insert(partition_id, partition.clone());
 
         let filename = format!("transit_chunk_{}.pbf", partition_id);
@@ -2113,8 +2127,8 @@ mod tests {
         cross_edges.push((
             (0, 1),
             DagEdge {
-                from_hub_idx: 0,
-                to_hub_idx: 1,
+                from_node_idx: 0,
+                to_node_idx: 1,
                 edge_type: Some(EdgeType::Walk(WalkEdge {
                     duration_seconds: 100,
                 })),
@@ -2235,8 +2249,8 @@ mod tests {
 
         // Edges
         assert_eq!(dag.edges.len(), 1);
-        assert_eq!(dag.edges[0].from_hub_idx, 0); // Index in hubs list
-        assert_eq!(dag.edges[0].to_hub_idx, 1);
+        assert_eq!(dag.edges[0].from_node_idx, 0); // Index in hubs list
+        assert_eq!(dag.edges[0].to_node_idx, 1);
     }
 }
 
@@ -2689,8 +2703,8 @@ async fn stitch_graph(args: &Args) -> Result<()> {
                     ) {
                         if let Some(et) = &edge.edge_type {
                             let dag_edge = DagEdge {
-                                from_hub_idx: g1 as u32,
-                                to_hub_idx: g2 as u32,
+                                from_node_idx: g1 as u32,
+                                to_node_idx: g2 as u32,
                                 edge_type: Some(et.clone()),
                             };
                             cross_partition_edges.push(((g1, g2), dag_edge));

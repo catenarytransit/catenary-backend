@@ -257,7 +257,7 @@ pub fn compute_global_patterns(
 
                                 // Expand edges in LocalTransferPattern from local_u
                                 for edge in &local_transfer_pattern.edges {
-                                    if edge.from_hub_idx == local_u {
+                                    if edge.from_node_idx == local_u {
                                         let weight = match &edge.edge_type {
                                             Some(EdgeType::Transit(t)) => t.min_duration,
                                             Some(EdgeType::Walk(w)) => w.duration_seconds,
@@ -265,12 +265,14 @@ pub fn compute_global_patterns(
                                         };
                                         let next_local_cost = local_cost + weight;
                                         if next_local_cost
-                                            < *local_dist.get(&edge.to_hub_idx).unwrap_or(&u32::MAX)
+                                            < *local_dist
+                                                .get(&edge.to_node_idx)
+                                                .unwrap_or(&u32::MAX)
                                         {
-                                            local_dist.insert(edge.to_hub_idx, next_local_cost);
+                                            local_dist.insert(edge.to_node_idx, next_local_cost);
                                             local_pq.push(State {
                                                 cost: next_local_cost,
-                                                node: edge.to_hub_idx as usize,
+                                                node: edge.to_node_idx as usize,
                                             });
                                         }
                                     }
@@ -459,7 +461,7 @@ pub fn compute_global_patterns(
                                     {
                                         // Find edge to l_v
                                         if let Some(edge) =
-                                            ltp.edges.iter().find(|e| e.to_hub_idx == l_v)
+                                            ltp.edges.iter().find(|e| e.to_node_idx == l_v)
                                         {
                                             edge_type = edge.edge_type.clone();
                                         }
@@ -477,8 +479,8 @@ pub fn compute_global_patterns(
                     }
 
                     dag_edges.push(DagEdge {
-                        from_hub_idx: *global_to_dag_idx.get(&u).unwrap(),
-                        to_hub_idx: *global_to_dag_idx.get(&v).unwrap(),
+                        from_node_idx: *global_to_dag_idx.get(&u).unwrap(),
+                        to_node_idx: *global_to_dag_idx.get(&v).unwrap(),
                         edge_type,
                     });
                 }
@@ -526,9 +528,9 @@ pub fn compute_global_patterns(
         for edge in &dag.edges {
             if let Some(EdgeType::Transit(t)) = &edge.edge_type {
                 // Find partition for this edge
-                // The edge connects from_hub_idx to to_hub_idx.
-                // from_hub_idx is index into dag.hubs.
-                let u_hub = &dag.hubs[edge.from_hub_idx as usize];
+                // The edge connects from_node_idx to to_node_idx.
+                // from_node_idx is index into dag.hubs.
+                let u_hub = &dag.hubs[edge.from_node_idx as usize];
                 let pid = u_hub.original_partition_id;
                 used_patterns
                     .entry(pid)
@@ -673,8 +675,8 @@ pub fn compute_intra_partition_connectivity(
                     local_to_global[stop2 as usize],
                 ),
                 DagEdge {
-                    from_hub_idx: stop1, // Local
-                    to_hub_idx: stop2,   // Local
+                    from_node_idx: stop1, // Local
+                    to_node_idx: stop2,   // Local
                     edge_type: Some(EdgeType::Transit(edge)),
                 },
             ));
@@ -696,8 +698,8 @@ pub fn compute_intra_partition_connectivity(
                     local_to_global[transfer.to_stop_idx as usize],
                 ),
                 DagEdge {
-                    from_hub_idx: transfer.from_stop_idx,
-                    to_hub_idx: transfer.to_stop_idx,
+                    from_node_idx: transfer.from_stop_idx,
+                    to_node_idx: transfer.to_stop_idx,
                     edge_type: Some(EdgeType::Walk(edge)),
                 },
             ));

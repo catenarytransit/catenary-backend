@@ -175,7 +175,7 @@ pub mod tests {
         for edge in &edges {
             println!(
                 "  {} -> {} ({:?})",
-                edge.from_hub_idx, edge.to_hub_idx, edge.edge_type
+                edge.from_node_idx, edge.to_node_idx, edge.edge_type
             );
         }
 

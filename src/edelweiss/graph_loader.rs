@@ -79,6 +79,7 @@ impl GraphManager {
 
         // 2. Slow path: Load from disk and insert
         if let Some(base_path) = &self.base_path {
+            println!("Loading transit partition {} from disk", partition_id);
             let filename = format!("transit_chunk_{}.pbf", partition_id);
             let path = base_path.join(filename);
             if path.exists() {
@@ -102,6 +103,7 @@ impl GraphManager {
         }
 
         if let Some(base_path) = &self.base_path {
+            println!("Loading transfer partition {} from disk", partition_id);
             let filename = format!("transfers_chunk_{}.pbf", partition_id);
             let path = base_path.join(filename);
             if path.exists() {
@@ -126,6 +128,7 @@ impl GraphManager {
 
         // 2. Slow path: Load from disk and insert
         if let Some(base_path) = &self.base_path {
+            println!("Loading edge partition {} from disk", partition_id);
             let filename = format!("edges_chunk_{}.json", partition_id);
             let path = base_path.join(filename);
             if path.exists() {
@@ -154,6 +157,7 @@ impl GraphManager {
 
         // 2. Slow path: Load from disk and insert
         if let Some(base_path) = &self.base_path {
+            println!("Loading street partition {} from disk", partition_id);
             let filename = format!("osm_chunk_{}.pbf", partition_id);
             let path = base_path.join(filename);
             if path.exists() {

@@ -150,8 +150,8 @@ mod tests {
         // So A -> B should NOT be in the result.
         // But A -> H should be.
 
-        let has_a_h = edges.iter().any(|e| e.to_hub_idx == 1);
-        let has_a_b = edges.iter().any(|e| e.to_hub_idx == 2);
+        let has_a_h = edges.iter().any(|e| e.to_node_idx == 1);
+        let has_a_b = edges.iter().any(|e| e.to_node_idx == 2);
 
         assert!(has_a_h, "Should contain A -> H");
         assert!(!has_a_b, "Should NOT contain A -> B (pruned at hub)");
@@ -271,7 +271,7 @@ mod tests {
         // Expect:
         // A -> C -> B (Active all the way) -> Stored
 
-        let has_a_b = edges.iter().any(|e| e.to_hub_idx == 2);
+        let has_a_b = edges.iter().any(|e| e.to_node_idx == 2);
 
         assert!(has_a_b, "Should contain A -> B (no hub pruning)");
     }

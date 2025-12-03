@@ -391,12 +391,16 @@ pub struct GlobalHub {
 
 #[derive(Clone, PartialEq, Eq, Hash, Message, serde::Serialize, serde::Deserialize)]
 pub struct DagEdge {
-    /// Index into the `hubs` vector of this DAG.
+    /// Index of the source node.
+    /// - For Global DAGs: Index into `PartitionDag.hubs`.
+    /// - For Local Transfer Patterns: Index into `TransitPartition.stops`.
     #[prost(uint32, tag = "1")]
-    pub from_hub_idx: u32,
-    /// Index into the `hubs` vector.
+    pub from_node_idx: u32,
+    /// Index of the target node.
+    /// - For Global DAGs: Index into `PartitionDag.hubs`.
+    /// - For Local Transfer Patterns: Index into `TransitPartition.stops`.
     #[prost(uint32, tag = "2")]
-    pub to_hub_idx: u32,
+    pub to_node_idx: u32,
 
     /// The "Transfer Pattern" used here.
     /// Replaces the old string-based signature with a structured reference.

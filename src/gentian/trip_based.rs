@@ -956,8 +956,8 @@ pub fn compute_profile_query(
         };
 
         result_edges.push(DagEdge {
-            from_hub_idx: start_stop,
-            to_hub_idx: stop_id,
+            from_node_idx: start_stop,
+            to_node_idx: stop_id,
             edge_type: Some(EdgeType::Walk(WalkEdge {
                 duration_seconds: dur,
             })),
@@ -1018,8 +1018,8 @@ pub fn compute_profile_query(
             let dur = arr.saturating_sub(dep);
 
             result_edges.push(DagEdge {
-                from_hub_idx: u,
-                to_hub_idx: v,
+                from_node_idx: u,
+                to_node_idx: v,
                 edge_type: Some(EdgeType::Transit(TransitEdge {
                     trip_pattern_idx: p_idx as u32,
                     start_stop_idx: idx1 as u32,
@@ -1045,8 +1045,8 @@ pub fn compute_profile_query(
             .stop_indices[tr.to_stop_idx_in_pattern];
 
         result_edges.push(DagEdge {
-            from_hub_idx: u,
-            to_hub_idx: v,
+            from_node_idx: u,
+            to_node_idx: v,
             edge_type: Some(EdgeType::Walk(WalkEdge {
                 duration_seconds: tr.duration,
             })),

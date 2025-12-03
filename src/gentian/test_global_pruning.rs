@@ -65,8 +65,8 @@ mod tests {
             .push(LocalTransferPattern {
                 from_stop_idx: 0,
                 edges: vec![DagEdge {
-                    from_hub_idx: 0,
-                    to_hub_idx: 1,
+                    from_node_idx: 0,
+                    to_node_idx: 1,
                     edge_type: Some(EdgeType::Walk(WalkEdge {
                         duration_seconds: 10,
                     })),
@@ -79,8 +79,8 @@ mod tests {
             .unwrap()
             .edges
             .push(DagEdge {
-                from_hub_idx: 0,
-                to_hub_idx: 2,
+                from_node_idx: 0,
+                to_node_idx: 2,
                 edge_type: Some(EdgeType::Walk(WalkEdge {
                     duration_seconds: 25,
                 })),
@@ -92,8 +92,8 @@ mod tests {
             .push(LocalTransferPattern {
                 from_stop_idx: 1,
                 edges: vec![DagEdge {
-                    from_hub_idx: 1,
-                    to_hub_idx: 2,
+                    from_node_idx: 1,
+                    to_node_idx: 2,
                     edge_type: Some(EdgeType::Walk(WalkEdge {
                         duration_seconds: 10,
                     })),
@@ -267,22 +267,22 @@ mod tests {
         // A(0) -> B(2) : Cost 25
 
         let edge_ah = DagEdge {
-            from_hub_idx: 0,
-            to_hub_idx: 0,
+            from_node_idx: 0,
+            to_node_idx: 0,
             edge_type: Some(EdgeType::Walk(WalkEdge {
                 duration_seconds: 10,
             })),
         };
         let edge_hb = DagEdge {
-            from_hub_idx: 0,
-            to_hub_idx: 0,
+            from_node_idx: 0,
+            to_node_idx: 0,
             edge_type: Some(EdgeType::Walk(WalkEdge {
                 duration_seconds: 10,
             })),
         };
         let edge_ab = DagEdge {
-            from_hub_idx: 0,
-            to_hub_idx: 0,
+            from_node_idx: 0,
+            to_node_idx: 0,
             edge_type: Some(EdgeType::Walk(WalkEdge {
                 duration_seconds: 25,
             })),
@@ -372,8 +372,8 @@ mod tests {
             let mut has_a_b = false;
 
             for edge in &dag.edges {
-                let u = dag_idx_to_global[&edge.from_hub_idx];
-                let v = dag_idx_to_global[&edge.to_hub_idx];
+                let u = dag_idx_to_global[&edge.from_node_idx];
+                let v = dag_idx_to_global[&edge.to_node_idx];
                 match (u, v) {
                     (0, 1) => has_a_h = true,
                     (1, 2) => has_h_b = true,

@@ -46,6 +46,8 @@ impl<'a> Router<'a> {
                 .push(stop);
         }
 
+        println!("starting stops grouped by partition");
+
         let end_pids: std::collections::HashSet<_> =
             end_stops.iter().map(|(p, _, _, _)| *p).collect();
         let mut itineraries = Vec::new();
@@ -139,6 +141,11 @@ impl<'a> Router<'a> {
                         .map(|(p, s, t, _)| (*p, *s, *t))
                         .collect();
 
+                    println!(
+                        "Starting Dijkstra from {} nodes to {} nodes",
+                        start_nodes_for_dijkstra.len(),
+                        end_nodes_map.len()
+                    );
                     let mut dijkstra_itineraries = query_graph.dijkstra(
                         &start_nodes_for_dijkstra,
                         &end_nodes_map,
@@ -597,8 +604,8 @@ mod tests {
                     from_stop_idx: 0,
                     edges: vec![
                         DagEdge {
-                            from_hub_idx: 0, // Not used for LocalTransferPattern
-                            to_hub_idx: 1,   // Stop 1
+                            from_node_idx: 0, // Not used for LocalTransferPattern
+                            to_node_idx: 1,   // Stop 1
                             edge_type: Some(EdgeType::Transit(TransitEdge {
                                 trip_pattern_idx: 0,
                                 start_stop_idx: 0,
@@ -607,8 +614,8 @@ mod tests {
                             })),
                         },
                         DagEdge {
-                            from_hub_idx: 0,
-                            to_hub_idx: 2, // Stop 2
+                            from_node_idx: 0,
+                            to_node_idx: 2, // Stop 2
                             edge_type: Some(EdgeType::Transit(TransitEdge {
                                 trip_pattern_idx: 0,
                                 start_stop_idx: 0,
@@ -621,8 +628,8 @@ mod tests {
                 LocalTransferPattern {
                     from_stop_idx: 1,
                     edges: vec![DagEdge {
-                        from_hub_idx: 1,
-                        to_hub_idx: 2, // Stop 2
+                        from_node_idx: 1,
+                        to_node_idx: 2, // Stop 2
                         edge_type: Some(EdgeType::Transit(TransitEdge {
                             trip_pattern_idx: 0,
                             start_stop_idx: 1,
@@ -784,8 +791,8 @@ mod tests {
             to_partition: 1,
             hubs: vec![hub1, hub2],
             edges: vec![DagEdge {
-                from_hub_idx: 0,
-                to_hub_idx: 1,
+                from_node_idx: 0,
+                to_node_idx: 1,
                 edge_type: Some(EdgeType::Walk(
                     catenary::routing_common::transit_graph::WalkEdge {
                         duration_seconds: 600, // 10 min walk transfer
@@ -862,8 +869,8 @@ fn test_multi_partition_selection() {
         local_transfer_patterns: vec![LocalTransferPattern {
             from_stop_idx: 0,
             edges: vec![DagEdge {
-                from_hub_idx: 0,
-                to_hub_idx: 1,
+                from_node_idx: 0,
+                to_node_idx: 1,
                 edge_type: Some(EdgeType::Transit(TransitEdge {
                     trip_pattern_idx: 0,
                     start_stop_idx: 0,
@@ -942,8 +949,8 @@ fn test_multi_partition_selection() {
         local_transfer_patterns: vec![LocalTransferPattern {
             from_stop_idx: 0,
             edges: vec![DagEdge {
-                from_hub_idx: 0,
-                to_hub_idx: 1,
+                from_node_idx: 0,
+                to_node_idx: 1,
                 edge_type: Some(EdgeType::Transit(TransitEdge {
                     trip_pattern_idx: 0,
                     start_stop_idx: 0,
@@ -1104,8 +1111,8 @@ fn test_long_distance_routing() {
                     from_stop_idx: 0,
                     edges: vec![
                         DagEdge {
-                            from_hub_idx: 0,
-                            to_hub_idx: 1,
+                            from_node_idx: 0,
+                            to_node_idx: 1,
                             edge_type: Some(EdgeType::Transit(TransitEdge {
                                 trip_pattern_idx: 0,
                                 start_stop_idx: 0,
@@ -1114,8 +1121,8 @@ fn test_long_distance_routing() {
                             })),
                         },
                         DagEdge {
-                            from_hub_idx: 0,
-                            to_hub_idx: 2,
+                            from_node_idx: 0,
+                            to_node_idx: 2,
                             edge_type: Some(EdgeType::Transit(TransitEdge {
                                 trip_pattern_idx: 0,
                                 start_stop_idx: 0,
@@ -1128,8 +1135,8 @@ fn test_long_distance_routing() {
                 LocalTransferPattern {
                     from_stop_idx: 1,
                     edges: vec![DagEdge {
-                        from_hub_idx: 1,
-                        to_hub_idx: 2,
+                        from_node_idx: 1,
+                        to_node_idx: 2,
                         edge_type: Some(EdgeType::Transit(TransitEdge {
                             trip_pattern_idx: 0,
                             start_stop_idx: 1,
@@ -1233,8 +1240,8 @@ fn test_long_distance_routing() {
         to_partition: 1,
         hubs: vec![hub0, hub1],
         edges: vec![DagEdge {
-            from_hub_idx: 0,
-            to_hub_idx: 1,
+            from_node_idx: 0,
+            to_node_idx: 1,
             edge_type: Some(EdgeType::LongDistanceTransit(TransitEdge {
                 trip_pattern_idx: pattern_idx,
                 start_stop_idx: 0,
@@ -1298,8 +1305,8 @@ fn test_hub_routing_repro() {
         LocalTransferPattern {
             from_stop_idx: 0,
             edges: vec![DagEdge {
-                from_hub_idx: 0,
-                to_hub_idx: 1, // A -> Hub
+                from_node_idx: 0,
+                to_node_idx: 1, // A -> Hub
                 edge_type: Some(EdgeType::Transit(TransitEdge {
                     trip_pattern_idx: 0,
                     start_stop_idx: 0,
@@ -1311,8 +1318,8 @@ fn test_hub_routing_repro() {
         LocalTransferPattern {
             from_stop_idx: 1,
             edges: vec![DagEdge {
-                from_hub_idx: 1,
-                to_hub_idx: 2, // Hub -> B
+                from_node_idx: 1,
+                to_node_idx: 2, // Hub -> B
                 edge_type: Some(EdgeType::Transit(TransitEdge {
                     trip_pattern_idx: 0,
                     start_stop_idx: 1,

@@ -110,8 +110,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             for edge in dag.edges {
                 if let (Some(Some(from)), Some(Some(to))) = (
-                    hub_coords.get(edge.from_hub_idx as usize),
-                    hub_coords.get(edge.to_hub_idx as usize),
+                    hub_coords.get(edge.from_node_idx as usize),
+                    hub_coords.get(edge.to_node_idx as usize),
                 ) {
                     let mut properties = JsonObject::new();
                     properties.insert("type".to_string(), "global_dag_edge".into());

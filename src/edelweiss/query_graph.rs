@@ -101,8 +101,8 @@ impl QueryGraph {
         for dag in &global_index.partition_dags {
             if dag.from_partition == start_pid && dag.to_partition == end_pid {
                 for edge in &dag.edges {
-                    let from_hub = &dag.hubs[edge.from_hub_idx as usize];
-                    let to_hub = &dag.hubs[edge.to_hub_idx as usize];
+                    let from_hub = &dag.hubs[edge.from_node_idx as usize];
+                    let to_hub = &dag.hubs[edge.to_node_idx as usize];
 
                     let from_node = QueryNode {
                         partition_id: from_hub.original_partition_id,
@@ -127,8 +127,8 @@ impl QueryGraph {
         for dag in &global_index.long_distance_dags {
             if dag.from_partition == start_pid && dag.to_partition == end_pid {
                 for edge in &dag.edges {
-                    let from_hub = &dag.hubs[edge.from_hub_idx as usize];
-                    let to_hub = &dag.hubs[edge.to_hub_idx as usize];
+                    let from_hub = &dag.hubs[edge.from_node_idx as usize];
+                    let to_hub = &dag.hubs[edge.to_node_idx as usize];
 
                     let from_node = QueryNode {
                         partition_id: from_hub.original_partition_id,
@@ -154,11 +154,11 @@ impl QueryGraph {
     fn add_dag_edge(&mut self, partition_id: u32, dag_edge: &DagEdge) {
         let from_node = QueryNode {
             partition_id,
-            stop_idx: dag_edge.from_hub_idx,
+            stop_idx: dag_edge.from_node_idx,
         };
         let to_node = QueryNode {
             partition_id,
-            stop_idx: dag_edge.to_hub_idx,
+            stop_idx: dag_edge.to_node_idx,
         };
 
         if let Some(edge_type) = &dag_edge.edge_type {

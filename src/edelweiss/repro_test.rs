@@ -107,8 +107,8 @@ fn test_multi_partition_selection() {
         local_transfer_patterns: vec![LocalTransferPattern {
             from_stop_idx: 0,
             edges: vec![DagEdge {
-                from_hub_idx: 0,
-                to_hub_idx: 1,
+                from_node_idx: 0,
+                to_node_idx: 1,
                 edge_type: Some(EdgeType::Transit(TransitEdge {
                     trip_pattern_idx: 0,
                     start_stop_idx: 0,
