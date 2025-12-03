@@ -620,6 +620,8 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         transfers.len()
     );
 
+    println!("      - Precomputing auxiliary structures for Trip-Based Routing");
+
     // Precompute auxiliary structures for Trip-Based Routing
     let num_trips = partition
         .trip_patterns
@@ -647,6 +649,7 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     }
 
     // Precompute trip_transfer_ranges
+    println!("      - Precomputing trip_transfer_ranges");
     let mut trip_transfer_ranges: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
     let mut start = 0;
     while start < transfers.len() {
@@ -667,6 +670,7 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     let mut scratch = crate::trip_based::ProfileScratch::new(partition.stops.len(), num_trips, 6);
 
     // For each stop, run profile search to hubs
+    println!("      - Running profile search to {} hubs", hubs.len());
     for start_node in 0..partition.stops.len() {
         let start_node = start_node as u32;
 
