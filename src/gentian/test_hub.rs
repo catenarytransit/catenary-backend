@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identify_hubs_time_dependent;
+    use crate::identify_hubs_time_independent;
     use crate::utils::ProcessedPattern;
     use catenary::models::{Calendar, Stop};
     use catenary::routing_common::transit_graph::{CompressedTrip, TimeDeltaSequence};
@@ -113,7 +113,8 @@ mod tests {
         let calendar = vec![];
 
         // Run with sample_size = 100
-        let hubs = identify_hubs_time_dependent(&stops, &patterns, &time_deltas, &calendar, 100, 1);
+        let hubs =
+            identify_hubs_time_independent(&stops, &patterns, &time_deltas, &calendar, 100, 1);
 
         // We expect 2 to be the hub
         assert!(hubs.contains(&2), "Node 2 should be identified as a hub");
@@ -178,7 +179,8 @@ mod tests {
         let calendar = vec![];
 
         // Run with sample_size = 100
-        let hubs = identify_hubs_time_dependent(&stops, &patterns, &time_deltas, &calendar, 100, 2);
+        let hubs =
+            identify_hubs_time_independent(&stops, &patterns, &time_deltas, &calendar, 100, 2);
 
         // We expect 1 and 2 to be hubs.
         assert!(

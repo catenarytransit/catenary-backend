@@ -979,7 +979,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         );
 
         // 4. Run Identification
-        let local_hubs = identify_hubs_time_dependent(
+        let local_hubs = identify_hubs_time_independent(
             &local_stops,
             &local_patterns,
             &global_time_deltas,
@@ -1906,7 +1906,8 @@ mod tests {
         // Run with sample_size = 100
         // We need to make sure sample picks random nodes that force transfer at 2.
         // With 10 nodes, 100 queries should hit 0->8 or 5->4 etc.
-        let hubs = identify_hubs_time_dependent(&stops, &patterns, &time_deltas, &calendar, 500, 1);
+        let hubs =
+            identify_hubs_time_independent(&stops, &patterns, &time_deltas, &calendar, 500, 1);
 
         // We expect 2 to be the hub
         assert!(hubs.contains(&2), "Node 2 should be identified as a hub");
@@ -2096,7 +2097,7 @@ mod tests {
         let time_deltas = vec![TimeDeltaSequence { deltas }];
 
         let hubs =
-            identify_hubs_time_dependent(&stops, &patterns, &time_deltas, &calendar, 5000, 5);
+            identify_hubs_time_independent(&stops, &patterns, &time_deltas, &calendar, 5000, 5);
 
         // 12 should be a hub (Transfer B->C).
         assert!(
@@ -2264,388 +2265,339 @@ mod tests {
     }
 }
 
-fn identify_hubs_time_dependent(
+fn identify_hubs_time_independent(
     stops: &[Stop],
     patterns: &[ProcessedPattern],
     time_deltas: &[TimeDeltaSequence],
-    calendar: &[Calendar],
+    _calendar: &[Calendar],
     sample_size: usize,
     top_k: usize,
 ) -> HashSet<usize> {
-    println!("  - Building temporary graph for centrality analysis...");
+    println!("  - Building static graph for centrality analysis...");
 
-    // 1. Build Temporary Partition
-    let mut t_stops = Vec::new();
+    // 1. Build Static Graph
+    // Adjacency list: node_idx -> vec<(neighbor_idx, weight_seconds)>
+    let mut adj: Vec<Vec<(usize, u32)>> = vec![Vec::new(); stops.len()];
 
-    let mut chateau_ids: Vec<String> = Vec::new();
-    let mut chateau_map: HashMap<String, u32> = HashMap::new();
-
-    let mut get_chateau_idx = |chateau: &str| -> u32 {
-        if let Some(&idx) = chateau_map.get(chateau) {
-            idx
-        } else {
-            let idx = chateau_ids.len() as u32;
-            chateau_ids.push(chateau.to_string());
-            chateau_map.insert(chateau.to_string(), idx);
-            idx
-        }
-    };
-
-    for (i, s) in stops.iter().enumerate() {
-        t_stops.push(TransitStop {
-            id: i as u64,
-            chateau_idx: get_chateau_idx(&s.chateau),
-            gtfs_original_id: s.gtfs_id.clone(),
-            is_hub: false,
-            is_border: false,
-            is_external_gateway: false,
-            is_long_distance: false,
-            lat: s.point.as_ref().map(|p| p.y).unwrap_or(0.0),
-            lon: s.point.as_ref().map(|p| p.x).unwrap_or(0.0),
-        });
-    }
-
-    let mut t_patterns = Vec::new();
-    let mut direction_patterns = Vec::new();
-    let mut direction_pattern_map: HashMap<Vec<u32>, u32> = HashMap::new();
-
+    // Add Transit Edges (min travel time)
     for pat in patterns {
-        let dp_idx = if let Some(&idx) = direction_pattern_map.get(&pat.stop_indices) {
-            idx
-        } else {
-            let idx = direction_patterns.len() as u32;
-            direction_patterns.push(DirectionPattern {
-                stop_indices: pat.stop_indices.clone(),
-            });
-            direction_pattern_map.insert(pat.stop_indices.clone(), idx);
-            idx
-        };
+        if pat.stop_indices.is_empty() {
+            continue;
+        }
 
-        t_patterns.push(TripPattern {
-            chateau_idx: get_chateau_idx("temp"),
-            route_id: pat.route_id.clone(),
-            direction_pattern_idx: dp_idx,
-            trips: pat.trips.clone(),
-            timezone_idx: pat.timezone_idx,
-        });
+        // We need to find the minimum travel time between adjacent stops in this pattern across all trips.
+        // This is an approximation. The paper says "overlay the nodes and arcs of each line... using the minimum of arc costs".
+
+        // For each segment (u, v) in the pattern
+        for i in 0..pat.stop_indices.len() - 1 {
+            let u = pat.stop_indices[i] as usize;
+            let v = pat.stop_indices[i + 1] as usize;
+
+            // Find min duration for this segment across all trips
+            let mut min_dur = u32::MAX;
+
+            for trip in &pat.trips {
+                let delta_seq = &time_deltas[trip.time_delta_idx as usize];
+                // Segment i corresponds to deltas[2*i] (dwell at u) + deltas[2*i+1] (travel u->v)
+                // Actually, let's check how deltas are structured.
+                // In `get_arrival_time`:
+                // k=0: start
+                // k=1: + delta[0] (travel 0->1)
+                // Wait, let's look at `get_arrival_time` again.
+                // if k > 0 { time += deltas[2*k] ?? No.
+                // Let's re-read `get_arrival_time` or `compute_initial_transfers`.
+                // `compute_initial_transfers`:
+                // i=0: time = start
+                // i=1:
+                //   if 2*i < len: time += deltas[2*i] (This looks like travel?)
+                //   Wait, 2*i for i=1 is 2.
+                //   If deltas has [travel_0_1, dwell_1, travel_1_2, dwell_2 ...]
+                //   Let's assume standard GTFS deltas structure often used:
+                //   Arrival[i] = Dep[i-1] + Travel[i-1->i]
+                //   Dep[i] = Arrival[i] + Dwell[i]
+
+                // In `gentian`:
+                // Trip has `time_delta_idx`.
+                // `get_arrival_time`:
+                // for k in 0..=stop_idx
+                //   if k > 0: time += deltas[2*k]  <-- This seems to be travel time to k?
+                //   if k < stop_idx: time += deltas[2*k+1] <-- This seems to be dwell at k?
+                // This indexing is weird.
+                // Let's look at `compute_initial_transfers` line 89:
+                // if i > 0 { if 2*i < len { time += deltas[2*i]; } }
+                // if 2*i+1 < len { time += deltas[2*i+1]; }
+
+                // So for segment i (from stop i to i+1):
+                // We are at stop i (after arrival).
+                // We add deltas[2*i+1] (Dwell at i).
+                // Then for next stop (i+1), we add deltas[2*(i+1)] (Travel i->i+1).
+                // So total time from Arr(i) to Arr(i+1) is Dwell(i) + Travel(i->i+1).
+                // Or Dep(i) to Arr(i+1) is Travel(i->i+1).
+
+                // We want edge weight. Usually this is travel time + dwell?
+                // Or just travel time?
+                // If we are routing node to node, and nodes are stops.
+                // The cost to go from stop A to stop B is travel time.
+                // Dwell is usually incurred at the stop.
+                // Let's include both to be safe, or just travel.
+                // If we include dwell, it's Dwell(u) + Travel(u->v).
+                // Dwell at u is deltas[2*i + 1].
+                // Travel u->v is deltas[2*(i+1)].
+
+                let mut dur = 0;
+                // Dwell at u
+                if 2 * i + 1 < delta_seq.deltas.len() {
+                    dur += delta_seq.deltas[2 * i + 1];
+                }
+                // Travel u->v
+                if 2 * (i + 1) < delta_seq.deltas.len() {
+                    dur += delta_seq.deltas[2 * (i + 1)];
+                }
+
+                if dur < min_dur {
+                    min_dur = dur;
+                }
+            }
+
+            if min_dur != u32::MAX {
+                adj[u].push((v, min_dur));
+            }
+        }
     }
 
-    // Calculate BBox for temporary partition
-    // Calculate Convex Hull for boundary
-    let points: Vec<Point<f64>> = t_stops.iter().map(|s| Point::new(s.lon, s.lat)).collect();
-    let hull = MultiPoint(points).concave_hull(2.0);
-    let boundary_points: Vec<BoundaryPoint> = hull
-        .exterior()
-        .points()
-        .map(|p| BoundaryPoint {
-            lat: p.y(),
-            lon: p.x(),
-        })
-        .collect();
-
-    let boundary = PartitionBoundary {
-        points: boundary_points,
-    };
-
-    // 2. Generate Internal Transfers (Distance-based)
-    // Use RTree for efficiency
-    let points: Vec<GeomWithData<[f64; 2], usize>> = t_stops
+    // Add Internal Transfers (Footpaths)
+    // We need to regenerate them or reuse logic.
+    // The previous function generated them. Let's copy that logic briefly or extract it.
+    // For simplicity, let's just do the RTree lookup again here since it's fast.
+    let points: Vec<GeomWithData<[f64; 2], usize>> = stops
         .iter()
         .enumerate()
-        .map(|(i, s)| GeomWithData::new([s.lon, s.lat], i))
+        .map(|(i, s)| {
+            GeomWithData::new(
+                [
+                    s.point.as_ref().map(|p| p.x).unwrap_or(0.0),
+                    s.point.as_ref().map(|p| p.y).unwrap_or(0.0),
+                ],
+                i,
+            )
+        })
         .collect();
     let rtree = RTree::bulk_load(points);
 
-    let mut internal_transfers = Vec::new();
-    for (i, stop) in t_stops.iter().enumerate() {
-        let nearest = rtree.locate_within_distance([stop.lon, stop.lat], 0.003); // ~300m approx (0.003 deg is roughly 300m lat, less lon)
-        // Better to use haversine check
+    for (i, stop) in stops.iter().enumerate() {
+        let lon = stop.point.as_ref().map(|p| p.x).unwrap_or(0.0);
+        let lat = stop.point.as_ref().map(|p| p.y).unwrap_or(0.0);
+
+        let nearest = rtree.locate_within_distance([lon, lat], 0.003);
         for point in nearest {
             let neighbor_idx = point.data;
             if i == neighbor_idx {
                 continue;
             }
 
-            let neighbor = &t_stops[neighbor_idx];
-            let dist = haversine_distance(stop.lat, stop.lon, neighbor.lat, neighbor.lon);
+            let n_lon = point.geom()[0];
+            let n_lat = point.geom()[1];
+            let dist = haversine_distance(lat, lon, n_lat, n_lon);
 
             if dist <= 300.0 {
-                // 300m transfer radius for simulation
                 let walk_seconds = (dist / 1.4) as u32;
-                internal_transfers.push(StaticTransfer {
-                    from_stop_idx: i as u32,
-                    to_stop_idx: neighbor_idx as u32,
-                    duration_seconds: walk_seconds,
-                    distance_meters: dist as u32,
-                    wheelchair_accessible: true,
-                });
+                adj[i].push((neighbor_idx, walk_seconds));
             }
         }
     }
+
     println!(
-        "  - Generated {} internal transfers for simulation",
-        internal_transfers.len()
+        "  - Static graph built. Nodes: {}, Edges: ~{}",
+        stops.len(),
+        adj.iter().map(|v| v.len()).sum::<usize>()
     );
 
-    let partition = TransitPartition {
-        partition_id: 0,
-        stops: t_stops,
-        trip_patterns: t_patterns,
-        time_deltas: time_deltas.to_vec(),
-        direction_patterns,
-        internal_transfers,
-        osm_links: Vec::new(),
-        service_ids: Vec::new(),
-        service_exceptions: Vec::new(),
-        _deprecated_external_transfers: Vec::new(),
-        local_transfer_patterns: Vec::new(),
-        long_distance_trip_patterns: Vec::new(),
-        timezones: vec!["UTC".to_string()], // Dummy, not used for centrality
-        boundary: Some(boundary),
-        chateau_ids,
-    };
+    // 2. Run Dijkstra from random samples
 
-    // Precompute stop -> patterns (pattern_idx, stop_idx_in_pattern)
-    let mut stop_to_patterns: Vec<Vec<(usize, usize)>> = vec![Vec::new(); partition.stops.len()];
-    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
-        let stop_indices =
-            &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
-        for (i, &s_idx) in stop_indices.iter().enumerate() {
-            stop_to_patterns[s_idx as usize].push((p_idx, i));
-        }
-    }
-
-    // Precompute flat_id mappings
-    let num_trips = partition
-        .trip_patterns
-        .iter()
-        .map(|p| p.trips.len())
-        .sum::<usize>();
-    let mut pattern_trip_offset = Vec::with_capacity(partition.trip_patterns.len());
-    let mut flat_id_to_pattern_trip = Vec::with_capacity(num_trips);
-    let mut total_trips = 0;
-    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
-        pattern_trip_offset.push(total_trips);
-        for t_idx in 0..pattern.trips.len() {
-            flat_id_to_pattern_trip.push((p_idx, t_idx));
-        }
-        total_trips += pattern.trips.len();
-    }
-
-    // Compute Transfers for Trip-Based Routing
-    let mut transfers = trip_based::compute_initial_transfers(&partition);
-    println!("  - Initial transfers: {}", transfers.len());
-    trip_based::remove_u_turn_transfers(&partition, &mut transfers);
-    println!("  - After U-turn removal: {}", transfers.len());
-    // TODO: Re-enable refine_transfers after fixing the bug where it prunes valid transfers in single-trip scenarios or same-stop transfers.
-    // trip_based::refine_transfers(&partition, &mut transfers);
-    println!("  - After Refine: {}", transfers.len());
-    // for tr in &transfers {
-    //    println!("    Transfer: Pat {} Trip {} Stop {} -> Pat {} Trip {} Stop {} Dur {}",
-    //        tr.from_pattern_idx, tr.from_trip_idx, tr.from_stop_idx_in_pattern,
-    //        tr.to_pattern_idx, tr.to_trip_idx, tr.to_stop_idx_in_pattern, tr.duration);
-    // }
-
-    // 3. Run Random Queries
-    let num_stops = stops.len();
-
-    // Precompute trip_transfer_ranges
-    let mut trip_transfer_ranges: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
-    let mut start = 0;
-    while start < transfers.len() {
-        let t = &transfers[start];
-        let key = (t.from_pattern_idx, t.from_trip_idx);
-        let mut end = start + 1;
-        while end < transfers.len()
-            && transfers[end].from_pattern_idx == key.0
-            && transfers[end].from_trip_idx == key.1
-        {
-            end += 1;
-        }
-        trip_transfer_ranges.insert(key, (start, end));
-        start = end;
-    }
-
-    println!("  - Running {} random queries...", sample_size);
-
-    let centrality_updates: Vec<Vec<usize>> = (0..sample_size)
+    let centrality_updates: Vec<Vec<(usize, u32)>> = (0..sample_size)
         .into_par_iter()
-        .map_init(
-            || trip_based::ProfileScratch::new(stops.len(), num_trips, 16),
-            |scratch, _| {
-                scratch.reset();
-                let mut rng = rand::rng();
-                let mut local_hubs = Vec::new();
-                let start_node = rng.random_range(0..num_stops) as u32;
-                let end_node = rng.random_range(0..num_stops) as u32;
+        .map(|_| {
+            let mut rng = rand::rng();
+            let start_node = rng.random_range(0..stops.len());
+            let mut local_centrality = Vec::new();
 
-                if start_node == end_node {
-                    return local_hubs;
+            // Dijkstra
+            let mut dist = vec![u32::MAX; stops.len()];
+            let mut pq = BinaryHeap::new();
+
+            dist[start_node] = 0;
+            pq.push(std::cmp::Reverse((0, start_node)));
+
+            // Track predecessors to reconstruct paths?
+            // Or just count nodes visited in the shortest path tree?
+            // "The stations being on the largest number of shortest paths are chosen as hubs."
+            // This usually means Betweenness Centrality.
+            // Exact BC is expensive.
+            // Approximation: For a single SSSP from s, increment centrality for all v on the shortest path s->t for all t.
+            // This is equivalent to counting how many descendants each node has in the Shortest Path Tree (SPT), roughly?
+            // Or just: if v is on the shortest path from s to t, increment v.
+            // To do this efficiently:
+            // 1. Run Dijkstra to get SPT (predecessors).
+            // 2. Accumulate counts from leaves up to root.
+            //    For each node u, `dependency[u] = 1 + sum(dependency[v])` for v where parent[v] == u.
+            //    Then add `dependency[u]` to global centrality.
+
+            // Let's implement predecessors.
+            let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); stops.len()];
+            // Note: Multiple predecessors possible for equal cost paths.
+
+            // Limit search depth/cost?
+            // "Cost-limited Dijkstra searches".
+            // Let's limit to 2 hours (7200s).
+            let max_cost = 7200;
+
+            let mut stack = Vec::new(); // For traversal order
+
+            while let Some(std::cmp::Reverse((d, u))) = pq.pop() {
+                if d > dist[u] {
+                    continue;
+                }
+                if d > max_cost {
+                    break;
                 }
 
-                // Random time between 7:00 AM and 10:00 AM
-                let start_time = rng.random_range(25200..36000);
+                stack.push(u);
 
-                // Run Trip-Based Profile Query
-                let edges = trip_based::compute_profile_query(
-                    &partition,
-                    &transfers,
-                    &trip_transfer_ranges,
-                    start_node,
-                    start_time,
-                    &[end_node],
-                    &stop_to_patterns,
-                    &flat_id_to_pattern_trip,
-                    &pattern_trip_offset,
-                    16,
-                    scratch,
-                );
-
-                #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
-                enum PatternId {
-                    Transit(u32),
-                    Walk,
-                }
-
-                // Build node connectivity from edges
-                let mut node_incoming: HashMap<u32, HashSet<PatternId>> = HashMap::new();
-                let mut node_outgoing: HashMap<u32, HashSet<PatternId>> = HashMap::new();
-                let mut nodes_in_dag = HashSet::new();
-
-                for edge in &edges {
-                    let pattern = match &edge.edge_type {
-                        Some(EdgeType::Transit(t)) => PatternId::Transit(t.trip_pattern_idx),
-                        Some(EdgeType::LongDistanceTransit(t)) => {
-                            PatternId::Transit(t.trip_pattern_idx)
-                        }
-                        Some(EdgeType::Walk(_)) => PatternId::Walk,
-                        None => PatternId::Walk,
-                    };
-
-                    node_outgoing
-                        .entry(edge.from_hub_idx)
-                        .or_default()
-                        .insert(pattern);
-                    node_incoming
-                        .entry(edge.to_hub_idx)
-                        .or_default()
-                        .insert(pattern);
-                    nodes_in_dag.insert(edge.from_hub_idx);
-                    nodes_in_dag.insert(edge.to_hub_idx);
-                }
-
-                for &node in &nodes_in_dag {
-                    if node == start_node || node == end_node {
-                        continue;
-                    }
-
-                    let incoming = node_incoming.get(&node);
-                    let outgoing = node_outgoing.get(&node);
-
-                    if let (Some(inc), Some(out)) = (incoming, outgoing) {
-                        // Check if any incoming pattern is different from any outgoing pattern
-                        // We consider it a hub if there is a transfer.
-                        // i.e. NOT (incoming == outgoing == {SinglePattern})
-                        // If we have Walk in incoming/outgoing, it's a transfer?
-                        // Usually Walk means transfer.
-                        // If Incoming={A}, Outgoing={B}, A!=B -> Hub.
-                        // If Incoming={A}, Outgoing={A} -> Not Hub (Passthrough).
-                        // If Incoming={A, B}, Outgoing={A} -> Hub (Merge).
-
-                        // Filter out Walks for pattern comparison?
-                        // If we walk 1->2 (Walk), then 2->3 (Transit A).
-                        // At 2: Incoming={Walk}, Outgoing={Transit A}.
-                        // Is 2 a hub? Yes, we boarded here.
-                        // But `identify_hubs` filtered out "Access" (Walk -> Transit at beginning).
-                        // "Access" is Start -> Walk -> Board.
-                        // Here Start is checked above (continue if node == start_node).
-                        // So if we are at a node != start, and we have Walk -> Transit, it's a transfer (or boarding).
-                        // If we have Transit A -> Walk -> Transit B.
-                        // At the intermediate nodes of the walk?
-                        // Transit A -> U -> V -> Transit B.
-                        // At U: Incoming={A}, Outgoing={Walk}. Hub?
-                        // At V: Incoming={Walk}, Outgoing={B}. Hub?
-                        // Usually the alighting stop (U) and boarding stop (V) are hubs.
-
-                        // Let's count any node where we switch modes or patterns.
-
-                        let mut is_hub = false;
-                        for &p_in in inc {
-                            for &p_out in out {
-                                if p_in != p_out {
-                                    is_hub = true;
-                                    break;
-                                }
-                            }
-                            if is_hub {
-                                break;
-                            }
-                        }
-
-                        if is_hub {
-                            local_hubs.push(node as usize);
-                        }
+                for &(v, weight) in &adj[u] {
+                    let new_dist = d + weight;
+                    if new_dist < dist[v] {
+                        dist[v] = new_dist;
+                        predecessors[v].clear();
+                        predecessors[v].push(u);
+                        pq.push(std::cmp::Reverse((new_dist, v)));
+                    } else if new_dist == dist[v] {
+                        predecessors[v].push(u);
                     }
                 }
+            }
 
-                // Debug print (only for specific test cases if possible, or just print)
-                // println!("Query {}->{} (Time {}): Found {} edges. Hubs: {:?}", start_node, end_node, start_time, edges.len(), local_hubs);
+            // Accumulate centrality (Brandes algorithm simplified for unweighted count on DAG of SPs)
+            // We want to count how many shortest paths pass through v.
+            // Let sigma[v] = number of shortest paths from s to v.
+            // Let delta[v] = dependency of s on v.
+            // delta[v] = sum_{w: v in pred[w]} (sigma[v]/sigma[w]) * (1 + delta[w])
+            // This is getting complicated for a quick heuristic.
 
-                // Debug print
-                /* if local_hubs.is_empty() && start_node != end_node {
-                    println!(
-                        "Query {}->{} (Time {}): Found {} edges. Hubs: {:?}",
-                        start_node,
-                        end_node,
-                        start_time,
-                        edges.len(),
-                        local_hubs
-                    );
-                    for edge in &edges {
-                        println!(
-                            "  Edge: {:?} -> {:?} ({:?})",
-                            edge.from_hub_idx, edge.to_hub_idx, edge.edge_type
-                        );
+            // Simpler heuristic from paper context:
+            // "The stations being on the largest number of shortest paths"
+            // Maybe just: if a node is visited by Dijkstra, it's "reachable".
+            // But that makes close nodes high centrality? No.
+            // Hubs are central.
+            // Let's use the dependency accumulation (Brandes).
+            // It's not that hard since we have the stack (topological order).
+
+            // 1. Compute sigma (path counts) - Forward pass
+            // We need to do this during Dijkstra or re-traverse.
+            // Actually, we can just do it in `stack` order (increasing distance).
+            // Wait, stack is extraction order, which is correct for forward pass.
+            let mut sigma = vec![0.0; stops.len()];
+            sigma[start_node] = 1.0;
+
+            // We need to process in distance order. `stack` contains nodes in increasing distance order.
+            // But we didn't store edges in stack.
+            // We can re-evaluate edges or store them.
+            // Re-evaluating is fine.
+            // Actually, we have `predecessors`.
+            // We can compute sigma using predecessors.
+            // But predecessors point backwards.
+            // So to compute sigma[v], we need sigma[u] for u in predecessors[v].
+            // Since we process in increasing distance, predecessors are already processed.
+            for &u in &stack {
+                if u == start_node {
+                    continue;
+                }
+                for &p in &predecessors[u] {
+                    sigma[u] += sigma[p];
+                }
+            }
+
+            // 2. Compute delta (dependency) - Backward pass
+            let mut delta = vec![0.0; stops.len()];
+            // Process stack in reverse
+            for &w in stack.iter().rev() {
+                for &v in &predecessors[w] {
+                    if sigma[w] > 0.0 {
+                        delta[v] += (sigma[v] / sigma[w]) * (1.0 + delta[w]);
                     }
-                }*/
+                }
+                if w != start_node {
+                    // Add to local centrality
+                    // We can just add to a list and sum later
+                    // Or return a map.
+                    // Since we map to `local_centrality`, let's just push (w, count).
+                    // But we want to sum up `delta[w]`.
+                    // Since `delta` is float, let's cast or just count "is on path".
+                    // The paper says "largest number of shortest paths".
+                    // This implies betweenness.
+                }
+            }
 
-                // Only print for the failing test case nodes (e.g. 2, 12)
-                // But we don't know which query it is.
-                // Let's print if we find edges but no hubs?
-                // Or just print everything for now (it's a test run).
+            // Collect results
+            for (i, &d) in delta.iter().enumerate() {
+                if d > 0.0 {
+                    // We can just use the integer part or round.
+                    // Or just add 1 if d > threshold?
+                    // Let's just accumulate the raw value (scaled) or just count occurrences?
+                    // "Number of shortest paths" usually means count of (s, t) pairs.
+                    // delta[v] is exactly that count (fractional if multiple paths).
+                    // So we should add delta[v] to global centrality.
+                    // But we can't return float easily in `Vec<Vec<usize>>`.
+                    // Let's return `Vec<(usize, f64)>`?
+                    // Or just cast to usize * 1000 for precision.
+                    if d >= 1.0 {
+                        local_centrality.push(i);
+                    }
+                }
+            }
+            // Wait, if we just return `local_centrality` as list of nodes, we lose the magnitude of delta.
+            // The previous code did `centrality[hub_idx] += 1`.
+            // That was "is this node a hub in this query?".
+            // In the previous code, `local_hubs` was "nodes where transfers happen".
+            // Here we are doing global centrality.
+            // Let's change the return type of the map to `Vec<(usize, f32)>`.
 
-                /*
-                println!(
-                    "Query {}->{} (Time {}): Found {} edges. Hubs: {:?}",
-                    start_node,
-                    end_node,
-                    start_time,
-                    edges.len(),
-                    local_hubs
-                );
-                 */
+            // Actually, to fit the existing structure `Vec<Vec<usize>>` (list of hubs found),
+            // we might want to just return nodes that have high dependency?
+            // No, we should accumulate the values.
+            // Let's change the accumulator loop below.
 
-                local_hubs
-            },
-        )
+            // For now, let's just return the nodes that have non-zero dependency,
+            // but that treats a node with delta=1 same as delta=1000.
+            // We should probably return `Vec<(usize, u32)>` (node, score).
+
+            // Let's hack it: return `Vec<usize>` where we repeat the node `delta` times?
+            // That might be huge.
+            // Let's change the `centrality_updates` type.
+
+            // Since I cannot change the type signature of the `collect` easily without changing the variable type,
+            // I will do that.
+
+            // But wait, I am inside `map`.
+            // I will return `Vec<(usize, u32)>`.
+            let mut updates = Vec::with_capacity(stack.len());
+            for (i, &d) in delta.iter().enumerate() {
+                if i == start_node {
+                    continue;
+                }
+                if d > 0.001 {
+                    updates.push((i, (d * 10.0) as u32)); // Scale by 10 to keep some precision
+                }
+            }
+            updates
+        })
         .collect();
 
     let mut centrality = vec![0; stops.len()];
-    for hubs in centrality_updates {
-        for hub_idx in hubs {
-            centrality[hub_idx] += 1;
+    for updates in centrality_updates {
+        for (node, score) in updates {
+            centrality[node] += score as usize;
         }
     }
-
-    // Debug centrality
-    println!(
-        "  - Centrality counts: {:?}",
-        centrality
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| **c > 0)
-            .collect::<Vec<_>>()
-    );
 
     // 4. Select Top K
     let mut indexed_centrality: Vec<(usize, usize)> = centrality.into_iter().enumerate().collect();
