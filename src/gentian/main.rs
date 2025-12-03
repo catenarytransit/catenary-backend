@@ -1483,7 +1483,17 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         }
 
         // Compute Local Transfer Patterns
+        println!(
+            "Computing local transfer patterns for partition {}",
+            partition_id
+        );
+        let start_timer_local_patterns = Instant::now();
         compute_local_patterns_for_partition(&mut partition);
+        println!(
+            "Computed local transfer patterns for partition {}, took {} ms",
+            partition_id,
+            start_timer_local_patterns.elapsed().as_millis()
+        );
         partitions.insert(partition_id, partition.clone());
 
         let filename = format!("transit_chunk_{}.pbf", partition_id);
