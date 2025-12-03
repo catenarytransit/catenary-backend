@@ -808,7 +808,7 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
             &stop_to_patterns,
             &flat_id_to_pattern_trip,
             &pattern_trip_offset,
-            6,
+            4,
             &mut scratch,
             &hubs,
             is_source_hub,
