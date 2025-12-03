@@ -418,37 +418,52 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         }
     }
 
+    // Precompute trip_transfer_ranges
+    let mut trip_transfer_ranges: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
+    let mut start = 0;
+    while start < transfers.len() {
+        let t = &transfers[start];
+        let key = (t.from_pattern_idx, t.from_trip_idx);
+        let mut end = start + 1;
+        while end < transfers.len()
+            && transfers[end].from_pattern_idx == key.0
+            && transfers[end].from_trip_idx == key.1
+        {
+            end += 1;
+        }
+        trip_transfer_ranges.insert(key, (start, end));
+        start = end;
+    }
+
     let mut ltps = Vec::new();
+    let mut scratch = crate::trip_based::ProfileScratch::new(partition.stops.len(), num_trips, 6);
 
     // For each stop, run profile search to hubs
     for start_node in 0..partition.stops.len() {
         let start_node = start_node as u32;
 
-        let mut all_edges = HashSet::new();
+        // Full reset for this source
+        scratch.reset();
 
-        // Timestep through a day (every 1 hour)
-        for hour in 0..=24 {
-            let start_time = hour * 3600;
-            let edges = crate::trip_based::compute_profile_query(
-                partition,
-                &transfers,
-                start_node,
-                start_time,
-                &hubs,
-                &stop_to_patterns,
-                &flat_id_to_pattern_trip,
-                &pattern_trip_offset,
-                6,
-            );
-            for edge in edges {
-                all_edges.insert(edge);
-            }
-        }
+        // One profile over [0, end_of_day], like the paper’s 24h profiles
+        let edges = crate::trip_based::compute_profile_query(
+            partition,
+            &transfers,
+            &trip_transfer_ranges,
+            start_node,
+            0, // departures >= 0
+            &hubs,
+            &stop_to_patterns,
+            &flat_id_to_pattern_trip,
+            &pattern_trip_offset,
+            6,
+            &mut scratch,
+        );
 
-        if !all_edges.is_empty() {
+        if !edges.is_empty() {
             ltps.push(LocalTransferPattern {
                 from_stop_idx: start_node,
-                edges: all_edges.into_iter().collect(),
+                edges, // already Vec<DagEdge>
             });
         }
     }

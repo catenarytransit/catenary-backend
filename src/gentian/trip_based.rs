@@ -16,6 +16,50 @@ pub struct Transfer {
     pub duration: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct Seed {
+    pub dep_time: u32,
+    pub pattern_idx: usize,
+    pub trip_idx: usize,
+    pub stop_idx: usize,
+    pub walk_duration: u32,
+    pub stop_id: u32,
+}
+
+pub struct ProfileScratch {
+    pub r_labels: Vec<Vec<usize>>,
+    pub used_segments: HashMap<usize, Vec<(usize, usize)>>,
+    pub used_transfers: HashSet<usize>,
+    pub used_initial_walks: HashSet<u32>,
+    pub is_target: Vec<bool>,
+    pub seeds: Vec<Seed>,
+    pub initial_walks: Vec<(u32, u32)>,
+}
+
+impl ProfileScratch {
+    pub fn new(num_stops: usize, total_trips: usize, max_transfers: usize) -> Self {
+        Self {
+            r_labels: vec![vec![usize::MAX; total_trips]; max_transfers + 1],
+            used_segments: HashMap::new(),
+            used_transfers: HashSet::new(),
+            used_initial_walks: HashSet::new(),
+            is_target: vec![false; num_stops],
+            seeds: Vec::new(),
+            initial_walks: Vec::new(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        for level in &mut self.r_labels {
+            for r in level.iter_mut() {
+                *r = usize::MAX;
+            }
+        }
+        // The maps and vectors are cleared in compute_profile_query now,
+        // but it's fine to clear them here too if you prefer.
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct PatternStopInfo {
     pattern_idx: usize,
@@ -459,11 +503,10 @@ pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transf
 
 /// Profile Query (Trip-Based One-To-All Profile)
 /// Computes all Pareto-optimal paths from start_stop to targets for departures >= start_time.
-/// Profile Query (Trip-Based One-To-All Profile)
-/// Computes all Pareto-optimal paths from start_stop to targets for departures >= start_time.
 pub fn compute_profile_query(
     partition: &TransitPartition,
     transfers: &[Transfer],
+    trip_transfer_ranges: &HashMap<(usize, usize), (usize, usize)>,
     start_stop: u32,
     start_time: u32,
     targets: &[u32],
@@ -471,89 +514,53 @@ pub fn compute_profile_query(
     flat_id_to_pattern_trip: &[(usize, usize)],
     pattern_trip_offset: &[usize],
     max_transfers: usize,
+    scratch: &mut ProfileScratch,
 ) -> Vec<DagEdge> {
     let num_stops = partition.stops.len();
+    let total_trips = flat_id_to_pattern_trip.len();
+
+    // Cheap per-call resets (heavy stuff is in scratch.reset)
+    scratch.initial_walks.clear();
+    scratch.seeds.clear();
+    scratch.used_segments.clear();
+    scratch.used_transfers.clear();
+    scratch.used_initial_walks.clear();
+
+    if scratch.is_target.len() != num_stops {
+        scratch.is_target.resize(num_stops, false);
+    }
+    scratch.is_target.fill(false);
 
     // Helpers for flat trip ID
     let get_flat_id = |p: usize, t: usize| -> usize { pattern_trip_offset[p] + t };
-    let total_trips = flat_id_to_pattern_trip.len();
-
-    // 1. Build Transfer Index (if not passed in optimized form)
-    // The `transfers` arg is a slice. We assume it's sorted by (from_pattern, from_trip, from_stop)
-    // as done in refine_transfers. If not, we should sort or build an index.
-    // Since refine_transfers sorts it, we can assume it's sorted if we called it.
-    // But to be safe and robust, let's build the index here.
-    // (pattern, trip) -> range
-    let mut trip_transfer_ranges: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
-    let mut start = 0;
-    while start < transfers.len() {
-        let t = &transfers[start];
-        let key = (t.from_pattern_idx, t.from_trip_idx);
-        let mut end = start + 1;
-        while end < transfers.len()
-            && transfers[end].from_pattern_idx == key.0
-            && transfers[end].from_trip_idx == key.1
-        {
-            end += 1;
-        }
-        trip_transfer_ranges.insert(key, (start, end));
-        start = end;
-    }
 
     // 2. Identify Target Set for fast lookup
-    let mut is_target = vec![false; num_stops];
     for &t in targets {
-        is_target[t as usize] = true;
+        scratch.is_target[t as usize] = true;
     }
 
     // 3. Identify Initial Walks (Source -> Stops)
-    // We include start_stop itself (0 duration) and internal transfers.
-    let mut initial_walks = Vec::new();
-    initial_walks.push((start_stop, 0));
+    scratch.initial_walks.push((start_stop, 0));
     for tr in &partition.internal_transfers {
         if tr.from_stop_idx == start_stop {
-            initial_walks.push((tr.to_stop_idx, tr.duration_seconds));
+            scratch
+                .initial_walks
+                .push((tr.to_stop_idx, tr.duration_seconds));
         }
     }
 
     // 4. Collect all Departure Opportunities (Seeds)
-    // A seed is a trip we can board directly from an initial walk.
-    // (departure_time, pattern_idx, trip_idx, stop_idx_in_pattern, walk_duration_to_stop)
-    struct Seed {
-        dep_time: u32,
-        pattern_idx: usize,
-        trip_idx: usize,
-        stop_idx: usize,
-        walk_duration: u32,
-        stop_id: u32,
-    }
-    let mut seeds = Vec::new();
-
-    for &(stop_id, walk_dur) in &initial_walks {
-        // Use precomputed stop -> patterns map
+    for &(stop_id, walk_dur) in &scratch.initial_walks {
         if let Some(patterns) = stop_to_patterns.get(stop_id as usize) {
             for &(p_idx, s_idx) in patterns {
                 let pattern = &partition.trip_patterns[p_idx];
-
-                // Find the earliest trip that departs after start_time + walk_dur
-                // Trips are sorted by start_time. We can use binary search or linear scan.
-                // Since we need to compute departure time at s_idx, which depends on time_deltas,
-                // and time_deltas might vary (though usually consistent for a pattern),
-                // strictly speaking we should check departure times.
-                // However, pattern.trips are sorted by start_time.
-                // Departure at s_idx is monotonic with start_time (usually).
-
-                // We'll use a linear scan for now, but break early.
-                // Optimization: Binary search could be better if many trips.
-
                 let min_dep = start_time + walk_dur;
 
-                // Find first trip with dep >= min_dep
+                // TODO: binary search instead of linear
                 for (t_idx, trip) in pattern.trips.iter().enumerate() {
                     let dep = get_departure_time(partition, trip, s_idx);
                     if dep >= min_dep {
-                        // Found the earliest valid trip.
-                        seeds.push(Seed {
+                        scratch.seeds.push(Seed {
                             dep_time: dep - walk_dur, // Effective start time at source
                             pattern_idx: p_idx,
                             trip_idx: t_idx,
@@ -561,9 +568,6 @@ pub fn compute_profile_query(
                             walk_duration: walk_dur,
                             stop_id,
                         });
-                        // Optimization: Only take the earliest trip per pattern!
-                        // The propagation logic (or just the fact that we only need one path per pattern)
-                        // means we don't need to seed later trips.
                         break;
                     }
                 }
@@ -571,43 +575,38 @@ pub fn compute_profile_query(
         }
     }
     // Sort seeds descending by departure time
-    seeds.sort_by_key(|s| std::cmp::Reverse(s.dep_time));
+    scratch.seeds.sort_by_key(|s| std::cmp::Reverse(s.dep_time));
 
     // 5. Trip-Based Profile Search
-    // R[n][flat_trip_idx] = min_stop_idx
-    let mut r_labels = vec![vec![usize::MAX; total_trips]; max_transfers + 1];
+    // Ensure size
+    if scratch.r_labels.len() <= max_transfers {
+        scratch
+            .r_labels
+            .resize(max_transfers + 1, vec![usize::MAX; total_trips]);
+    }
+    // Ensure inner vectors are large enough (should be handled by new/reset, but check)
+    if scratch.r_labels[0].len() < total_trips {
+        for level in &mut scratch.r_labels {
+            level.resize(total_trips, usize::MAX);
+        }
+    }
 
-    // Tracking used graph components
-    // used_segments: flat_trip_idx -> Set<(entry_idx, exit_idx)>
-    // We use a Vec and deduplicate later or just append.
-    let mut used_segments: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
-    // used_transfers: Set<transfer_idx>
-    let mut used_transfers: HashSet<usize> = HashSet::new();
-    // used_initial_walks: Set<(to_stop)>
-    let mut used_initial_walks: HashSet<u32> = HashSet::new();
-
-    for seed in seeds {
+    for seed in &scratch.seeds {
         let flat_id = get_flat_id(seed.pattern_idx, seed.trip_idx);
 
         // Update R[0]
-        let old_r = r_labels[0][flat_id];
+        let old_r = scratch.r_labels[0][flat_id];
         if seed.stop_idx < old_r {
-            r_labels[0][flat_id] = seed.stop_idx;
+            scratch.r_labels[0][flat_id] = seed.stop_idx;
 
             // Record usage
-            used_initial_walks.insert(seed.stop_id);
-
-            // We don't record segment here yet, we record it when we reach a target or transfer.
-            // But we need to know the entry point.
-            // The stack stores `stop_idx` which IS the entry point for the scan.
+            scratch.used_initial_walks.insert(seed.stop_id);
 
             // Propagate
-            // Stack stores (n, flat_trip_id, start_scan_stop_idx_in_pattern, old_r_value_for_this_trip)
             let mut stack = Vec::new();
             stack.push((0, flat_id, seed.stop_idx, old_r));
 
             while let Some((n, flat_id, stop_idx, old_r_val)) = stack.pop() {
-                // println!("Pop: n={}, flat_id={}, stop_idx={}, old_r_val={}", n, flat_id, stop_idx, old_r_val);
                 let (p_idx, t_idx) = flat_id_to_pattern_trip[flat_id];
 
                 let pattern = &partition.trip_patterns[p_idx];
@@ -615,8 +614,6 @@ pub fn compute_profile_query(
                     [pattern.direction_pattern_idx as usize]
                     .stop_indices;
 
-                // The segment to scan is from `stop_idx` up to `old_r_val` (exclusive)
-                // If `old_r_val` was usize::MAX, we scan to the end of the trip.
                 let scan_limit = std::cmp::min(old_r_val, stop_indices.len());
 
                 // Look up transfers for this trip
@@ -626,7 +623,6 @@ pub fn compute_profile_query(
                     (0, 0)
                 };
 
-                // Current transfer pointer for the sorted transfers slice
                 let mut tr_ptr = range.0;
                 let tr_end = range.1;
 
@@ -634,9 +630,9 @@ pub fn compute_profile_query(
                     let current_stop_global_id = stop_indices[i];
 
                     // Check if this stop is a target
-                    if is_target[current_stop_global_id as usize] {
-                        // println!("  Reached target {} at stop_idx {} on trip (p{},t{}) with {} transfers", current_stop_global_id, i, p_idx, t_idx, n);
-                        used_segments
+                    if scratch.is_target[current_stop_global_id as usize] {
+                        scratch
+                            .used_segments
                             .entry(flat_id)
                             .or_default()
                             .push((stop_idx, i));
@@ -651,28 +647,24 @@ pub fn compute_profile_query(
                                 continue;
                             }
                             if tr.from_stop_idx_in_pattern > i {
-                                break; // Transfers are sorted, so no more transfers from this stop
+                                break;
                             }
 
-                            // Found transfer from current stop `i`
+                            // Found transfer
                             let target_flat = get_flat_id(tr.to_pattern_idx, tr.to_trip_idx);
                             let target_stop_idx = tr.to_stop_idx_in_pattern;
 
-                            // println!("  Transfer found at stop idx {} on trip (p{},t{}): to flat_id {} stop {} with {} transfers", i, p_idx, t_idx, target_flat, target_stop_idx, n);
-
                             let next_n = n + 1;
-                            let old_target_r = r_labels[next_n][target_flat];
+                            let old_target_r = scratch.r_labels[next_n][target_flat];
 
                             if target_stop_idx < old_target_r {
-                                // println!("    Improving R_{} for flat_id {}: {} -> {}", next_n, target_flat, old_target_r, target_stop_idx);
-                                r_labels[next_n][target_flat] = target_stop_idx;
+                                scratch.r_labels[next_n][target_flat] = target_stop_idx;
                                 stack.push((next_n, target_flat, target_stop_idx, old_target_r));
 
-                                // Mark transfer as used (store index)
-                                used_transfers.insert(tr_ptr);
+                                scratch.used_transfers.insert(tr_ptr);
 
-                                // Also mark the segment on current trip as used up to this transfer
-                                used_segments
+                                scratch
+                                    .used_segments
                                     .entry(flat_id)
                                     .or_default()
                                     .push((stop_idx, i));
@@ -687,22 +679,10 @@ pub fn compute_profile_query(
     }
 
     // 6. Reconstruct Graph from Used Components
-    // We need to build edges:
-    // - Initial Walks: Start -> Stop
-    // - Trip Segments: Stop -> Stop (along trip)
-    // - Transfers: Stop -> Stop (between trips)
-
-    // Build adjacency list for backward BFS
-    // Node ID: Stop Index (Global)
-    // Edges: to -> from
-    let mut reverse_adj: HashMap<u32, Vec<(u32, DagEdge)>> = HashMap::new();
-    let mut adj: HashMap<u32, Vec<(u32, DagEdge)>> = HashMap::new();
+    let mut result_edges = Vec::new();
 
     // Add Initial Walks
-    for &stop_id in &used_initial_walks {
-        // Edge: start_stop -> stop_id
-
-        // Find duration
+    for &stop_id in &scratch.used_initial_walks {
         let dur = if stop_id == start_stop {
             0
         } else {
@@ -714,46 +694,40 @@ pub fn compute_profile_query(
                 .unwrap_or(0)
         };
 
-        let edge = DagEdge {
+        result_edges.push(DagEdge {
             from_hub_idx: start_stop,
             to_hub_idx: stop_id,
             edge_type: Some(EdgeType::Walk(WalkEdge {
                 duration_seconds: dur,
             })),
-        };
-
-        adj.entry(start_stop)
-            .or_default()
-            .push((stop_id, edge.clone()));
-        reverse_adj
-            .entry(stop_id)
-            .or_default()
-            .push((start_stop, edge));
+        });
     }
 
     // Add Trip Segments
-    for (flat_id, segments) in &used_segments {
+    for (flat_id, segments) in &mut scratch.used_segments {
+        // Deduplicate segments
+        segments.sort();
+        segments.dedup();
+
         let (p_idx, t_idx) = flat_id_to_pattern_trip[*flat_id];
 
         let pattern = &partition.trip_patterns[p_idx];
         let stop_indices =
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
 
-        for &(entry_idx, exit_idx) in segments {
+        for &(entry_idx, exit_idx) in segments.iter() {
             if exit_idx <= entry_idx {
                 continue;
             }
             let u = stop_indices[entry_idx];
             let v = stop_indices[exit_idx];
 
-            // Calculate min_duration
             let trip = &pattern.trips[t_idx];
             let arr = get_arrival_time(partition, trip, exit_idx);
             let dep = get_departure_time(partition, trip, entry_idx);
             let dur = arr.saturating_sub(dep);
 
-            // Create Transit Edge
-            let edge = DagEdge {
+            result_edges.push(DagEdge {
                 from_hub_idx: u,
                 to_hub_idx: v,
                 edge_type: Some(EdgeType::Transit(TransitEdge {
@@ -762,15 +736,12 @@ pub fn compute_profile_query(
                     end_stop_idx: exit_idx as u32,
                     min_duration: dur,
                 })),
-            };
-
-            adj.entry(u).or_default().push((v, edge.clone()));
-            reverse_adj.entry(v).or_default().push((u, edge));
+            });
         }
     }
 
     // Add Transfers
-    for &tr_idx in &used_transfers {
+    for &tr_idx in &scratch.used_transfers {
         let tr = &transfers[tr_idx];
         let (p_from, _) =
             flat_id_to_pattern_trip[get_flat_id(tr.from_pattern_idx, tr.from_trip_idx)];
@@ -783,52 +754,13 @@ pub fn compute_profile_query(
             [partition.trip_patterns[p_to].direction_pattern_idx as usize]
             .stop_indices[tr.to_stop_idx_in_pattern];
 
-        let edge = DagEdge {
+        result_edges.push(DagEdge {
             from_hub_idx: u,
             to_hub_idx: v,
             edge_type: Some(EdgeType::Walk(WalkEdge {
                 duration_seconds: tr.duration,
             })),
-        };
-
-        adj.entry(u).or_default().push((v, edge.clone()));
-        reverse_adj.entry(v).or_default().push((u, edge));
-    }
-
-    // 7. Prune: Backward BFS from targets
-    let mut useful_nodes = HashSet::new();
-    let mut q = std::collections::VecDeque::new();
-
-    // We already built reverse_adj above.
-    // But we need to make sure we only include nodes reachable from targets.
-
-    for &t in targets {
-        if reverse_adj.contains_key(&t) || t == start_stop {
-            q.push_back(t);
-            useful_nodes.insert(t);
-        }
-    }
-
-    while let Some(curr) = q.pop_front() {
-        if let Some(preds) = reverse_adj.get(&curr) {
-            for (pred, _) in preds {
-                if useful_nodes.insert(*pred) {
-                    q.push_back(*pred);
-                }
-            }
-        }
-    }
-
-    // 8. Construct Result Edges
-    let mut result_edges = Vec::new();
-    for &u in &useful_nodes {
-        if let Some(neighbors) = adj.get(&u) {
-            for (v, edge) in neighbors {
-                if useful_nodes.contains(v) {
-                    result_edges.push(edge.clone());
-                }
-            }
-        }
+        });
     }
 
     result_edges

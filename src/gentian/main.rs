@@ -30,12 +30,20 @@ pub mod clustering;
 pub mod connectivity;
 pub mod osm;
 pub mod reduce_borders;
+pub mod repro_hub;
 pub mod test_hub;
 #[cfg(test)]
 pub mod test_reduce_borders;
 pub mod test_trip_based;
 pub mod trip_based;
 pub mod utils;
+
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 use clustering::merge_based_clustering;
 use connectivity::{
@@ -2353,134 +2361,178 @@ fn identify_hubs_time_dependent(
     // 3. Run Random Queries
     let num_stops = stops.len();
 
+    // Precompute trip_transfer_ranges
+    let mut trip_transfer_ranges: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
+    let mut start = 0;
+    while start < transfers.len() {
+        let t = &transfers[start];
+        let key = (t.from_pattern_idx, t.from_trip_idx);
+        let mut end = start + 1;
+        while end < transfers.len()
+            && transfers[end].from_pattern_idx == key.0
+            && transfers[end].from_trip_idx == key.1
+        {
+            end += 1;
+        }
+        trip_transfer_ranges.insert(key, (start, end));
+        start = end;
+    }
+
     println!("  - Running {} random queries...", sample_size);
 
     let centrality_updates: Vec<Vec<usize>> = (0..sample_size)
         .into_par_iter()
-        .map(|_| {
-            let mut rng = rand::rng();
-            let mut local_hubs = Vec::new();
-            let start_node = rng.random_range(0..num_stops) as u32;
-            let end_node = rng.random_range(0..num_stops) as u32;
+        .map_init(
+            || trip_based::ProfileScratch::new(stops.len(), num_trips, 16),
+            |scratch, _| {
+                scratch.reset();
+                let mut rng = rand::rng();
+                let mut local_hubs = Vec::new();
+                let start_node = rng.random_range(0..num_stops) as u32;
+                let end_node = rng.random_range(0..num_stops) as u32;
 
-            if start_node == end_node {
-                return local_hubs;
-            }
-
-            // Random time between 7:00 AM and 10:00 AM
-            let start_time = rng.random_range(25200..36000);
-
-            // Run Trip-Based Profile Query
-            let edges = trip_based::compute_profile_query(
-                &partition,
-                &transfers,
-                start_node,
-                start_time,
-                &[end_node],
-                &stop_to_patterns,
-                &flat_id_to_pattern_trip,
-                &pattern_trip_offset,
-                16,
-            );
-
-            #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
-            enum PatternId {
-                Transit(u32),
-                Walk,
-            }
-
-            // Build node connectivity from edges
-            let mut node_incoming: HashMap<u32, HashSet<PatternId>> = HashMap::new();
-            let mut node_outgoing: HashMap<u32, HashSet<PatternId>> = HashMap::new();
-            let mut nodes_in_dag = HashSet::new();
-
-            for edge in &edges {
-                let pattern = match &edge.edge_type {
-                    Some(EdgeType::Transit(t)) => PatternId::Transit(t.trip_pattern_idx),
-                    Some(EdgeType::LongDistanceTransit(t)) => {
-                        PatternId::Transit(t.trip_pattern_idx)
-                    }
-                    Some(EdgeType::Walk(_)) => PatternId::Walk,
-                    None => PatternId::Walk,
-                };
-
-                node_outgoing
-                    .entry(edge.from_hub_idx)
-                    .or_default()
-                    .insert(pattern);
-                node_incoming
-                    .entry(edge.to_hub_idx)
-                    .or_default()
-                    .insert(pattern);
-                nodes_in_dag.insert(edge.from_hub_idx);
-                nodes_in_dag.insert(edge.to_hub_idx);
-            }
-
-            for &node in &nodes_in_dag {
-                if node == start_node || node == end_node {
-                    continue;
+                if start_node == end_node {
+                    return local_hubs;
                 }
 
-                let incoming = node_incoming.get(&node);
-                let outgoing = node_outgoing.get(&node);
+                // Random time between 7:00 AM and 10:00 AM
+                let start_time = rng.random_range(25200..36000);
 
-                if let (Some(inc), Some(out)) = (incoming, outgoing) {
-                    // Check if any incoming pattern is different from any outgoing pattern
-                    // We consider it a hub if there is a transfer.
-                    // i.e. NOT (incoming == outgoing == {SinglePattern})
-                    // If we have Walk in incoming/outgoing, it's a transfer?
-                    // Usually Walk means transfer.
-                    // If Incoming={A}, Outgoing={B}, A!=B -> Hub.
-                    // If Incoming={A}, Outgoing={A} -> Not Hub (Passthrough).
-                    // If Incoming={A, B}, Outgoing={A} -> Hub (Merge).
+                // Run Trip-Based Profile Query
+                let edges = trip_based::compute_profile_query(
+                    &partition,
+                    &transfers,
+                    &trip_transfer_ranges,
+                    start_node,
+                    start_time,
+                    &[end_node],
+                    &stop_to_patterns,
+                    &flat_id_to_pattern_trip,
+                    &pattern_trip_offset,
+                    16,
+                    scratch,
+                );
 
-                    // Filter out Walks for pattern comparison?
-                    // If we walk 1->2 (Walk), then 2->3 (Transit A).
-                    // At 2: Incoming={Walk}, Outgoing={Transit A}.
-                    // Is 2 a hub? Yes, we boarded here.
-                    // But `identify_hubs` filtered out "Access" (Walk -> Transit at beginning).
-                    // "Access" is Start -> Walk -> Board.
-                    // Here Start is checked above (continue if node == start_node).
-                    // So if we are at a node != start, and we have Walk -> Transit, it's a transfer (or boarding).
-                    // If we have Transit A -> Walk -> Transit B.
-                    // At the intermediate nodes of the walk?
-                    // Transit A -> U -> V -> Transit B.
-                    // At U: Incoming={A}, Outgoing={Walk}. Hub?
-                    // At V: Incoming={Walk}, Outgoing={B}. Hub?
-                    // Usually the alighting stop (U) and boarding stop (V) are hubs.
+                #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
+                enum PatternId {
+                    Transit(u32),
+                    Walk,
+                }
 
-                    // Let's count any node where we switch modes or patterns.
+                // Build node connectivity from edges
+                let mut node_incoming: HashMap<u32, HashSet<PatternId>> = HashMap::new();
+                let mut node_outgoing: HashMap<u32, HashSet<PatternId>> = HashMap::new();
+                let mut nodes_in_dag = HashSet::new();
 
-                    let mut is_hub = false;
-                    for &p_in in inc {
-                        if matches!(p_in, PatternId::Walk) {
-                            continue;
+                for edge in &edges {
+                    let pattern = match &edge.edge_type {
+                        Some(EdgeType::Transit(t)) => PatternId::Transit(t.trip_pattern_idx),
+                        Some(EdgeType::LongDistanceTransit(t)) => {
+                            PatternId::Transit(t.trip_pattern_idx)
                         }
-                        for &p_out in out {
-                            if matches!(p_out, PatternId::Walk) {
+                        Some(EdgeType::Walk(_)) => PatternId::Walk,
+                        None => PatternId::Walk,
+                    };
+
+                    node_outgoing
+                        .entry(edge.from_hub_idx)
+                        .or_default()
+                        .insert(pattern);
+                    node_incoming
+                        .entry(edge.to_hub_idx)
+                        .or_default()
+                        .insert(pattern);
+                    nodes_in_dag.insert(edge.from_hub_idx);
+                    nodes_in_dag.insert(edge.to_hub_idx);
+                }
+
+                for &node in &nodes_in_dag {
+                    if node == start_node || node == end_node {
+                        continue;
+                    }
+
+                    let incoming = node_incoming.get(&node);
+                    let outgoing = node_outgoing.get(&node);
+
+                    if let (Some(inc), Some(out)) = (incoming, outgoing) {
+                        // Check if any incoming pattern is different from any outgoing pattern
+                        // We consider it a hub if there is a transfer.
+                        // i.e. NOT (incoming == outgoing == {SinglePattern})
+                        // If we have Walk in incoming/outgoing, it's a transfer?
+                        // Usually Walk means transfer.
+                        // If Incoming={A}, Outgoing={B}, A!=B -> Hub.
+                        // If Incoming={A}, Outgoing={A} -> Not Hub (Passthrough).
+                        // If Incoming={A, B}, Outgoing={A} -> Hub (Merge).
+
+                        // Filter out Walks for pattern comparison?
+                        // If we walk 1->2 (Walk), then 2->3 (Transit A).
+                        // At 2: Incoming={Walk}, Outgoing={Transit A}.
+                        // Is 2 a hub? Yes, we boarded here.
+                        // But `identify_hubs` filtered out "Access" (Walk -> Transit at beginning).
+                        // "Access" is Start -> Walk -> Board.
+                        // Here Start is checked above (continue if node == start_node).
+                        // So if we are at a node != start, and we have Walk -> Transit, it's a transfer (or boarding).
+                        // If we have Transit A -> Walk -> Transit B.
+                        // At the intermediate nodes of the walk?
+                        // Transit A -> U -> V -> Transit B.
+                        // At U: Incoming={A}, Outgoing={Walk}. Hub?
+                        // At V: Incoming={Walk}, Outgoing={B}. Hub?
+                        // Usually the alighting stop (U) and boarding stop (V) are hubs.
+
+                        // Let's count any node where we switch modes or patterns.
+
+                        let mut is_hub = false;
+                        for &p_in in inc {
+                            if matches!(p_in, PatternId::Walk) {
                                 continue;
                             }
-                            if p_in != p_out {
-                                is_hub = true;
+                            for &p_out in out {
+                                if matches!(p_out, PatternId::Walk) {
+                                    continue;
+                                }
+                                if p_in != p_out {
+                                    is_hub = true;
+                                    break;
+                                }
+                            }
+                            if is_hub {
                                 break;
                             }
                         }
+
                         if is_hub {
-                            break;
+                            local_hubs.push(node as usize);
                         }
                     }
-
-                    if is_hub {
-                        local_hubs.push(node as usize);
-                    }
                 }
-            }
 
-            // Debug print (only for specific test cases if possible, or just print)
-            // println!("Query {}->{} (Time {}): Found {} edges. Hubs: {:?}", start_node, end_node, start_time, edges.len(), local_hubs);
+                // Debug print (only for specific test cases if possible, or just print)
+                // println!("Query {}->{} (Time {}): Found {} edges. Hubs: {:?}", start_node, end_node, start_time, edges.len(), local_hubs);
 
-            // Debug print
-            /* if local_hubs.is_empty() && start_node != end_node {
+                // Debug print
+                /* if local_hubs.is_empty() && start_node != end_node {
+                    println!(
+                        "Query {}->{} (Time {}): Found {} edges. Hubs: {:?}",
+                        start_node,
+                        end_node,
+                        start_time,
+                        edges.len(),
+                        local_hubs
+                    );
+                    for edge in &edges {
+                        println!(
+                            "  Edge: {:?} -> {:?} ({:?})",
+                            edge.from_hub_idx, edge.to_hub_idx, edge.edge_type
+                        );
+                    }
+                }*/
+
+                // Only print for the failing test case nodes (e.g. 2, 12)
+                // But we don't know which query it is.
+                // Let's print if we find edges but no hubs?
+                // Or just print everything for now (it's a test run).
+
+                /*
                 println!(
                     "Query {}->{} (Time {}): Found {} edges. Hubs: {:?}",
                     start_node,
@@ -2489,32 +2541,11 @@ fn identify_hubs_time_dependent(
                     edges.len(),
                     local_hubs
                 );
-                for edge in &edges {
-                    println!(
-                        "  Edge: {:?} -> {:?} ({:?})",
-                        edge.from_hub_idx, edge.to_hub_idx, edge.edge_type
-                    );
-                }
-            }*/
+                 */
 
-            // Only print for the failing test case nodes (e.g. 2, 12)
-            // But we don't know which query it is.
-            // Let's print if we find edges but no hubs?
-            // Or just print everything for now (it's a test run).
-
-            /*
-            println!(
-                "Query {}->{} (Time {}): Found {} edges. Hubs: {:?}",
-                start_node,
-                end_node,
-                start_time,
-                edges.len(),
                 local_hubs
-            );
-             */
-
-            local_hubs
-        })
+            },
+        )
         .collect();
 
     let mut centrality = vec![0; stops.len()];

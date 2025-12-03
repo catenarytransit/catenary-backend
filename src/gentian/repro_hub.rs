@@ -1,11 +1,12 @@
 pub mod tests {
     use crate::trip_based::{self, Transfer};
+    use ahash::AHashMap as HashMap;
     use catenary::routing_common::transit_graph::{
         CompressedTrip, DirectionPattern, TimeDeltaSequence, TransitPartition, TransitStop,
         TripPattern,
     };
-    use std::collections::HashMap;
 
+    #[test]
     pub fn run_repro() {
         // Setup a simple partition with a transfer
         // Pattern 1: 0 -> 1 -> 2 -> 3 -> 4
@@ -134,10 +135,30 @@ pub mod tests {
             }
         }
 
+        // Precompute trip_transfer_ranges
+        let mut trip_transfer_ranges: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
+        let mut start = 0;
+        while start < transfers.len() {
+            let t = &transfers[start];
+            let key = (t.from_pattern_idx, t.from_trip_idx);
+            let mut end = start + 1;
+            while end < transfers.len()
+                && transfers[end].from_pattern_idx == key.0
+                && transfers[end].from_trip_idx == key.1
+            {
+                end += 1;
+            }
+            trip_transfer_ranges.insert(key, (start, end));
+            start = end;
+        }
+
+        let mut scratch = trip_based::ProfileScratch::new(partition.stops.len(), num_trips, 16);
+
         println!("Running compute_profile_query for 0 -> 8...");
         let edges = trip_based::compute_profile_query(
             &partition,
             &transfers,
+            &trip_transfer_ranges,
             0,    // Start at 0
             900,  // Start time
             &[8], // Target 8
@@ -145,6 +166,7 @@ pub mod tests {
             &flat_id_to_pattern_trip,
             &pattern_trip_offset,
             16,
+            &mut scratch,
         );
 
         println!("Found {} edges:", edges.len());

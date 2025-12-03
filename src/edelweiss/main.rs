@@ -18,6 +18,13 @@ use std::sync::Arc;
 use tarpc::server::{self, Channel};
 use tokio::net::TcpListener;
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 #[derive(Clone)]
 struct EdelweissServer {
     graph: Arc<GraphManager>,
