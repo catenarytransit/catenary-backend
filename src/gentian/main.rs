@@ -24,7 +24,11 @@ use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
+
 use std::sync::Arc;
+
+use rstar::RTree;
+use rstar::primitives::GeomWithData;
 
 pub mod clustering;
 pub mod connectivity;
@@ -670,6 +674,158 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         clusters.len()
     );
 
+    // --- PASS 1: Regional Hubs (Super-Clusters) ---
+    println!("  > Building Super-Clusters (Regions)...");
+
+    // Build Super-Clusters
+    // Target size ~50,000 stops? Or just group connected clusters?
+    // Let's use a larger max_size for super-clustering.
+    let super_cluster_target_size = 50_000;
+
+    // We need to cluster the CLUSTERS.
+    // Build Cluster Adjacency
+    let mut cluster_adj: HashMap<(usize, usize), u32> = HashMap::new();
+    let mut stop_to_cluster_map: Vec<usize> = vec![0; db_stops.len()];
+    for (c_idx, c_stops) in clusters.iter().enumerate() {
+        for &s in c_stops {
+            stop_to_cluster_map[s] = c_idx;
+        }
+    }
+
+    for (&(u, v), &w) in &adjacency {
+        let c1 = stop_to_cluster_map[u];
+        let c2 = stop_to_cluster_map[v];
+        if c1 != c2 {
+            let (min, max) = if c1 < c2 { (c1, c2) } else { (c2, c1) };
+            *cluster_adj.entry((min, max)).or_default() += w;
+        }
+    }
+
+    // Run clustering on clusters
+    // We can reuse merge_based_clustering logic but adapted for "Cluster Nodes".
+    // Or just implement a simple greedy merge here.
+
+    let num_clusters = clusters.len();
+    let mut super_clusters: Vec<Vec<usize>> = (0..num_clusters).map(|i| vec![i]).collect(); // Indices into `clusters`
+    let mut sc_map: Vec<usize> = (0..num_clusters).collect(); // Cluster -> SuperCluster
+    let mut active_sc: HashSet<usize> = (0..num_clusters).collect();
+
+    // Priority Queue for merges
+    #[derive(Eq, PartialEq)]
+    struct ScEdge {
+        weight: u32,
+        sc1: usize,
+        sc2: usize,
+    }
+    impl Ord for ScEdge {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.weight.cmp(&other.weight)
+        }
+    }
+    impl PartialOrd for ScEdge {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    let mut pq = BinaryHeap::new();
+    for (&(c1, c2), &w) in &cluster_adj {
+        pq.push(ScEdge {
+            weight: w,
+            sc1: c1,
+            sc2: c2,
+        });
+    }
+
+    // Helper to get size of super cluster (number of stops)
+    let get_sc_size =
+        |sc_idx: usize, super_clusters: &Vec<Vec<usize>>, clusters: &Vec<Vec<usize>>| -> usize {
+            super_clusters[sc_idx]
+                .iter()
+                .map(|&c_idx| clusters[c_idx].len())
+                .sum()
+        };
+
+    while let Some(edge) = pq.pop() {
+        let sc1 = sc_map[edge.sc1];
+        let sc2 = sc_map[edge.sc2];
+
+        if sc1 == sc2 {
+            continue;
+        }
+
+        let size1 = get_sc_size(sc1, &super_clusters, &clusters);
+        let size2 = get_sc_size(sc2, &super_clusters, &clusters);
+
+        if size1 + size2 <= super_cluster_target_size {
+            // Merge sc2 into sc1
+            let to_move = super_clusters[sc2].clone();
+            for &c_idx in &to_move {
+                sc_map[c_idx] = sc1;
+            }
+            super_clusters[sc1].extend(to_move);
+            super_clusters[sc2].clear();
+            active_sc.remove(&sc2);
+        }
+    }
+
+    let final_super_clusters: Vec<Vec<usize>> = super_clusters
+        .into_iter()
+        .filter(|sc| !sc.is_empty())
+        .collect();
+    println!(
+        "  > Created {} Super-Clusters (Regions) from {} base clusters",
+        final_super_clusters.len(),
+        num_clusters
+    );
+
+    // --- Re-clustering Check ---
+    println!("  > Checking partition quality and re-clustering if necessary...");
+    let mut new_clusters: Vec<Vec<usize>> = Vec::new();
+    let mut new_super_clusters: Vec<Vec<usize>> = Vec::new();
+    let mut recluster_count = 0;
+
+    for sc_indices in final_super_clusters {
+        let mut current_partitioning = Vec::new();
+        for &c_idx in &sc_indices {
+            current_partitioning.push(clusters[c_idx].clone());
+        }
+
+        if check_partition_quality(&current_partitioning, &db_stops) {
+            // Keep existing
+            let start_idx = new_clusters.len();
+            new_clusters.extend(current_partitioning);
+            let end_idx = new_clusters.len();
+            new_super_clusters.push((start_idx..end_idx).collect());
+        } else {
+            // Recluster
+            recluster_count += 1;
+            let all_stops: Vec<usize> = current_partitioning.into_iter().flatten().collect();
+            let new_parts = recluster_with_spatial_weights(
+                &all_stops,
+                &adjacency,
+                &db_stops,
+                args.cluster_size,
+            );
+
+            let start_idx = new_clusters.len();
+            new_clusters.extend(new_parts);
+            let end_idx = new_clusters.len();
+            new_super_clusters.push((start_idx..end_idx).collect());
+        }
+    }
+
+    // Shadowing with new values
+    let clusters = new_clusters;
+    let final_super_clusters = new_super_clusters;
+
+    if recluster_count > 0 {
+        println!(
+            "  > Re-clustered {} regions due to quality issues.",
+            recluster_count
+        );
+    }
+
     // Generate unique partition IDs for each cluster
     let mut cluster_id_to_partition_id: Vec<u32> = Vec::with_capacity(clusters.len());
     let mut rng = rand::thread_rng();
@@ -841,179 +997,6 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
         Ok(global_hubs)
     };
-
-    // --- PASS 1: Regional Hubs (Super-Clusters) ---
-    println!("  > Building Super-Clusters (Regions)...");
-
-    // Build Super-Clusters
-    // Target size ~50,000 stops? Or just group connected clusters?
-    // Let's use a larger max_size for super-clustering.
-    let super_cluster_target_size = 50_000;
-
-    // We need to cluster the CLUSTERS.
-    // Build Cluster Adjacency
-    let mut cluster_adj: HashMap<(usize, usize), u32> = HashMap::new();
-    let mut stop_to_cluster_map: Vec<usize> = vec![0; db_stops.len()];
-    for (c_idx, c_stops) in clusters.iter().enumerate() {
-        for &s in c_stops {
-            stop_to_cluster_map[s] = c_idx;
-        }
-    }
-
-    for (&(u, v), &w) in &adjacency {
-        let c1 = stop_to_cluster_map[u];
-        let c2 = stop_to_cluster_map[v];
-        if c1 != c2 {
-            let (min, max) = if c1 < c2 { (c1, c2) } else { (c2, c1) };
-            *cluster_adj.entry((min, max)).or_default() += w;
-        }
-    }
-
-    // Run clustering on clusters
-    // We can reuse merge_based_clustering logic but adapted for "Cluster Nodes".
-    // Or just implement a simple greedy merge here.
-
-    let num_clusters = clusters.len();
-    let mut super_clusters: Vec<Vec<usize>> = (0..num_clusters).map(|i| vec![i]).collect(); // Indices into `clusters`
-    let mut sc_map: Vec<usize> = (0..num_clusters).collect(); // Cluster -> SuperCluster
-    let mut active_sc: HashSet<usize> = (0..num_clusters).collect();
-
-    // Priority Queue for merges
-    #[derive(Eq, PartialEq)]
-    struct ScEdge {
-        weight: u32,
-        sc1: usize,
-        sc2: usize,
-    }
-    impl Ord for ScEdge {
-        fn cmp(&self, other: &Self) -> Ordering {
-            self.weight.cmp(&other.weight)
-        }
-    }
-    impl PartialOrd for ScEdge {
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    let mut pq = BinaryHeap::new();
-    for (&(c1, c2), &w) in &cluster_adj {
-        pq.push(ScEdge {
-            weight: w,
-            sc1: c1,
-            sc2: c2,
-        });
-    }
-
-    // Helper to get size of super cluster (number of stops)
-    let get_sc_size =
-        |sc_idx: usize, super_clusters: &Vec<Vec<usize>>, clusters: &Vec<Vec<usize>>| -> usize {
-            super_clusters[sc_idx]
-                .iter()
-                .map(|&c_idx| clusters[c_idx].len())
-                .sum()
-        };
-
-    while let Some(edge) = pq.pop() {
-        let sc1 = sc_map[edge.sc1];
-        let sc2 = sc_map[edge.sc2];
-
-        if sc1 == sc2 {
-            continue;
-        }
-
-        let size1 = get_sc_size(sc1, &super_clusters, &clusters);
-        let size2 = get_sc_size(sc2, &super_clusters, &clusters);
-
-        if size1 + size2 <= super_cluster_target_size {
-            // Merge sc2 into sc1
-            let to_move = super_clusters[sc2].clone();
-            for &c_idx in &to_move {
-                sc_map[c_idx] = sc1;
-            }
-            super_clusters[sc1].extend(to_move);
-            super_clusters[sc2].clear();
-            active_sc.remove(&sc2);
-        }
-    }
-
-    let final_super_clusters: Vec<Vec<usize>> = super_clusters
-        .into_iter()
-        .filter(|sc| !sc.is_empty())
-        .collect();
-    println!(
-        "  > Created {} Super-Clusters (Regions) from {} base clusters",
-        final_super_clusters.len(),
-        num_clusters
-    );
-
-    // --- Re-clustering Check ---
-    println!("  > Checking partition quality and re-clustering if necessary...");
-    let mut new_clusters: Vec<Vec<usize>> = Vec::new();
-    let mut new_super_clusters: Vec<Vec<usize>> = Vec::new();
-    let mut recluster_count = 0;
-
-    for sc_indices in final_super_clusters {
-        let mut current_partitioning = Vec::new();
-        for &c_idx in &sc_indices {
-            current_partitioning.push(clusters[c_idx].clone());
-        }
-
-        if check_partition_quality(&current_partitioning, &db_stops) {
-            // Keep existing
-            let start_idx = new_clusters.len();
-            new_clusters.extend(current_partitioning);
-            let end_idx = new_clusters.len();
-            new_super_clusters.push((start_idx..end_idx).collect());
-        } else {
-            // Recluster
-            recluster_count += 1;
-            let all_stops: Vec<usize> = current_partitioning.into_iter().flatten().collect();
-            let new_parts = recluster_with_spatial_weights(
-                &all_stops,
-                &adjacency,
-                &db_stops,
-                args.cluster_size,
-            );
-
-            let start_idx = new_clusters.len();
-            new_clusters.extend(new_parts);
-            let end_idx = new_clusters.len();
-            new_super_clusters.push((start_idx..end_idx).collect());
-        }
-    }
-
-    // Shadowing with new values
-    let clusters = new_clusters;
-    let final_super_clusters = new_super_clusters;
-
-    if recluster_count > 0 {
-        println!(
-            "  > Re-clustered {} regions due to quality issues.",
-            recluster_count
-        );
-
-        // Regenerate Partition IDs
-        cluster_id_to_partition_id.clear();
-
-        used_ids.clear();
-        for p_list in existing_manifest.chateau_to_partitions.values() {
-            for &pid in p_list {
-                if !partitions_to_remove.contains(&pid) {
-                    used_ids.insert(pid);
-                }
-            }
-        }
-
-        for _ in 0..clusters.len() {
-            let mut pid = rng.r#gen::<u32>();
-            while used_ids.contains(&pid) {
-                pid = rng.r#gen::<u32>();
-            }
-            used_ids.insert(pid);
-            cluster_id_to_partition_id.push(pid);
-        }
-    }
 
     println!("  > Starting Regional Pass (Super-Clusters)...");
     for (i, sc) in final_super_clusters.iter().enumerate() {
@@ -1267,12 +1250,60 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
         println!("  - Found {} external stops in BBox", external_stops.len());
 
+        // Precompute is_train_stop for all local stops
+        // Map: local_idx -> bool
+        let mut is_train_stop = vec![false; chunk_stops.len()];
+        for pat in &relevant_patterns {
+            let is_train_route =
+                if let Some(route) = route_map.get(&(pat.chateau.clone(), pat.route_id.clone())) {
+                    route.route_type == 1 || route.route_type == 2
+                } else {
+                    false
+                };
+
+            if is_train_route {
+                for &global_idx in &pat.stop_indices {
+                    if let Some(&local_idx) = local_stop_map.get(&global_idx) {
+                        is_train_stop[local_idx as usize] = true;
+                    }
+                }
+            }
+        }
+
+        // Build RTree of local stops
+        let local_points: Vec<GeomWithData<[f64; 2], usize>> = chunk_stops
+            .iter()
+            .enumerate()
+            .map(|(i, s)| GeomWithData::new([s.lon, s.lat], i))
+            .collect();
+        let local_rtree = RTree::bulk_load(local_points);
+
         for ext_stop in external_stops {
             let ext_lat = ext_stop.point.as_ref().map(|p| p.y).unwrap_or(0.0);
             let ext_lon = ext_stop.point.as_ref().map(|p| p.x).unwrap_or(0.0);
 
             // Find nearest local stops (within 3km for cycling)
-            for (local_idx, stop) in chunk_stops.iter_mut().enumerate() {
+            // Use RTree for efficient query
+            // locate_within_distance uses squared euclidean distance for performance if using simple points,
+            // but for GeomWithData it might be different.
+            // Actually, rstar works in the coordinate space provided.
+            // Since we are using lat/lon, "distance" is in degrees.
+            // 3km is roughly 0.027 degrees (very approx).
+            // To be safe and accurate, we should query a larger box or use a custom distance function if supported,
+            // but locate_within_distance expects the metric of the space.
+            // A simple approach is to query a bounding box or a slightly larger radius in degrees,
+            // then filter by exact haversine distance.
+            // 3km ~ 0.03 degrees.
+
+            let search_radius_deg = 0.04; // Conservative upper bound
+            let candidates = local_rtree
+                .locate_within_distance([ext_lon, ext_lat], search_radius_deg * search_radius_deg);
+            // Wait, locate_within_distance for [f64; 2] uses squared euclidean distance.
+
+            for candidate in candidates {
+                let local_idx = candidate.data;
+                let stop = &mut chunk_stops[local_idx];
+
                 let dist = haversine_distance(stop.lat, stop.lon, ext_lat, ext_lon);
                 if dist <= 3000.0 {
                     // Create transfer
@@ -1292,43 +1323,10 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                     });
 
                     // Mark as External Gateway
-                    // If it's a train station (Route Type 1 or 2), allow larger radius (300m)
-                    // Otherwise 200m.
-                    // Actually, we already filtered by 3km for cycling.
-                    // But for "Gateway" status (which implies walking transfer usually), we want a tighter bound?
-
-                    // Let's check if this stop serves a train route.
-                    // We need to know if `stop` (local) serves a train.
-                    // This is expensive to check every time.
-                    // Optimization: Precompute `is_train_stop` map.
-
-                    // For now, let's just use the distance.
                     // If dist <= 200m, it's a gateway.
                     // If dist <= 300m AND it's a train station, it's a gateway.
 
-                    // Wait, we don't know if the LOCAL stop is a train station easily without checking trips.
-                    // But we can check `db_stops[global_idx]` against routes?
-                    // We have `trips` for this stop.
-
-                    let mut is_train = false;
-                    // Check patterns serving this stop
-                    // stop.id is local_idx.
-                    let global_idx = sorted_relevant_stops[stop.id as usize];
-
-                    // Check patterns
-                    for pat in &relevant_patterns {
-                        if pat.stop_indices.contains(&(global_idx as u32)) {
-                            if let Some(route) =
-                                route_map.get(&(pat.chateau.clone(), pat.route_id.clone()))
-                            {
-                                if route.route_type == 1 || route.route_type == 2 {
-                                    is_train = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
+                    let is_train = is_train_stop[local_idx];
                     let threshold = if is_train { 300.0 } else { 200.0 };
 
                     if dist <= threshold {
@@ -1634,9 +1632,6 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     Ok(())
 }
-
-use rstar::RTree;
-use rstar::primitives::GeomWithData;
 
 // --- Geometry Helpers ---
 
