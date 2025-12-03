@@ -1053,7 +1053,64 @@ pub fn compute_profile_query(
         });
     }
 
-    result_edges
+    // Deduplicate edges
+    // Key: (from, to, type (0=Walk, 1=Transit), p_idx, s_idx, e_idx)
+    let mut dedup_map: HashMap<(u32, u32, u8, u32, u32, u32), DagEdge> = HashMap::new();
+
+    for edge in result_edges {
+        let key = match &edge.edge_type {
+            Some(EdgeType::Transit(t)) => (
+                edge.from_node_idx,
+                edge.to_node_idx,
+                1,
+                t.trip_pattern_idx,
+                t.start_stop_idx,
+                t.end_stop_idx,
+            ),
+            Some(EdgeType::LongDistanceTransit(t)) => (
+                edge.from_node_idx,
+                edge.to_node_idx,
+                2,
+                t.trip_pattern_idx,
+                t.start_stop_idx,
+                t.end_stop_idx,
+            ),
+            Some(EdgeType::Walk(_)) => (edge.from_node_idx, edge.to_node_idx, 0, 0, 0, 0),
+            None => continue,
+        };
+
+        match dedup_map.entry(key) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let existing = entry.get_mut();
+                match (&mut existing.edge_type, &edge.edge_type) {
+                    (Some(EdgeType::Transit(t1)), Some(EdgeType::Transit(t2))) => {
+                        if t2.min_duration < t1.min_duration {
+                            t1.min_duration = t2.min_duration;
+                        }
+                    }
+                    (
+                        Some(EdgeType::LongDistanceTransit(t1)),
+                        Some(EdgeType::LongDistanceTransit(t2)),
+                    ) => {
+                        if t2.min_duration < t1.min_duration {
+                            t1.min_duration = t2.min_duration;
+                        }
+                    }
+                    (Some(EdgeType::Walk(w1)), Some(EdgeType::Walk(w2))) => {
+                        if w2.duration_seconds < w1.duration_seconds {
+                            w1.duration_seconds = w2.duration_seconds;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(edge);
+            }
+        }
+    }
+
+    dedup_map.into_values().collect()
 }
 
 // Helpers

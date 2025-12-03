@@ -37,6 +37,8 @@ pub mod osm;
 pub mod reduce_borders;
 pub mod repro_hub;
 #[cfg(test)]
+pub mod repro_large_file;
+#[cfg(test)]
 pub mod test_global_pruning;
 pub mod test_hub;
 #[cfg(test)]
