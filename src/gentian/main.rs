@@ -1486,6 +1486,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
         // Compute Local Transfer Patterns
         compute_local_patterns_for_partition(&mut partition);
+        partitions.insert(partition_id, partition.clone());
 
         let filename = format!("transit_chunk_{}.pbf", partition_id);
         let path = args.output.join(filename);
@@ -1627,6 +1628,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         &cross_partition_edges,
         &intra_partition_edges,
         &global_to_partition_map,
+        &partitions,
         &args.output,
     );
 
@@ -2143,11 +2145,46 @@ mod tests {
         global_to_partition_map.insert(0, (0, 0)); // Node 0 is in P0, local idx 0
         global_to_partition_map.insert(1, (1, 0)); // Node 1 is in P1, local idx 0
 
+        let mut loaded_partitions = HashMap::new();
+
+        // Partition 0
+        let mut p0 = TransitPartition::default();
+        p0.partition_id = 0;
+        p0.stops.push(TransitStop {
+            id: 0,
+            chateau_idx: 0,
+            gtfs_original_id: "s0".to_string(),
+            is_hub: true, // Must be hub to be considered long-distance
+            is_border: true,
+            is_external_gateway: false,
+            is_long_distance: true,
+            lat: 0.0,
+            lon: 0.0,
+        });
+        loaded_partitions.insert(0, p0);
+
+        // Partition 1
+        let mut p1 = TransitPartition::default();
+        p1.partition_id = 1;
+        p1.stops.push(TransitStop {
+            id: 0,
+            chateau_idx: 0,
+            gtfs_original_id: "s1".to_string(),
+            is_hub: true,
+            is_border: true,
+            is_external_gateway: false,
+            is_long_distance: true,
+            lat: 0.0,
+            lon: 0.0,
+        });
+        loaded_partitions.insert(1, p1);
+
         compute_global_patterns(
             &border_nodes,
             &cross_edges,
             &intra_edges,
             &global_to_partition_map,
+            &loaded_partitions,
             &temp_dir,
         );
 
@@ -2698,6 +2735,7 @@ async fn stitch_graph(args: &Args) -> Result<()> {
         &cross_partition_edges,
         &intra_partition_edges,
         &global_to_partition_map,
+        &loaded_partitions,
         &args.output,
     );
 
