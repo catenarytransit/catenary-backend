@@ -133,6 +133,7 @@ via-rail-gtfsrt = "0.2.0"
 wyhash2 = "0.2.1"
 console-subscriber = "0.5.0"
 strumbra = "0.6.0"
+strsim = "0.11.0"
 compact_str = { version = "0.9.0", features = ["serde", "diesel"] }
 urlencoding = "2.1.3"
 url = "2.5.2"

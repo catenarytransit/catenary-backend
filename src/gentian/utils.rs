@@ -1,5 +1,5 @@
 use ahash::AHashMap as HashMap;
-use catenary::models::{Calendar, CompressedTrip as DbCompressedTrip};
+use catenary::models::Calendar;
 use catenary::routing_common::transit_graph::{
     CompressedTrip, DirectionPattern, TimeDeltaSequence, TripPattern,
 };

@@ -14,7 +14,8 @@ mod tests {
             TransitStop {
                 id: 0,
                 chateau_idx: 0,
-                gtfs_original_id: "s0".to_string(),
+                station_id: "s0".to_string(),
+                gtfs_stop_ids: vec!["s0".to_string()],
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
@@ -25,7 +26,8 @@ mod tests {
             TransitStop {
                 id: 1,
                 chateau_idx: 0,
-                gtfs_original_id: "s1".to_string(),
+                station_id: "s1".to_string(),
+                gtfs_stop_ids: vec!["s1".to_string()],
                 is_hub: true,
                 is_border: false,
                 is_external_gateway: false,
@@ -36,7 +38,8 @@ mod tests {
             TransitStop {
                 id: 2,
                 chateau_idx: 0,
-                gtfs_original_id: "s2".to_string(),
+                station_id: "s2".to_string(),
+                gtfs_stop_ids: vec!["s2".to_string()],
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
@@ -157,7 +160,8 @@ mod tests {
             TransitStop {
                 id: 0,
                 chateau_idx: 0,
-                gtfs_original_id: "s0".to_string(),
+                station_id: "s0".to_string(),
+                gtfs_stop_ids: vec!["s0".to_string()],
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
@@ -168,7 +172,8 @@ mod tests {
             TransitStop {
                 id: 1,
                 chateau_idx: 0,
-                gtfs_original_id: "s1".to_string(),
+                station_id: "s1".to_string(),
+                gtfs_stop_ids: vec!["s1".to_string()],
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
@@ -179,7 +184,8 @@ mod tests {
             TransitStop {
                 id: 2,
                 chateau_idx: 0,
-                gtfs_original_id: "s2".to_string(),
+                station_id: "s2".to_string(),
+                gtfs_stop_ids: vec!["s2".to_string()],
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,

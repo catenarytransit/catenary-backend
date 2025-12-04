@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     let boundary_geom = parse_kml_boundary(&kml_content)?;
 
     // 4. Determine covering tiles (Z10)
-    let zoom_level = 10;
+    let zoom_level = 12;
     println!("Calculating covering tiles at Z{}...", zoom_level);
     let tiles = calculate_covering_tiles(&boundary_geom, zoom_level);
     println!("Found {} tiles covering the region.", tiles.len());

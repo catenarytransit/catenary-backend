@@ -5,23 +5,23 @@ use catenary::models::{
     Agency, Calendar, CompressedTrip as DbCompressedTrip, ItineraryPatternRow, Route, Stop,
 };
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
-use catenary::routing_common::osm_graph::{load_pbf, save_pbf};
+
 use catenary::routing_common::transit_graph::BoundaryPoint;
 use catenary::routing_common::transit_graph::{
     CompressedTrip, DagEdge, DirectionPattern, EdgeEntry, EdgeType, ExternalTransfer,
-    GlobalPatternIndex, LocalTransferPattern, Manifest, OsmLink, PartitionBoundary,
-    PartitionTimetableData, ServiceException, StaticTransfer, TimeDeltaSequence, TimetableData,
-    TransferChunk, TransitEdge, TransitPartition, TransitStop, TripPattern, WalkEdge, save_bincode,
+    GlobalPatternIndex, Manifest, OsmLink, PartitionBoundary, PartitionTimetableData,
+    StaticTransfer, TimeDeltaSequence, TimetableData, TransferChunk, TransitEdge, TransitPartition,
+    TransitStop, TripPattern, load_bincode, save_bincode,
 };
 use clap::Parser;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use geo::prelude::*;
-use geo::prelude::*;
-use geo::{ConcaveHull, Distance, Haversine, MultiPoint, Point};
+
+use geo::{ConcaveHull, MultiPoint, Point};
 use rand::prelude::*;
 use rayon::prelude::*;
-use std::cmp::Ordering;
+
 use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::BufReader;
@@ -50,37 +50,24 @@ pub mod test_local_patterns;
 #[cfg(test)]
 pub mod test_reduce_borders;
 
+pub mod cluster_global;
+pub mod extract;
+pub mod station_matching;
 #[cfg(test)]
 pub mod test_stitching;
 pub mod test_trip_based;
+pub mod tp;
 pub mod trip_based;
-pub mod utils;
-
-#[cfg(not(target_env = "msvc"))]
-use tikv_jemallocator::Jemalloc;
-
-#[cfg(not(target_env = "msvc"))]
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
-
-use clustering::merge_based_clustering;
-use connectivity::{
-    compute_border_patterns, compute_global_patterns, compute_intra_partition_connectivity,
-    compute_local_patterns_for_partition,
-};
-use osm::{ChunkCache, find_osm_link};
-use reduce_borders::reduce_borders_by_merging;
-use utils::{ProcessedPattern, calculate_service_mask, haversine_distance, reindex_deltas};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Chateau ID to process (comma-separated for multiple)
     #[arg(short, long)]
-    chateau: String,
+    chateau: Option<String>,
 
     /// Directory containing OSM chunks
-    #[arg(long)]
+    #[arg(long, default_value = "osm_chunks")]
     osm_chunks: PathBuf,
 
     /// Output directory for generated GTFS chunks
@@ -94,6 +81,22 @@ struct Args {
     /// Run in stitch mode (rebuild global graph from chunks)
     #[arg(long)]
     stitch: bool,
+
+    /// Subcommand to run specific phases
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Commands {
+    /// Extract data from DB and update shards
+    Extract {
+        /// Chateau IDs to process (comma-separated)
+        #[arg(short, long)]
+        chateau: String,
+    },
+    /// Run global clustering on shards
+    Cluster,
 }
 
 #[tokio::main]
@@ -102,12 +105,6 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
-    println!("Starting Gentian for Chateaux: {}", args.chateau);
-
-    // Create output directory
-    tokio::fs::create_dir_all(&args.output)
-        .await
-        .context("Failed to create output dir")?;
 
     // Connect to DB
     let pool = make_async_pool()
@@ -116,15 +113,37 @@ async fn main() -> Result<()> {
         .context("Failed to create DB pool")?;
     let pool = Arc::new(pool);
 
-    // Run generation
-    // Run generation or stitch
-    // Run generation or stitch
-    if args.stitch {
-        stitch_graph(&args).await?;
+    // Create output directory
+    tokio::fs::create_dir_all(&args.output)
+        .await
+        .context("Failed to create output dir")?;
+
+    if let Some(cmd) = &args.command {
+        match cmd {
+            Commands::Extract { chateau } => {
+                let chateaux_list: Vec<String> =
+                    chateau.split(',').map(|s| s.trim().to_string()).collect();
+                extract::run_extraction(pool, chateaux_list, &args.output).await?;
+            }
+            Commands::Cluster => {
+                cluster_global::run_global_clustering(&args.output)?;
+            }
+        }
     } else {
-        generate_chunks(&args, pool).await?;
-        // Always stitch after generation to ensure global connectivity is up to date
-        stitch_graph(&args).await?;
+        // Legacy/Default behavior
+        if let Some(chateau_str) = &args.chateau {
+            println!("Starting Gentian for Chateaux: {}", chateau_str);
+            // Run generation or stitch
+            if args.stitch {
+                stitch_graph(&args).await?;
+            } else {
+                generate_chunks(&args, pool).await?;
+                // Always stitch after generation to ensure global connectivity is up to date
+                stitch_graph(&args).await?;
+            }
+        } else {
+            println!("Please provide --chateau or a subcommand.");
+        }
     }
 
     Ok(())
@@ -411,6 +430,82 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         );
     }
 
+    // Run Station Matching
+    println!("Running Station Matching...");
+    for chateau_id in &chateaux_to_process {
+        let stops_for_chateau: Vec<Stop> = db_stops
+            .iter()
+            .filter(|s| s.chateau == *chateau_id)
+            .cloned()
+            .collect();
+
+        if !stops_for_chateau.is_empty() {
+            station_matching::match_stops_to_stations(&mut conn, chateau_id, &stops_for_chateau)
+                .await?;
+        }
+    }
+    println!("Station Matching Complete.");
+
+    // Load Mappings
+    use catenary::models::{Station, StopMapping};
+    use catenary::schema::gtfs::stations::dsl::{station_id as station_table_id, stations};
+    use catenary::schema::gtfs::stop_mappings::dsl::{feed_id as mapping_feed_id, stop_mappings};
+
+    let all_mappings: Vec<StopMapping> = stop_mappings
+        .filter(mapping_feed_id.eq_any(&chateaux_to_process))
+        .load(&mut conn)
+        .await?;
+
+    let mut stop_to_station_map: HashMap<(String, String), String> = HashMap::new();
+    for m in all_mappings {
+        stop_to_station_map.insert((m.feed_id, m.stop_id), m.station_id);
+    }
+
+    // Load Stations (Only those referenced by mappings)
+    let referenced_station_ids: Vec<String> = stop_to_station_map.values().cloned().collect();
+    // Dedup
+    let referenced_station_ids: HashSet<String> = referenced_station_ids.into_iter().collect();
+    let referenced_station_ids: Vec<String> = referenced_station_ids.into_iter().collect();
+
+    let all_stations: Vec<Station> = stations
+        .filter(station_table_id.eq_any(&referenced_station_ids))
+        .load(&mut conn)
+        .await?;
+
+    let station_map: HashMap<String, Station> = all_stations
+        .into_iter()
+        .map(|s| (s.station_id.clone(), s))
+        .collect();
+
+    // Create db_stations vector and mappings
+    let mut db_stations: Vec<Station> = station_map.values().cloned().collect();
+    // Sort for determinism
+    db_stations.sort_by(|a, b| a.station_id.cmp(&b.station_id));
+
+    let station_id_to_idx: HashMap<String, usize> = db_stations
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.station_id.clone(), i))
+        .collect();
+
+    // Map Stop Index -> Station Index
+    let mut stop_idx_to_station_idx: Vec<usize> = Vec::with_capacity(db_stops.len());
+    let mut station_idx_to_stop_indices: HashMap<usize, Vec<usize>> = HashMap::new();
+
+    for (i, stop) in db_stops.iter().enumerate() {
+        let station_id = stop_to_station_map.get(&(stop.chateau.clone(), stop.gtfs_id.clone()));
+        let s_idx = if let Some(sid) = station_id {
+            *station_id_to_idx.get(sid).unwrap_or(&0)
+        } else {
+            0
+        };
+        stop_idx_to_station_idx.push(s_idx);
+        station_idx_to_stop_indices
+            .entry(s_idx)
+            .or_default()
+            .push(i);
+    }
+
     let route_map: HashMap<(String, String), Route> = db_routes
         .into_iter()
         .map(|r| ((r.chateau.clone(), r.route_id.clone()), r))
@@ -503,6 +598,11 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 })
                 .collect();
 
+            let station_indices: Vec<u32> = stop_indices
+                .iter()
+                .map(|&idx| stop_idx_to_station_idx[idx as usize] as u32)
+                .collect();
+
             if stop_indices.len() != rows.len() {
                 continue;
             }
@@ -545,10 +645,20 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 // Add to Adjacency Graph
                 let trip_count = trips.len() as u32;
                 for i in 0..stop_indices.len() - 1 {
-                    let u = stop_indices[i] as usize;
-                    let v = stop_indices[i + 1] as usize;
-                    let (min, max) = if u < v { (u, v) } else { (v, u) };
-                    *adjacency.entry((min, max)).or_default() += trip_count;
+                    let u_stop = stop_indices[i] as usize;
+                    let v_stop = stop_indices[i + 1] as usize;
+
+                    let u_station = stop_idx_to_station_idx[u_stop];
+                    let v_station = stop_idx_to_station_idx[v_stop];
+
+                    if u_station != v_station {
+                        let (min, max) = if u_station < v_station {
+                            (u_station, v_station)
+                        } else {
+                            (v_station, u_station)
+                        };
+                        *adjacency.entry((min, max)).or_default() += trip_count;
+                    }
                 }
             }
 
@@ -560,23 +670,20 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             deltas.push((s0_dep - s0_arr) as u32); // Dwell at 0
 
             for i in 1..rows.len() {
-                let prev_dep = rows[i - 1]
-                    .departure_time_since_start
-                    .unwrap_or(rows[i - 1].arrival_time_since_start.unwrap_or(0));
-                let curr_arr = rows[i].arrival_time_since_start.unwrap_or(prev_dep);
-                let curr_dep = rows[i].departure_time_since_start.unwrap_or(curr_arr);
+                let s_prev_dep = rows[i - 1].departure_time_since_start.unwrap_or(0);
+                let s_curr_arr = rows[i].arrival_time_since_start.unwrap_or(0);
+                let s_curr_dep = rows[i].departure_time_since_start.unwrap_or(s_curr_arr);
 
-                let travel = if curr_arr >= prev_dep {
-                    curr_arr - prev_dep
+                let travel = if s_curr_arr > s_prev_dep {
+                    s_curr_arr - s_prev_dep
                 } else {
                     0
                 };
-                let dwell = if curr_dep >= curr_arr {
-                    curr_dep - curr_arr
+                let dwell = if s_curr_dep > s_curr_arr {
+                    s_curr_dep - s_curr_arr
                 } else {
                     0
                 };
-
                 deltas.push(travel as u32);
                 deltas.push(dwell as u32);
             }
@@ -630,15 +737,34 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 });
             }
 
+            // Map Timezone
+            let route_id = trips[0].route_id.clone();
+            let tz_str = route_timezone_map
+                .get(&(chateau_id.clone(), route_id.clone()))
+                .cloned()
+                .unwrap_or_else(|| "UTC".to_string());
+
+            let tz_idx = if let Some(&idx) = timezone_map.get(&tz_str) {
+                idx
+            } else {
+                let idx = global_timezones.len() as u32;
+                global_timezones.push(tz_str.clone());
+                timezone_map.insert(tz_str, idx);
+                idx
+            };
+
             // Merge into ProcessedPattern
-            let key = ((chateau_id.clone(), route_id.clone()), stop_indices.clone());
+            let key = (
+                (chateau_id.clone(), route_id.clone()),
+                station_indices.clone(),
+            );
 
             let entry = merged_patterns
                 .entry(key)
                 .or_insert_with(|| ProcessedPattern {
                     chateau: trips[0].chateau.clone(),
                     route_id,
-                    stop_indices,
+                    stop_indices: station_indices,
                     trips: Vec::new(),
                     timezone_idx: tz_idx,
                 });
@@ -656,8 +782,13 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     // 4. Merge-Based Clustering (Moved Before Hub Identification)
     println!("Clustering stops (Merge-Based)...");
-    let clusters = merge_based_clustering(db_stops.len(), &adjacency, args.cluster_size);
-    println!("Created {} clusters (before filtering)", clusters.len());
+    let clusters = merge_based_clustering(db_stations.len(), &adjacency, args.cluster_size);
+
+    // A stop is "used" if it appears in any pattern (which means it is in adjacency? No, adjacency is edges)
+    // Actually, we should check if it's referenced by any trip.
+    // For now, assume all stations are relevant or will be filtered out if empty.
+
+    println!("Initial Clusters: {}", clusters.len());
 
     // Filter out clusters that contain only unused stops
     // A stop is "used" if it appears in any pattern (which means it is in adjacency? No, adjacency is edges)
@@ -998,39 +1129,57 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             }
         };
 
-        let mut sorted_relevant_stops: Vec<u32> = relevant_stop_indices.into_iter().collect();
-        sorted_relevant_stops.sort();
+        let mut sorted_relevant_stations: Vec<u32> = relevant_stop_indices.into_iter().collect();
+        sorted_relevant_stations.sort();
 
-        for (local_idx, &global_idx) in sorted_relevant_stops.iter().enumerate() {
+        for (local_idx, &global_idx) in sorted_relevant_stations.iter().enumerate() {
             local_stop_map.insert(global_idx, local_idx as u64);
 
-            // If this partition owns the stop, record it in the map
+            // If this partition owns the station, record it in the map
             if stop_to_cluster[global_idx as usize] == cluster_id {
                 global_to_partition_map
                     .insert(global_idx as usize, (cluster_id as u32, local_idx as u32));
             }
 
-            let stop = &db_stops[global_idx as usize];
+            let station = &db_stations[global_idx as usize];
             let is_border = border_stops.contains(&(global_idx as usize));
             let is_hub = hubs.contains(&(global_idx as usize))
                 || border_stops.contains(&(global_idx as usize));
 
+            // Find mapped GTFS stops
+            let mapped_stop_indices = station_idx_to_stop_indices
+                .get(&(global_idx as usize))
+                .cloned()
+                .unwrap_or_default();
+            let gtfs_stop_ids: Vec<String> = mapped_stop_indices
+                .iter()
+                .map(|&i| db_stops[i].gtfs_id.clone())
+                .collect();
+
+            // Determine Chateau (use first mapped stop)
+            let chateau = if let Some(&first_stop_idx) = mapped_stop_indices.get(0) {
+                &db_stops[first_stop_idx].chateau
+            } else {
+                "unknown" // Should not happen
+            };
+
             let t_stop = TransitStop {
                 id: local_idx as u64,
-                chateau_idx: get_chateau_idx(&stop.chateau),
-                gtfs_original_id: stop.gtfs_id.clone(),
+                chateau_idx: get_chateau_idx(chateau),
+                station_id: station.station_id.clone(),
+                gtfs_stop_ids,
                 is_hub,
                 is_border,
                 is_external_gateway: false,
                 is_long_distance: false,
-                lat: stop.point.as_ref().map(|p| p.y).unwrap_or(0.0),
-                lon: stop.point.as_ref().map(|p| p.x).unwrap_or(0.0),
+                lat: station.point.y,
+                lon: station.point.x,
             };
             chunk_stops.push(t_stop);
 
             if let Some(link) = find_osm_link(
-                stop.point.as_ref().unwrap().x,
-                stop.point.as_ref().unwrap().y,
+                station.point.x,
+                station.point.y,
                 local_idx as u32,
                 &args.osm_chunks,
                 &mut chunk_cache,
@@ -1379,7 +1528,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             let stops_size: usize = partition
                 .stops
                 .iter()
-                .map(|s| std::mem::size_of::<TransitStop>() + s.gtfs_original_id.len())
+                .map(|s| std::mem::size_of::<TransitStop>() + s.station_id.len())
                 .sum();
             let trip_patterns_size: usize = partition
                 .trip_patterns
@@ -2141,7 +2290,8 @@ mod tests {
         p0.stops.push(TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "s0".to_string(),
+            station_id: "s0".to_string(),
+            gtfs_stop_ids: vec!["s0".to_string()],
             is_hub: true, // Must be hub to be considered long-distance
             is_border: true,
             is_external_gateway: false,
@@ -2153,7 +2303,8 @@ mod tests {
         p0.stops.push(TransitStop {
             id: 1,
             chateau_idx: 0,
-            gtfs_original_id: "s0_dummy".to_string(),
+            station_id: "s0_dummy".to_string(),
+            gtfs_stop_ids: vec!["s0_dummy".to_string()],
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
@@ -2179,7 +2330,8 @@ mod tests {
         p1.stops.push(TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "s1".to_string(),
+            station_id: "s1".to_string(),
+            gtfs_stop_ids: vec!["s1".to_string()],
             is_hub: true,
             is_border: true,
             is_external_gateway: false,
@@ -2191,7 +2343,8 @@ mod tests {
         p1.stops.push(TransitStop {
             id: 1,
             chateau_idx: 0,
-            gtfs_original_id: "s1_dummy".to_string(),
+            station_id: "s1_dummy".to_string(),
+            gtfs_stop_ids: vec!["s1_dummy".to_string()],
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
@@ -2628,9 +2781,9 @@ async fn stitch_graph(args: &Args) -> Result<()> {
     let mut long_distance_stops_per_partition: HashMap<u32, HashSet<u32>> = HashMap::new();
 
     for &pid in &sorted_partitions {
-        let path = args.output.join(format!("transit_chunk_{}.pbf", pid));
+        let path = args.output.join(format!("transit_chunk_{}.bincode", pid));
         let mut partition: TransitPartition =
-            load_pbf(path.to_str().unwrap()).context("Failed to load transit partition")?;
+            load_bincode(path.to_str().unwrap()).context("Failed to load transit partition")?;
 
         let mut long_dist_stop_indices = HashSet::new();
 
@@ -2728,7 +2881,7 @@ async fn stitch_graph(args: &Args) -> Result<()> {
         for (local_idx, stop) in partition.stops.iter().enumerate() {
             let key = (
                 partition.chateau_ids[stop.chateau_idx as usize].clone(),
-                stop.gtfs_original_id.clone(),
+                stop.station_id.clone(),
             );
 
             let is_long_dist = stop.is_hub && long_dist_indices.contains(&(local_idx as u32));
@@ -2799,17 +2952,17 @@ async fn stitch_graph(args: &Args) -> Result<()> {
         partition_dags,
         long_distance_dags: Vec::new(), // TODO: Populate if needed, or maybe Step 3 should return these?
     };
-    let global_path = args.output.join("global_patterns.pbf");
-    if let Err(e) = save_pbf(&global_index, global_path.to_str().unwrap()) {
-        eprintln!("Failed to save global_patterns.pbf: {}", e);
+    let global_path = args.output.join("global_patterns.bincode");
+    if let Err(e) = save_bincode(&global_index, global_path.to_str().unwrap()) {
+        eprintln!("Failed to save global_patterns.bincode: {}", e);
     } else {
-        println!("  - Saved global_patterns.pbf");
+        println!("  - Saved global_patterns.bincode");
     }
 
     // 6. Save Updated Partitions
     for (pid, partition) in loaded_partitions {
-        let path = args.output.join(format!("transit_chunk_{}.pbf", pid));
-        if let Err(e) = save_pbf(&partition, path.to_str().unwrap()) {
+        let path = args.output.join(format!("transit_chunk_{}.bincode", pid));
+        if let Err(e) = save_bincode(&partition, path.to_str().unwrap()) {
             eprintln!("Failed to save partition {}: {}", pid, e);
         } else {
             println!("  - Saved updated partition {} to {:?}", pid, path);

@@ -4,7 +4,7 @@ use catenary::routing_common::transit_graph::{
     CompressedTrip, DagEdge, EdgeType, GlobalPatternIndex, ServiceException, TransitPartition,
 };
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct QueryNode {
@@ -313,7 +313,7 @@ impl QueryGraph {
                             start_time: min_end_time - *egress_time as u64,
                             end_time: min_end_time,
                             mode: TravelMode::Walk,
-                            start_stop_id: Some(stop.gtfs_original_id.clone()),
+                            start_stop_id: Some(stop.station_id.clone()),
                             end_stop_id: None, // Destination
                             start_stop_chateau: Some(
                                 partition.chateau_ids[stop.chateau_idx as usize].clone(),
@@ -663,7 +663,7 @@ impl QueryGraph {
                     // Local walk
                     let stop = partition.stops.get(edge.to.stop_idx as usize)?;
                     (
-                        stop.gtfs_original_id.clone(),
+                        stop.station_id.clone(),
                         partition.chateau_ids[stop.chateau_idx as usize].clone(),
                     )
                 } else {
@@ -671,7 +671,7 @@ impl QueryGraph {
                     let to_partition = graph_manager.get_transit_partition(edge.to.partition_id)?;
                     let stop = to_partition.stops.get(edge.to.stop_idx as usize)?;
                     (
-                        stop.gtfs_original_id.clone(),
+                        stop.station_id.clone(),
                         partition.chateau_ids[stop.chateau_idx as usize].clone(),
                     )
                 };
@@ -680,7 +680,7 @@ impl QueryGraph {
                     start_time,
                     end_time,
                     mode: TravelMode::Walk,
-                    start_stop_id: Some(start_stop.gtfs_original_id.clone()),
+                    start_stop_id: Some(start_stop.station_id.clone()),
                     end_stop_id: Some(end_stop_id),
                     start_stop_chateau: Some(
                         partition.chateau_ids[start_stop.chateau_idx as usize].clone(),
@@ -708,8 +708,8 @@ impl QueryGraph {
                     start_time,
                     end_time,
                     mode: TravelMode::Transit,
-                    start_stop_id: start_stop.gtfs_original_id.clone(),
-                    end_stop_id: end_stop.gtfs_original_id.clone(),
+                    start_stop_id: start_stop.station_id.clone(),
+                    end_stop_id: end_stop.station_id.clone(),
                     start_stop_chateau: partition.chateau_ids[start_stop.chateau_idx as usize]
                         .clone(),
                     end_stop_chateau: partition.chateau_ids[end_stop.chateau_idx as usize].clone(),
@@ -744,7 +744,7 @@ impl QueryGraph {
                 {
                     let end_stop = &partition.stops[end_stop_idx_in_partition as usize];
                     (
-                        end_stop.gtfs_original_id.clone(),
+                        end_stop.station_id.clone(),
                         partition.chateau_ids[end_stop.chateau_idx as usize].clone(),
                     )
                 } else {
@@ -759,7 +759,7 @@ impl QueryGraph {
                                 .get(hub.stop_idx_in_partition as usize)
                             {
                                 (
-                                    stop.gtfs_original_id.clone(),
+                                    stop.station_id.clone(),
                                     target_partition.chateau_ids[stop.chateau_idx as usize].clone(),
                                 )
                             } else {
@@ -777,7 +777,7 @@ impl QueryGraph {
                     start_time,
                     end_time,
                     mode: TravelMode::Transit,
-                    start_stop_id: start_stop.gtfs_original_id.clone(),
+                    start_stop_id: start_stop.station_id.clone(),
                     end_stop_id,
                     start_stop_chateau: partition.chateau_ids[start_stop.chateau_idx as usize]
                         .clone(),

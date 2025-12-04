@@ -1,10 +1,5 @@
 pub mod tests {
-    use crate::trip_based::{self, Transfer};
-    use ahash::AHashMap as HashMap;
-    use catenary::routing_common::transit_graph::{
-        CompressedTrip, DirectionPattern, TimeDeltaSequence, TransitPartition, TransitStop,
-        TripPattern,
-    };
+    use crate::trip_based;
 
     #[test]
     pub fn run_repro() {

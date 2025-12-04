@@ -414,6 +414,34 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.stations (station_id) {
+            station_id -> Text,
+            name -> Text,
+            point -> Geometry,
+            is_manual -> Bool,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.stop_mappings (feed_id, stop_id) {
+            feed_id -> Text,
+            stop_id -> Text,
+            station_id -> Text,
+            match_score -> Float8,
+            match_method -> Text,
+            active -> Bool,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.stops (onestop_feed_id, attempt_id, gtfs_id) {
             onestop_feed_id -> Text,
             attempt_id -> Text,
@@ -541,6 +569,8 @@ pub mod gtfs {
         }
     }
 
+    diesel::joinable!(stop_mappings -> stations (station_id));
+
     diesel::allow_tables_to_appear_in_same_query!(
         admin_credentials,
         agencies,
@@ -565,6 +595,8 @@ pub mod gtfs {
         static_download_attempts,
         static_feeds,
         static_passwords,
+        stations,
+        stop_mappings,
         stops,
         stopsforroute,
         tile_storage,

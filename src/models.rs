@@ -453,3 +453,23 @@ pub struct VehicleEntry {
     pub notes: Option<String>,
     pub key_str: String,
 }
+
+#[derive(Queryable, Selectable, Insertable, QueryableByName, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::stations)]
+pub struct Station {
+    pub station_id: String,
+    pub name: String,
+    pub point: postgis_diesel::types::Point,
+    pub is_manual: bool,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::stop_mappings)]
+pub struct StopMapping {
+    pub feed_id: String,
+    pub stop_id: String,
+    pub station_id: String,
+    pub match_score: f64,
+    pub match_method: String,
+    pub active: bool,
+}

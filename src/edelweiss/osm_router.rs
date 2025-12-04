@@ -1,8 +1,7 @@
 use crate::graph_loader::GraphManager;
-use catenary::routing_common::osm_graph::{Edge, Node, StreetData};
+use catenary::routing_common::osm_graph::StreetData;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
-use std::sync::Arc;
 
 #[derive(Copy, Clone, PartialEq)]
 struct State {

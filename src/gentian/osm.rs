@@ -79,7 +79,7 @@ pub async fn find_osm_link(
     osm_dir: &PathBuf,
     cache: &mut ChunkCache,
 ) -> Option<OsmLink> {
-    let (x, y) = lon_lat_to_tile(lon, lat, 10);
+    let (x, y) = lon_lat_to_tile(lon, lat, 12);
 
     let (street_data, rtree) = cache.get_or_load(x, y, osm_dir)?;
 

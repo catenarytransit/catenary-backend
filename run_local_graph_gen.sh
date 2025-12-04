@@ -150,6 +150,17 @@ if [ "$GENTIAN_ONLY" = false ]; then
     "f-9q5b4-pvpta~ca~us"
     "f-9muq-lagunabeach~ca~us"
     "f-9q4g-santabarbaramtd"
+    "f-9q9-scmtdcom"
+    "f-sf~bay~area~rg"
+    "f-9qce-sacramentoregionaltransit"
+    "f-9q9-modesto~ca~us"
+    "f-9qd-mercedthebus~ca~us"
+    "f-9q54-goldcoasttransit"
+    "f-9qdc-gis4ufresnogov"
+    "f-montebello~bus"
+    "f-redondo~beach~cities~transit"
+    "f-9q7-getbus"
+    "f-9q7-kerncounty~ca~us"
     )
 
     # Join feeds into comma-separated string
@@ -165,10 +176,10 @@ if [ "$GENTIAN_ONLY" = false ]; then
     OSM_TEMP="$TEMP_DIR/osm_temp"
     mkdir -p "$OSM_TEMP"
 
-  #  "$AVENS_BIN" \
-   #     --region north-america/us/california/socal \
-   #     --output-dir "$OSM_CHUNKS_DIR" \
-    #    --temp-dir "$OSM_TEMP"
+    "$AVENS_BIN" \
+     --region north-america/us/california \
+        --output-dir "$OSM_CHUNKS_DIR" \
+        --temp-dir "$OSM_TEMP"
 else
     echo "Skipping Maple and Avens (Gentian Only mode)"
 fi
@@ -178,17 +189,23 @@ echo "=== Running Gentian (Graph Generation) ==="
 
 CHATEAUS=$(psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT c.chateau FROM gtfs.chateaus c WHERE EXISTS (SELECT 1 FROM gtfs.routes r WHERE r.chateau = c.chateau);")
 
-for CHATEAU in $CHATEAUS; do
-    # Trim whitespace
-    CHATEAU=$(echo "$CHATEAU" | xargs)
+# Convert newlines to commas
+CHATEAU_LIST=$(echo "$CHATEAUS" | tr '\n' ',' | sed 's/,$//' | sed 's/ //g')
 
-    if [ -n "$CHATEAU" ]; then
-        echo "Running Gentian for $CHATEAU"
-        "$GENTIAN_BIN" \
-            --chateau "$CHATEAU" \
-            --osm-chunks "$OSM_CHUNKS_DIR" \
-            --output "$OUTPUT_DIR"
-    fi
-done
+if [ -n "$CHATEAU_LIST" ]; then
+    echo "Running Gentian Extract for: $CHATEAU_LIST"
+    "$GENTIAN_BIN" \
+        --output "$OUTPUT_DIR" \
+        --osm-chunks "$OSM_CHUNKS_DIR" \
+        extract \
+        --chateau "$CHATEAU_LIST"
+
+    echo "Running Gentian Cluster"
+    "$GENTIAN_BIN" \
+        --output "$OUTPUT_DIR" \
+        cluster
+else
+    echo "No chateaus found to process."
+fi
 
 echo "=== Local Graph Generation Complete! ==="

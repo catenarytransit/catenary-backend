@@ -1,14 +1,11 @@
 use crate::graph_loader::GraphManager;
 use crate::osm_router::OsmRouter;
 use crate::query_graph::{QueryGraph, ServiceContext};
-use catenary::routing_common::api::{Itinerary, RoutingRequest, RoutingResult, TravelMode};
-use catenary::routing_common::transit_graph::{
-    CompressedTrip, DagEdge, DagEdgeList, DirectionPattern, EdgeType, LocalTransferPattern,
-    TransitEdge, TransitPartition, TripPattern,
-};
-use chrono::{Datelike, TimeZone, Timelike};
+use catenary::routing_common::api::{RoutingRequest, RoutingResult, TravelMode};
+use catenary::routing_common::transit_graph::{CompressedTrip, TransitPartition};
+use chrono::{Datelike, TimeZone};
 use chrono_tz::Tz;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub struct Router<'a> {
     graph: &'a GraphManager,
@@ -158,7 +155,7 @@ impl<'a> Router<'a> {
                         if let Some(start_stop_id) = first_leg.start_stop_id() {
                             for (pid, idx, time, geom) in partition_start_stops {
                                 if let Some(stop) = start_partition.stops.get(*idx as usize) {
-                                    if stop.gtfs_original_id == *start_stop_id {
+                                    if stop.gtfs_stop_ids.contains(start_stop_id) {
                                         // Found match
                                         let walk_leg = catenary::routing_common::api::Leg::Osm(
                                             catenary::routing_common::api::OsmLeg {
@@ -166,7 +163,7 @@ impl<'a> Router<'a> {
                                                 end_time: req.time + *time as u64,
                                                 mode: TravelMode::Walk,
                                                 start_stop_id: None, // User Location
-                                                end_stop_id: Some(stop.gtfs_original_id.clone()),
+                                                end_stop_id: stop.gtfs_stop_ids.first().cloned(),
                                                 start_stop_chateau: None,
                                                 end_stop_chateau: Some(
                                                     start_partition.chateau_ids
@@ -417,7 +414,9 @@ impl<'a> Router<'a> {
                 .map(|i| i as u32)?;
 
             for (idx, stop) in partition.stops.iter().enumerate() {
-                if stop.gtfs_original_id == gtfs_id && stop.chateau_idx == chateau_idx {
+                if stop.gtfs_stop_ids.contains(&gtfs_id.to_string())
+                    && stop.chateau_idx == chateau_idx
+                {
                     return Some(idx as u32);
                 }
             }
@@ -499,7 +498,8 @@ mod tests {
             TransitStop {
                 id: 0,
                 chateau_idx: 0,
-                gtfs_original_id: "S0".to_string(),
+                station_id: "S0".to_string(),
+                gtfs_stop_ids: vec!["S0".to_string()],
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
@@ -510,7 +510,8 @@ mod tests {
             TransitStop {
                 id: 1,
                 chateau_idx: 0,
-                gtfs_original_id: "S1".to_string(),
+                station_id: "S1".to_string(),
+                gtfs_stop_ids: vec!["S1".to_string()],
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
@@ -521,7 +522,8 @@ mod tests {
             TransitStop {
                 id: 2,
                 chateau_idx: 0,
-                gtfs_original_id: "S2".to_string(),
+                station_id: "S2".to_string(),
+                gtfs_stop_ids: vec!["S2".to_string()],
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
@@ -836,7 +838,8 @@ mod tests {
         let stops_p0 = vec![TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "S0_P0".to_string(),
+            station_id: "S0_P0".to_string(),
+            gtfs_stop_ids: vec!["S0_P0".to_string()],
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
@@ -887,7 +890,8 @@ mod tests {
             TransitStop {
                 id: 0,
                 chateau_idx: 0,
-                gtfs_original_id: "S0_P1".to_string(),
+                station_id: "S0_P1".to_string(),
+                gtfs_stop_ids: vec!["S0_P1".to_string()],
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
@@ -898,7 +902,8 @@ mod tests {
             TransitStop {
                 id: 1,
                 chateau_idx: 0,
-                gtfs_original_id: "S1_P1".to_string(),
+                station_id: "S1_P1".to_string(),
+                gtfs_stop_ids: vec!["S1_P1".to_string()],
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
@@ -1031,7 +1036,8 @@ mod tests {
                 TransitStop {
                     id: 0,
                     chateau_idx: 0,
-                    gtfs_original_id: "S0".to_string(),
+                    station_id: "S0".to_string(),
+                    gtfs_stop_ids: vec!["S0".to_string()],
                     is_hub: false,
                     is_border: false,
                     is_external_gateway: false,
@@ -1042,7 +1048,8 @@ mod tests {
                 TransitStop {
                     id: 1,
                     chateau_idx: 0,
-                    gtfs_original_id: "S1".to_string(),
+                    station_id: "S1".to_string(),
+                    gtfs_stop_ids: vec!["S1".to_string()],
                     is_hub: false,
                     is_border: false,
                     is_external_gateway: false,
@@ -1053,7 +1060,8 @@ mod tests {
                 TransitStop {
                     id: 2,
                     chateau_idx: 0,
-                    gtfs_original_id: "S2".to_string(),
+                    station_id: "S2".to_string(),
+                    gtfs_stop_ids: vec!["S2".to_string()],
                     is_hub: false,
                     is_border: false,
                     is_external_gateway: false,
@@ -1186,7 +1194,8 @@ mod tests {
         partition0.stops.push(TransitStop {
             id: 1, // Local index 1 in P0
             chateau_idx: 0,
-            gtfs_original_id: "S1_P1".to_string(),
+            station_id: "S1_P1".to_string(),
+            gtfs_stop_ids: vec!["S1_P1".to_string()],
             is_hub: true,
             is_border: true,
             is_external_gateway: false,
