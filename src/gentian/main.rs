@@ -49,6 +49,7 @@ pub mod test_hub;
 pub mod test_local_patterns;
 #[cfg(test)]
 pub mod test_reduce_borders;
+pub mod utils;
 
 pub mod cluster_global;
 pub mod extract;
@@ -58,6 +59,15 @@ pub mod test_stitching;
 pub mod test_trip_based;
 pub mod tp;
 pub mod trip_based;
+
+use crate::clustering::merge_based_clustering;
+use crate::connectivity::{
+    compute_border_patterns, compute_global_patterns, compute_local_patterns_for_partition,
+};
+use crate::osm::{ChunkCache, find_osm_link};
+use crate::reduce_borders::reduce_borders_by_merging;
+use crate::utils::haversine_distance;
+use utils::{ProcessedPattern, calculate_service_mask, reindex_deltas};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -154,8 +164,11 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     let chateaux_list: Vec<String> = args
         .chateau
+        .clone()
+        .unwrap_or_default()
         .split(',')
-        .map(|s| s.trim().to_string())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
         .collect();
     println!(
         "Processing {} chateaux: {:?}",
@@ -313,14 +326,14 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         println!("  - Fetching data for {}", chateau_id);
 
         // Stops (if not already fetched)
-        if !stops_by_chateau.contains_key(chateau_id) {
+        if !stops_by_chateau.contains_key::<str>(chateau_id) {
             use catenary::schema::gtfs::stops::dsl::{chateau as stop_chateau, stops};
             let stops_chunk: Vec<Stop> = stops
                 .filter(stop_chateau.eq(chateau_id))
                 .select(Stop::as_select())
                 .load(&mut conn)
                 .await?;
-            stops_by_chateau.insert(chateau_id.clone(), stops_chunk);
+            stops_by_chateau.insert(chateau_id.to_string(), stops_chunk);
         }
 
         // Flatten stops back to db_stops later

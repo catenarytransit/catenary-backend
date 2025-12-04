@@ -1,10 +1,11 @@
 use crate::clustering::merge_based_clustering;
 use crate::reduce_borders::reduce_borders_by_merging;
+use ahash::AHashMap as HashMap;
+use ahash::AHashSet as HashSet;
 use anyhow::{Context, Result};
 use catenary::routing_common::transit_graph::{
     IntermediateLocalEdge, IntermediateStation, load_bincode, save_bincode,
 };
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Run the global clustering phase.

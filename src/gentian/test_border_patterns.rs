@@ -32,7 +32,8 @@ mod tests {
         p0.stops.push(TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "p0_s0".to_string(),
+            station_id: "s0".to_string(),
+            gtfs_stop_ids: vec!["p0_s0".to_string()],
             is_hub: true,
             is_border: true,
             is_external_gateway: false,
@@ -43,7 +44,8 @@ mod tests {
         p0.stops.push(TransitStop {
             id: 1,
             chateau_idx: 0,
-            gtfs_original_id: "p0_s1".to_string(),
+            station_id: "s1".to_string(),
+            gtfs_stop_ids: vec!["p0_s1".to_string()],
             is_hub: true,
             is_border: false,
             is_external_gateway: false,
@@ -103,7 +105,8 @@ mod tests {
         p1.stops.push(TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "p1_s0".to_string(),
+            station_id: "s2".to_string(),
+            gtfs_stop_ids: vec!["p1_s0".to_string()],
             is_hub: true,
             is_border: true,
             is_external_gateway: false,

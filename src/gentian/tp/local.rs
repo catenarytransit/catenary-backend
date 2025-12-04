@@ -16,7 +16,7 @@ pub fn run_local_patterns(output_dir: &Path, cluster_id: u32) -> Result<()> {
     // 2. Identify Stations in this Cluster
     let cluster_stations: HashSet<String> = station_to_cluster
         .iter()
-        .filter(|(_, &c)| c == cluster_id)
+        .filter(|&(_, &c)| c == cluster_id)
         .map(|(s, _)| s.clone())
         .collect();
 

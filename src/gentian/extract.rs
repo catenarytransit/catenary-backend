@@ -110,8 +110,8 @@ pub async fn run_extraction(
         .await?;
 
     let mut stop_to_station_map: HashMap<(String, String), String> = HashMap::new();
-    for m in all_mappings {
-        stop_to_station_map.insert((m.feed_id, m.stop_id), m.station_id);
+    for m in &all_mappings {
+        stop_to_station_map.insert((m.feed_id.clone(), m.stop_id.clone()), m.station_id.clone());
     }
 
     let referenced_station_ids: Vec<String> = stop_to_station_map.values().cloned().collect();
@@ -124,12 +124,24 @@ pub async fn run_extraction(
         .await?;
 
     // 3. Prepare Intermediate Data
+    let mut station_to_chateau: HashMap<String, String> = HashMap::new();
+    for m in &all_mappings {
+        station_to_chateau.insert(m.station_id.clone(), m.feed_id.clone());
+    }
+
+    // 3. Prepare Intermediate Data
     let mut intermediate_stations: Vec<IntermediateStation> = Vec::new();
     let mut station_id_to_tile: HashMap<String, String> = HashMap::new();
 
     for s in all_stations {
         // Compute 3-char Geohash
-        let tile_id = match encode(Coord { x: s.lon, y: s.lat }, 3) {
+        let tile_id = match encode(
+            Coord {
+                x: s.point.x,
+                y: s.point.y,
+            },
+            3,
+        ) {
             Ok(g) => g,
             Err(_) => "000".to_string(), // Fallback
         };
@@ -137,11 +149,14 @@ pub async fn run_extraction(
         station_id_to_tile.insert(s.station_id.clone(), tile_id.clone());
 
         intermediate_stations.push(IntermediateStation {
-            station_id: s.station_id,
-            chateau_id: s.chateau.clone(),
-            lat: s.lat,
-            lon: s.lon,
-            name: s.name.unwrap_or_default(),
+            station_id: s.station_id.clone(),
+            chateau_id: station_to_chateau
+                .get(&s.station_id)
+                .cloned()
+                .unwrap_or_default(),
+            lat: s.point.y,
+            lon: s.point.x,
+            name: s.name.clone(),
             tile_id,
         });
     }
