@@ -521,6 +521,11 @@ pub fn compute_profile_query(
     let num_stops = partition.stops.len();
     let total_trips = flat_id_to_pattern_trip.len();
 
+    scratch.r_labels.clear();
+    scratch
+        .r_labels
+        .resize(max_transfers + 1, vec![u32::MAX; total_trips]);
+
     // Cheap per-call resets
     scratch.initial_walks.clear();
     scratch.seeds.clear();

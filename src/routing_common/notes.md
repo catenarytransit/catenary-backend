@@ -106,7 +106,7 @@ We follow the hierarchy approach given by Bast et al. in Transfer Patterns[1] an
     - **Pre-computation**:
         - **Hub Selection (Centrality)**:
             - Hubs are identified by running random shortest path queries (Time-Dependent Centrality).
-            - **Self-Transfer Penalty**: We explicitly penalize "self-transfers" (transfers between the same route/pattern) to prevent stops on loop routes from being falsely identified as major hubs. This ensures selected hubs are true interchange points between different services.
+            - **Self-Transfer Penalty**: We explicitly penalise "self-transfers" (transfers between the same route/pattern) to prevent stops on loop routes from being falsely identified as major hubs. This ensures selected hubs are true interchange points between different services.
         - **Border Nodes**: Derived from the clustering process (stops with cross-partition links).
         - **Global Graph**: Constructed from the union of Hubs and Border Nodes.
         - **Pattern Generation**: Profile Search (CSA/Raptor) is run between all Global Nodes to find optimal long-distance transfer sequences.
