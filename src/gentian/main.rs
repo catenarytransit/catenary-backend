@@ -9,8 +9,9 @@ use catenary::routing_common::osm_graph::{load_pbf, save_pbf};
 use catenary::routing_common::transit_graph::BoundaryPoint;
 use catenary::routing_common::transit_graph::{
     CompressedTrip, DagEdge, DirectionPattern, EdgeEntry, EdgeType, ExternalTransfer,
-    GlobalPatternIndex, Manifest, OsmLink, PartitionBoundary, StaticTransfer, TimeDeltaSequence,
-    TransferChunk, TransitEdge, TransitPartition, TransitStop, TripPattern, WalkEdge,
+    GlobalPatternIndex, LocalTransferPattern, Manifest, OsmLink, PartitionBoundary, StaticTransfer,
+    TimeDeltaSequence, TransferChunk, TransitEdge, TransitPartition, TransitStop, TripPattern,
+    WalkEdge,
 };
 use clap::Parser;
 use diesel::prelude::*;
@@ -45,6 +46,8 @@ pub mod test_hub;
 pub mod test_local_patterns;
 #[cfg(test)]
 pub mod test_reduce_borders;
+#[cfg(test)]
+pub mod test_stitching;
 pub mod test_trip_based;
 pub mod trip_based;
 pub mod utils;
@@ -1515,6 +1518,72 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
         let filename = format!("transit_chunk_{}.pbf", partition_id);
         let path = args.output.join(filename);
+
+        // Debug: Print approximate sizes
+        {
+            let stops_size: usize = partition
+                .stops
+                .iter()
+                .map(|s| std::mem::size_of::<TransitStop>() + s.gtfs_original_id.len())
+                .sum();
+            let trip_patterns_size: usize = partition
+                .trip_patterns
+                .iter()
+                .map(|tp| {
+                    std::mem::size_of::<TripPattern>()
+                        + tp.route_id.len()
+                        + tp.trips
+                            .iter()
+                            .map(|t| std::mem::size_of::<CompressedTrip>() + t.gtfs_trip_id.len())
+                            .sum::<usize>()
+                })
+                .sum();
+            let time_deltas_size: usize = partition
+                .time_deltas
+                .iter()
+                .map(|td| std::mem::size_of::<TimeDeltaSequence>() + td.deltas.len() * 4)
+                .sum();
+            let internal_transfers_size: usize =
+                partition.internal_transfers.len() * std::mem::size_of::<StaticTransfer>();
+            let direction_patterns_size: usize = partition
+                .direction_patterns
+                .iter()
+                .map(|dp| std::mem::size_of::<DirectionPattern>() + dp.stop_indices.len() * 4)
+                .sum();
+            let local_transfer_patterns_size: usize = partition
+                .local_transfer_patterns
+                .iter()
+                .map(|ltp| {
+                    std::mem::size_of::<LocalTransferPattern>()
+                        + ltp.edges.len() * std::mem::size_of::<DagEdge>()
+                })
+                .sum();
+            let long_distance_trip_patterns_size: usize = partition
+                .long_distance_trip_patterns
+                .iter()
+                .map(|tp| {
+                    std::mem::size_of::<TripPattern>()
+                        + tp.route_id.len()
+                        + tp.trips
+                            .iter()
+                            .map(|t| std::mem::size_of::<CompressedTrip>() + t.gtfs_trip_id.len())
+                            .sum::<usize>()
+                })
+                .sum();
+
+            println!(
+                "Partition {} sizes (approx bytes): Stops: {}, TripPatterns: {}, TimeDeltas: {}, InternalTransfers: {}, DirectionPatterns: {}, LocalTransferPatterns: {}, LongDistanceTripPatterns: {}",
+                partition.partition_id,
+                stops_size,
+                trip_patterns_size,
+                time_deltas_size,
+                internal_transfers_size,
+                direction_patterns_size,
+                local_transfer_patterns_size,
+                long_distance_trip_patterns_size
+            );
+        }
+
         println!("Saving transit chunk to {}", path.display());
         save_pbf(&partition, path.to_str().unwrap())?;
     }

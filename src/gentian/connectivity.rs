@@ -1,6 +1,6 @@
 use ahash::AHashMap as HashMap;
 use ahash::AHashSet as HashSet;
-use catenary::routing_common::osm_graph::save_pbf;
+use catenary::routing_common::osm_graph::{load_pbf, save_pbf};
 use catenary::routing_common::transit_graph::{
     DagEdge, EdgeType, GlobalHub, GlobalPatternIndex, GlobalTimetable, LocalTransferPattern,
     PartitionDag, PartitionTimetable, PatternTimetable, TimeDeltaSequence, TransitEdge,
@@ -505,12 +505,49 @@ pub fn compute_global_patterns(
         }
     }
 
+    // 3. Save Global Patterns (Stitching)
+    let path = output_dir.join("global_patterns.pbf");
+    let current_partition_ids: HashSet<u32> = loaded_partitions.keys().cloned().collect();
+
+    let mut final_partition_dags = partition_dags;
+    let mut final_long_distance_dags = Vec::new();
+
+    if path.exists() {
+        println!(
+            "  - Found existing global patterns at {:?}, merging...",
+            path
+        );
+        match load_pbf::<GlobalPatternIndex>(path.to_str().unwrap()) {
+            Ok(existing_index) => {
+                let initial_count = existing_index.partition_dags.len();
+                let mut kept_count = 0;
+                for dag in existing_index.partition_dags {
+                    // Filter: Remove if from_partition OR to_partition is in current set
+                    // If a partition is being reprocessed, its outgoing AND incoming edges in the global graph might change (hubs change).
+                    if !current_partition_ids.contains(&dag.from_partition)
+                        && !current_partition_ids.contains(&dag.to_partition)
+                    {
+                        final_partition_dags.push(dag);
+                        kept_count += 1;
+                    }
+                }
+                println!(
+                    "    - Kept {}/{} existing partition DAGs",
+                    kept_count, initial_count
+                );
+
+                // Preserve long_distance_dags
+                final_long_distance_dags.extend(existing_index.long_distance_dags);
+            }
+            Err(e) => eprintln!("    ! Failed to load existing global patterns: {}", e),
+        }
+    }
+
     let global_index = GlobalPatternIndex {
-        partition_dags,
-        long_distance_dags: Vec::new(),
+        partition_dags: final_partition_dags,
+        long_distance_dags: final_long_distance_dags,
     };
 
-    let path = output_dir.join("global_patterns.pbf");
     if let Err(e) = save_pbf(&global_index, path.to_str().unwrap()) {
         eprintln!("Failed to save global patterns: {}", e);
     } else {
@@ -592,11 +629,37 @@ pub fn compute_global_patterns(
         }
     }
 
+    let path_tt = output_dir.join("global_timetable.pbf");
+    let mut final_partition_timetables = partition_timetables;
+
+    if path_tt.exists() {
+        println!(
+            "  - Found existing global timetable at {:?}, merging...",
+            path_tt
+        );
+        match load_pbf::<GlobalTimetable>(path_tt.to_str().unwrap()) {
+            Ok(existing_tt) => {
+                let initial_count = existing_tt.partition_timetables.len();
+                let mut kept_count = 0;
+                for pt in existing_tt.partition_timetables {
+                    if !current_partition_ids.contains(&pt.partition_id) {
+                        final_partition_timetables.push(pt);
+                        kept_count += 1;
+                    }
+                }
+                println!(
+                    "    - Kept {}/{} existing partition timetables",
+                    kept_count, initial_count
+                );
+            }
+            Err(e) => eprintln!("    ! Failed to load existing global timetable: {}", e),
+        }
+    }
+
     let global_timetable = GlobalTimetable {
-        partition_timetables,
+        partition_timetables: final_partition_timetables,
     };
 
-    let path_tt = output_dir.join("global_timetable.pbf");
     if let Err(e) = save_pbf(&global_timetable, path_tt.to_str().unwrap()) {
         eprintln!("Failed to save global timetable: {}", e);
     } else {
