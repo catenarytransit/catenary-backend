@@ -688,153 +688,10 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     );
 
     // --- PASS 1: Regional Hubs (Super-Clusters) ---
-    println!("  > Building Super-Clusters (Regions)...");
-
-    // Build Super-Clusters
-    // Target size ~50,000 stops? Or just group connected clusters?
-    // Let's use a larger max_size for super-clustering.
-    let super_cluster_target_size = 50_000;
-
-    // We need to cluster the CLUSTERS.
-    // Build Cluster Adjacency
-    let mut cluster_adj: HashMap<(usize, usize), u32> = HashMap::new();
-    let mut stop_to_cluster_map: Vec<usize> = vec![0; db_stops.len()];
-    for (c_idx, c_stops) in clusters.iter().enumerate() {
-        for &s in c_stops {
-            stop_to_cluster_map[s] = c_idx;
-        }
-    }
-
-    for (&(u, v), &w) in &adjacency {
-        let c1 = stop_to_cluster_map[u];
-        let c2 = stop_to_cluster_map[v];
-        if c1 != c2 {
-            let (min, max) = if c1 < c2 { (c1, c2) } else { (c2, c1) };
-            *cluster_adj.entry((min, max)).or_default() += w;
-        }
-    }
-
-    // Run clustering on clusters
-    // We can reuse merge_based_clustering logic but adapted for "Cluster Nodes".
-    // Or just implement a simple greedy merge here.
-
-    let num_clusters = clusters.len();
-    let mut super_clusters: Vec<Vec<usize>> = (0..num_clusters).map(|i| vec![i]).collect(); // Indices into `clusters`
-    let mut sc_map: Vec<usize> = (0..num_clusters).collect(); // Cluster -> SuperCluster
-    let mut active_sc: HashSet<usize> = (0..num_clusters).collect();
-
-    // Priority Queue for merges
-    #[derive(Eq, PartialEq)]
-    struct ScEdge {
-        weight: u32,
-        sc1: usize,
-        sc2: usize,
-    }
-    impl Ord for ScEdge {
-        fn cmp(&self, other: &Self) -> Ordering {
-            self.weight.cmp(&other.weight)
-        }
-    }
-    impl PartialOrd for ScEdge {
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    let mut pq = BinaryHeap::new();
-    for (&(c1, c2), &w) in &cluster_adj {
-        pq.push(ScEdge {
-            weight: w,
-            sc1: c1,
-            sc2: c2,
-        });
-    }
-
-    // Helper to get size of super cluster (number of stops)
-    let get_sc_size =
-        |sc_idx: usize, super_clusters: &Vec<Vec<usize>>, clusters: &Vec<Vec<usize>>| -> usize {
-            super_clusters[sc_idx]
-                .iter()
-                .map(|&c_idx| clusters[c_idx].len())
-                .sum()
-        };
-
-    while let Some(edge) = pq.pop() {
-        let sc1 = sc_map[edge.sc1];
-        let sc2 = sc_map[edge.sc2];
-
-        if sc1 == sc2 {
-            continue;
-        }
-
-        let size1 = get_sc_size(sc1, &super_clusters, &clusters);
-        let size2 = get_sc_size(sc2, &super_clusters, &clusters);
-
-        if size1 + size2 <= super_cluster_target_size {
-            // Merge sc2 into sc1
-            let to_move = super_clusters[sc2].clone();
-            for &c_idx in &to_move {
-                sc_map[c_idx] = sc1;
-            }
-            super_clusters[sc1].extend(to_move);
-            super_clusters[sc2].clear();
-            active_sc.remove(&sc2);
-        }
-    }
-
-    let final_super_clusters: Vec<Vec<usize>> = super_clusters
-        .into_iter()
-        .filter(|sc| !sc.is_empty())
-        .collect();
-    println!(
-        "  > Created {} Super-Clusters (Regions) from {} base clusters",
-        final_super_clusters.len(),
-        num_clusters
-    );
-
-    // --- Re-clustering Check ---
-    println!("  > Checking partition quality and re-clustering if necessary...");
-    let mut new_clusters: Vec<Vec<usize>> = Vec::new();
-    let mut new_super_clusters: Vec<Vec<usize>> = Vec::new();
-    let mut recluster_count = 0;
-
-    for sc_indices in final_super_clusters {
-        let mut current_partitioning = Vec::new();
-        for &c_idx in &sc_indices {
-            current_partitioning.push(clusters[c_idx].clone());
-        }
-
-        //if check_partition_quality(&current_partitioning, &db_stops) {
-        if (false) {
-            // Keep existing
-            let start_idx = new_clusters.len();
-            new_clusters.extend(current_partitioning);
-            let end_idx = new_clusters.len();
-            new_super_clusters.push((start_idx..end_idx).collect());
-        } else {
-            // Recluster
-            recluster_count += 1;
-            let all_stops: Vec<usize> = current_partitioning.into_iter().flatten().collect();
-            let new_parts =
-                recluster_without_weights(&all_stops, &adjacency, &db_stops, args.cluster_size);
-
-            let start_idx = new_clusters.len();
-            new_clusters.extend(new_parts);
-            let end_idx = new_clusters.len();
-            new_super_clusters.push((start_idx..end_idx).collect());
-        }
-    }
-
-    // Shadowing with new values
-    let clusters = new_clusters;
-    let final_super_clusters = new_super_clusters;
-
-    if recluster_count > 0 {
-        println!(
-            "  > Re-clustered {} regions due to quality issues.",
-            recluster_count
-        );
-    }
+    // Removed super-clustering to enforce partition size cap.
+    // We treat each cluster as its own region for hub identification.
+    let final_super_clusters: Vec<Vec<usize>> = (0..clusters.len()).map(|i| vec![i]).collect();
+    println!("  > Skipped Super-Clustering to enforce partition size cap.");
 
     // Generate unique partition IDs for each cluster
     let mut cluster_id_to_partition_id: Vec<u32> = Vec::with_capacity(clusters.len());
@@ -974,9 +831,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
         // 3. Determine Parameters
         let num_subset_stops = local_stops.len();
-        let dynamic_top_k = (num_subset_stops / 50).max(10).min(500); // Adjusted min/max
+        let dynamic_top_k = (num_subset_stops / 100).min(1).max(100);
 
-        let sample_size = sample_size_override.unwrap_or_else(|| 1000 + (num_subset_stops / 10));
+        let sample_size = sample_size_override.unwrap_or_else(|| 100 + (num_subset_stops / 10));
 
         println!(
             "  - Pass: {} | Stops: {} | Patterns: {} | Samples: {} | Top-K: {}",
