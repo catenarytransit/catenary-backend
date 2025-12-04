@@ -136,6 +136,16 @@ pub struct TransitPartition {
     /// Referenced by `TransitStop.chateau_idx`, `TripPattern.chateau_idx`, etc.
     #[prost(string, repeated, tag = "14")]
     pub chateau_ids: Vec<String>,
+
+    /// External Hubs referenced by long-distance patterns.
+    /// These are stops in OTHER partitions that are reachable from this partition's long-distance stations.
+    #[prost(message, repeated, tag = "16")]
+    pub external_hubs: Vec<GlobalHub>,
+
+    /// Long Distance Transfer Patterns.
+    /// DAGs connecting local long-distance stations to external hubs.
+    #[prost(message, repeated, tag = "17")]
+    pub long_distance_transfer_patterns: Vec<LocalTransferPattern>,
 }
 
 /// A transfer to a stop in a different Chateau.

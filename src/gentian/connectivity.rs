@@ -1,34 +1,286 @@
 use ahash::AHashMap as HashMap;
 use ahash::AHashSet as HashSet;
-use catenary::routing_common::osm_graph::{load_pbf, save_pbf};
 use catenary::routing_common::transit_graph::{
-    DagEdge, EdgeType, GlobalHub, GlobalPatternIndex, GlobalTimetable, LocalTransferPattern,
-    PartitionDag, PartitionTimetable, PatternTimetable, TimeDeltaSequence, TransitEdge,
+    DagEdge, EdgeType, GlobalHub, LocalTransferPattern, PartitionDag, TransitEdge,
     TransitPartition, TransitStop, WalkEdge,
 };
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::path::PathBuf;
 
-pub fn compute_border_patterns(border_nodes: &HashMap<u32, Vec<TransitStop>>) {
-    // Identify connections between border nodes within the same partition.
-    // This is handled by `compute_intra_partition_connectivity` and stored in `intra_partition_edges`.
-    // We just log the stats here.
-    let total_border_nodes: usize = border_nodes.values().map(|v| v.len()).sum();
-    println!(
-        "  - Border Patterns: Identified {} border nodes across {} partitions (Connectivity computed)",
-        total_border_nodes,
-        border_nodes.len()
-    );
+pub fn compute_border_patterns(
+    border_nodes: &HashMap<u32, Vec<TransitStop>>,
+    loaded_partitions: &HashMap<u32, TransitPartition>,
+    _global_to_partition_map: &HashMap<usize, (u32, u32)>,
+) -> Vec<PartitionDag> {
+    println!("  - Computing Border Patterns (Step 4)...");
+
+    let mut result_dags = Vec::new();
+
+    // 1. Build Lookups for Patterns
+    println!("    - Building pattern lookups...");
+    let mut local_pattern_lookup: HashMap<(u32, u32), &LocalTransferPattern> = HashMap::new();
+    let mut long_dist_pattern_lookup: HashMap<(u32, u32), &LocalTransferPattern> = HashMap::new();
+
+    for (pid, partition) in loaded_partitions {
+        for pat in &partition.local_transfer_patterns {
+            local_pattern_lookup.insert((*pid, pat.from_stop_idx), pat);
+        }
+        for pat in &partition.long_distance_transfer_patterns {
+            long_dist_pattern_lookup.insert((*pid, pat.from_stop_idx), pat);
+        }
+    }
+
+    // 2. Iterate over each partition as a Source Cluster
+    let partition_ids: Vec<u32> = border_nodes.keys().cloned().collect();
+
+    // Map: (StartPID, EndPID) -> DagBuilder
+    struct DagBuilder {
+        // (From(PID, Idx), To(PID, Idx), Type)
+        edges: HashSet<((u32, u32), (u32, u32), Option<EdgeType>)>,
+        // (PID, Idx)
+        nodes: HashSet<(u32, u32)>,
+    }
+    let mut dag_builders: HashMap<(u32, u32), DagBuilder> = HashMap::new();
+
+    for &p_start in &partition_ids {
+        let start_borders = &border_nodes[&p_start];
+        if start_borders.is_empty() {
+            continue;
+        }
+
+        println!(
+            "    - Processing Partition {} ({} border nodes)...",
+            p_start,
+            start_borders.len()
+        );
+
+        // Run Dijkstra from EACH border node
+        for start_node in start_borders {
+            let start_key = (p_start, start_node.id as u32);
+
+            let mut dist: HashMap<(u32, u32), u32> = HashMap::new();
+            // Predecessors: Target -> List of (Source, EdgeType)
+            let mut predecessors: HashMap<(u32, u32), Vec<((u32, u32), Option<EdgeType>)>> =
+                HashMap::new();
+            let mut pq = BinaryHeap::new();
+
+            #[derive(Copy, Clone, Eq, PartialEq)]
+            struct State {
+                cost: u32,
+                pid: u32,
+                stop_idx: u32,
+            }
+            impl Ord for State {
+                fn cmp(&self, other: &Self) -> Ordering {
+                    other.cost.cmp(&self.cost)
+                }
+            }
+            impl PartialOrd for State {
+                fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                    Some(self.cmp(other))
+                }
+            }
+
+            dist.insert(start_key, 0);
+            pq.push(State {
+                cost: 0,
+                pid: start_key.0,
+                stop_idx: start_key.1,
+            });
+
+            while let Some(State {
+                cost,
+                pid,
+                stop_idx,
+            }) = pq.pop()
+            {
+                if cost > *dist.get(&(pid, stop_idx)).unwrap_or(&u32::MAX) {
+                    continue;
+                }
+
+                // A. Local Relaxation (within 'pid')
+                if let Some(pat) = local_pattern_lookup.get(&(pid, stop_idx)) {
+                    for edge in &pat.edges {
+                        let target_idx = edge.to_node_idx;
+                        let weight = match &edge.edge_type {
+                            Some(EdgeType::Transit(t)) => t.min_duration,
+                            Some(EdgeType::Walk(w)) => w.duration_seconds,
+                            Some(EdgeType::LongDistanceTransit(t)) => t.min_duration,
+                            None => 0,
+                        };
+
+                        let next_cost = cost + weight;
+                        let target_key = (pid, target_idx);
+
+                        if next_cost < *dist.get(&target_key).unwrap_or(&u32::MAX) {
+                            dist.insert(target_key, next_cost);
+                            predecessors.insert(
+                                target_key,
+                                vec![((pid, stop_idx), edge.edge_type.clone())],
+                            );
+                            pq.push(State {
+                                cost: next_cost,
+                                pid,
+                                stop_idx: target_idx,
+                            });
+                        } else if next_cost == *dist.get(&target_key).unwrap_or(&u32::MAX) {
+                            predecessors
+                                .entry(target_key)
+                                .or_default()
+                                .push(((pid, stop_idx), edge.edge_type.clone()));
+                        }
+                    }
+                }
+
+                // B. Long-Distance Relaxation (Jump to other partitions)
+                if let Some(pat) = long_dist_pattern_lookup.get(&(pid, stop_idx)) {
+                    let partition = &loaded_partitions[&pid];
+
+                    for edge in &pat.edges {
+                        let ext_idx = edge.to_node_idx as usize;
+                        if ext_idx >= partition.stops.len() {
+                            let hub_idx = ext_idx - partition.stops.len();
+                            if hub_idx < partition.external_hubs.len() {
+                                let global_hub = &partition.external_hubs[hub_idx];
+                                let target_pid = global_hub.original_partition_id;
+                                let target_idx = global_hub.stop_idx_in_partition;
+                                let target_key = (target_pid, target_idx);
+
+                                let weight = match &edge.edge_type {
+                                    Some(EdgeType::Transit(t)) => t.min_duration,
+                                    Some(EdgeType::Walk(w)) => w.duration_seconds,
+                                    Some(EdgeType::LongDistanceTransit(t)) => t.min_duration,
+                                    None => 0,
+                                };
+
+                                let next_cost = cost + weight;
+
+                                if next_cost < *dist.get(&target_key).unwrap_or(&u32::MAX) {
+                                    dist.insert(target_key, next_cost);
+                                    predecessors.insert(
+                                        target_key,
+                                        vec![((pid, stop_idx), edge.edge_type.clone())],
+                                    );
+                                    pq.push(State {
+                                        cost: next_cost,
+                                        pid: target_pid,
+                                        stop_idx: target_idx,
+                                    });
+                                } else if next_cost == *dist.get(&target_key).unwrap_or(&u32::MAX) {
+                                    predecessors
+                                        .entry(target_key)
+                                        .or_default()
+                                        .push(((pid, stop_idx), edge.edge_type.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Extract Paths to Border Nodes of Other Partitions
+            for &p_end in &partition_ids {
+                if p_end == p_start {
+                    continue;
+                }
+
+                let end_borders = &border_nodes[&p_end];
+                for end_node in end_borders {
+                    let end_key = (p_end, end_node.id as u32);
+
+                    if let Some(&d) = dist.get(&end_key) {
+                        if d == u32::MAX {
+                            continue;
+                        }
+
+                        // Backtrack
+                        let mut q = std::collections::VecDeque::new();
+                        q.push_back(end_key);
+                        let mut visited_back = HashSet::new();
+                        visited_back.insert(end_key);
+
+                        let builder =
+                            dag_builders
+                                .entry((p_start, p_end))
+                                .or_insert_with(|| DagBuilder {
+                                    edges: HashSet::new(),
+                                    nodes: HashSet::new(),
+                                });
+
+                        builder.nodes.insert(end_key);
+
+                        while let Some(curr) = q.pop_front() {
+                            if curr == start_key {
+                                builder.nodes.insert(curr);
+                                continue;
+                            }
+
+                            if let Some(preds) = predecessors.get(&curr) {
+                                for (pred_key, edge_type) in preds {
+                                    // Add edge and nodes
+                                    builder.nodes.insert(*pred_key);
+                                    builder.edges.insert((*pred_key, curr, edge_type.clone()));
+
+                                    if visited_back.insert(*pred_key) {
+                                        q.push_back(*pred_key);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Construct PartitionDags
+    for ((p_start, p_end), builder) in dag_builders {
+        // Convert nodes to GlobalHubs and assign indices
+        let mut hubs = Vec::new();
+        let mut node_to_idx: HashMap<(u32, u32), u32> = HashMap::new();
+
+        for (pid, idx) in builder.nodes {
+            let hub_idx = hubs.len() as u32;
+            hubs.push(GlobalHub {
+                original_partition_id: pid,
+                stop_idx_in_partition: idx,
+            });
+            node_to_idx.insert((pid, idx), hub_idx);
+        }
+
+        // Convert edges
+        let mut edges = Vec::new();
+        for (from_key, to_key, edge_type) in builder.edges {
+            if let (Some(&from_idx), Some(&to_idx)) =
+                (node_to_idx.get(&from_key), node_to_idx.get(&to_key))
+            {
+                edges.push(DagEdge {
+                    from_node_idx: from_idx,
+                    to_node_idx: to_idx,
+                    edge_type,
+                });
+            }
+        }
+
+        result_dags.push(PartitionDag {
+            from_partition: p_start,
+            to_partition: p_end,
+            hubs,
+            edges,
+        });
+    }
+
+    println!("  - Generated {} Partition DAGs", result_dags.len());
+    result_dags
 }
 
 pub fn compute_global_patterns(
     border_nodes: &HashMap<u32, Vec<TransitStop>>,
     cross_edges: &[((usize, usize), DagEdge)],
-    _intra_edges: &[((usize, usize), DagEdge)], // Unused now, we use LocalTransferPatterns
     global_to_partition_map: &HashMap<usize, (u32, u32)>,
-    loaded_partitions: &HashMap<u32, TransitPartition>,
-    output_dir: &PathBuf,
+    loaded_partitions: &mut HashMap<u32, TransitPartition>,
+    _output_dir: &PathBuf,
 ) {
     println!("  - Building Global Hub Graph (Profile Search)...");
 
@@ -39,56 +291,9 @@ pub fn compute_global_patterns(
     }
 
     // 2. Identify Long-Distance Stations (Global Indices)
-    // Precompute long-distance stops for each partition
-    let mut long_distance_stops_per_partition: HashMap<u32, HashSet<u32>> = HashMap::new();
-
-    for (&pid, partition) in loaded_partitions {
-        let mut long_dist_stop_indices = HashSet::new();
-
-        for pattern in &partition.trip_patterns {
-            let dir_idx = pattern.direction_pattern_idx as usize;
-            if dir_idx >= partition.direction_patterns.len() {
-                continue;
-            }
-            let stop_indices = &partition.direction_patterns[dir_idx].stop_indices;
-
-            if stop_indices.len() < 2 {
-                continue;
-            }
-
-            let mut total_dist = 0.0;
-            for i in 0..stop_indices.len() - 1 {
-                let s1 = &partition.stops[stop_indices[i] as usize];
-                let s2 = &partition.stops[stop_indices[i + 1] as usize];
-                total_dist += super::utils::haversine_distance(s1.lat, s1.lon, s2.lat, s2.lon);
-            }
-
-            if total_dist > 100000.0 {
-                // 100km
-                for &s_idx in stop_indices {
-                    long_dist_stop_indices.insert(s_idx);
-                }
-            }
-        }
-        long_distance_stops_per_partition.insert(pid, long_dist_stop_indices);
-    }
-
-    let mut long_distance_stations: Vec<usize> = Vec::new();
-    for (&g_idx, &(pid, l_idx)) in global_to_partition_map {
-        if let Some(partition) = loaded_partitions.get(&pid) {
-            if l_idx < partition.stops.len() as u32 {
-                let stop = &partition.stops[l_idx as usize];
-                if stop.is_hub {
-                    // Check if it serves a long distance route
-                    if let Some(valid_stops) = long_distance_stops_per_partition.get(&pid) {
-                        if valid_stops.contains(&l_idx) {
-                            long_distance_stations.push(g_idx);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // The input `global_to_partition_map` now ONLY contains relevant nodes (long-distance + active border).
+    // So we can just use all keys from it.
+    let mut long_distance_stations: Vec<usize> = global_to_partition_map.keys().cloned().collect();
     long_distance_stations.sort();
 
     println!(
@@ -97,7 +302,6 @@ pub fn compute_global_patterns(
     );
 
     let partition_ids: Vec<u32> = border_nodes.keys().cloned().collect();
-    let mut partition_dags: Vec<PartitionDag> = Vec::new();
 
     // Group long-distance stations by partition
     let mut stations_by_partition: HashMap<u32, Vec<usize>> = HashMap::new();
@@ -107,14 +311,16 @@ pub fn compute_global_patterns(
         }
     }
 
-    // We need to compute DAGs for each pair of partitions (P_start -> P_end)
-    // To do this efficiently, we can run searches from all hubs in P_start.
-
     // Precompute map from (pid, local_idx) -> global_idx for fast lookup
     let mut node_to_global: HashMap<(u32, u32), usize> = HashMap::new();
     for (&g, &p) in global_to_partition_map {
         node_to_global.insert(p, g);
     }
+
+    // Store all computed edges grouped by Source Partition
+    // Map: Source Partition -> From Global Node -> List of (To Global Node, Edge)
+    let mut partition_global_edges: HashMap<u32, HashMap<usize, Vec<(usize, DagEdge)>>> =
+        HashMap::new();
 
     for &p_start in &partition_ids {
         let start_hubs = stations_by_partition
@@ -125,31 +331,11 @@ pub fn compute_global_patterns(
             continue;
         }
 
-        // We want to find paths to all other partitions
-        // We can run a single search from ALL start_hubs (multi-source)?
-        // No, the paper says "from each long-distance station".
-        // But we want to aggregate them into PartitionDAGs.
-        // Let's run from each start hub and aggregate edges.
-
-        // Store useful edges for (p_start, p_end) with their costs
         // Map: p_end -> (u, v) -> cost
         let mut useful_edges_by_pair: HashMap<u32, HashMap<(usize, usize), u32>> = HashMap::new();
         let mut useful_nodes_by_pair: HashMap<u32, HashSet<usize>> = HashMap::new();
 
         for &start_node in start_hubs {
-            // Run Profile Search from start_node
-            // We use a simplified Dijkstra here because we are exploring the "Transfer Pattern Graph".
-            // The edges in LocalTransferPattern are already optimal. We just need to link them.
-            // However, we need to respect time.
-            // For now, let's use min_duration to find the structural DAG, as the full profile search might be too heavy
-            // and we want to "precompute how you can travel between them (as a transfer pattern)".
-            // If we use min_duration, we are essentially doing what we did before but using LocalTransferPatterns as edges.
-            // The user said: "run a profile search ... until all optimal connections ... are known".
-            // But if we just want the DAG structure, maybe min_duration is enough?
-            // "Goal: precompute how you can travel ... (as a transfer pattern)".
-            // The result is a DAG.
-            // Let's stick to min_duration for the topology, but use LocalTransferPatterns.
-
             let mut dist: HashMap<usize, u32> = HashMap::new();
             let mut predecessors: HashMap<usize, Vec<usize>> = HashMap::new();
             let mut pq = BinaryHeap::new();
@@ -205,17 +391,11 @@ pub fn compute_global_patterns(
                 // 2. Intra-Partition (LocalTransferPattern)
                 if let Some(&(pid, l_idx)) = global_to_partition_map.get(&u) {
                     if let Some(partition) = loaded_partitions.get(&pid) {
-                        // Find LocalTransferPattern starting at l_idx
                         if let Some(local_transfer_pattern) = partition
                             .local_transfer_patterns
                             .iter()
                             .find(|p| p.from_stop_idx == l_idx)
                         {
-                            // Traverse LocalTransferPattern DAG
-                            // We need to run a local search on this DAG to update global neighbors.
-                            // The LocalTransferPattern DAG contains local indices.
-
-                            // Local Dijkstra on LocalTransferPattern
                             let mut local_dist: HashMap<u32, u32> = HashMap::new();
                             let mut local_pq = BinaryHeap::new();
 
@@ -223,7 +403,7 @@ pub fn compute_global_patterns(
                             local_pq.push(State {
                                 cost: 0,
                                 node: l_idx as usize,
-                            }); // using usize for State
+                            });
 
                             while let Some(State {
                                 cost: local_cost,
@@ -235,14 +415,12 @@ pub fn compute_global_patterns(
                                     continue;
                                 }
 
-                                // If this local node is a Border/Hub (and not the start), relax global graph
                                 if local_u != l_idx {
                                     if let Some(&global_v) = node_to_global.get(&(pid, local_u)) {
-                                        // It's a relevant node (hub/border)
                                         let total_cost = cost + local_cost;
                                         if total_cost < *dist.get(&global_v).unwrap_or(&u32::MAX) {
                                             dist.insert(global_v, total_cost);
-                                            predecessors.insert(global_v, vec![u]); // Predecessor is u (the entry to LocalTransferPattern)
+                                            predecessors.insert(global_v, vec![u]);
                                             pq.push(State {
                                                 cost: total_cost,
                                                 node: global_v,
@@ -255,7 +433,6 @@ pub fn compute_global_patterns(
                                     }
                                 }
 
-                                // Expand edges in LocalTransferPattern from local_u
                                 for edge in &local_transfer_pattern.edges {
                                     if edge.from_node_idx == local_u {
                                         let weight = match &edge.edge_type {
@@ -284,11 +461,17 @@ pub fn compute_global_patterns(
             }
 
             // Collect results for each target partition
-            for &p_end in &partition_ids {
-                if p_start == p_end {
-                    continue;
+            // Optimization: Only iterate over partitions that were actually reached
+            let mut reached_partitions = HashSet::new();
+            for &reached_node in dist.keys() {
+                if let Some(&(pid, _)) = global_to_partition_map.get(&reached_node) {
+                    if pid != p_start {
+                        reached_partitions.insert(pid);
+                    }
                 }
+            }
 
+            for &p_end in &reached_partitions {
                 let end_hubs = stations_by_partition
                     .get(&p_end)
                     .map(|v| v.as_slice())
@@ -300,7 +483,6 @@ pub fn compute_global_patterns(
                             continue;
                         }
 
-                        // Backtrack to find edges
                         let mut q = std::collections::VecDeque::new();
                         q.push_back(end_node);
                         useful_nodes_by_pair
@@ -317,7 +499,6 @@ pub fn compute_global_patterns(
                             }
                             if let Some(preds) = predecessors.get(&curr) {
                                 for &pred in preds {
-                                    // Calculate edge cost
                                     let pred_dist = *dist.get(&pred).unwrap_or(&0);
                                     let curr_dist = *dist.get(&curr).unwrap_or(&0);
                                     let edge_cost = if curr_dist >= pred_dist {
@@ -348,322 +529,168 @@ pub fn compute_global_patterns(
             }
         }
 
-        // Build PartitionDAGs for p_start -> *
-        for &p_end in &partition_ids {
-            if p_start == p_end {
-                continue;
-            }
+        // Process edges for p_start -> *
+        for (&p_end, edges_map) in useful_edges_by_pair.iter_mut() {
+            let nodes = useful_nodes_by_pair.get(&p_end).unwrap();
+            let nodes_vec: Vec<usize> = nodes.iter().cloned().collect();
 
-            if let Some(edges_map) = useful_edges_by_pair.get_mut(&p_end) {
-                let nodes = useful_nodes_by_pair.get(&p_end).unwrap();
+            // Pruning Logic
+            for &w in &nodes_vec {
+                let mut incoming: HashMap<usize, Vec<usize>> = HashMap::new();
+                let mut outgoing: HashMap<usize, Vec<usize>> = HashMap::new();
 
-                // --- Pruning Logic ---
-                // Prune direct edges A->B if A->H->B exists and is better/equal.
-                // We iterate over all triplets (u, v, w) in the local DAG.
-                // Since the DAG is relatively small (hubs only), this is feasible.
+                for (&(u, v), _) in edges_map.iter() {
+                    outgoing.entry(u).or_default().push(v);
+                    incoming.entry(v).or_default().push(u);
+                }
 
-                let nodes_vec: Vec<usize> = nodes.iter().cloned().collect();
-
-                // We need to check if edge (u, v) exists and if path u->w->v exists.
-                // Iterate all w.
-                for &w in &nodes_vec {
-                    // Check all incoming edges to w: u -> w
-                    // Check all outgoing edges from w: w -> v
-                    // If u -> v exists, compare cost.
-
-                    // To do this efficiently, let's build adjacency lists for the current set of edges
-                    let mut incoming: HashMap<usize, Vec<usize>> = HashMap::new();
-                    let mut outgoing: HashMap<usize, Vec<usize>> = HashMap::new();
-
-                    for (&(u, v), _) in edges_map.iter() {
-                        outgoing.entry(u).or_default().push(v);
-                        incoming.entry(v).or_default().push(u);
-                    }
-
-                    if let (Some(preds), Some(succs)) = (incoming.get(&w), outgoing.get(&w)) {
-                        for &u in preds {
-                            if u == w {
+                if let (Some(preds), Some(succs)) = (incoming.get(&w), outgoing.get(&w)) {
+                    for &u in preds {
+                        if u == w {
+                            continue;
+                        }
+                        for &v in succs {
+                            if v == w || v == u {
                                 continue;
                             }
-                            for &v in succs {
-                                if v == w || v == u {
-                                    continue;
-                                }
-
-                                // Check if direct edge u->v exists
-                                if let Some(&direct_cost) = edges_map.get(&(u, v)) {
-                                    let cost_u_w =
-                                        edges_map.get(&(u, w)).cloned().unwrap_or(u32::MAX);
-                                    let cost_w_v =
-                                        edges_map.get(&(w, v)).cloned().unwrap_or(u32::MAX);
-
-                                    if cost_u_w != u32::MAX && cost_w_v != u32::MAX {
-                                        let indirect_cost = cost_u_w + cost_w_v;
-                                        // Prune if indirect path is better or equal (prefer hub)
-                                        // Actually, usually we prune if indirect is strictly better.
-                                        // But if equal, hub path might be preferred to reduce edges?
-                                        // Or direct path preferred for simplicity?
-                                        // User said: "worse than going through a hub".
-                                        // So if Direct > Indirect, prune Direct.
-                                        // If Direct == Indirect, keep Direct?
-                                        // Let's stick to strict inequality for safety, or <= if we want to force hub.
-                                        // "worse than" usually implies strictly worse.
-                                        if direct_cost > indirect_cost {
-                                            // Prune u->v
-                                            edges_map.remove(&(u, v));
-                                        }
+                            if let Some(&direct_cost) = edges_map.get(&(u, v)) {
+                                let cost_u_w = edges_map.get(&(u, w)).cloned().unwrap_or(u32::MAX);
+                                let cost_w_v = edges_map.get(&(w, v)).cloned().unwrap_or(u32::MAX);
+                                if cost_u_w != u32::MAX && cost_w_v != u32::MAX {
+                                    let indirect_cost = cost_u_w + cost_w_v;
+                                    if direct_cost > indirect_cost {
+                                        edges_map.remove(&(u, v));
                                     }
                                 }
                             }
                         }
                     }
                 }
+            }
 
-                let mut dag_hubs_vec: Vec<usize> = nodes.iter().cloned().collect();
-                dag_hubs_vec.sort();
-                let mut global_to_dag_idx: HashMap<usize, u32> = HashMap::new();
-                for (i, &g_idx) in dag_hubs_vec.iter().enumerate() {
-                    global_to_dag_idx.insert(g_idx, i as u32);
+            // Recover Edge Types and Store
+            for ((u, v), _) in edges_map {
+                let u = *u;
+                let v = *v;
+                let mut edge_type = None;
+
+                // Check Cross
+                if let Some(cross_list) = cross_adj.get(&u) {
+                    if let Some((_, e)) = cross_list.iter().find(|(target, _)| *target == v) {
+                        edge_type = e.edge_type.clone();
+                    }
                 }
 
-                let mut dag_edges = Vec::new();
-                for ((u, v), _) in edges_map {
-                    let u = *u;
-                    let v = *v;
-
-                    // Determine edge type
-                    // If u and v are in same partition, it's LocalTransferPattern (Transit/Walk)
-                    // If different, it's Cross (Walk)
-                    // We need to recover the edge type.
-
-                    let mut edge_type = None;
-
-                    // Check Cross
-                    if let Some(cross_list) = cross_adj.get(&u) {
-                        if let Some((_, e)) = cross_list.iter().find(|(target, _)| *target == v) {
-                            edge_type = e.edge_type.clone();
-                        }
-                    }
-
-                    // Check Intra (LocalTransferPattern)
-                    if edge_type.is_none() {
-                        if let (Some(&(pid_u, l_u)), Some(&(pid_v, l_v))) = (
-                            global_to_partition_map.get(&u),
-                            global_to_partition_map.get(&v),
-                        ) {
-                            if pid_u == pid_v {
-                                // Same partition, look up in LocalTransferPattern
-                                if let Some(partition) = loaded_partitions.get(&pid_u) {
-                                    if let Some(ltp) = partition
-                                        .local_transfer_patterns
-                                        .iter()
-                                        .find(|p| p.from_stop_idx == l_u)
+                // Check Intra
+                if edge_type.is_none() {
+                    if let (Some(&(pid_u, l_u)), Some(&(pid_v, l_v))) = (
+                        global_to_partition_map.get(&u),
+                        global_to_partition_map.get(&v),
+                    ) {
+                        if pid_u == pid_v {
+                            if let Some(partition) = loaded_partitions.get(&pid_u) {
+                                if let Some(ltp) = partition
+                                    .local_transfer_patterns
+                                    .iter()
+                                    .find(|p| p.from_stop_idx == l_u)
+                                {
+                                    if let Some(edge) =
+                                        ltp.edges.iter().find(|e| e.to_node_idx == l_v)
                                     {
-                                        // Find edge to l_v
-                                        if let Some(edge) =
-                                            ltp.edges.iter().find(|e| e.to_node_idx == l_v)
-                                        {
-                                            edge_type = edge.edge_type.clone();
-                                        }
+                                        edge_type = edge.edge_type.clone();
                                     }
                                 }
                             }
                         }
                     }
+                }
 
-                    if edge_type.is_none() {
-                        // Fallback (should not happen if logic is correct)
-                        edge_type = Some(EdgeType::Walk(WalkEdge {
-                            duration_seconds: 0,
-                        }));
+                if edge_type.is_none() {
+                    edge_type = Some(EdgeType::Walk(WalkEdge {
+                        duration_seconds: 0,
+                    }));
+                }
+
+                let dag_edge = DagEdge {
+                    from_node_idx: 0, // Placeholder, will be re-indexed
+                    to_node_idx: 0,   // Placeholder
+                    edge_type,
+                };
+
+                partition_global_edges
+                    .entry(p_start)
+                    .or_default()
+                    .entry(u)
+                    .or_default()
+                    .push((v, dag_edge));
+            }
+        }
+    }
+
+    // 3. Update Partitions with Long-Distance Patterns
+    for (&pid, partition) in loaded_partitions.iter_mut() {
+        if let Some(global_edges_map) = partition_global_edges.get(&pid) {
+            let mut external_hubs: Vec<GlobalHub> = Vec::new();
+            let mut external_hub_map: HashMap<usize, u32> = HashMap::new(); // GlobalIdx -> ExternalIdx
+
+            // Helper to get index (Local < N, External >= N)
+            let mut get_node_idx = |global_idx: usize| -> u32 {
+                if let Some(&(p, l)) = global_to_partition_map.get(&global_idx) {
+                    if p == pid {
+                        return l;
                     }
-
-                    dag_edges.push(DagEdge {
-                        from_node_idx: *global_to_dag_idx.get(&u).unwrap(),
-                        to_node_idx: *global_to_dag_idx.get(&v).unwrap(),
-                        edge_type,
+                }
+                // External
+                if let Some(&idx) = external_hub_map.get(&global_idx) {
+                    return partition.stops.len() as u32 + idx;
+                }
+                let idx = external_hubs.len() as u32;
+                if let Some(&(p, l)) = global_to_partition_map.get(&global_idx) {
+                    external_hubs.push(GlobalHub {
+                        original_partition_id: p,
+                        stop_idx_in_partition: l,
+                    });
+                } else {
+                    // Should not happen if map is complete
+                    external_hubs.push(GlobalHub {
+                        original_partition_id: 0,
+                        stop_idx_in_partition: 0,
                     });
                 }
+                external_hub_map.insert(global_idx, idx);
+                partition.stops.len() as u32 + idx
+            };
 
-                let mut final_hubs = Vec::new();
-                for &g_idx in &dag_hubs_vec {
-                    if let Some(&(pid, l_idx)) = global_to_partition_map.get(&g_idx) {
-                        final_hubs.push(GlobalHub {
-                            original_partition_id: pid,
-                            stop_idx_in_partition: l_idx,
-                        });
-                    }
+            let mut new_patterns = Vec::new();
+
+            for (&u_global, edges) in global_edges_map {
+                let from_idx = get_node_idx(u_global);
+                let mut dag_edges = Vec::new();
+
+                for (v_global, edge_template) in edges {
+                    let to_idx = get_node_idx(*v_global);
+                    let mut new_edge = edge_template.clone();
+                    new_edge.from_node_idx = from_idx;
+                    new_edge.to_node_idx = to_idx;
+                    dag_edges.push(new_edge);
                 }
 
-                partition_dags.push(PartitionDag {
-                    from_partition: p_start,
-                    to_partition: p_end,
-                    hubs: final_hubs,
+                new_patterns.push(LocalTransferPattern {
+                    from_stop_idx: from_idx,
                     edges: dag_edges,
                 });
             }
+
+            partition.external_hubs = external_hubs;
+            partition.long_distance_transfer_patterns = new_patterns;
+
+            println!(
+                "  - Partition {}: Added {} long-distance patterns referencing {} external hubs",
+                pid,
+                partition.long_distance_transfer_patterns.len(),
+                partition.external_hubs.len()
+            );
         }
-    }
-
-    // 3. Save Global Patterns (Stitching)
-    let path = output_dir.join("global_patterns.pbf");
-    let current_partition_ids: HashSet<u32> = loaded_partitions.keys().cloned().collect();
-
-    let mut final_partition_dags = partition_dags;
-    let mut final_long_distance_dags = Vec::new();
-
-    if path.exists() {
-        println!(
-            "  - Found existing global patterns at {:?}, merging...",
-            path
-        );
-        match load_pbf::<GlobalPatternIndex>(path.to_str().unwrap()) {
-            Ok(existing_index) => {
-                let initial_count = existing_index.partition_dags.len();
-                let mut kept_count = 0;
-                for dag in existing_index.partition_dags {
-                    // Filter: Remove if from_partition OR to_partition is in current set
-                    // If a partition is being reprocessed, its outgoing AND incoming edges in the global graph might change (hubs change).
-                    if !current_partition_ids.contains(&dag.from_partition)
-                        && !current_partition_ids.contains(&dag.to_partition)
-                    {
-                        final_partition_dags.push(dag);
-                        kept_count += 1;
-                    }
-                }
-                println!(
-                    "    - Kept {}/{} existing partition DAGs",
-                    kept_count, initial_count
-                );
-
-                // Preserve long_distance_dags
-                final_long_distance_dags.extend(existing_index.long_distance_dags);
-            }
-            Err(e) => eprintln!("    ! Failed to load existing global patterns: {}", e),
-        }
-    }
-
-    let global_index = GlobalPatternIndex {
-        partition_dags: final_partition_dags,
-        long_distance_dags: final_long_distance_dags,
-    };
-
-    if let Err(e) = save_pbf(&global_index, path.to_str().unwrap()) {
-        eprintln!("Failed to save global patterns: {}", e);
-    } else {
-        println!("  - Global Patterns: Saved index to {:?}", path);
-    }
-
-    // 3. Build Global Timetable
-    println!("  - Building Global Timetable...");
-    let mut partition_timetables = Vec::new();
-
-    // Identify used patterns per partition
-    let mut used_patterns: HashMap<u32, HashSet<u32>> = HashMap::new();
-
-    for dag in &global_index.partition_dags {
-        for edge in &dag.edges {
-            if let Some(EdgeType::Transit(t)) = &edge.edge_type {
-                // Find partition for this edge
-                // The edge connects from_node_idx to to_node_idx.
-                // from_node_idx is index into dag.hubs.
-                let u_hub = &dag.hubs[edge.from_node_idx as usize];
-                let pid = u_hub.original_partition_id;
-                used_patterns
-                    .entry(pid)
-                    .or_default()
-                    .insert(t.trip_pattern_idx);
-            }
-        }
-    }
-
-    // Populate Timetables
-    for (pid, pattern_indices) in used_patterns {
-        if let Some(partition) = loaded_partitions.get(&pid) {
-            let mut pattern_timetables = Vec::new();
-            let mut time_deltas = Vec::new();
-            let mut delta_map: HashMap<usize, u32> = HashMap::new(); // Original Delta Idx -> New Delta Idx
-
-            let mut sorted_indices: Vec<u32> = pattern_indices.into_iter().collect();
-            sorted_indices.sort();
-
-            for p_idx in sorted_indices {
-                if let Some(pattern) = partition.trip_patterns.get(p_idx as usize) {
-                    let mut trip_start_times = Vec::with_capacity(pattern.trips.len());
-                    let mut trip_time_delta_indices = Vec::with_capacity(pattern.trips.len());
-                    let mut service_masks = Vec::with_capacity(pattern.trips.len());
-
-                    for trip in &pattern.trips {
-                        trip_start_times.push(trip.start_time);
-                        service_masks.push(trip.service_mask);
-
-                        // Handle Time Delta
-                        let original_delta_idx = trip.time_delta_idx as usize;
-                        let new_delta_idx = if let Some(&idx) = delta_map.get(&original_delta_idx) {
-                            idx
-                        } else {
-                            let idx = time_deltas.len() as u32;
-                            time_deltas.push(partition.time_deltas[original_delta_idx].clone());
-                            delta_map.insert(original_delta_idx, idx);
-                            idx
-                        };
-                        trip_time_delta_indices.push(new_delta_idx);
-                    }
-
-                    pattern_timetables.push(PatternTimetable {
-                        pattern_idx: p_idx,
-                        trip_start_times,
-                        trip_time_delta_indices,
-                        service_masks,
-                        timezone_idx: pattern.timezone_idx,
-                    });
-                }
-            }
-
-            partition_timetables.push(PartitionTimetable {
-                partition_id: pid,
-                pattern_timetables,
-                time_deltas,
-                timezones: partition.timezones.clone(),
-            });
-        }
-    }
-
-    let path_tt = output_dir.join("global_timetable.pbf");
-    let mut final_partition_timetables = partition_timetables;
-
-    if path_tt.exists() {
-        println!(
-            "  - Found existing global timetable at {:?}, merging...",
-            path_tt
-        );
-        match load_pbf::<GlobalTimetable>(path_tt.to_str().unwrap()) {
-            Ok(existing_tt) => {
-                let initial_count = existing_tt.partition_timetables.len();
-                let mut kept_count = 0;
-                for pt in existing_tt.partition_timetables {
-                    if !current_partition_ids.contains(&pt.partition_id) {
-                        final_partition_timetables.push(pt);
-                        kept_count += 1;
-                    }
-                }
-                println!(
-                    "    - Kept {}/{} existing partition timetables",
-                    kept_count, initial_count
-                );
-            }
-            Err(e) => eprintln!("    ! Failed to load existing global timetable: {}", e),
-        }
-    }
-
-    let global_timetable = GlobalTimetable {
-        partition_timetables: final_partition_timetables,
-    };
-
-    if let Err(e) = save_pbf(&global_timetable, path_tt.to_str().unwrap()) {
-        eprintln!("Failed to save global timetable: {}", e);
-    } else {
-        println!("  - Global Timetable: Saved to {:?}", path_tt);
     }
 }
 

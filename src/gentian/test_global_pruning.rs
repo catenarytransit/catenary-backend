@@ -29,6 +29,8 @@ mod tests {
             timezones: vec![],
             boundary: None,
             chateau_ids: vec![],
+            external_hubs: vec![],
+            long_distance_transfer_patterns: vec![],
         }
     }
 
@@ -302,91 +304,82 @@ mod tests {
         compute_global_patterns(
             &border_nodes,
             &cross_edges,
-            &[],
             &global_to_partition_map,
-            &loaded_partitions,
+            &mut loaded_partitions,
             &output_dir,
         );
 
-        // Load result
-        let path = output_dir.join("global_patterns.pbf");
-        let global_index: GlobalPatternIndex =
-            catenary::routing_common::osm_graph::load_pbf(path.to_str().unwrap()).unwrap();
+        // Verify P0
+        let p0 = &loaded_partitions[&0];
 
-        // Check PartitionDAGs
-        // We expect P0 -> P1 (A -> H)
-        // We expect P1 -> P2 (H -> B)
-        // We expect NO P0 -> P2 (A -> B) because it was pruned.
-
-        let dag_0_1 = global_index
-            .partition_dags
+        // Check External Hubs
+        // Should contain H(1) and B(2)
+        let h_idx_opt = p0
+            .external_hubs
             .iter()
-            .find(|d| d.from_partition == 0 && d.to_partition == 1);
-        assert!(dag_0_1.is_some(), "Should have DAG P0 -> P1");
-
-        let dag_1_2 = global_index
-            .partition_dags
+            .position(|h| h.original_partition_id == 1 && h.stop_idx_in_partition == 0);
+        let b_idx_opt = p0
+            .external_hubs
             .iter()
-            .find(|d| d.from_partition == 1 && d.to_partition == 2);
-        assert!(dag_1_2.is_some(), "Should have DAG P1 -> P2");
+            .position(|h| h.original_partition_id == 2 && h.stop_idx_in_partition == 0);
 
-        let dag_0_2 = global_index
-            .partition_dags
+        assert!(h_idx_opt.is_some(), "P0 should know about H");
+        assert!(b_idx_opt.is_some(), "P0 should know about B");
+
+        let h_idx = p0.stops.len() as u32 + h_idx_opt.unwrap() as u32;
+        let b_idx = p0.stops.len() as u32 + b_idx_opt.unwrap() as u32;
+        let a_idx = 0; // Local index of A
+
+        // Check Long Distance Patterns
+        // Should have pattern starting at A
+        let pattern_a = p0
+            .long_distance_transfer_patterns
             .iter()
-            .find(|d| d.from_partition == 0 && d.to_partition == 2);
+            .find(|p| p.from_stop_idx == a_idx);
+        assert!(pattern_a.is_some(), "Should have pattern starting at A");
 
-        // If pruning works, dag_0_2 should be None OR have no edges.
-        // Actually, if no edges are found, `partition_dags` might not even contain the entry?
-        // My code: `if let Some(edges) = useful_edges_by_pair.get(&p_end)`
-        // If edges is empty (after pruning), it might still push?
-        // `edges_map.remove(&(u, v))` removes from map.
-        // If map becomes empty, `useful_edges_by_pair` still has the key?
-        // `useful_edges_by_pair` is populated if we find *any* path.
-        // If we prune all edges, the map entry exists but is empty?
-        // Wait, `useful_edges_by_pair` stores *edges*.
-        // If we prune all edges, `edges` is empty.
-        // Then `dag_edges` will be empty.
-        // Then we push `PartitionDag` with empty edges?
-        // `partition_dags.push(...)`.
+        let edges = &pattern_a.unwrap().edges;
 
-        if let Some(dag) = dag_0_2 {
-            // Map DAG indices to Global IDs
-            let mut dag_idx_to_global = HashMap::new();
-            for (i, hub) in dag.hubs.iter().enumerate() {
-                // We need to map back to global ID.
-                // We know:
-                // P0, stop 0 -> Global 0 (A)
-                // P1, stop 0 -> Global 1 (H)
-                // P2, stop 0 -> Global 2 (B)
-                let global_id = match (hub.original_partition_id, hub.stop_idx_in_partition) {
-                    (0, 0) => 0,
-                    (1, 0) => 1,
-                    (2, 0) => 2,
-                    _ => panic!("Unknown hub"),
-                };
-                dag_idx_to_global.insert(i as u32, global_id);
-            }
+        // Edges should be:
+        // A -> H (Cost 10)
+        // H -> B (Cost 10)
+        // A -> B (Cost 25) -> Pruned!
 
-            let mut has_a_h = false;
-            let mut has_h_b = false;
-            let mut has_a_b = false;
+        let has_a_h = edges
+            .iter()
+            .any(|e| e.from_node_idx == a_idx && e.to_node_idx == h_idx);
+        let has_a_b = edges
+            .iter()
+            .any(|e| e.from_node_idx == a_idx && e.to_node_idx == b_idx);
 
-            for edge in &dag.edges {
-                let u = dag_idx_to_global[&edge.from_node_idx];
-                let v = dag_idx_to_global[&edge.to_node_idx];
-                match (u, v) {
-                    (0, 1) => has_a_h = true,
-                    (1, 2) => has_h_b = true,
-                    (0, 2) => has_a_b = true,
-                    _ => {}
-                }
-            }
+        assert!(has_a_h, "Should contain A -> H");
+        assert!(!has_a_b, "Should NOT contain A -> B (pruned)");
 
-            assert!(has_a_h, "Should contain A -> H");
-            assert!(has_h_b, "Should contain H -> B");
-            assert!(!has_a_b, "Should NOT contain A -> B (pruned)");
-        } else {
-            panic!("DAG P0 -> P2 should exist");
-        }
+        // Verify P1
+        let p1 = &loaded_partitions[&1];
+        let h_idx_p1 = 0; // Local index of H in P1
+
+        // Check External Hub B in P1
+        let b_idx_opt_p1 = p1
+            .external_hubs
+            .iter()
+            .position(|h| h.original_partition_id == 2 && h.stop_idx_in_partition == 0);
+        assert!(b_idx_opt_p1.is_some(), "P1 should know about B");
+        let b_idx_p1 = p1.stops.len() as u32 + b_idx_opt_p1.unwrap() as u32;
+
+        let pattern_h = p1
+            .long_distance_transfer_patterns
+            .iter()
+            .find(|p| p.from_stop_idx == h_idx_p1);
+        assert!(
+            pattern_h.is_some(),
+            "Should have pattern starting at H in P1"
+        );
+
+        let edges_p1 = &pattern_h.unwrap().edges;
+        let has_h_b = edges_p1
+            .iter()
+            .any(|e| e.from_node_idx == h_idx_p1 && e.to_node_idx == b_idx_p1);
+        assert!(has_h_b, "Should contain H -> B in P1");
     }
 }

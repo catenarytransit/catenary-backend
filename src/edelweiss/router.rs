@@ -643,6 +643,8 @@ mod tests {
             timezones: vec!["UTC".to_string()],
             boundary: None,
             chateau_ids: vec!["test".to_string()],
+            external_hubs: vec![],
+            long_distance_transfer_patterns: vec![],
         }
     }
 
@@ -833,531 +835,539 @@ mod tests {
         // Stop 0 in P1 has GTFS ID "S0" (inherited from create_test_partition)
         assert_eq!(last_leg.end_stop_id().unwrap().as_str(), "S0");
     }
-}
 
-#[test]
-fn test_multi_partition_selection() {
-    use catenary::routing_common::transit_graph::{CompressedTrip, TimeDeltaSequence, TransitStop};
+    #[test]
+    fn test_multi_partition_selection() {
+        use catenary::routing_common::transit_graph::{
+            CompressedTrip, TimeDeltaSequence, TransitStop,
+        };
 
-    // Create two partitions:
-    // Partition 0: Has a stop near start, but NO path to destination.
-    // Partition 1: Has a stop slightly further from start, but HAS path to destination.
+        // Create two partitions:
+        // Partition 0: Has a stop near start, but NO path to destination.
+        // Partition 1: Has a stop slightly further from start, but HAS path to destination.
 
-    // Partition 0
-    let stops_p0 = vec![TransitStop {
-        id: 0,
-        chateau_idx: 0,
-        gtfs_original_id: "S0_P0".to_string(),
-        is_hub: false,
-        is_border: false,
-        is_external_gateway: false,
-        is_long_distance: false,
-        lat: -0.01,
-        lon: 0.0, // Further from start/end
-    }];
-    let partition0 = TransitPartition {
-        partition_id: 0,
-        stops: stops_p0,
-        trip_patterns: vec![], // No trips
-        time_deltas: vec![],
-        direction_patterns: vec![],
-        internal_transfers: vec![],
-        osm_links: vec![],
-        service_ids: vec![],
-        service_exceptions: vec![],
-        _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![LocalTransferPattern {
-            from_stop_idx: 0,
-            edges: vec![DagEdge {
-                from_node_idx: 0,
-                to_node_idx: 1,
-                edge_type: Some(EdgeType::Transit(TransitEdge {
-                    trip_pattern_idx: 0,
-                    start_stop_idx: 0,
-                    end_stop_idx: 1,
-                    min_duration: 0,
-                })),
-            }],
-        }],
-        long_distance_trip_patterns: vec![],
-        timezones: vec!["UTC".to_string()],
-        boundary: None,
-        chateau_ids: vec!["p0".to_string()],
-    };
-
-    // Partition 1
-    let stops_p1 = vec![
-        TransitStop {
+        // Partition 0
+        let stops_p0 = vec![TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "S0_P1".to_string(),
+            gtfs_original_id: "S0_P0".to_string(),
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
             is_long_distance: false,
-            lat: 0.001, // Slightly further (approx 111m)
-            lon: 0.0,
-        },
-        TransitStop {
-            id: 1,
-            chateau_idx: 0,
-            gtfs_original_id: "S1_P1".to_string(),
-            is_hub: false,
-            is_border: false,
-            is_external_gateway: false,
-            is_long_distance: false,
-            lat: 0.01, // Destination
-            lon: 0.0,
-        },
-    ];
-
-    // Create a trip in Partition 1 from S0_P1 to S1_P1
-    let direction_patterns_p1 = vec![DirectionPattern {
-        stop_indices: vec![0, 1],
-    }];
-    let time_deltas_p1 = vec![TimeDeltaSequence {
-        deltas: vec![0, 0, 600, 0],
-    }]; // 10 min travel
-    let trips_p1 = vec![CompressedTrip {
-        gtfs_trip_id: "T1_P1".to_string(),
-        service_mask: 127,
-        start_time: 28800, // 8:00
-        time_delta_idx: 0,
-        service_idx: 0,
-        bikes_allowed: 0,
-        wheelchair_accessible: 0,
-    }];
-    let trip_patterns_p1 = vec![TripPattern {
-        chateau_idx: 0,
-        route_id: "R1_P1".to_string(),
-        direction_pattern_idx: 0,
-        trips: trips_p1,
-        timezone_idx: 0,
-    }];
-
-    let partition1 = TransitPartition {
-        partition_id: 1,
-        stops: stops_p1,
-        trip_patterns: trip_patterns_p1,
-        time_deltas: time_deltas_p1,
-        direction_patterns: direction_patterns_p1,
-        internal_transfers: vec![],
-        osm_links: vec![],
-        service_ids: vec!["daily".to_string()],
-        service_exceptions: vec![],
-        _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![LocalTransferPattern {
-            from_stop_idx: 0,
-            edges: vec![DagEdge {
-                from_node_idx: 0,
-                to_node_idx: 1,
-                edge_type: Some(EdgeType::Transit(TransitEdge {
-                    trip_pattern_idx: 0,
-                    start_stop_idx: 0,
-                    end_stop_idx: 1,
-                    min_duration: 0,
-                })),
+            lat: -0.01,
+            lon: 0.0, // Further from start/end
+        }];
+        let partition0 = TransitPartition {
+            partition_id: 0,
+            stops: stops_p0,
+            trip_patterns: vec![], // No trips
+            time_deltas: vec![],
+            direction_patterns: vec![],
+            internal_transfers: vec![],
+            osm_links: vec![],
+            service_ids: vec![],
+            service_exceptions: vec![],
+            _deprecated_external_transfers: vec![],
+            local_transfer_patterns: vec![LocalTransferPattern {
+                from_stop_idx: 0,
+                edges: vec![DagEdge {
+                    from_node_idx: 0,
+                    to_node_idx: 1,
+                    edge_type: Some(EdgeType::Transit(TransitEdge {
+                        trip_pattern_idx: 0,
+                        start_stop_idx: 0,
+                        end_stop_idx: 1,
+                        min_duration: 0,
+                    })),
+                }],
             }],
-        }],
-        long_distance_trip_patterns: vec![],
-        timezones: vec!["UTC".to_string()],
-        boundary: None,
-        chateau_ids: vec!["p1".to_string()],
-    };
+            long_distance_trip_patterns: vec![],
+            timezones: vec!["UTC".to_string()],
+            boundary: None,
+            chateau_ids: vec!["p0".to_string()],
+            external_hubs: vec![],
+            long_distance_transfer_patterns: vec![],
+        };
 
-    let mut graph = GraphManager::new();
-    graph
-        .transit_partitions
-        .write()
-        .unwrap()
-        .insert(0, std::sync::Arc::new(partition0));
-    graph
-        .transit_partitions
-        .write()
-        .unwrap()
-        .insert(1, std::sync::Arc::new(partition1));
-    let router = Router::new(&graph);
-
-    // Request: (0,0) to (0.01, 0)
-    // Partition 0 stop is at (0,0) -> dist 0
-    // Partition 1 stop is at (0.001, 0) -> dist ~111m
-    // Current logic picks first available partition from sorted stops.
-    // Since P0 stop is closer, it might pick P0 and fail because P0 has no path.
-
-    let req = RoutingRequest {
-        start_lat: 0.0,
-        start_lon: 0.0,
-        end_lat: 0.01,
-        end_lon: 0.0,
-        mode: TravelMode::Transit,
-        time: 1704095880, // 7:58 (2 min wait)
-        speed_mps: 1.0,
-        is_departure_time: true,
-        wheelchair_accessible: false,
-    };
-
-    let result = router.route(&req);
-
-    assert!(
-        !result.itineraries.is_empty(),
-        "Should find itinerary via Partition 1"
-    );
-    assert_eq!(
-        result.itineraries[0].legs.len(),
-        2,
-        "Should have Walk + Transit leg"
-    );
-    assert_eq!(result.itineraries[0].legs[0].mode(), TravelMode::Walk);
-    assert_eq!(result.itineraries[0].legs[1].mode(), TravelMode::Transit);
-    // Note: Access/Egress legs are implicit in start/end times but not in legs vec currently.
-}
-
-#[test]
-fn test_long_distance_routing() {
-    use crate::graph_loader::GraphManager;
-    use catenary::routing_common::api::{RoutingRequest, TravelMode};
-    use catenary::routing_common::transit_graph::{
-        CompressedTrip, DagEdge, DirectionPattern, EdgeType, LocalTransferPattern,
-        TimeDeltaSequence, TransitEdge, TransitPartition, TransitStop, TripPattern,
-    };
-
-    fn create_test_partition() -> TransitPartition {
-        let stops = vec![
+        // Partition 1
+        let stops_p1 = vec![
             TransitStop {
                 id: 0,
                 chateau_idx: 0,
-                gtfs_original_id: "S0".to_string(),
+                gtfs_original_id: "S0_P1".to_string(),
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
                 is_long_distance: false,
-                lat: 0.0,
+                lat: 0.001, // Slightly further (approx 111m)
                 lon: 0.0,
             },
             TransitStop {
                 id: 1,
                 chateau_idx: 0,
-                gtfs_original_id: "S1".to_string(),
+                gtfs_original_id: "S1_P1".to_string(),
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
                 is_long_distance: false,
-                lat: 0.01,
-                lon: 0.0,
-            },
-            TransitStop {
-                id: 2,
-                chateau_idx: 0,
-                gtfs_original_id: "S2".to_string(),
-                is_hub: false,
-                is_border: false,
-                is_external_gateway: false,
-                is_long_distance: false,
-                lat: 0.02,
+                lat: 0.01, // Destination
                 lon: 0.0,
             },
         ];
 
-        let direction_patterns = vec![DirectionPattern {
-            stop_indices: vec![0, 1, 2],
+        // Create a trip in Partition 1 from S0_P1 to S1_P1
+        let direction_patterns_p1 = vec![DirectionPattern {
+            stop_indices: vec![0, 1],
         }];
-
-        let time_deltas = vec![TimeDeltaSequence {
-            deltas: vec![0, 0, 600, 0, 600, 0],
+        let time_deltas_p1 = vec![TimeDeltaSequence {
+            deltas: vec![0, 0, 600, 0],
+        }]; // 10 min travel
+        let trips_p1 = vec![CompressedTrip {
+            gtfs_trip_id: "T1_P1".to_string(),
+            service_mask: 127,
+            start_time: 28800, // 8:00
+            time_delta_idx: 0,
+            service_idx: 0,
+            bikes_allowed: 0,
+            wheelchair_accessible: 0,
         }];
-
-        let trips = vec![
-            CompressedTrip {
-                gtfs_trip_id: "T1".to_string(),
-                service_mask: 127,
-                start_time: 28800,
-                time_delta_idx: 0,
-                service_idx: 0,
-                bikes_allowed: 0,
-                wheelchair_accessible: 0,
-            },
-            CompressedTrip {
-                gtfs_trip_id: "T2".to_string(),
-                service_mask: 127,
-                start_time: 30600,
-                time_delta_idx: 0,
-                service_idx: 0,
-                bikes_allowed: 0,
-                wheelchair_accessible: 0,
-            },
-        ];
-
-        let trip_patterns = vec![TripPattern {
+        let trip_patterns_p1 = vec![TripPattern {
             chateau_idx: 0,
-            route_id: "R1".to_string(),
+            route_id: "R1_P1".to_string(),
             direction_pattern_idx: 0,
-            trips,
+            trips: trips_p1,
             timezone_idx: 0,
         }];
 
-        TransitPartition {
-            partition_id: 0,
-            stops,
-            trip_patterns,
-            time_deltas,
-            direction_patterns,
+        let partition1 = TransitPartition {
+            partition_id: 1,
+            stops: stops_p1,
+            trip_patterns: trip_patterns_p1,
+            time_deltas: time_deltas_p1,
+            direction_patterns: direction_patterns_p1,
             internal_transfers: vec![],
             osm_links: vec![],
             service_ids: vec!["daily".to_string()],
             service_exceptions: vec![],
             _deprecated_external_transfers: vec![],
-            local_transfer_patterns: vec![
-                LocalTransferPattern {
-                    from_stop_idx: 0,
-                    edges: vec![
-                        DagEdge {
-                            from_node_idx: 0,
-                            to_node_idx: 1,
-                            edge_type: Some(EdgeType::Transit(TransitEdge {
-                                trip_pattern_idx: 0,
-                                start_stop_idx: 0,
-                                end_stop_idx: 1,
-                                min_duration: 0,
-                            })),
-                        },
-                        DagEdge {
-                            from_node_idx: 0,
-                            to_node_idx: 2,
-                            edge_type: Some(EdgeType::Transit(TransitEdge {
-                                trip_pattern_idx: 0,
-                                start_stop_idx: 0,
-                                end_stop_idx: 2,
-                                min_duration: 0,
-                            })),
-                        },
-                    ],
-                },
-                LocalTransferPattern {
-                    from_stop_idx: 1,
-                    edges: vec![DagEdge {
-                        from_node_idx: 1,
-                        to_node_idx: 2,
-                        edge_type: Some(EdgeType::Transit(TransitEdge {
-                            trip_pattern_idx: 0,
-                            start_stop_idx: 1,
-                            end_stop_idx: 2,
-                            min_duration: 0,
-                        })),
-                    }],
-                },
-            ],
+            local_transfer_patterns: vec![LocalTransferPattern {
+                from_stop_idx: 0,
+                edges: vec![DagEdge {
+                    from_node_idx: 0,
+                    to_node_idx: 1,
+                    edge_type: Some(EdgeType::Transit(TransitEdge {
+                        trip_pattern_idx: 0,
+                        start_stop_idx: 0,
+                        end_stop_idx: 1,
+                        min_duration: 0,
+                    })),
+                }],
+            }],
             long_distance_trip_patterns: vec![],
             timezones: vec!["UTC".to_string()],
             boundary: None,
-            chateau_ids: vec!["test".to_string()],
-        }
+            chateau_ids: vec!["p1".to_string()],
+            external_hubs: vec![],
+            long_distance_transfer_patterns: vec![],
+        };
+
+        let mut graph = GraphManager::new();
+        graph
+            .transit_partitions
+            .write()
+            .unwrap()
+            .insert(0, std::sync::Arc::new(partition0));
+        graph
+            .transit_partitions
+            .write()
+            .unwrap()
+            .insert(1, std::sync::Arc::new(partition1));
+        let router = Router::new(&graph);
+
+        // Request: (0,0) to (0.01, 0)
+        // Partition 0 stop is at (0,0) -> dist 0
+        // Partition 1 stop is at (0.001, 0) -> dist ~111m
+        // Current logic picks first available partition from sorted stops.
+        // Since P0 stop is closer, it might pick P0 and fail because P0 has no path.
+
+        let req = RoutingRequest {
+            start_lat: 0.0,
+            start_lon: 0.0,
+            end_lat: 0.01,
+            end_lon: 0.0,
+            mode: TravelMode::Transit,
+            time: 1704095880, // 7:58 (2 min wait)
+            speed_mps: 1.0,
+            is_departure_time: true,
+            wheelchair_accessible: false,
+        };
+
+        let result = router.route(&req);
+
+        assert!(
+            !result.itineraries.is_empty(),
+            "Should find itinerary via Partition 1"
+        );
+        assert_eq!(
+            result.itineraries[0].legs.len(),
+            2,
+            "Should have Walk + Transit leg"
+        );
+        assert_eq!(result.itineraries[0].legs[0].mode(), TravelMode::Walk);
+        assert_eq!(result.itineraries[0].legs[1].mode(), TravelMode::Transit);
+        // Note: Access/Egress legs are implicit in start/end times but not in legs vec currently.
     }
 
-    // Partition 0: Stop 0 (Long Distance)
-    let mut partition0 = create_test_partition();
-    partition0.partition_id = 0;
-    partition0.stops[0].id = 0;
-    partition0.stops[0].is_long_distance = true;
-    partition0.stops[0].lat = 0.0;
-    partition0.stops[0].lon = 0.0;
+    #[test]
+    fn test_long_distance_routing() {
+        use crate::graph_loader::GraphManager;
+        use catenary::routing_common::api::{RoutingRequest, TravelMode};
+        use catenary::routing_common::transit_graph::{
+            CompressedTrip, DagEdge, DirectionPattern, EdgeType, LocalTransferPattern,
+            TimeDeltaSequence, TransitEdge, TransitPartition, TransitStop, TripPattern,
+        };
 
-    // Partition 1: Stop 0 (Long Distance)
-    let mut partition1 = create_test_partition();
-    partition1.partition_id = 1;
-    partition1.stops[0].id = 0; // Local index 0
-    partition1.stops[0].is_long_distance = true;
-    partition1.stops[0].lat = 10.0; // Far away
-    partition1.stops[0].lon = 0.0;
+        fn create_test_partition() -> TransitPartition {
+            let stops = vec![
+                TransitStop {
+                    id: 0,
+                    chateau_idx: 0,
+                    gtfs_original_id: "S0".to_string(),
+                    is_hub: false,
+                    is_border: false,
+                    is_external_gateway: false,
+                    is_long_distance: false,
+                    lat: 0.0,
+                    lon: 0.0,
+                },
+                TransitStop {
+                    id: 1,
+                    chateau_idx: 0,
+                    gtfs_original_id: "S1".to_string(),
+                    is_hub: false,
+                    is_border: false,
+                    is_external_gateway: false,
+                    is_long_distance: false,
+                    lat: 0.01,
+                    lon: 0.0,
+                },
+                TransitStop {
+                    id: 2,
+                    chateau_idx: 0,
+                    gtfs_original_id: "S2".to_string(),
+                    is_hub: false,
+                    is_border: false,
+                    is_external_gateway: false,
+                    is_long_distance: false,
+                    lat: 0.02,
+                    lon: 0.0,
+                },
+            ];
 
-    // Add Long Distance Trip Pattern to Partition 0
-    partition0.stops.push(TransitStop {
-        id: 1, // Local index 1 in P0
-        chateau_idx: 0,
-        gtfs_original_id: "S1_P1".to_string(),
-        is_hub: true,
-        is_border: true,
-        is_external_gateway: false,
-        is_long_distance: true,
-        lat: 10.0,
-        lon: 0.0,
-    });
+            let direction_patterns = vec![DirectionPattern {
+                stop_indices: vec![0, 1, 2],
+            }];
 
-    let trips = vec![CompressedTrip {
-        gtfs_trip_id: "LD_Trip".to_string(),
-        service_mask: 127,
-        start_time: 36000, // 10:00
-        time_delta_idx: 0,
-        service_idx: 0,
-        bikes_allowed: 0,
-        wheelchair_accessible: 0,
-    }];
+            let time_deltas = vec![TimeDeltaSequence {
+                deltas: vec![0, 0, 600, 0, 600, 0],
+            }];
 
-    partition0.time_deltas.push(TimeDeltaSequence {
-        deltas: vec![0, 0, 3600, 0],
-    });
-    let delta_idx = (partition0.time_deltas.len() - 1) as u32;
+            let trips = vec![
+                CompressedTrip {
+                    gtfs_trip_id: "T1".to_string(),
+                    service_mask: 127,
+                    start_time: 28800,
+                    time_delta_idx: 0,
+                    service_idx: 0,
+                    bikes_allowed: 0,
+                    wheelchair_accessible: 0,
+                },
+                CompressedTrip {
+                    gtfs_trip_id: "T2".to_string(),
+                    service_mask: 127,
+                    start_time: 30600,
+                    time_delta_idx: 0,
+                    service_idx: 0,
+                    bikes_allowed: 0,
+                    wheelchair_accessible: 0,
+                },
+            ];
 
-    let mut trips = trips;
-    trips[0].time_delta_idx = delta_idx;
+            let trip_patterns = vec![TripPattern {
+                chateau_idx: 0,
+                route_id: "R1".to_string(),
+                direction_pattern_idx: 0,
+                trips,
+                timezone_idx: 0,
+            }];
 
-    partition0.direction_patterns.push(DirectionPattern {
-        stop_indices: vec![0, 3],
-    });
-    let dir_idx = (partition0.direction_patterns.len() - 1) as u32;
+            TransitPartition {
+                partition_id: 0,
+                stops,
+                trip_patterns,
+                time_deltas,
+                direction_patterns,
+                internal_transfers: vec![],
+                osm_links: vec![],
+                service_ids: vec!["daily".to_string()],
+                service_exceptions: vec![],
+                _deprecated_external_transfers: vec![],
+                local_transfer_patterns: vec![
+                    LocalTransferPattern {
+                        from_stop_idx: 0,
+                        edges: vec![
+                            DagEdge {
+                                from_node_idx: 0,
+                                to_node_idx: 1,
+                                edge_type: Some(EdgeType::Transit(TransitEdge {
+                                    trip_pattern_idx: 0,
+                                    start_stop_idx: 0,
+                                    end_stop_idx: 1,
+                                    min_duration: 0,
+                                })),
+                            },
+                            DagEdge {
+                                from_node_idx: 0,
+                                to_node_idx: 2,
+                                edge_type: Some(EdgeType::Transit(TransitEdge {
+                                    trip_pattern_idx: 0,
+                                    start_stop_idx: 0,
+                                    end_stop_idx: 2,
+                                    min_duration: 0,
+                                })),
+                            },
+                        ],
+                    },
+                    LocalTransferPattern {
+                        from_stop_idx: 1,
+                        edges: vec![DagEdge {
+                            from_node_idx: 1,
+                            to_node_idx: 2,
+                            edge_type: Some(EdgeType::Transit(TransitEdge {
+                                trip_pattern_idx: 0,
+                                start_stop_idx: 1,
+                                end_stop_idx: 2,
+                                min_duration: 0,
+                            })),
+                        }],
+                    },
+                ],
+                long_distance_trip_patterns: vec![],
+                timezones: vec!["UTC".to_string()],
+                boundary: None,
+                chateau_ids: vec!["test".to_string()],
+                external_hubs: vec![],
+                long_distance_transfer_patterns: vec![],
+            }
+        }
 
-    partition0.long_distance_trip_patterns.push(TripPattern {
-        chateau_idx: 0,
-        route_id: "LD_Route".to_string(),
-        direction_pattern_idx: dir_idx,
-        trips,
-        timezone_idx: 0,
-    });
-    let pattern_idx = (partition0.long_distance_trip_patterns.len() - 1) as u32;
+        // Partition 0: Stop 0 (Long Distance)
+        let mut partition0 = create_test_partition();
+        partition0.partition_id = 0;
+        partition0.stops[0].id = 0;
+        partition0.stops[0].is_long_distance = true;
+        partition0.stops[0].lat = 0.0;
+        partition0.stops[0].lon = 0.0;
 
-    let mut graph = GraphManager::new();
-    graph
-        .transit_partitions
-        .write()
-        .unwrap()
-        .insert(0, std::sync::Arc::new(partition0));
-    graph
-        .transit_partitions
-        .write()
-        .unwrap()
-        .insert(1, std::sync::Arc::new(partition1));
+        // Partition 1: Stop 0 (Long Distance)
+        let mut partition1 = create_test_partition();
+        partition1.partition_id = 1;
+        partition1.stops[0].id = 0; // Local index 0
+        partition1.stops[0].is_long_distance = true;
+        partition1.stops[0].lat = 10.0; // Far away
+        partition1.stops[0].lon = 0.0;
 
-    let hub0 = catenary::routing_common::transit_graph::GlobalHub {
-        original_partition_id: 0,
-        stop_idx_in_partition: 0,
-    };
-    let hub1 = catenary::routing_common::transit_graph::GlobalHub {
-        original_partition_id: 1,
-        stop_idx_in_partition: 0,
-    };
+        // Add Long Distance Trip Pattern to Partition 0
+        partition0.stops.push(TransitStop {
+            id: 1, // Local index 1 in P0
+            chateau_idx: 0,
+            gtfs_original_id: "S1_P1".to_string(),
+            is_hub: true,
+            is_border: true,
+            is_external_gateway: false,
+            is_long_distance: true,
+            lat: 10.0,
+            lon: 0.0,
+        });
 
-    let dag = catenary::routing_common::transit_graph::PartitionDag {
-        from_partition: 0,
-        to_partition: 1,
-        hubs: vec![hub0, hub1],
-        edges: vec![DagEdge {
-            from_node_idx: 0,
-            to_node_idx: 1,
-            edge_type: Some(EdgeType::LongDistanceTransit(TransitEdge {
-                trip_pattern_idx: pattern_idx,
-                start_stop_idx: 0,
-                end_stop_idx: 1,
-                min_duration: 3600,
-            })),
-        }],
-    };
+        let trips = vec![CompressedTrip {
+            gtfs_trip_id: "LD_Trip".to_string(),
+            service_mask: 127,
+            start_time: 36000, // 10:00
+            time_delta_idx: 0,
+            service_idx: 0,
+            bikes_allowed: 0,
+            wheelchair_accessible: 0,
+        }];
 
-    graph.global_index = Some(
-        catenary::routing_common::transit_graph::GlobalPatternIndex {
-            partition_dags: vec![],
-            long_distance_dags: vec![dag],
-        },
-    );
+        partition0.time_deltas.push(TimeDeltaSequence {
+            deltas: vec![0, 0, 3600, 0],
+        });
+        let delta_idx = (partition0.time_deltas.len() - 1) as u32;
 
-    // Use crate::edelweiss::router::Router
-    let router = crate::router::Router::new(&graph);
+        let mut trips = trips;
+        trips[0].time_delta_idx = delta_idx;
 
-    let req = RoutingRequest {
-        start_lat: 0.0,
-        start_lon: 0.0,
-        end_lat: 10.0,
-        end_lon: 0.0,
-        mode: TravelMode::Transit,
-        time: 35000, // 9:43
-        speed_mps: 1.0,
-        is_departure_time: true,
-        wheelchair_accessible: false,
-    };
+        partition0.direction_patterns.push(DirectionPattern {
+            stop_indices: vec![0, 3],
+        });
+        let dir_idx = (partition0.direction_patterns.len() - 1) as u32;
 
-    let result = router.route(&req);
+        partition0.long_distance_trip_patterns.push(TripPattern {
+            chateau_idx: 0,
+            route_id: "LD_Route".to_string(),
+            direction_pattern_idx: dir_idx,
+            trips,
+            timezone_idx: 0,
+        });
+        let pattern_idx = (partition0.long_distance_trip_patterns.len() - 1) as u32;
 
-    assert!(
-        !result.itineraries.is_empty(),
-        "Should find long distance itinerary"
-    );
-    let itin = &result.itineraries[0];
+        let mut graph = GraphManager::new();
+        graph
+            .transit_partitions
+            .write()
+            .unwrap()
+            .insert(0, std::sync::Arc::new(partition0));
+        graph
+            .transit_partitions
+            .write()
+            .unwrap()
+            .insert(1, std::sync::Arc::new(partition1));
 
-    assert_eq!(itin.start_time, 35000);
-    assert_eq!(itin.end_time, 39600);
-}
+        let hub0 = catenary::routing_common::transit_graph::GlobalHub {
+            original_partition_id: 0,
+            stop_idx_in_partition: 0,
+        };
+        let hub1 = catenary::routing_common::transit_graph::GlobalHub {
+            original_partition_id: 1,
+            stop_idx_in_partition: 0,
+        };
 
-#[test]
-fn test_hub_routing_repro() {
-    // Graph: A (0) -> Hub (1) -> B (2)
-    // LTPs:
-    // A: [A -> Hub]
-    // Hub: [Hub -> B]
-    // We want to route A -> B.
-    // Current implementation loads A's LTP, gets A->Hub.
-    // It does NOT load Hub's LTP, so it can't go Hub->B.
-    // This test should fail before the fix.
-
-    let mut partition = create_test_partition();
-    // Modify stops
-    partition.stops[1].is_hub = true; // Stop 1 is Hub
-
-    // Modify LTPs
-    partition.local_transfer_patterns = vec![
-        LocalTransferPattern {
-            from_stop_idx: 0,
+        let dag = catenary::routing_common::transit_graph::PartitionDag {
+            from_partition: 0,
+            to_partition: 1,
+            hubs: vec![hub0, hub1],
             edges: vec![DagEdge {
                 from_node_idx: 0,
-                to_node_idx: 1, // A -> Hub
-                edge_type: Some(EdgeType::Transit(TransitEdge {
-                    trip_pattern_idx: 0,
+                to_node_idx: 1,
+                edge_type: Some(EdgeType::LongDistanceTransit(TransitEdge {
+                    trip_pattern_idx: pattern_idx,
                     start_stop_idx: 0,
                     end_stop_idx: 1,
-                    min_duration: 0,
+                    min_duration: 3600,
                 })),
             }],
-        },
-        LocalTransferPattern {
-            from_stop_idx: 1,
-            edges: vec![DagEdge {
-                from_node_idx: 1,
-                to_node_idx: 2, // Hub -> B
-                edge_type: Some(EdgeType::Transit(TransitEdge {
-                    trip_pattern_idx: 0,
-                    start_stop_idx: 1,
-                    end_stop_idx: 2,
-                    min_duration: 0,
-                })),
-            }],
-        },
-        // No LTP for A -> B directly
-    ];
+        };
 
-    let mut graph = GraphManager::new();
-    graph
-        .transit_partitions
-        .write()
-        .unwrap()
-        .insert(0, std::sync::Arc::new(partition));
-    let router = Router::new(&graph);
+        graph.global_index = Some(
+            catenary::routing_common::transit_graph::GlobalPatternIndex {
+                partition_dags: vec![],
+                long_distance_dags: vec![dag],
+            },
+        );
 
-    let req = RoutingRequest {
-        start_lat: 0.0,
-        start_lon: 0.0,
-        end_lat: 0.02,
-        end_lon: 0.0,
-        mode: TravelMode::Transit,
-        time: 1704095400,
-        speed_mps: 1.0,
-        is_departure_time: true,
-        wheelchair_accessible: false,
-    };
+        // Use crate::edelweiss::router::Router
+        let router = crate::router::Router::new(&graph);
 
-    let result = router.route(&req);
+        let req = RoutingRequest {
+            start_lat: 0.0,
+            start_lon: 0.0,
+            end_lat: 10.0,
+            end_lon: 0.0,
+            mode: TravelMode::Transit,
+            time: 35000, // 9:43
+            speed_mps: 1.0,
+            is_departure_time: true,
+            wheelchair_accessible: false,
+        };
 
-    // Should find itinerary A -> Hub -> B
-    assert!(
-        !result.itineraries.is_empty(),
-        "Should find itinerary via Hub"
-    );
-    let itin = &result.itineraries[0];
-    assert_eq!(itin.end_time, 1704097200);
+        let result = router.route(&req);
+
+        assert!(
+            !result.itineraries.is_empty(),
+            "Should find long distance itinerary"
+        );
+        let itin = &result.itineraries[0];
+
+        assert_eq!(itin.start_time, 35000);
+        assert_eq!(itin.end_time, 39600);
+    }
+
+    #[test]
+    fn test_hub_routing_repro() {
+        // Graph: A (0) -> Hub (1) -> B (2)
+        // LTPs:
+        // A: [A -> Hub]
+        // Hub: [Hub -> B]
+        // We want to route A -> B.
+        // Current implementation loads A's LTP, gets A->Hub.
+        // It does NOT load Hub's LTP, so it can't go Hub->B.
+        // This test should fail before the fix.
+
+        let mut partition = create_test_partition();
+        // Modify stops
+        partition.stops[1].is_hub = true; // Stop 1 is Hub
+
+        // Modify LTPs
+        partition.local_transfer_patterns = vec![
+            LocalTransferPattern {
+                from_stop_idx: 0,
+                edges: vec![DagEdge {
+                    from_node_idx: 0,
+                    to_node_idx: 1, // A -> Hub
+                    edge_type: Some(EdgeType::Transit(TransitEdge {
+                        trip_pattern_idx: 0,
+                        start_stop_idx: 0,
+                        end_stop_idx: 1,
+                        min_duration: 0,
+                    })),
+                }],
+            },
+            LocalTransferPattern {
+                from_stop_idx: 1,
+                edges: vec![DagEdge {
+                    from_node_idx: 1,
+                    to_node_idx: 2, // Hub -> B
+                    edge_type: Some(EdgeType::Transit(TransitEdge {
+                        trip_pattern_idx: 0,
+                        start_stop_idx: 1,
+                        end_stop_idx: 2,
+                        min_duration: 0,
+                    })),
+                }],
+            },
+            // No LTP for A -> B directly
+        ];
+
+        let mut graph = GraphManager::new();
+        graph
+            .transit_partitions
+            .write()
+            .unwrap()
+            .insert(0, std::sync::Arc::new(partition));
+        let router = Router::new(&graph);
+
+        let req = RoutingRequest {
+            start_lat: 0.0,
+            start_lon: 0.0,
+            end_lat: 0.02,
+            end_lon: 0.0,
+            mode: TravelMode::Transit,
+            time: 1704095400,
+            speed_mps: 1.0,
+            is_departure_time: true,
+            wheelchair_accessible: false,
+        };
+
+        let result = router.route(&req);
+
+        // Should find itinerary A -> Hub -> B
+        assert!(
+            !result.itineraries.is_empty(),
+            "Should find itinerary via Hub"
+        );
+        let itin = &result.itineraries[0];
+        assert_eq!(itin.end_time, 1704097200);
+    }
 }

@@ -1,10 +1,9 @@
 // cargo run --bin linnaea --release -- --input output --output transit_viz.geojson
 
 use catenary::routing_common::transit_graph::{
-    GlobalPatternIndex, LocalTransferPattern, Manifest, TransitPartition, TransitStop, TripPattern,
+    EdgeType, GlobalPatternIndex, Manifest, TransitPartition,
 };
 use clap::Parser;
-use geo::{Point, Polygon};
 use geojson::{Feature, FeatureCollection, Geometry, JsonObject, Value};
 use prost::Message;
 use std::collections::HashMap;
@@ -67,15 +66,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let partition_map: HashMap<u32, &TransitPartition> =
         partitions.iter().map(|p| (p.partition_id, p)).collect();
 
-    if let Some(manifest) = &manifest {
-        for (partition_id, boundary) in &manifest.partition_boundaries {
+    // 1. Plot Partition Boundaries (Prefer from Partition, fallback to Manifest)
+    for partition in &partitions {
+        if let Some(boundary) = &partition.boundary {
             let mut properties = JsonObject::new();
             properties.insert("type".to_string(), "partition_boundary".into());
-            properties.insert("partition_id".to_string(), partition_id.clone().into());
-            properties.insert("style".to_string(), "convex_fallback".into());
+            properties.insert("partition_id".to_string(), partition.partition_id.into());
+            properties.insert("source".to_string(), "partition_pbf".into());
 
             let ring: Vec<Vec<f64>> = boundary.points.iter().map(|p| vec![p.lon, p.lat]).collect();
-
+            // GeoJSON Polygon requires a list of rings (outer + inner holes)
+            // We assume single outer ring for now.
             features.push(Feature {
                 bbox: None,
                 geometry: Some(Geometry::new(Value::Polygon(vec![ring]))),
@@ -83,6 +84,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 properties: Some(properties),
                 foreign_members: None,
             });
+        }
+    }
+
+    if let Some(manifest) = &manifest {
+        for (partition_id, boundary) in &manifest.partition_boundaries {
+            // Only plot if we didn't already plot it from the partition itself (or maybe plot both for comparison?)
+            // For now, let's plot it if the partition wasn't loaded or didn't have a boundary.
+            let has_partition_boundary = partition_map
+                .get(partition_id)
+                .map(|p| p.boundary.is_some())
+                .unwrap_or(false);
+
+            if !has_partition_boundary {
+                let mut properties = JsonObject::new();
+                properties.insert("type".to_string(), "partition_boundary".into());
+                properties.insert("partition_id".to_string(), partition_id.clone().into());
+                properties.insert("source".to_string(), "manifest".into());
+                properties.insert("style".to_string(), "convex_fallback".into());
+
+                let ring: Vec<Vec<f64>> =
+                    boundary.points.iter().map(|p| vec![p.lon, p.lat]).collect();
+
+                features.push(Feature {
+                    bbox: None,
+                    geometry: Some(Geometry::new(Value::Polygon(vec![ring]))),
+                    id: None,
+                    properties: Some(properties),
+                    foreign_members: None,
+                });
+            }
         }
     }
 
@@ -106,6 +137,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None
                 };
                 hub_coords.push(coords);
+
+                // Plot Hub
+                if let Some((lon, lat)) = coords {
+                    hub_count += 1;
+                    let mut properties = JsonObject::new();
+                    properties.insert("type".to_string(), "hub".into());
+                    properties.insert(
+                        "original_partition_id".to_string(),
+                        hub.original_partition_id.into(),
+                    );
+                    properties.insert("stop_idx".to_string(), hub.stop_idx_in_partition.into());
+
+                    features.push(Feature {
+                        bbox: None,
+                        geometry: Some(Geometry::new(Value::Point(vec![lon, lat]))),
+                        id: None,
+                        properties: Some(properties),
+                        foreign_members: None,
+                    });
+                }
             }
 
             for edge in dag.edges {
@@ -117,6 +168,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     properties.insert("type".to_string(), "global_dag_edge".into());
                     properties.insert("from_partition".to_string(), from_part_id.into());
                     properties.insert("to_partition".to_string(), to_part_id.into());
+
+                    let edge_type_str = match &edge.edge_type {
+                        Some(EdgeType::Transit(_)) => "transit",
+                        Some(EdgeType::LongDistanceTransit(_)) => "long_distance",
+                        Some(EdgeType::Walk(_)) => "walk",
+                        None => "unknown",
+                    };
+                    properties.insert("edge_type".to_string(), edge_type_str.into());
 
                     features.push(Feature {
                         bbox: None,

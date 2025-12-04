@@ -38,9 +38,11 @@ fn test_multi_partition_selection() {
         _deprecated_external_transfers: vec![],
         local_transfer_patterns: vec![],
         long_distance_trip_patterns: vec![],
-        timezones: vec!["UTC".to_string()],
+        timezones: vec![],
         boundary: None,
-        chateau_ids: vec!["p0".to_string()],
+        chateau_ids: vec![],
+        external_hubs: vec![],
+        long_distance_transfer_patterns: vec![],
     };
 
     // Partition 1
@@ -121,6 +123,8 @@ fn test_multi_partition_selection() {
         timezones: vec!["UTC".to_string()],
         boundary: None,
         chateau_ids: vec!["p1".to_string()],
+        external_hubs: vec![],
+        long_distance_transfer_patterns: vec![],
     };
 
     let mut graph = GraphManager::new();

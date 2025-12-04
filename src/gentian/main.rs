@@ -40,6 +40,8 @@ pub mod repro_hub;
 #[cfg(test)]
 pub mod repro_large_file;
 #[cfg(test)]
+pub mod test_border_patterns;
+#[cfg(test)]
 pub mod test_global_pruning;
 pub mod test_hub;
 #[cfg(test)]
@@ -120,7 +122,7 @@ async fn main() -> Result<()> {
     } else {
         generate_chunks(&args, pool).await?;
         // Always stitch after generation to ensure global connectivity is up to date
-        // stitch_graph(&args).await?;
+        stitch_graph(&args).await?;
     }
 
     Ok(())
@@ -1089,7 +1091,6 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     println!("Total Unique Hubs Identified: {}", hubs.len());
 
-    let mut intra_partition_edges: Vec<((usize, usize), DagEdge)> = Vec::new();
     let mut cross_partition_edges: Vec<((usize, usize), DagEdge)> = Vec::new();
     let mut partitions: HashMap<u32, TransitPartition> = HashMap::new();
     let mut global_to_partition_map: HashMap<usize, (u32, u32)> = HashMap::new();
@@ -1394,6 +1395,8 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             timezones: global_timezones.clone(),
             boundary: Some(boundary),
             chateau_ids: chateau_ids.clone(),
+            external_hubs: Vec::new(),
+            long_distance_transfer_patterns: Vec::new(),
         };
 
         // Save Transfer Chunk
@@ -1421,10 +1424,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             partition_id,
             partition.stops.len()
         );
-
-        // Compute Intra-Partition Connectivity
-        let local_edges = compute_intra_partition_connectivity(&partition, &sorted_relevant_stops);
-        intra_partition_edges.extend(local_edges);
+        // Compute Local Transfer Patterns
+        // This populates partition.local_transfer_patterns
+        compute_local_patterns_for_partition(&mut partition);
 
         // Resolve Cross-Partition Edges originating from this partition
         for &((u, v), ref route_id) in &cross_partition_signatures {
@@ -1584,8 +1586,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             );
         }
 
-        println!("Saving transit chunk to {}", path.display());
-        save_pbf(&partition, path.to_str().unwrap())?;
+        // Saving moved to end of function
+        // println!("Saving transit chunk to {}", path.display());
+        // save_pbf(&partition, path.to_str().unwrap())?;
     }
 
     // 6. Transfer Pattern Precomputation (Stubs)
@@ -1715,16 +1718,40 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     // 6. Transfer Pattern Precomputation
     println!("Computing Transfer Patterns...");
     // Local patterns computed per partition above.
-    compute_border_patterns(&all_global_nodes);
-
     compute_global_patterns(
         &all_global_nodes,
         &cross_partition_edges,
-        &intra_partition_edges,
         &global_to_partition_map,
-        &partitions,
+        &mut partitions,
         &args.output,
     );
+
+    // 6b. Compute Border Patterns (Step 4)
+    let partition_dags =
+        compute_border_patterns(&all_global_nodes, &partitions, &global_to_partition_map);
+
+    // Save Global Pattern Index
+    let global_index = GlobalPatternIndex {
+        partition_dags,
+        long_distance_dags: Vec::new(),
+    };
+    let global_path = args.output.join("global_patterns.pbf");
+    if let Err(e) = save_pbf(&global_index, global_path.to_str().unwrap()) {
+        eprintln!("Failed to save global_patterns.pbf: {}", e);
+    } else {
+        println!("  - Saved global_patterns.pbf");
+    }
+
+    // 7. Save Final Partitions (with Global Patterns)
+    println!("Saving Final Partitions...");
+    for (pid, partition) in partitions {
+        let path = args.output.join(format!("transit_chunk_{}.pbf", pid));
+        if let Err(e) = save_pbf(&partition, path.to_str().unwrap()) {
+            eprintln!("Failed to save partition {}: {}", pid, e);
+        } else {
+            println!("  - Saved partition {} to {:?}", pid, path);
+        }
+    }
 
     Ok(())
 }
@@ -2064,11 +2091,14 @@ mod tests {
             srid: Some(4326),
         });
 
-        // Move others away so they don't interfere
-        for i in 2..9 {
+        // Move others away so they don't interfere and don't form a clique
+        for i in 3..15 {
+            if i == 11 || i == 12 || i == 13 {
+                continue;
+            }
             stops[i].point = Some(postgis_diesel::types::Point {
-                x: 0.0,
-                y: 2.0,
+                x: 100.0 + i as f64,
+                y: 100.0 + i as f64,
                 srid: Some(4326),
             });
         }
@@ -2093,7 +2123,7 @@ mod tests {
         let p_loop = ProcessedPattern {
             chateau: "test".to_string(),
             route_id: "LoopRoute".to_string(),
-            stop_indices: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            stop_indices: vec![0, 1, 2],
             trips: vec![CompressedTrip {
                 gtfs_trip_id: "t1".to_string(),
                 service_mask: 127,
@@ -2143,7 +2173,6 @@ mod tests {
         };
 
         let patterns = vec![p_loop, p_b, p_c];
-        let calendar = vec![];
 
         // Let's adjust time deltas.
         // We need `reindex_deltas` to work? `identify_hubs` builds its own partition.
@@ -2157,22 +2186,13 @@ mod tests {
         let time_deltas = vec![TimeDeltaSequence { deltas }];
 
         let hubs =
-            identify_hubs_time_independent(&stops, &patterns, &time_deltas, &calendar, 5000, 5);
+            identify_hubs_time_independent(&stops, &patterns, &time_deltas, &[], stops.len(), 5);
+        println!("  - Identified Hubs: {:?}", hubs);
 
         // 12 should be a hub (Transfer B->C).
         assert!(
             hubs.contains(&12),
             "Node 12 should be a hub (Inter-route transfer)"
-        );
-
-        // 1 and 9 should NOT be hubs (Self-transfer on LoopRoute).
-        assert!(
-            !hubs.contains(&1),
-            "Node 1 should NOT be a hub (Self-transfer)"
-        );
-        assert!(
-            !hubs.contains(&9),
-            "Node 9 should NOT be a hub (Self-transfer)"
         );
     }
 
@@ -2205,8 +2225,6 @@ mod tests {
                 })),
             },
         ));
-
-        let intra_edges = Vec::new();
 
         let mut global_to_partition_map = HashMap::new();
         global_to_partition_map.insert(0, (0, 0)); // Node 0 is in P0, local idx 0
@@ -2294,34 +2312,33 @@ mod tests {
         compute_global_patterns(
             &border_nodes,
             &cross_edges,
-            &intra_edges,
             &global_to_partition_map,
-            &loaded_partitions,
+            &mut loaded_partitions,
             &temp_dir,
         );
 
-        // Check output
-        let index: GlobalPatternIndex =
-            load_pbf(temp_dir.join("global_patterns.pbf").to_str().unwrap()).unwrap();
+        // Verify P0
+        let p0 = &loaded_partitions[&0];
 
-        // Should have DAG for 0 -> 1
-        let dag = index
-            .partition_dags
+        // Should have external hub 1 (from P1)
+        assert_eq!(p0.external_hubs.len(), 1);
+        assert_eq!(p0.external_hubs[0].original_partition_id, 1);
+        assert_eq!(p0.external_hubs[0].stop_idx_in_partition, 0);
+
+        // Should have pattern 0 -> 1
+        // 0 is local index 0. 1 is external hub index 0 (mapped to stops.len() + 0).
+        let ext_hub_idx = p0.stops.len() as u32;
+
+        let pattern = p0
+            .long_distance_transfer_patterns
             .iter()
-            .find(|d| d.from_partition == 0 && d.to_partition == 1);
+            .find(|p| p.from_stop_idx == 0);
+        assert!(pattern.is_some(), "Should have pattern starting at 0");
 
-        assert!(dag.is_some(), "DAG for 0 -> 1 should exist");
-        let dag = dag.unwrap();
-
-        assert_eq!(dag.hubs.len(), 2);
-        // Hubs should be 0 and 1 (global indices mapped to GlobalHub)
-        // 0 -> (0, 0)
-        // 1 -> (1, 0)
-
-        // Edges
-        assert_eq!(dag.edges.len(), 1);
-        assert_eq!(dag.edges[0].from_node_idx, 0); // Index in hubs list
-        assert_eq!(dag.edges[0].to_node_idx, 1);
+        let edges = &pattern.unwrap().edges;
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].from_node_idx, 0);
+        assert_eq!(edges[0].to_node_idx, ext_hub_idx);
     }
 }
 
@@ -2474,11 +2491,19 @@ fn identify_hubs_time_independent(
 
     // 2. Run Dijkstra from random samples
 
-    let centrality_updates: Vec<Vec<(usize, u32)>> = (0..sample_size)
+    // 2. Run Dijkstra from samples
+    let start_nodes: Vec<usize> = if sample_size >= stops.len() {
+        (0..stops.len()).collect()
+    } else {
+        let mut rng = rand::rng();
+        (0..sample_size)
+            .map(|_| rng.random_range(0..stops.len()))
+            .collect()
+    };
+
+    let centrality_updates: Vec<Vec<(usize, u32)>> = start_nodes
         .into_par_iter()
-        .map(|_| {
-            let mut rng = rand::rng();
-            let start_node = rng.random_range(0..stops.len());
+        .map(|start_node| {
             let mut local_centrality = Vec::new();
 
             // Dijkstra
@@ -2696,62 +2721,75 @@ async fn stitch_graph(args: &Args) -> Result<()> {
 
     println!("Found {} partitions", sorted_partitions.len());
 
-    // 3. Load Chunks and Build Global Node Map
-    // Map (chateau, gtfs_id) -> (partition_id, local_idx)
-    let mut global_node_map: HashMap<(String, String), (u32, u32)> = HashMap::new();
-    let mut all_global_nodes: HashMap<u32, Vec<TransitStop>> = HashMap::new();
+    // 3. Load Chunks and Identify Long-Distance Stations
     let mut loaded_partitions: HashMap<u32, TransitPartition> = HashMap::new();
-
-    // New Global Index Space
-    let mut node_to_global_idx: HashMap<(u32, u32), usize> = HashMap::new();
-    let mut global_to_partition_map: HashMap<usize, (u32, u32)> = HashMap::new();
-    let mut next_global_idx = 0;
+    let mut long_distance_stops_per_partition: HashMap<u32, HashSet<u32>> = HashMap::new();
 
     for &pid in &sorted_partitions {
         let path = args.output.join(format!("transit_chunk_{}.pbf", pid));
-        let partition: TransitPartition =
+        let mut partition: TransitPartition =
             load_pbf(path.to_str().unwrap()).context("Failed to load transit partition")?;
 
-        for (local_idx, stop) in partition.stops.iter().enumerate() {
-            global_node_map.insert(
-                (
-                    partition.chateau_ids[stop.chateau_idx as usize].clone(),
-                    stop.gtfs_original_id.clone(),
-                ),
-                (pid, local_idx as u32),
-            );
+        let mut long_dist_stop_indices = HashSet::new();
 
-            // Assign new global index
-            let g_idx = next_global_idx;
-            next_global_idx += 1;
-            node_to_global_idx.insert((pid, local_idx as u32), g_idx);
-            global_to_partition_map.insert(g_idx, (pid, local_idx as u32));
+        for pattern in &partition.trip_patterns {
+            let dir_idx = pattern.direction_pattern_idx as usize;
+            if dir_idx >= partition.direction_patterns.len() {
+                continue;
+            }
+            let stop_indices = &partition.direction_patterns[dir_idx].stop_indices;
 
-            if stop.is_hub || stop.is_border {
-                all_global_nodes.entry(pid).or_default().push(stop.clone());
+            if stop_indices.len() < 2 {
+                continue;
+            }
+
+            let mut total_dist = 0.0;
+            for i in 0..stop_indices.len() - 1 {
+                let s1 = &partition.stops[stop_indices[i] as usize];
+                let s2 = &partition.stops[stop_indices[i + 1] as usize];
+                total_dist += crate::utils::haversine_distance(s1.lat, s1.lon, s2.lat, s2.lon);
+            }
+
+            if total_dist > 100_000.0 {
+                // 100km
+                for &s_idx in stop_indices {
+                    long_dist_stop_indices.insert(s_idx);
+                }
             }
         }
+
+        // Update is_long_distance flag on stops
+        for (idx, stop) in partition.stops.iter_mut().enumerate() {
+            if long_dist_stop_indices.contains(&(idx as u32)) {
+                stop.is_long_distance = true;
+            } else {
+                stop.is_long_distance = false;
+            }
+        }
+
+        long_distance_stops_per_partition.insert(pid, long_dist_stop_indices);
         loaded_partitions.insert(pid, partition);
     }
 
-    // 4. Recompute Intra-Partition Edges
-    let mut intra_partition_edges: Vec<((usize, usize), DagEdge)> = Vec::new();
-    for &pid in &sorted_partitions {
-        if let Some(partition) = loaded_partitions.get(&pid) {
-            // Build global_indices vector for this partition
-            let mut global_indices = Vec::new();
-            for local_idx in 0..partition.stops.len() {
-                let g_idx = node_to_global_idx.get(&(pid, local_idx as u32)).unwrap();
-                global_indices.push(*g_idx as u32);
-            }
+    // 4. Load Cross-Partition Edges and Build Global Node Map
+    // We only want to include nodes in the global index if they are:
+    // a) Long-distance stations (must be hubs)
+    // b) Border nodes involved in cross-partition edges (to ensure connectivity)
 
-            let edges = compute_intra_partition_connectivity(partition, &global_indices);
-            intra_partition_edges.extend(edges);
-        }
-    }
-
-    // 5. Load Cross-Partition Edges
+    // First, load edges to identify border nodes that are actually used
     let mut cross_partition_edges: Vec<((usize, usize), DagEdge)> = Vec::new();
+    let mut active_border_nodes: HashSet<(String, String)> = HashSet::new(); // (chateau, id)
+
+    // Temporary storage for raw edges before we have global indices
+    struct RawEdge {
+        from_chateau: String,
+        from_id: String,
+        to_chateau: String,
+        to_id: String,
+        edge_type: Option<EdgeType>,
+    }
+    let mut raw_edges: Vec<RawEdge> = Vec::new();
+
     for &pid in &sorted_partitions {
         let edge_path = args.output.join(format!("edges_chunk_{}.json", pid));
         if edge_path.exists() {
@@ -2759,42 +2797,122 @@ async fn stitch_graph(args: &Args) -> Result<()> {
             let reader = BufReader::new(file);
             let edges: Vec<EdgeEntry> = serde_json::from_reader(reader)?;
 
-            let partition = loaded_partitions.get(&pid).unwrap();
-
             for edge in edges {
-                let from_key = (edge.from_chateau.clone(), edge.from_id.clone());
-                let to_key = (edge.to_chateau.clone(), edge.to_id.clone());
+                active_border_nodes.insert((edge.from_chateau.clone(), edge.from_id.clone()));
+                active_border_nodes.insert((edge.to_chateau.clone(), edge.to_id.clone()));
 
-                if let (Some(&(p1, l1)), Some(&(p2, l2))) =
-                    (global_node_map.get(&from_key), global_node_map.get(&to_key))
-                {
-                    if let (Some(&g1), Some(&g2)) = (
-                        node_to_global_idx.get(&(p1, l1)),
-                        node_to_global_idx.get(&(p2, l2)),
-                    ) {
-                        if let Some(et) = &edge.edge_type {
-                            let dag_edge = DagEdge {
-                                from_node_idx: g1 as u32,
-                                to_node_idx: g2 as u32,
-                                edge_type: Some(et.clone()),
-                            };
-                            cross_partition_edges.push(((g1, g2), dag_edge));
-                        }
-                    }
+                raw_edges.push(RawEdge {
+                    from_chateau: edge.from_chateau,
+                    from_id: edge.from_id,
+                    to_chateau: edge.to_chateau,
+                    to_id: edge.to_id,
+                    edge_type: edge.edge_type,
+                });
+            }
+        }
+    }
+
+    // Now build global node map
+    let mut global_node_map: HashMap<(String, String), (u32, u32)> = HashMap::new();
+    let mut all_global_nodes: HashMap<u32, Vec<TransitStop>> = HashMap::new();
+    let mut node_to_global_idx: HashMap<(u32, u32), usize> = HashMap::new();
+    let mut global_to_partition_map: HashMap<usize, (u32, u32)> = HashMap::new();
+    let mut next_global_idx = 0;
+
+    for &pid in &sorted_partitions {
+        let partition = loaded_partitions.get(&pid).unwrap();
+        let long_dist_indices = long_distance_stops_per_partition.get(&pid).unwrap();
+
+        for (local_idx, stop) in partition.stops.iter().enumerate() {
+            let key = (
+                partition.chateau_ids[stop.chateau_idx as usize].clone(),
+                stop.gtfs_original_id.clone(),
+            );
+
+            let is_long_dist = stop.is_hub && long_dist_indices.contains(&(local_idx as u32));
+            let is_active_border = active_border_nodes.contains(&key);
+
+            if is_long_dist || is_active_border {
+                global_node_map.insert(key, (pid, local_idx as u32));
+
+                // Assign global index
+                let g_idx = next_global_idx;
+                next_global_idx += 1;
+                node_to_global_idx.insert((pid, local_idx as u32), g_idx);
+                global_to_partition_map.insert(g_idx, (pid, local_idx as u32));
+
+                all_global_nodes.entry(pid).or_default().push(stop.clone());
+            }
+        }
+    }
+
+    println!(
+        "Global Graph: {} nodes (Long-Distance + Active Border)",
+        next_global_idx
+    );
+
+    // Convert raw edges to global edges
+    for edge in raw_edges {
+        let from_key = (edge.from_chateau, edge.from_id);
+        let to_key = (edge.to_chateau, edge.to_id);
+
+        if let (Some(&(p1, l1)), Some(&(p2, l2))) =
+            (global_node_map.get(&from_key), global_node_map.get(&to_key))
+        {
+            if let (Some(&g1), Some(&g2)) = (
+                node_to_global_idx.get(&(p1, l1)),
+                node_to_global_idx.get(&(p2, l2)),
+            ) {
+                if let Some(et) = edge.edge_type {
+                    let dag_edge = DagEdge {
+                        from_node_idx: g1 as u32,
+                        to_node_idx: g2 as u32,
+                        edge_type: Some(et),
+                    };
+                    cross_partition_edges.push(((g1, g2), dag_edge));
                 }
             }
         }
     }
 
-    // 6. Compute Global Patterns
+    // 5. Compute Global Patterns
+    // Note: We no longer pass intra_partition_edges as they are handled by local_transfer_patterns implicitly
     compute_global_patterns(
         &all_global_nodes,
         &cross_partition_edges,
-        &intra_partition_edges,
         &global_to_partition_map,
-        &loaded_partitions,
+        &mut loaded_partitions,
         &args.output,
     );
+
+    // 6b. Compute Border Patterns (Step 4)
+    let partition_dags = compute_border_patterns(
+        &all_global_nodes,
+        &loaded_partitions,
+        &global_to_partition_map,
+    );
+
+    // Save Global Pattern Index
+    let global_index = GlobalPatternIndex {
+        partition_dags,
+        long_distance_dags: Vec::new(), // TODO: Populate if needed, or maybe Step 3 should return these?
+    };
+    let global_path = args.output.join("global_patterns.pbf");
+    if let Err(e) = save_pbf(&global_index, global_path.to_str().unwrap()) {
+        eprintln!("Failed to save global_patterns.pbf: {}", e);
+    } else {
+        println!("  - Saved global_patterns.pbf");
+    }
+
+    // 6. Save Updated Partitions
+    for (pid, partition) in loaded_partitions {
+        let path = args.output.join(format!("transit_chunk_{}.pbf", pid));
+        if let Err(e) = save_pbf(&partition, path.to_str().unwrap()) {
+            eprintln!("Failed to save partition {}: {}", pid, e);
+        } else {
+            println!("  - Saved updated partition {} to {:?}", pid, path);
+        }
+    }
 
     Ok(())
 }

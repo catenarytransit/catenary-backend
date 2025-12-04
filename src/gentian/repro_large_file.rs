@@ -88,6 +88,8 @@ mod tests {
             timezones: vec!["UTC".to_string()],
             boundary: None,
             chateau_ids: vec!["c1".to_string()],
+            external_hubs: vec![],
+            long_distance_transfer_patterns: vec![],
         };
 
         let transfers = compute_initial_transfers(&partition);
@@ -267,6 +269,8 @@ mod tests {
             timezones: vec!["UTC".to_string()],
             boundary: None,
             chateau_ids: vec!["c1".to_string()],
+            external_hubs: vec![],
+            long_distance_transfer_patterns: vec![],
         };
 
         let mut transfers = compute_initial_transfers(&partition);

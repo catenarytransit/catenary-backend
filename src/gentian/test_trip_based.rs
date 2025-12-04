@@ -35,6 +35,8 @@ mod tests {
             timezones: vec![],
             boundary: None,
             chateau_ids: vec![],
+            external_hubs: vec![],
+            long_distance_transfer_patterns: vec![],
         }
     }
 
