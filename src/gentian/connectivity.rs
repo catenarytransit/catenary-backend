@@ -867,7 +867,7 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     }
 
     let mut local_transfer_patterns = Vec::new();
-    let mut scratch = crate::trip_based::ProfileScratch::new(partition.stops.len(), num_trips, 6);
+    let mut scratch = crate::trip_based::ProfileScratch::new(partition.stops.len(), num_trips, 3);
 
     // Collect hubs
     let mut hubs = HashSet::new();
@@ -900,7 +900,7 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
             &stop_to_patterns,
             &flat_id_to_pattern_trip,
             &pattern_trip_offset,
-            4,
+            3,
             &mut scratch,
             &hubs,
             is_source_hub,

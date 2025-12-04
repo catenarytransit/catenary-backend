@@ -50,6 +50,8 @@ fn test_transit_partition_serialization() {
         timezones: vec!["UTC".to_string()],
         boundary: None,
         chateau_ids: vec!["test_chateau".to_string()],
+        external_hubs: vec![],
+        long_distance_transfer_patterns: vec![],
     };
 
     let encoded = partition.encode_to_vec();

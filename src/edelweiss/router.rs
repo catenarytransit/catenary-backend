@@ -78,30 +78,56 @@ impl<'a> Router<'a> {
                     // Step 2: Graph Construction
 
                     // 2a. Source to Border (and Source to Target if same partition)
-                    // Add LocalTransferPatterns from Start Stops
-                    let start_stops_simple: Vec<(u32, u32)> = partition_start_stops
+                    // 2a. Source Partition: Start Stops + Key Stops (Hubs, Borders, Long-Distance)
+                    let mut start_stops_to_build: Vec<(u32, u32)> = partition_start_stops
                         .iter()
                         .map(|(p, s, _, _)| (*p, *s))
                         .collect();
-                    query_graph.build_local(&start_partition, &start_stops_simple);
 
-                    // 2b. Target from Border
+                    // Add Key Stops from Start Partition
+                    for (idx, stop) in start_partition.stops.iter().enumerate() {
+                        if stop.is_hub || stop.is_border || stop.is_long_distance {
+                            start_stops_to_build.push((*start_pid, idx as u32));
+                        }
+                    }
+                    // Dedup
+                    start_stops_to_build.sort();
+                    start_stops_to_build.dedup();
+
+                    query_graph.build_local(&start_partition, &start_stops_to_build);
+
+                    // 2b. Target Partition: Target Stops + Key Stops (Hubs, Borders, Long-Distance)
                     if let Some(end_partition) = self.graph.get_transit_partition(end_pid) {
-                        // Identify border stops in end partition
-                        let mut border_stops = Vec::new();
+                        let mut end_stops_to_build = Vec::new();
+
+                        // Add Target Stops (from request, if any - usually we just route TO them, but we need patterns FROM them if we are doing backward search or if they are intermediate?
+                        // Actually, for forward search, we need patterns TO the target.
+                        // But `build_local` adds patterns FROM the given stops.
+                        // So for the target partition, we need patterns FROM the border/hubs TO the target.
+                        // The `LocalTransferPattern`s from border/hubs should cover the target.
+                        // So we just need to add patterns FROM all Key Stops in the target partition.
+
                         for (idx, stop) in end_partition.stops.iter().enumerate() {
-                            if stop.is_border || stop.is_hub {
-                                border_stops.push((end_pid, idx as u32));
+                            if stop.is_hub || stop.is_border || stop.is_long_distance {
+                                end_stops_to_build.push((end_pid, idx as u32));
                             }
                         }
-                        // Add LocalTransferPatterns from Border Stops in End Partition
-                        // Note: This adds edges FROM border stops.
-                        // If we are routing TO target, we need edges that lead TO target.
-                        // LocalTransferPatterns are "From X -> Y".
-                        // So adding LocalTransferPatterns from Border Stops allows us to reach Target if Target is reachable from Border.
-                        query_graph.build_local(&end_partition, &border_stops);
+
+                        // Also add patterns from stops near the destination?
+                        // No, we route TO the destination. We don't need patterns FROM it unless we are doing something else.
+                        // But wait, if the destination IS a hub, we might need its patterns if we go through it?
+                        // Generally, we just need to reach the destination.
+                        // The patterns FROM borders/hubs should reach the destination.
+
+                        query_graph.build_local(&end_partition, &end_stops_to_build);
                     }
 
+                    // 2c. Border to Border (Global DAGs)
+                    if *start_pid != end_pid {
+                        if let Some(global_index) = &self.graph.global_index {
+                            query_graph.build_global(*start_pid, end_pid, global_index);
+                        }
+                    }
                     // 2c. Border to Border (Global DAGs)
                     if *start_pid != end_pid {
                         if let Some(global_index) = &self.graph.global_index {

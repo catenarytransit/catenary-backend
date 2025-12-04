@@ -6,6 +6,8 @@ mod router;
 
 #[cfg(test)]
 mod repro_test;
+#[cfg(test)]
+mod test_graph_construction;
 
 use crate::graph_loader::GraphManager;
 use crate::hydrator::Hydrator;

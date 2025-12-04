@@ -89,6 +89,47 @@ impl QueryGraph {
                     }
                 }
             }
+
+            // Add LongDistanceTransferPattern edges
+            for ld_pattern in &partition.long_distance_transfer_patterns {
+                if ld_pattern.from_stop_idx == s_idx {
+                    for edge in &ld_pattern.edges {
+                        // For LongDistanceTransferPattern, the to_node_idx might be an external hub index
+                        // We need to resolve it.
+                        // But add_dag_edge expects a DagEdge and assumes to_node_idx is a stop_idx in the SAME partition?
+                        // No, add_dag_edge creates a QueryNode with `partition_id` (the current one) and `stop_idx`.
+                        // If to_node_idx refers to an external hub, we need to resolve it to (pid, idx).
+
+                        // Check if it's an external hub index
+                        let to_node_idx = edge.to_node_idx;
+                        if to_node_idx >= partition.stops.len() as u32 {
+                            let hub_idx = (to_node_idx as usize) - partition.stops.len();
+                            if let Some(hub) = partition.external_hubs.get(hub_idx) {
+                                let to_node = QueryNode {
+                                    partition_id: hub.original_partition_id,
+                                    stop_idx: hub.stop_idx_in_partition,
+                                };
+
+                                let from_node = QueryNode {
+                                    partition_id: p_id,
+                                    stop_idx: s_idx,
+                                };
+
+                                if let Some(edge_type) = &edge.edge_type {
+                                    self.add_edge(QueryEdge {
+                                        from: from_node,
+                                        to: to_node,
+                                        edge_type: edge_type.clone(),
+                                    });
+                                }
+                            }
+                        } else {
+                            // Local stop
+                            self.add_dag_edge(partition.partition_id, edge);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -699,17 +740,49 @@ impl QueryGraph {
                     &partition.direction_patterns[pattern.direction_pattern_idx as usize];
                 let end_stop_idx_in_partition = dir_pattern.stop_indices[t.end_stop_idx as usize];
 
-                let end_stop = &partition.stops[end_stop_idx_in_partition as usize];
+                let (end_stop_id, end_stop_chateau) = if (end_stop_idx_in_partition as usize)
+                    < partition.stops.len()
+                {
+                    let end_stop = &partition.stops[end_stop_idx_in_partition as usize];
+                    (
+                        end_stop.gtfs_original_id.clone(),
+                        partition.chateau_ids[end_stop.chateau_idx as usize].clone(),
+                    )
+                } else {
+                    // External Hub
+                    let hub_idx = (end_stop_idx_in_partition as usize) - partition.stops.len();
+                    if let Some(hub) = partition.external_hubs.get(hub_idx) {
+                        if let Some(target_partition) =
+                            graph_manager.get_transit_partition(hub.original_partition_id)
+                        {
+                            if let Some(stop) = target_partition
+                                .stops
+                                .get(hub.stop_idx_in_partition as usize)
+                            {
+                                (
+                                    stop.gtfs_original_id.clone(),
+                                    target_partition.chateau_ids[stop.chateau_idx as usize].clone(),
+                                )
+                            } else {
+                                ("UNKNOWN".to_string(), "UNKNOWN".to_string())
+                            }
+                        } else {
+                            ("UNKNOWN".to_string(), "UNKNOWN".to_string())
+                        }
+                    } else {
+                        ("UNKNOWN".to_string(), "UNKNOWN".to_string())
+                    }
+                };
 
                 Some(Leg::Transit(TransitLeg {
                     start_time,
                     end_time,
                     mode: TravelMode::Transit,
                     start_stop_id: start_stop.gtfs_original_id.clone(),
-                    end_stop_id: end_stop.gtfs_original_id.clone(),
+                    end_stop_id,
                     start_stop_chateau: partition.chateau_ids[start_stop.chateau_idx as usize]
                         .clone(),
-                    end_stop_chateau: partition.chateau_ids[end_stop.chateau_idx as usize].clone(),
+                    end_stop_chateau,
                     route_id: pattern.route_id.clone(),
                     trip_id: None,
                     chateau: partition.chateau_ids[pattern.chateau_idx as usize].clone(),
@@ -722,8 +795,25 @@ impl QueryGraph {
                         let mut geom = Vec::new();
                         for i in t.start_stop_idx..=t.end_stop_idx {
                             let s_idx = dir_pattern.stop_indices[i as usize];
-                            let stop = &partition.stops[s_idx as usize];
-                            geom.push((stop.lat, stop.lon));
+                            if (s_idx as usize) < partition.stops.len() {
+                                let stop = &partition.stops[s_idx as usize];
+                                geom.push((stop.lat, stop.lon));
+                            } else {
+                                // External Hub
+                                let hub_idx = (s_idx as usize) - partition.stops.len();
+                                if let Some(hub) = partition.external_hubs.get(hub_idx) {
+                                    if let Some(target_partition) = graph_manager
+                                        .get_transit_partition(hub.original_partition_id)
+                                    {
+                                        if let Some(stop) = target_partition
+                                            .stops
+                                            .get(hub.stop_idx_in_partition as usize)
+                                        {
+                                            geom.push((stop.lat, stop.lon));
+                                        }
+                                    }
+                                }
+                            }
                         }
                         geom
                     },
