@@ -5,9 +5,12 @@ mod query_graph;
 mod router;
 
 #[cfg(test)]
+#[cfg(test)]
 mod repro_test;
 #[cfg(test)]
 mod test_graph_construction;
+#[cfg(test)]
+mod test_multi_target;
 
 use crate::graph_loader::GraphManager;
 use crate::hydrator::Hydrator;

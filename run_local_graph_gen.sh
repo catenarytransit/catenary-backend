@@ -175,18 +175,20 @@ fi
 
 echo "=== Running Gentian (Graph Generation) ==="
 # Fetch Chateaus
-# Fetch Chateaus
-CHATEAUS=$(psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT string_agg(c.chateau, ',') FROM gtfs.chateaus c WHERE EXISTS (SELECT 1 FROM gtfs.routes r WHERE r.chateau = c.chateau);")
 
-# Trim whitespace
-CHATEAUS=$(echo "$CHATEAUS" | xargs)
+CHATEAUS=$(psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT c.chateau FROM gtfs.chateaus c WHERE EXISTS (SELECT 1 FROM gtfs.routes r WHERE r.chateau = c.chateau);")
 
-if [ -n "$CHATEAUS" ]; then
-    echo "Running Gentian for $CHATEAUS"
-    "$GENTIAN_BIN" \
-        --chateau "$CHATEAUS" \
-        --osm-chunks "$OSM_CHUNKS_DIR" \
-        --output "$OUTPUT_DIR"
-fi
+for CHATEAU in $CHATEAUS; do
+    # Trim whitespace
+    CHATEAU=$(echo "$CHATEAU" | xargs)
+
+    if [ -n "$CHATEAU" ]; then
+        echo "Running Gentian for $CHATEAU"
+        "$GENTIAN_BIN" \
+            --chateau "$CHATEAU" \
+            --osm-chunks "$OSM_CHUNKS_DIR" \
+            --output "$OUTPUT_DIR"
+    fi
+done
 
 echo "=== Local Graph Generation Complete! ==="

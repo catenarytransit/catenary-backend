@@ -69,8 +69,8 @@ pub fn merge_based_clustering(
     }
 
     // PASS 2: Cleanup Orphans (Force merge small clusters)
-    // Definition of "Small": Less than 5% of max_size, or < 50 stops
-    let min_size = (max_size / 5).max(20);
+    // Definition of "Small": Less than 10% of max_size, or < 50 stops
+    let min_size = (max_size / 100).max(50);
 
     // We need to iterate until no more merges happen, or just do one pass?
     // One pass is probably enough to catch the worst offenders.

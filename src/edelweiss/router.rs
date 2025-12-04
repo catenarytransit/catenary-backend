@@ -60,64 +60,38 @@ impl<'a> Router<'a> {
             tried_partitions.insert(*start_pid);
 
             if let Some(start_partition) = self.graph.get_transit_partition(*start_pid) {
-                // Determine relevant end partitions
-                // For now, we try to route to ALL end partitions found.
-                for &end_pid in &end_pids {
-                    // Step 1: Cluster Analysis
-                    // Case A: Same Cluster (and Convex - currently assumed Non-Convex/Global for safety)
-                    // Case B: Different Cluster or Non-Convex -> Global Query
+                let mut query_graph = QueryGraph::new();
 
-                    // We treat everything as Case B (Global/Non-Convex) for now as we lack is_convex flag.
-                    // Even for intra-partition (start_pid == end_pid), we build the graph using LocalTransferPatterns.
+                // Step 2: Graph Construction
 
-                    let mut query_graph = QueryGraph::new();
-                    let mut involved_partitions = HashSet::new();
-                    involved_partitions.insert(*start_pid);
-                    involved_partitions.insert(end_pid);
+                // 2a. Source Partition: Start Stops + Key Stops (Hubs, Borders, Long-Distance)
+                let mut start_stops_to_build: Vec<(u32, u32)> = partition_start_stops
+                    .iter()
+                    .map(|(p, s, _, _)| (*p, *s))
+                    .collect();
 
-                    // Step 2: Graph Construction
-
-                    // 2a. Source to Border (and Source to Target if same partition)
-                    // 2a. Source Partition: Start Stops + Key Stops (Hubs, Borders, Long-Distance)
-                    let mut start_stops_to_build: Vec<(u32, u32)> = partition_start_stops
-                        .iter()
-                        .map(|(p, s, _, _)| (*p, *s))
-                        .collect();
-
-                    // Add Key Stops from Start Partition
-                    for (idx, stop) in start_partition.stops.iter().enumerate() {
-                        if stop.is_hub || stop.is_border || stop.is_long_distance {
-                            start_stops_to_build.push((*start_pid, idx as u32));
-                        }
+                // Add Key Stops from Start Partition
+                for (idx, stop) in start_partition.stops.iter().enumerate() {
+                    if stop.is_hub || stop.is_border || stop.is_long_distance {
+                        start_stops_to_build.push((*start_pid, idx as u32));
                     }
-                    // Dedup
-                    start_stops_to_build.sort();
-                    start_stops_to_build.dedup();
+                }
+                // Dedup
+                start_stops_to_build.sort();
+                start_stops_to_build.dedup();
 
-                    query_graph.build_local(&start_partition, &start_stops_to_build);
+                query_graph.build_local(&start_partition, &start_stops_to_build);
 
-                    // 2b. Target Partition: Target Stops + Key Stops (Hubs, Borders, Long-Distance)
+                // 2b. Target Partitions & Global DAGs
+                for &end_pid in &end_pids {
                     if let Some(end_partition) = self.graph.get_transit_partition(end_pid) {
                         let mut end_stops_to_build = Vec::new();
-
-                        // Add Target Stops (from request, if any - usually we just route TO them, but we need patterns FROM them if we are doing backward search or if they are intermediate?
-                        // Actually, for forward search, we need patterns TO the target.
-                        // But `build_local` adds patterns FROM the given stops.
-                        // So for the target partition, we need patterns FROM the border/hubs TO the target.
-                        // The `LocalTransferPattern`s from border/hubs should cover the target.
-                        // So we just need to add patterns FROM all Key Stops in the target partition.
 
                         for (idx, stop) in end_partition.stops.iter().enumerate() {
                             if stop.is_hub || stop.is_border || stop.is_long_distance {
                                 end_stops_to_build.push((end_pid, idx as u32));
                             }
                         }
-
-                        // Also add patterns from stops near the destination?
-                        // No, we route TO the destination. We don't need patterns FROM it unless we are doing something else.
-                        // But wait, if the destination IS a hub, we might need its patterns if we go through it?
-                        // Generally, we just need to reach the destination.
-                        // The patterns FROM borders/hubs should reach the destination.
 
                         query_graph.build_local(&end_partition, &end_stops_to_build);
                     }
@@ -128,24 +102,19 @@ impl<'a> Router<'a> {
                             query_graph.build_global(*start_pid, end_pid, global_index);
                         }
                     }
-                    // 2c. Border to Border (Global DAGs)
-                    if *start_pid != end_pid {
-                        if let Some(global_index) = &self.graph.global_index {
-                            query_graph.build_global(*start_pid, end_pid, global_index);
-                        }
-                    }
+                }
 
-                    // Step 3: Execution (Time-Dependent Dijkstra)
-                    // We need service contexts for all involved partitions.
-                    // For now, just start and end.
-                    let window = 7200; // 2 hours
-                    let mut service_contexts = HashMap::new();
-                    self.compute_partition_service_contexts(
-                        &start_partition,
-                        req.time as i64,
-                        window,
-                        &mut service_contexts,
-                    );
+                // Step 3: Execution (Time-Dependent Dijkstra)
+                let window = 7200; // 2 hours
+                let mut service_contexts = HashMap::new();
+                self.compute_partition_service_contexts(
+                    &start_partition,
+                    req.time as i64,
+                    window,
+                    &mut service_contexts,
+                );
+
+                for &end_pid in &end_pids {
                     if let Some(end_part) = self.graph.get_transit_partition(end_pid) {
                         if *start_pid != end_pid {
                             self.compute_partition_service_contexts(
@@ -156,81 +125,70 @@ impl<'a> Router<'a> {
                             );
                         }
                     }
-                    let end_nodes_map: HashMap<(u32, u32), (u32, Vec<(f64, f64)>)> = end_stops
-                        .iter()
-                        .filter(|(p, _, _, _)| *p == end_pid)
-                        .map(|(p, s, t, g)| ((*p, *s), (*t, g.clone())))
-                        .collect();
+                }
 
-                    let start_nodes_for_dijkstra: Vec<(u32, u32, u32)> = partition_start_stops
-                        .iter()
-                        .map(|(p, s, t, _)| (*p, *s, *t))
-                        .collect();
+                let end_nodes_map: HashMap<(u32, u32), (u32, Vec<(f64, f64)>)> = end_stops
+                    .iter()
+                    .map(|(p, s, t, g)| ((*p, *s), (*t, g.clone())))
+                    .collect();
 
-                    println!(
-                        "Starting Dijkstra from {} nodes to {} nodes",
-                        start_nodes_for_dijkstra.len(),
-                        end_nodes_map.len()
-                    );
-                    let mut dijkstra_itineraries = query_graph.dijkstra(
-                        &start_nodes_for_dijkstra,
-                        &end_nodes_map,
-                        req.time as i64,
-                        self.graph,
-                        &mut service_contexts,
-                    );
+                let start_nodes_for_dijkstra: Vec<(u32, u32, u32)> = partition_start_stops
+                    .iter()
+                    .map(|(p, s, t, _)| (*p, *s, *t))
+                    .collect();
 
-                    // Prepend Walk Leg
-                    for itinerary in &mut dijkstra_itineraries {
-                        if let Some(first_leg) = itinerary.legs.first() {
-                            if let Some(start_stop_id) = first_leg.start_stop_id() {
-                                // Find which start stop was used
-                                // We need to match start_stop_id to one of partition_start_stops
-                                // This is a bit inefficient, but robust.
-                                // Or we can use (pid, stop_idx) if we had it in Itinerary.
-                                // But Itinerary only has GTFS ID.
-                                // We can look up the stop in the partition to get GTFS ID.
+                println!(
+                    "Starting Dijkstra from {} nodes to {} nodes (across {} end partitions)",
+                    start_nodes_for_dijkstra.len(),
+                    end_nodes_map.len(),
+                    end_pids.len()
+                );
 
-                                for (pid, idx, time, geom) in partition_start_stops {
-                                    if let Some(stop) = start_partition.stops.get(*idx as usize) {
-                                        if stop.gtfs_original_id == *start_stop_id {
-                                            // Found match
-                                            let walk_leg = catenary::routing_common::api::Leg::Osm(
-                                                catenary::routing_common::api::OsmLeg {
-                                                    start_time: req.time,
-                                                    end_time: req.time + *time as u64,
-                                                    mode: TravelMode::Walk,
-                                                    start_stop_id: None, // User Location
-                                                    end_stop_id: Some(
-                                                        stop.gtfs_original_id.clone(),
-                                                    ),
-                                                    start_stop_chateau: None,
-                                                    end_stop_chateau: Some(
-                                                        start_partition.chateau_ids
-                                                            [stop.chateau_idx as usize]
-                                                            .clone(),
-                                                    ),
-                                                    start_stop_name: Some("Origin".to_string()),
-                                                    end_stop_name: None,
-                                                    duration_seconds: *time as u64,
-                                                    geometry: geom.clone(),
-                                                },
-                                            );
-                                            itinerary.legs.insert(0, walk_leg);
-                                            // Itinerary start time is already set to req.time by Dijkstra?
-                                            // Dijkstra sets start_time = start_time_unix (req.time).
-                                            // The first transit leg starts at req.time + access_time + wait.
-                                            // So adding a walk leg of duration access_time fits perfectly.
-                                            break;
-                                        }
+                let mut dijkstra_itineraries = query_graph.dijkstra(
+                    &start_nodes_for_dijkstra,
+                    &end_nodes_map,
+                    req.time as i64,
+                    self.graph,
+                    &mut service_contexts,
+                );
+
+                // Prepend Walk Leg
+                for itinerary in &mut dijkstra_itineraries {
+                    if let Some(first_leg) = itinerary.legs.first() {
+                        if let Some(start_stop_id) = first_leg.start_stop_id() {
+                            for (pid, idx, time, geom) in partition_start_stops {
+                                if let Some(stop) = start_partition.stops.get(*idx as usize) {
+                                    if stop.gtfs_original_id == *start_stop_id {
+                                        // Found match
+                                        let walk_leg = catenary::routing_common::api::Leg::Osm(
+                                            catenary::routing_common::api::OsmLeg {
+                                                start_time: req.time,
+                                                end_time: req.time + *time as u64,
+                                                mode: TravelMode::Walk,
+                                                start_stop_id: None, // User Location
+                                                end_stop_id: Some(stop.gtfs_original_id.clone()),
+                                                start_stop_chateau: None,
+                                                end_stop_chateau: Some(
+                                                    start_partition.chateau_ids
+                                                        [stop.chateau_idx as usize]
+                                                        .clone(),
+                                                ),
+                                                start_stop_name: Some("Origin".to_string()),
+                                                end_stop_name: None,
+                                                duration_seconds: *time as u64,
+                                                geometry: geom.clone(),
+                                            },
+                                        );
+                                        itinerary.legs.insert(0, walk_leg);
+                                        break;
                                     }
                                 }
                             }
                         }
                     }
-
-                    itineraries.extend(dijkstra_itineraries);
                 }
+
+                itineraries.extend(dijkstra_itineraries);
             }
         }
 
