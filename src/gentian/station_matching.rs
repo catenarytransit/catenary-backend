@@ -38,14 +38,17 @@ async fn process_single_stop(
         None => return Ok(()), // Skip stops without location
     };
 
-    // Candidate Search: Find stations within 200m using PostGIS
+    let (search_radius, decay_constant) = get_station_match_params(stop);
+
+    // Candidate Search: Find stations within search_radius using PostGIS
     // We cast to geography to measure distance in meters.
     let candidates: Vec<Station> = diesel::sql_query(
         "SELECT * FROM gtfs.stations 
-         WHERE ST_DWithin(point::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 200.0)"
+         WHERE ST_DWithin(point::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)",
     )
     .bind::<diesel::sql_types::Float8, _>(stop_pt.x)
     .bind::<diesel::sql_types::Float8, _>(stop_pt.y)
+    .bind::<diesel::sql_types::Float8, _>(search_radius)
     .load::<Station>(conn)
     .await
     .context("Failed to query candidate stations")?;
@@ -55,7 +58,7 @@ async fn process_single_stop(
     let mut best_station_id = String::new();
 
     for candidate in candidates {
-        let score = compute_match_score(stop, &candidate);
+        let score = compute_match_score(stop, &candidate, decay_constant);
         if score > best_score {
             best_score = score;
             best_station_id = candidate.station_id.clone();
@@ -104,7 +107,7 @@ async fn process_single_stop(
     Ok(())
 }
 
-fn compute_match_score(stop: &Stop, station: &Station) -> f64 {
+fn compute_match_score(stop: &Stop, station: &Station, decay_constant: f64) -> f64 {
     // 1. Name Similarity (Jaro-Winkler)
     let stop_name = stop.name.clone().unwrap_or_default().to_lowercase();
     let station_name = station.name.to_lowercase();
@@ -116,8 +119,8 @@ fn compute_match_score(stop: &Stop, station: &Station) -> f64 {
     let stop_pt = stop.point.as_ref().unwrap();
     let dist = haversine_distance(stop_pt.y, stop_pt.x, station.point.y, station.point.x);
 
-    // Decay function: exp(-d / 30m)
-    let dist_score = (-dist / 30.0).exp();
+    // Decay function: exp(-d / decay_constant)
+    let dist_score = (-dist / decay_constant).exp();
 
     0.6 * name_sim + 0.4 * dist_score
 }
@@ -166,4 +169,22 @@ async fn create_mapping(
         .await?;
 
     Ok(())
+}
+
+fn get_station_match_params(stop: &Stop) -> (f64, f64) {
+    // Determine the effective route type
+    // If primary_route_type is missing, try to infer from route_types list
+    let route_type = stop
+        .primary_route_type
+        .or_else(|| stop.route_types.get(0).and_then(|rt| *rt))
+        .unwrap_or(3); // Default to Bus (3) if unknown
+
+    match route_type {
+        // Bus (3), Trolleybus (11)
+        3 | 11 => (40.0, 10.0),
+        // Tram (0), Subway (1), Rail (2), Monorail (12)
+        0 | 1 | 2 | 12 => (500.0, 100.0),
+        // Default for others (Ferry, etc.)
+        _ => (100.0, 30.0),
+    }
 }
