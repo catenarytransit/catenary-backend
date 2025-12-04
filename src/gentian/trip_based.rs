@@ -598,6 +598,7 @@ pub fn compute_profile_query(
 
     // Stack for propagation: (n, flat_id, entry_stop_idx, old_r_val)
     let mut stack = Vec::new();
+    let mut active_in_stack = 0;
 
     const INACTIVE_MASK: u32 = 0x80000000;
     const IDX_MASK: u32 = !INACTIVE_MASK;
@@ -616,10 +617,25 @@ pub fn compute_profile_query(
         if (seed.stop_idx as u32) < old_r_idx {
             scratch.r_labels[0][flat_id] = seed.stop_idx as u32;
             stack.push((0, flat_id, seed.stop_idx as u32, old_r));
+            active_in_stack += 1;
 
             while let Some((n, flat_id, stop_idx_raw, old_r_val)) = stack.pop() {
                 let stop_idx = (stop_idx_raw & IDX_MASK) as usize;
                 let is_inactive = (stop_idx_raw & INACTIVE_MASK) != 0;
+
+                if is_inactive {
+                    if active_in_stack == 0 {
+                        // Optimization: If we are processing an inactive label, and there are NO active labels
+                        // left in the stack, we can stop exploring this seed.
+                        // Inactive labels cannot produce active labels (they stay inactive).
+                        // They are only needed to dominate non-optimal paths around hubs.
+                        // But if we have no active paths to potentially dominate or extend, we are done.
+                        stack.clear();
+                        break;
+                    }
+                } else {
+                    active_in_stack -= 1;
+                }
 
                 let (p_idx, t_idx) = flat_id_to_pattern_trip[flat_id];
 
@@ -681,17 +697,14 @@ pub fn compute_profile_query(
 
                                 scratch.r_labels[next_n][target_flat] = next_val;
                                 stack.push((next_n, target_flat, next_val, old_target_r));
+                                if !next_inactive {
+                                    active_in_stack += 1;
+                                }
                             }
 
                             tr_ptr += 1;
                         }
                     }
-
-                    // If we are inactive, and all unsettled labels are inactive, we stop?
-                    // The paper says: "stops as soon as all unsettled labels are inactive".
-                    // Here we are just exploring. If we are inactive, we continue exploring inactive paths
-                    // because they might dominate non-optimal paths around hubs (Note 8).
-                    // So we just propagate the inactive bit.
                 }
             }
         }
