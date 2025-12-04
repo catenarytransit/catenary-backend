@@ -538,8 +538,8 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 0.0
             };
 
-            let is_long_distance = total_distance > 100_000.0; // 100km
-            let is_high_speed = avg_speed_kmh > 50.0 && total_distance > 50_000.0; // 50km/h & 50km
+            let is_long_distance = total_distance > 200_000.0; // 200km
+            let is_high_speed = avg_speed_kmh > 50.0 && total_distance > 100_000.0; // 50km/h & 100km
 
             if !is_long_distance && !is_high_speed {
                 // Add to Adjacency Graph

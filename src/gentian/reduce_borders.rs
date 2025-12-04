@@ -162,10 +162,10 @@ pub fn reduce_borders_by_merging(
             // the ratio rises from a 15% border reduction at 1100 stops to a 30% border reduction at 3109 stops
 
             let n = new_size as f64;
-            let r = (0.144371 * n.ln() - 0.861038).max(0.15);
+            let r = (0.144371 * n.ln() - 0.861038).min(0.15);
             //the minimum reduction of 70 is to say that we want to reduce anything with lots of border nodes
             //this number is also taken from section 4.3 of scalable transfer patterns
-            let is_candidate = reduction > 70 && ratio > r;
+            let is_candidate = reduction > 100 && ratio > r;
 
             if is_candidate {
                 // Score: prioritise high reduction, penalise size slightly?
