@@ -24,7 +24,7 @@ mod tests {
             service_ids: vec![],
             service_exceptions: vec![],
             _deprecated_external_transfers: vec![],
-            local_transfer_patterns: vec![],
+            local_dag: std::collections::HashMap::new(),
             long_distance_trip_patterns: vec![],
             timezones: vec![],
             boundary: None,
@@ -63,22 +63,26 @@ mod tests {
         // Local Transfer Patterns (Mocked directly)
         // A -> H
         partition
-            .local_transfer_patterns
-            .push(LocalTransferPattern {
-                from_stop_idx: 0,
-                edges: vec![DagEdge {
-                    from_node_idx: 0,
-                    to_node_idx: 1,
-                    edge_type: Some(EdgeType::Walk(WalkEdge {
-                        duration_seconds: 10,
-                    })),
-                }],
+            .local_dag
+            .entry(0)
+            .or_insert_with(|| catenary::routing_common::transit_graph::DagEdgeList {
+                edges: vec![],
+            })
+            .edges
+            .push(DagEdge {
+                from_node_idx: 0,
+                to_node_idx: 1,
+                edge_type: Some(EdgeType::Walk(WalkEdge {
+                    duration_seconds: 10,
+                })),
             });
         // A -> B (Direct, Slow)
         partition
-            .local_transfer_patterns
-            .last_mut()
-            .unwrap()
+            .local_dag
+            .entry(0)
+            .or_insert_with(|| catenary::routing_common::transit_graph::DagEdgeList {
+                edges: vec![],
+            })
             .edges
             .push(DagEdge {
                 from_node_idx: 0,
@@ -90,25 +94,24 @@ mod tests {
 
         // H -> B
         partition
-            .local_transfer_patterns
-            .push(LocalTransferPattern {
-                from_stop_idx: 1,
-                edges: vec![DagEdge {
-                    from_node_idx: 1,
-                    to_node_idx: 2,
-                    edge_type: Some(EdgeType::Walk(WalkEdge {
-                        duration_seconds: 10,
-                    })),
-                }],
+            .local_dag
+            .entry(1)
+            .or_insert_with(|| catenary::routing_common::transit_graph::DagEdgeList {
+                edges: vec![],
+            })
+            .edges
+            .push(DagEdge {
+                from_node_idx: 1,
+                to_node_idx: 2,
+                edge_type: Some(EdgeType::Walk(WalkEdge {
+                    duration_seconds: 10,
+                })),
             });
 
         // B -> (None)
-        partition
-            .local_transfer_patterns
-            .push(LocalTransferPattern {
-                from_stop_idx: 2,
-                edges: vec![],
-            });
+        partition.local_dag.entry(2).or_insert_with(|| {
+            catenary::routing_common::transit_graph::DagEdgeList { edges: vec![] }
+        });
 
         let mut loaded_partitions = HashMap::new();
         loaded_partitions.insert(0, partition);

@@ -5,6 +5,7 @@ use catenary::routing_common::transit_graph::{
     CompressedTrip, DagEdge, DirectionPattern, EdgeType, LocalTransferPattern, TimeDeltaSequence,
     TransitEdge, TransitPartition, TransitStop, TripPattern,
 };
+use std::collections::HashMap;
 
 #[test]
 fn test_multi_partition_selection() {
@@ -36,7 +37,7 @@ fn test_multi_partition_selection() {
         service_ids: vec![],
         service_exceptions: vec![],
         _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![],
+        local_dag: HashMap::new(),
         long_distance_trip_patterns: vec![],
         timezones: vec![],
         boundary: None,
@@ -106,19 +107,25 @@ fn test_multi_partition_selection() {
         service_ids: vec!["daily".to_string()],
         service_exceptions: vec![],
         _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![LocalTransferPattern {
-            from_stop_idx: 0,
-            edges: vec![DagEdge {
-                from_node_idx: 0,
-                to_node_idx: 1,
-                edge_type: Some(EdgeType::Transit(TransitEdge {
-                    trip_pattern_idx: 0,
-                    start_stop_idx: 0,
-                    end_stop_idx: 1,
-                    min_duration: 0,
-                })),
-            }],
-        }],
+        local_dag: {
+            let mut map = HashMap::new();
+            map.insert(
+                0,
+                catenary::routing_common::transit_graph::DagEdgeList {
+                    edges: vec![DagEdge {
+                        from_node_idx: 0,
+                        to_node_idx: 1,
+                        edge_type: Some(EdgeType::Transit(TransitEdge {
+                            trip_pattern_idx: 0,
+                            start_stop_idx: 0,
+                            end_stop_idx: 1,
+                            min_duration: 0,
+                        })),
+                    }],
+                },
+            );
+            map
+        },
         long_distance_trip_patterns: vec![],
         timezones: vec!["UTC".to_string()],
         boundary: None,

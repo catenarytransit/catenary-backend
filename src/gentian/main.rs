@@ -17,7 +17,8 @@ use clap::Parser;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use geo::prelude::*;
-use geo::{ConcaveHull, MultiPoint, Point};
+use geo::prelude::*;
+use geo::{ConcaveHull, Distance, Haversine, MultiPoint, Point};
 use rand::prelude::*;
 use rayon::prelude::*;
 use std::cmp::Ordering;
@@ -48,6 +49,7 @@ pub mod test_hub;
 pub mod test_local_patterns;
 #[cfg(test)]
 pub mod test_reduce_borders;
+
 #[cfg(test)]
 pub mod test_stitching;
 pub mod test_trip_based;
@@ -511,9 +513,8 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 let u = stop_indices[i] as usize;
                 let v = stop_indices[i + 1] as usize;
                 if let (Some(p1), Some(p2)) = (&db_stops[u].point, &db_stops[v].point) {
-                    let gp1 = geo::Point::new(p1.x, p1.y);
-                    let gp2 = geo::Point::new(p2.x, p2.y);
-                    total_distance += gp1.haversine_distance(&gp2);
+                    total_distance += utils::haversine_distance(p1.y, p1.x, p2.y, p2.x);
+                    // let _: () = p1;
                 }
             }
 
@@ -803,7 +804,8 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             current_partitioning.push(clusters[c_idx].clone());
         }
 
-        if check_partition_quality(&current_partitioning, &db_stops) {
+        //if check_partition_quality(&current_partitioning, &db_stops) {
+        if (false) {
             // Keep existing
             let start_idx = new_clusters.len();
             new_clusters.extend(current_partitioning);
@@ -836,7 +838,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
     // Generate unique partition IDs for each cluster
     let mut cluster_id_to_partition_id: Vec<u32> = Vec::with_capacity(clusters.len());
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     // Initialize used_ids with existing partitions from manifest
     let mut used_ids: HashSet<u32> = HashSet::new();
@@ -849,9 +851,9 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     }
 
     for _ in 0..clusters.len() {
-        let mut pid = rng.r#gen::<u32>();
+        let mut pid = rng.random::<u32>();
         while used_ids.contains(&pid) {
-            pid = rng.r#gen::<u32>();
+            pid = rng.random::<u32>();
         }
         used_ids.insert(pid);
         cluster_id_to_partition_id.push(pid);
@@ -1334,7 +1336,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                     // If dist <= 300m AND it's a train station, it's a gateway.
 
                     let is_train = is_train_stop[local_idx];
-                    let threshold = if is_train { 300.0 } else { 200.0 };
+                    let threshold = if is_train { 400.0 } else { 300.0 };
 
                     if dist <= threshold {
                         stop.is_external_gateway = true;
@@ -1390,7 +1392,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             service_ids: service_ids.clone(),
             service_exceptions: Vec::new(),
             _deprecated_external_transfers: Vec::new(),
-            local_transfer_patterns: Vec::new(),
+            local_dag: std::collections::HashMap::new(),
             long_distance_trip_patterns: Vec::new(),
             timezones: global_timezones.clone(),
             boundary: Some(boundary),
@@ -1419,14 +1421,21 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             }
         }
 
-        println!(
-            "Computing intra partition connectivity between partition {} and {} stops",
-            partition_id,
-            partition.stops.len()
-        );
         // Compute Local Transfer Patterns
         // This populates partition.local_transfer_patterns
+        println!(
+            "Computing local transfer patterns for partition {}",
+            partition_id
+        );
+        let start_timer_local_patterns = Instant::now();
         compute_local_patterns_for_partition(&mut partition);
+        println!(
+            "Computed local transfer patterns for partition {}, took {} ms",
+            partition_id,
+            start_timer_local_patterns.elapsed().as_millis()
+        );
+
+        println!("Resolve cross partition edges");
 
         // Resolve Cross-Partition Edges originating from this partition
         for &((u, v), ref route_id) in &cross_partition_signatures {
@@ -1490,19 +1499,6 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             }
         }
 
-        // Compute Local Transfer Patterns
-        println!(
-            "Computing local transfer patterns for partition {}",
-            partition_id
-        );
-        let start_timer_local_patterns = Instant::now();
-        compute_local_patterns_for_partition(&mut partition);
-        println!(
-            "Computed local transfer patterns for partition {}, took {} ms",
-            partition_id,
-            start_timer_local_patterns.elapsed().as_millis()
-        );
-
         println!(
             "Partition {} has {} stops, {} trip_patterns, {} time_deltas, {} direction patterns, {} internal transfers, {} osm links, {} local transfer patterns, {} long distance patterns",
             partition_id,
@@ -1512,7 +1508,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             partition.direction_patterns.len(),
             partition.internal_transfers.len(),
             partition.osm_links.len(),
-            partition.local_transfer_patterns.len(),
+            partition.local_dag.len(),
             partition.long_distance_trip_patterns.len()
         );
 
@@ -1552,12 +1548,16 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 .iter()
                 .map(|dp| std::mem::size_of::<DirectionPattern>() + dp.stop_indices.len() * 4)
                 .sum();
-            let local_transfer_patterns_size: usize = partition
-                .local_transfer_patterns
+            let local_dag_size: usize = partition
+                .local_dag
                 .iter()
-                .map(|ltp| {
-                    std::mem::size_of::<LocalTransferPattern>()
-                        + ltp.edges.len() * std::mem::size_of::<DagEdge>()
+                .map(|(k, v)| {
+                    std::mem::size_of::<u32>()
+                        + std::mem::size_of::<catenary::routing_common::transit_graph::DagEdgeList>(
+                        )
+                        + v.edges.len()
+                            * std::mem::size_of::<catenary::routing_common::transit_graph::DagEdge>(
+                            )
                 })
                 .sum();
             let long_distance_trip_patterns_size: usize = partition
@@ -1581,14 +1581,14 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
                 time_deltas_size,
                 internal_transfers_size,
                 direction_patterns_size,
-                local_transfer_patterns_size,
+                local_dag_size,
                 long_distance_trip_patterns_size
             );
         }
 
         // Saving moved to end of function
-        // println!("Saving transit chunk to {}", path.display());
-        // save_pbf(&partition, path.to_str().unwrap())?;
+        println!("Saving transit chunk to {}", path.display());
+        save_pbf(&partition, path.to_str().unwrap())?;
     }
 
     // 6. Transfer Pattern Precomputation (Stubs)
@@ -2474,7 +2474,7 @@ fn identify_hubs_time_independent(
 
             let n_lon = point.geom()[0];
             let n_lat = point.geom()[1];
-            let dist = haversine_distance(lat, lon, n_lat, n_lon);
+            let dist = utils::haversine_distance(lat, lon, n_lat, n_lon);
 
             if dist <= 300.0 {
                 let walk_seconds = (dist / 1.4) as u32;

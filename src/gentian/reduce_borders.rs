@@ -146,8 +146,6 @@ pub fn reduce_borders_by_merging(
             // Let's use `reduction`.
 
             // Thresholds:
-            // Dramatic reduction: > 20 stops?
-            // And > 10% of total borders?
 
             let total_borders = cluster_borders[c1].len() + cluster_borders[c2].len();
             if total_borders == 0 {

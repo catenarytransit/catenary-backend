@@ -2,9 +2,9 @@ use crate::graph_loader::GraphManager;
 use crate::router::Router;
 use catenary::routing_common::api::{RoutingRequest, TravelMode};
 use catenary::routing_common::transit_graph::{
-    CompressedTrip, DagEdge, DirectionPattern, EdgeType, GlobalHub, GlobalPatternIndex,
-    LocalTransferPattern, PartitionDag, TimeDeltaSequence, TransitEdge, TransitPartition,
-    TransitStop, TripPattern, WalkEdge,
+    CompressedTrip, DagEdge, DagEdgeList, DirectionPattern, EdgeType, GlobalHub,
+    GlobalPatternIndex, LocalTransferPattern, PartitionDag, TimeDeltaSequence, TransitEdge,
+    TransitPartition, TransitStop, TripPattern, WalkEdge,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -66,30 +66,32 @@ fn test_hub_mediated_routing() {
         service_ids: vec![],
         service_exceptions: vec![],
         _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![
-            // A -> H
-            LocalTransferPattern {
-                from_stop_idx: 0,
-                edges: vec![DagEdge {
-                    from_node_idx: 0,
-                    to_node_idx: 1,
-                    edge_type: Some(EdgeType::Walk(WalkEdge {
-                        duration_seconds: 600,
-                    })),
-                }],
-            },
-            // H -> B
-            LocalTransferPattern {
-                from_stop_idx: 1,
-                edges: vec![DagEdge {
-                    from_node_idx: 1,
-                    to_node_idx: 2,
-                    edge_type: Some(EdgeType::Walk(WalkEdge {
-                        duration_seconds: 600,
-                    })),
-                }],
-            },
-        ],
+        local_dag: HashMap::from([
+            (
+                0,
+                DagEdgeList {
+                    edges: vec![DagEdge {
+                        from_node_idx: 0,
+                        to_node_idx: 1,
+                        edge_type: Some(EdgeType::Walk(WalkEdge {
+                            duration_seconds: 600,
+                        })),
+                    }],
+                },
+            ),
+            (
+                1,
+                DagEdgeList {
+                    edges: vec![DagEdge {
+                        from_node_idx: 1,
+                        to_node_idx: 2,
+                        edge_type: Some(EdgeType::Walk(WalkEdge {
+                            duration_seconds: 600,
+                        })),
+                    }],
+                },
+            ),
+        ]),
         long_distance_trip_patterns: vec![],
         timezones: vec![],
         boundary: None,
@@ -174,7 +176,7 @@ fn test_long_distance_jump() {
         service_ids: vec![],
         service_exceptions: vec![],
         _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![],
+        local_dag: HashMap::new(),
         long_distance_trip_patterns: vec![TripPattern {
             chateau_idx: 0,
             route_id: "LD_R1".to_string(),
@@ -229,7 +231,7 @@ fn test_long_distance_jump() {
         service_ids: vec![],
         service_exceptions: vec![],
         _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![], // No local patterns needed in P1 for this test
+        local_dag: HashMap::new(), // No local patterns needed in P1 for this test
         long_distance_trip_patterns: vec![],
         timezones: vec!["UTC".to_string()],
         boundary: None,
@@ -346,16 +348,18 @@ fn test_cross_cluster_dag() {
         service_ids: vec![],
         service_exceptions: vec![],
         _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![LocalTransferPattern {
-            from_stop_idx: 0,
-            edges: vec![DagEdge {
-                from_node_idx: 0,
-                to_node_idx: 1,
-                edge_type: Some(EdgeType::Walk(WalkEdge {
-                    duration_seconds: 600,
-                })),
-            }],
-        }],
+        local_dag: HashMap::from([(
+            0,
+            DagEdgeList {
+                edges: vec![DagEdge {
+                    from_node_idx: 0,
+                    to_node_idx: 1,
+                    edge_type: Some(EdgeType::Walk(WalkEdge {
+                        duration_seconds: 600,
+                    })),
+                }],
+            },
+        )]),
         long_distance_trip_patterns: vec![],
         timezones: vec!["UTC".to_string()],
         boundary: None,
@@ -375,16 +379,18 @@ fn test_cross_cluster_dag() {
         service_ids: vec![],
         service_exceptions: vec![],
         _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![LocalTransferPattern {
-            from_stop_idx: 0,
-            edges: vec![DagEdge {
-                from_node_idx: 0,
-                to_node_idx: 1,
-                edge_type: Some(EdgeType::Walk(WalkEdge {
-                    duration_seconds: 600,
-                })),
-            }],
-        }],
+        local_dag: HashMap::from([(
+            0,
+            DagEdgeList {
+                edges: vec![DagEdge {
+                    from_node_idx: 0,
+                    to_node_idx: 1,
+                    edge_type: Some(EdgeType::Walk(WalkEdge {
+                        duration_seconds: 600,
+                    })),
+                }],
+            },
+        )]),
         long_distance_trip_patterns: vec![],
         timezones: vec!["UTC".to_string()],
         boundary: None,

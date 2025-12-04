@@ -20,7 +20,7 @@ mod tests {
             service_ids: vec![],
             service_exceptions: vec![],
             _deprecated_external_transfers: vec![],
-            local_transfer_patterns: vec![],
+            local_dag: std::collections::HashMap::new(),
             long_distance_trip_patterns: vec![],
             timezones: vec![],
             boundary: None,

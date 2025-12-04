@@ -82,11 +82,10 @@ impl QueryGraph {
             }
 
             // Add LocalTransferPattern edges
-            for local_transfer_pattern in &partition.local_transfer_patterns {
-                if local_transfer_pattern.from_stop_idx == s_idx {
-                    for edge in &local_transfer_pattern.edges {
-                        self.add_dag_edge(partition.partition_id, edge);
-                    }
+            // Add LocalTransferPattern edges (from Union DAG)
+            if let Some(edge_list) = partition.local_dag.get(&s_idx) {
+                for edge in &edge_list.edges {
+                    self.add_dag_edge(partition.partition_id, edge);
                 }
             }
 

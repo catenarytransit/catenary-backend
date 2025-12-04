@@ -114,9 +114,10 @@ pub struct TransitPartition {
     #[prost(message, repeated, tag = "9")]
     pub _deprecated_external_transfers: Vec<ExternalTransfer>,
 
-    /// Local Transfer Patterns.
-    #[prost(message, repeated, tag = "10")]
-    pub local_transfer_patterns: Vec<LocalTransferPattern>,
+    /// Local Transfer Patterns (Union DAG).
+    /// Map from Source Stop Index -> List of Outgoing Edges.
+    #[prost(map = "uint32, message", tag = "18")]
+    pub local_dag: std::collections::HashMap<u32, DagEdgeList>,
 
     /// Long Distance Trip Patterns.
     /// Stored separately from standard trip patterns.
@@ -466,6 +467,13 @@ pub struct LocalTransferPattern {
     /// The edges of the DAG rooted at `from_stop_idx`.
     /// These edges describe optimal paths to reach other stops (primarily border stops).
     #[prost(message, repeated, tag = "2")]
+    pub edges: Vec<DagEdge>,
+}
+
+/// A wrapper for a list of DAG edges, used in the `local_dag` map.
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
+pub struct DagEdgeList {
+    #[prost(message, repeated, tag = "1")]
     pub edges: Vec<DagEdge>,
 }
 

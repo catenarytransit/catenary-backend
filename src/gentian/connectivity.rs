@@ -1,7 +1,7 @@
 use ahash::AHashMap as HashMap;
 use ahash::AHashSet as HashSet;
 use catenary::routing_common::transit_graph::{
-    DagEdge, EdgeType, GlobalHub, LocalTransferPattern, PartitionDag, TransitEdge,
+    DagEdge, DagEdgeList, EdgeType, GlobalHub, LocalTransferPattern, PartitionDag, TransitEdge,
     TransitPartition, TransitStop, WalkEdge,
 };
 use std::cmp::Ordering;
@@ -19,13 +19,12 @@ pub fn compute_border_patterns(
 
     // 1. Build Lookups for Patterns
     println!("    - Building pattern lookups...");
-    let mut local_pattern_lookup: HashMap<(u32, u32), &LocalTransferPattern> = HashMap::new();
+
     let mut long_dist_pattern_lookup: HashMap<(u32, u32), &LocalTransferPattern> = HashMap::new();
 
     for (pid, partition) in loaded_partitions {
-        for pat in &partition.local_transfer_patterns {
-            local_pattern_lookup.insert((*pid, pat.from_stop_idx), pat);
-        }
+        // local_dag is now a map, so we don't need to build a lookup for it.
+        // We will access it directly via partition.local_dag.
         for pat in &partition.long_distance_transfer_patterns {
             long_dist_pattern_lookup.insert((*pid, pat.from_stop_idx), pat);
         }
@@ -100,35 +99,37 @@ pub fn compute_border_patterns(
                 }
 
                 // A. Local Relaxation (within 'pid')
-                if let Some(pat) = local_pattern_lookup.get(&(pid, stop_idx)) {
-                    for edge in &pat.edges {
-                        let target_idx = edge.to_node_idx;
-                        let weight = match &edge.edge_type {
-                            Some(EdgeType::Transit(t)) => t.min_duration,
-                            Some(EdgeType::Walk(w)) => w.duration_seconds,
-                            Some(EdgeType::LongDistanceTransit(t)) => t.min_duration,
-                            None => 0,
-                        };
+                if let Some(partition) = loaded_partitions.get(&pid) {
+                    if let Some(edge_list) = partition.local_dag.get(&stop_idx) {
+                        for edge in &edge_list.edges {
+                            let target_idx = edge.to_node_idx;
+                            let weight = match &edge.edge_type {
+                                Some(EdgeType::Transit(t)) => t.min_duration,
+                                Some(EdgeType::Walk(w)) => w.duration_seconds,
+                                Some(EdgeType::LongDistanceTransit(t)) => t.min_duration,
+                                None => 0,
+                            };
 
-                        let next_cost = cost + weight;
-                        let target_key = (pid, target_idx);
+                            let next_cost = cost + weight;
+                            let target_key = (pid, target_idx);
 
-                        if next_cost < *dist.get(&target_key).unwrap_or(&u32::MAX) {
-                            dist.insert(target_key, next_cost);
-                            predecessors.insert(
-                                target_key,
-                                vec![((pid, stop_idx), edge.edge_type.clone())],
-                            );
-                            pq.push(State {
-                                cost: next_cost,
-                                pid,
-                                stop_idx: target_idx,
-                            });
-                        } else if next_cost == *dist.get(&target_key).unwrap_or(&u32::MAX) {
-                            predecessors
-                                .entry(target_key)
-                                .or_default()
-                                .push(((pid, stop_idx), edge.edge_type.clone()));
+                            if next_cost < *dist.get(&target_key).unwrap_or(&u32::MAX) {
+                                dist.insert(target_key, next_cost);
+                                predecessors.insert(
+                                    target_key,
+                                    vec![((pid, stop_idx), edge.edge_type.clone())],
+                                );
+                                pq.push(State {
+                                    cost: next_cost,
+                                    pid,
+                                    stop_idx: target_idx,
+                                });
+                            } else if next_cost == *dist.get(&target_key).unwrap_or(&u32::MAX) {
+                                predecessors
+                                    .entry(target_key)
+                                    .or_default()
+                                    .push(((pid, stop_idx), edge.edge_type.clone()));
+                            }
                         }
                     }
                 }
@@ -391,49 +392,47 @@ pub fn compute_global_patterns(
                 // 2. Intra-Partition (LocalTransferPattern)
                 if let Some(&(pid, l_idx)) = global_to_partition_map.get(&u) {
                     if let Some(partition) = loaded_partitions.get(&pid) {
-                        if let Some(local_transfer_pattern) = partition
-                            .local_transfer_patterns
-                            .iter()
-                            .find(|p| p.from_stop_idx == l_idx)
+                        // Use local_dag
+                        // We need to run a local Dijkstra from l_idx using the Union DAG
+                        let mut local_dist: HashMap<u32, u32> = HashMap::new();
+                        let mut local_pq = BinaryHeap::new();
+
+                        local_dist.insert(l_idx, 0);
+                        local_pq.push(State {
+                            cost: 0,
+                            node: l_idx as usize,
+                        });
+
+                        while let Some(State {
+                            cost: local_cost,
+                            node: local_u,
+                        }) = local_pq.pop()
                         {
-                            let mut local_dist: HashMap<u32, u32> = HashMap::new();
-                            let mut local_pq = BinaryHeap::new();
+                            let local_u = local_u as u32;
+                            if local_cost > *local_dist.get(&local_u).unwrap_or(&u32::MAX) {
+                                continue;
+                            }
 
-                            local_dist.insert(l_idx, 0);
-                            local_pq.push(State {
-                                cost: 0,
-                                node: l_idx as usize,
-                            });
-
-                            while let Some(State {
-                                cost: local_cost,
-                                node: local_u,
-                            }) = local_pq.pop()
-                            {
-                                let local_u = local_u as u32;
-                                if local_cost > *local_dist.get(&local_u).unwrap_or(&u32::MAX) {
-                                    continue;
-                                }
-
-                                if local_u != l_idx {
-                                    if let Some(&global_v) = node_to_global.get(&(pid, local_u)) {
-                                        let total_cost = cost + local_cost;
-                                        if total_cost < *dist.get(&global_v).unwrap_or(&u32::MAX) {
-                                            dist.insert(global_v, total_cost);
-                                            predecessors.insert(global_v, vec![u]);
-                                            pq.push(State {
-                                                cost: total_cost,
-                                                node: global_v,
-                                            });
-                                        } else if total_cost
-                                            == *dist.get(&global_v).unwrap_or(&u32::MAX)
-                                        {
-                                            predecessors.entry(global_v).or_default().push(u);
-                                        }
+                            if local_u != l_idx {
+                                if let Some(&global_v) = node_to_global.get(&(pid, local_u)) {
+                                    let total_cost = cost + local_cost;
+                                    if total_cost < *dist.get(&global_v).unwrap_or(&u32::MAX) {
+                                        dist.insert(global_v, total_cost);
+                                        predecessors.insert(global_v, vec![u]);
+                                        pq.push(State {
+                                            cost: total_cost,
+                                            node: global_v,
+                                        });
+                                    } else if total_cost
+                                        == *dist.get(&global_v).unwrap_or(&u32::MAX)
+                                    {
+                                        predecessors.entry(global_v).or_default().push(u);
                                     }
                                 }
+                            }
 
-                                for edge in &local_transfer_pattern.edges {
+                            if let Some(edge_list) = partition.local_dag.get(&local_u) {
+                                for edge in &edge_list.edges {
                                     if edge.from_node_idx == local_u {
                                         let weight = match &edge.edge_type {
                                             Some(EdgeType::Transit(t)) => t.min_duration,
@@ -589,13 +588,9 @@ pub fn compute_global_patterns(
                     ) {
                         if pid_u == pid_v {
                             if let Some(partition) = loaded_partitions.get(&pid_u) {
-                                if let Some(ltp) = partition
-                                    .local_transfer_patterns
-                                    .iter()
-                                    .find(|p| p.from_stop_idx == l_u)
-                                {
+                                if let Some(edge_list) = partition.local_dag.get(&l_u) {
                                     if let Some(edge) =
-                                        ltp.edges.iter().find(|e| e.to_node_idx == l_v)
+                                        edge_list.edges.iter().find(|e| e.to_node_idx == l_v)
                                     {
                                         edge_type = edge.edge_type.clone();
                                     }
@@ -866,7 +861,7 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         start = end;
     }
 
-    let mut local_transfer_patterns = Vec::new();
+    let mut unique_edges: HashSet<DagEdge> = HashSet::new();
     let mut scratch = crate::trip_based::ProfileScratch::new(partition.stops.len(), num_trips, 3);
 
     // Collect hubs
@@ -906,13 +901,21 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
             is_source_hub,
         );
 
-        if !edges.is_empty() {
-            local_transfer_patterns.push(LocalTransferPattern {
-                from_stop_idx: start_node,
-                edges, // already Vec<DagEdge>
-            });
+        for edge in edges {
+            unique_edges.insert(edge);
         }
     }
 
-    partition.local_transfer_patterns = local_transfer_patterns;
+    // Convert HashSet to HashMap<u32, DagEdgeList>
+    let mut local_dag: std::collections::HashMap<u32, DagEdgeList> =
+        std::collections::HashMap::new();
+    for edge in unique_edges {
+        local_dag
+            .entry(edge.from_node_idx)
+            .or_insert_with(|| DagEdgeList { edges: Vec::new() })
+            .edges
+            .push(edge);
+    }
+
+    partition.local_dag = local_dag;
 }

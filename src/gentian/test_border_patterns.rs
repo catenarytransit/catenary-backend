@@ -27,6 +27,7 @@ mod tests {
 
         // Partition 0
         let mut p0 = TransitPartition::default();
+        p0.local_dag = std::collections::HashMap::new();
         p0.partition_id = 0;
         p0.stops.push(TransitStop {
             id: 0,
@@ -52,16 +53,20 @@ mod tests {
         });
 
         // Local Pattern 0 -> 1
-        p0.local_transfer_patterns.push(LocalTransferPattern {
-            from_stop_idx: 0,
-            edges: vec![DagEdge {
+        // Local Pattern 0 -> 1
+        p0.local_dag
+            .entry(0)
+            .or_insert_with(|| catenary::routing_common::transit_graph::DagEdgeList {
+                edges: vec![],
+            })
+            .edges
+            .push(DagEdge {
                 from_node_idx: 0,
                 to_node_idx: 1,
                 edge_type: Some(EdgeType::Walk(WalkEdge {
                     duration_seconds: 10,
                 })),
-            }],
-        });
+            });
 
         // External Hubs
         p0.external_hubs.push(GlobalHub {
@@ -93,6 +98,7 @@ mod tests {
 
         // Partition 1
         let mut p1 = TransitPartition::default();
+        p1.local_dag = std::collections::HashMap::new();
         p1.partition_id = 1;
         p1.stops.push(TransitStop {
             id: 0,

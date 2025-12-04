@@ -3,8 +3,8 @@ use crate::osm_router::OsmRouter;
 use crate::query_graph::{QueryGraph, ServiceContext};
 use catenary::routing_common::api::{Itinerary, RoutingRequest, RoutingResult, TravelMode};
 use catenary::routing_common::transit_graph::{
-    CompressedTrip, DagEdge, DirectionPattern, EdgeType, LocalTransferPattern, TransitEdge,
-    TransitPartition, TripPattern,
+    CompressedTrip, DagEdge, DagEdgeList, DirectionPattern, EdgeType, LocalTransferPattern,
+    TransitEdge, TransitPartition, TripPattern,
 };
 use chrono::{Datelike, TimeZone, Timelike};
 use chrono_tz::Tz;
@@ -625,46 +625,52 @@ mod tests {
             service_ids: vec!["daily".to_string()],
             service_exceptions: vec![],
             _deprecated_external_transfers: vec![],
-            local_transfer_patterns: vec![
-                LocalTransferPattern {
-                    from_stop_idx: 0,
-                    edges: vec![
-                        DagEdge {
-                            from_node_idx: 0, // Not used for LocalTransferPattern
-                            to_node_idx: 1,   // Stop 1
+            local_dag: {
+                let mut map = HashMap::new();
+                map.insert(
+                    0,
+                    catenary::routing_common::transit_graph::DagEdgeList {
+                        edges: vec![
+                            DagEdge {
+                                from_node_idx: 0,
+                                to_node_idx: 1,
+                                edge_type: Some(EdgeType::Transit(TransitEdge {
+                                    trip_pattern_idx: 0,
+                                    start_stop_idx: 0,
+                                    end_stop_idx: 1,
+                                    min_duration: 0,
+                                })),
+                            },
+                            DagEdge {
+                                from_node_idx: 0,
+                                to_node_idx: 2,
+                                edge_type: Some(EdgeType::Transit(TransitEdge {
+                                    trip_pattern_idx: 0,
+                                    start_stop_idx: 0,
+                                    end_stop_idx: 2,
+                                    min_duration: 0,
+                                })),
+                            },
+                        ],
+                    },
+                );
+                map.insert(
+                    1,
+                    catenary::routing_common::transit_graph::DagEdgeList {
+                        edges: vec![DagEdge {
+                            from_node_idx: 1,
+                            to_node_idx: 2,
                             edge_type: Some(EdgeType::Transit(TransitEdge {
                                 trip_pattern_idx: 0,
-                                start_stop_idx: 0,
-                                end_stop_idx: 1,
-                                min_duration: 0,
-                            })),
-                        },
-                        DagEdge {
-                            from_node_idx: 0,
-                            to_node_idx: 2, // Stop 2
-                            edge_type: Some(EdgeType::Transit(TransitEdge {
-                                trip_pattern_idx: 0,
-                                start_stop_idx: 0,
+                                start_stop_idx: 1,
                                 end_stop_idx: 2,
                                 min_duration: 0,
                             })),
-                        },
-                    ],
-                },
-                LocalTransferPattern {
-                    from_stop_idx: 1,
-                    edges: vec![DagEdge {
-                        from_node_idx: 1,
-                        to_node_idx: 2, // Stop 2
-                        edge_type: Some(EdgeType::Transit(TransitEdge {
-                            trip_pattern_idx: 0,
-                            start_stop_idx: 1,
-                            end_stop_idx: 2,
-                            min_duration: 0,
-                        })),
-                    }],
-                },
-            ],
+                        }],
+                    },
+                );
+                map
+            },
             long_distance_trip_patterns: vec![],
             timezones: vec!["UTC".to_string()],
             boundary: None,
@@ -711,11 +717,7 @@ mod tests {
         // Wait, Itinerary.start_time usually reflects the trip start?
         // Or the query start?
         // In my Dijkstra implementation:
-        // start_time: start_time_unix as u64 (which is req.time)
-        // But the first leg (Transit) has a duration.
-        // If there is a wait, the transit leg starts later.
-        // Let's check Dijkstra reconstruction.
-        // Itinerary.start_time = start_time_unix (req.time).
+        // start_time: start_time_unix as u64 (which is req.time).
         // Itinerary.end_time = min_end_time.
         // This includes waiting time at start.
         // So start_time is 7:50.
@@ -895,19 +897,25 @@ mod tests {
             service_ids: vec![],
             service_exceptions: vec![],
             _deprecated_external_transfers: vec![],
-            local_transfer_patterns: vec![LocalTransferPattern {
-                from_stop_idx: 0,
-                edges: vec![DagEdge {
-                    from_node_idx: 0,
-                    to_node_idx: 1,
-                    edge_type: Some(EdgeType::Transit(TransitEdge {
-                        trip_pattern_idx: 0,
-                        start_stop_idx: 0,
-                        end_stop_idx: 1,
-                        min_duration: 0,
-                    })),
-                }],
-            }],
+            local_dag: {
+                let mut map = HashMap::new();
+                map.insert(
+                    0,
+                    catenary::routing_common::transit_graph::DagEdgeList {
+                        edges: vec![DagEdge {
+                            from_node_idx: 0,
+                            to_node_idx: 1,
+                            edge_type: Some(EdgeType::Transit(TransitEdge {
+                                trip_pattern_idx: 0,
+                                start_stop_idx: 0,
+                                end_stop_idx: 1,
+                                min_duration: 0,
+                            })),
+                        }],
+                    },
+                );
+                map
+            },
             long_distance_trip_patterns: vec![],
             timezones: vec!["UTC".to_string()],
             boundary: None,
@@ -977,19 +985,25 @@ mod tests {
             service_ids: vec!["daily".to_string()],
             service_exceptions: vec![],
             _deprecated_external_transfers: vec![],
-            local_transfer_patterns: vec![LocalTransferPattern {
-                from_stop_idx: 0,
-                edges: vec![DagEdge {
-                    from_node_idx: 0,
-                    to_node_idx: 1,
-                    edge_type: Some(EdgeType::Transit(TransitEdge {
-                        trip_pattern_idx: 0,
-                        start_stop_idx: 0,
-                        end_stop_idx: 1,
-                        min_duration: 0,
-                    })),
-                }],
-            }],
+            local_dag: {
+                let mut map = HashMap::new();
+                map.insert(
+                    0,
+                    catenary::routing_common::transit_graph::DagEdgeList {
+                        edges: vec![DagEdge {
+                            from_node_idx: 0,
+                            to_node_idx: 1,
+                            edge_type: Some(EdgeType::Transit(TransitEdge {
+                                trip_pattern_idx: 0,
+                                start_stop_idx: 0,
+                                end_stop_idx: 1,
+                                min_duration: 0,
+                            })),
+                        }],
+                    },
+                );
+                map
+            },
             long_distance_trip_patterns: vec![],
             timezones: vec!["UTC".to_string()],
             boundary: None,
@@ -1139,46 +1153,52 @@ mod tests {
                 service_ids: vec!["daily".to_string()],
                 service_exceptions: vec![],
                 _deprecated_external_transfers: vec![],
-                local_transfer_patterns: vec![
-                    LocalTransferPattern {
-                        from_stop_idx: 0,
-                        edges: vec![
-                            DagEdge {
-                                from_node_idx: 0,
-                                to_node_idx: 1,
-                                edge_type: Some(EdgeType::Transit(TransitEdge {
-                                    trip_pattern_idx: 0,
-                                    start_stop_idx: 0,
-                                    end_stop_idx: 1,
-                                    min_duration: 0,
-                                })),
-                            },
-                            DagEdge {
-                                from_node_idx: 0,
+                local_dag: {
+                    let mut map = HashMap::new();
+                    map.insert(
+                        0,
+                        catenary::routing_common::transit_graph::DagEdgeList {
+                            edges: vec![
+                                DagEdge {
+                                    from_node_idx: 0,
+                                    to_node_idx: 1,
+                                    edge_type: Some(EdgeType::Transit(TransitEdge {
+                                        trip_pattern_idx: 0,
+                                        start_stop_idx: 0,
+                                        end_stop_idx: 1,
+                                        min_duration: 0,
+                                    })),
+                                },
+                                DagEdge {
+                                    from_node_idx: 0,
+                                    to_node_idx: 2,
+                                    edge_type: Some(EdgeType::Transit(TransitEdge {
+                                        trip_pattern_idx: 0,
+                                        start_stop_idx: 0,
+                                        end_stop_idx: 2,
+                                        min_duration: 0,
+                                    })),
+                                },
+                            ],
+                        },
+                    );
+                    map.insert(
+                        1,
+                        catenary::routing_common::transit_graph::DagEdgeList {
+                            edges: vec![DagEdge {
+                                from_node_idx: 1,
                                 to_node_idx: 2,
                                 edge_type: Some(EdgeType::Transit(TransitEdge {
                                     trip_pattern_idx: 0,
-                                    start_stop_idx: 0,
+                                    start_stop_idx: 1,
                                     end_stop_idx: 2,
                                     min_duration: 0,
                                 })),
-                            },
-                        ],
-                    },
-                    LocalTransferPattern {
-                        from_stop_idx: 1,
-                        edges: vec![DagEdge {
-                            from_node_idx: 1,
-                            to_node_idx: 2,
-                            edge_type: Some(EdgeType::Transit(TransitEdge {
-                                trip_pattern_idx: 0,
-                                start_stop_idx: 1,
-                                end_stop_idx: 2,
-                                min_duration: 0,
-                            })),
-                        }],
-                    },
-                ],
+                            }],
+                        },
+                    );
+                    map
+                },
                 long_distance_trip_patterns: vec![],
                 timezones: vec!["UTC".to_string()],
                 boundary: None,
@@ -1336,35 +1356,39 @@ mod tests {
         partition.stops[1].is_hub = true; // Stop 1 is Hub
 
         // Modify LTPs
-        partition.local_transfer_patterns = vec![
-            LocalTransferPattern {
-                from_stop_idx: 0,
-                edges: vec![DagEdge {
-                    from_node_idx: 0,
-                    to_node_idx: 1, // A -> Hub
-                    edge_type: Some(EdgeType::Transit(TransitEdge {
-                        trip_pattern_idx: 0,
-                        start_stop_idx: 0,
-                        end_stop_idx: 1,
-                        min_duration: 0,
-                    })),
-                }],
-            },
-            LocalTransferPattern {
-                from_stop_idx: 1,
-                edges: vec![DagEdge {
-                    from_node_idx: 1,
-                    to_node_idx: 2, // Hub -> B
-                    edge_type: Some(EdgeType::Transit(TransitEdge {
-                        trip_pattern_idx: 0,
-                        start_stop_idx: 1,
-                        end_stop_idx: 2,
-                        min_duration: 0,
-                    })),
-                }],
-            },
-            // No LTP for A -> B directly
-        ];
+        partition.local_dag = HashMap::from([
+            (
+                0,
+                DagEdgeList {
+                    edges: vec![DagEdge {
+                        from_node_idx: 0,
+                        to_node_idx: 1, // A -> Hub
+                        edge_type: Some(EdgeType::Transit(TransitEdge {
+                            trip_pattern_idx: 0,
+                            start_stop_idx: 0,
+                            end_stop_idx: 1,
+                            min_duration: 0,
+                        })),
+                    }],
+                },
+            ),
+            (
+                1,
+                DagEdgeList {
+                    edges: vec![DagEdge {
+                        from_node_idx: 1,
+                        to_node_idx: 2, // Hub -> B
+                        edge_type: Some(EdgeType::Transit(TransitEdge {
+                            trip_pattern_idx: 0,
+                            start_stop_idx: 1,
+                            end_stop_idx: 2,
+                            min_duration: 0,
+                        })),
+                    }],
+                },
+                // No LTP for A -> B directly
+            ),
+        ]);
 
         let mut graph = GraphManager::new();
         graph
