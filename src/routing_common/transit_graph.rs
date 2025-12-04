@@ -4,11 +4,11 @@
 // It is designed to work alongside `graph_format.rs` (Street Layer).
 //
 // ARCHITECTURE:
-// 1. TransitPartition (transit_chunk_X.pbf):
+// 1. TransitPartition (transit_chunk_X.bincode):
 //    - Contains the full "Compressed Timetable" for a specific geographic cluster.
 //    - Optimized for "Trip-Based Routing" (contiguous arrays for CPU cache).
 //
-// 2. GlobalPatternIndex (global_patterns.pbf):
+// 2. GlobalPatternIndex (global_patterns.bincode):
 //    - The "Scalable" part of Transfer Patterns.
 //    - Stores the pre-computed DAGs connecting "Hub Stops" between partitions.
 
@@ -25,7 +25,7 @@ use std::path::Path;
 /// Stores interleaved [travel_time, dwell_time] pairs.
 /// Index 2*i: Travel time from Stop i-1 (Departure) to Stop i (Arrival). (0 for i=0).
 /// Index 2*i+1: Dwell time at Stop i (Departure - Arrival).
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct TimeDeltaSequence {
     #[prost(uint32, repeated, tag = "1")]
     pub deltas: Vec<u32>,
@@ -56,13 +56,44 @@ pub fn load_pbf<T: Message + Default>(path: &str) -> io::Result<T> {
     })
 }
 
+/// Generic helper to save any Serde-compatible struct to a file using bincode.
+pub fn save_bincode<T: serde::Serialize>(data: &T, path: &str) -> io::Result<()> {
+    let path = Path::new(path);
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    bincode::serde::encode_into_std_write(data, &mut writer, bincode::config::standard()).map_err(
+        |e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("Bincode serialize error: {}", e),
+            )
+        },
+    )?;
+    Ok(())
+}
+
+/// Generic helper to load any Serde-compatible struct from a file using bincode.
+pub fn load_bincode<T: serde::de::DeserializeOwned>(path: &str) -> io::Result<T> {
+    let path = Path::new(path);
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let data = bincode::serde::decode_from_std_read(&mut reader, bincode::config::standard())
+        .map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Bincode deserialize error: {}", e),
+            )
+        })?;
+    Ok(data)
+}
+
 // ===========================================================================
 // 1. TRANSIT PARTITION (The Chunk)
 // ===========================================================================
 
 /// The container for a single graph partition (Cluster).
 /// Loaded via Memory Mapping (mmap) during query time.
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct TransitPartition {
     /// Unique ID of this partition (0 to N).
     #[prost(uint32, tag = "1")]
@@ -150,7 +181,7 @@ pub struct TransitPartition {
 }
 
 /// A transfer to a stop in a different Chateau.
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct ExternalTransfer {
     /// Index of the local stop in this partition.
     #[prost(uint32, tag = "1")]
@@ -224,7 +255,7 @@ pub struct TransitStop {
 
 /// A "Direction Pattern" is a unique sequence of stops.
 /// It is shared by multiple TripPatterns (schedules).
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct DirectionPattern {
     /// The sequence of Stop Indices (referencing `stops` vector) for this pattern.
     #[prost(uint32, repeated, tag = "1")]
@@ -296,7 +327,7 @@ pub struct CompressedTrip {
 }
 
 /// Exception dates for a service (Calendar Dates).
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct ServiceException {
     /// Index into `TransitPartition.service_ids`.
     #[prost(uint32, tag = "1")]
@@ -312,7 +343,7 @@ pub struct ServiceException {
 }
 
 /// A pre-calculated walking connection inside the transit network.
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct StaticTransfer {
     #[prost(uint32, tag = "1")]
     pub from_stop_idx: u32,
@@ -327,7 +358,7 @@ pub struct StaticTransfer {
 }
 
 /// Bridges the separate "Transit" and "Street" graph files.
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct OsmLink {
     #[prost(uint32, tag = "1")]
     pub stop_idx: u32, // Index in `TransitPartition.stops`
@@ -343,7 +374,7 @@ pub struct OsmLink {
 
 /// A separate chunk for storing large transfer graphs (e.g. cycling transfers).
 /// Loaded on demand.
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct TransferChunk {
     /// Unique ID of this partition (matches TransitPartition).
     #[prost(uint32, tag = "1")]
@@ -358,9 +389,9 @@ pub struct TransferChunk {
 // 2. GLOBAL TRANSFER PATTERNS (The Index)
 // ===========================================================================
 
-/// The Master Index file (`global_patterns.pbf`).
+/// The Master Index file (`global_patterns.bincode`).
 /// Loaded for every inter-partition query.
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct GlobalPatternIndex {
     /// A DAG for every pair of partitions that have connectivity.
     #[prost(message, repeated, tag = "1")]
@@ -374,7 +405,7 @@ pub struct GlobalPatternIndex {
 
 /// The Directed Acyclic Graph connecting two partitions.
 /// Represents "How to get from Border A to Border B".
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct PartitionDag {
     #[prost(uint32, tag = "1")]
     pub from_partition: u32,
@@ -515,13 +546,13 @@ pub struct Manifest {
 
 /// A separate file storing the actual departure times for patterns used in the Global Graph.
 /// Used for fast lookup during query time without loading the full partition.
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct GlobalTimetable {
     #[prost(message, repeated, tag = "1")]
     pub partition_timetables: Vec<PartitionTimetable>,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct PartitionTimetable {
     #[prost(uint32, tag = "1")]
     pub partition_id: u32,
@@ -535,7 +566,7 @@ pub struct PartitionTimetable {
     pub timezones: Vec<String>,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Message, serde::Serialize, serde::Deserialize)]
 pub struct PatternTimetable {
     /// The index of the pattern in the partition's `trip_patterns`.
     #[prost(uint32, tag = "1")]
@@ -557,4 +588,28 @@ pub struct PatternTimetable {
     /// Index into `PartitionTimetable.timezones`.
     #[prost(uint32, tag = "5")]
     pub timezone_idx: u32,
+}
+
+// ===========================================================================
+// 4. TIMETABLE DATA (Per Chateau)
+// ===========================================================================
+
+/// Aggregated timetable data for a Chateau.
+/// Saved as `timetable_data_{chateau_id}.bincode`.
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TimetableData {
+    pub chateau_id: String,
+    pub partitions: Vec<PartitionTimetableData>,
+}
+
+/// Timetable data for a single partition within a Chateau.
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PartitionTimetableData {
+    pub partition_id: u32,
+    pub trip_patterns: Vec<TripPattern>,
+    pub time_deltas: Vec<TimeDeltaSequence>,
+    pub service_ids: Vec<String>,
+    pub service_exceptions: Vec<ServiceException>,
+    pub timezones: Vec<String>,
+    pub direction_patterns: Vec<DirectionPattern>,
 }

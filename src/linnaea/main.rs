@@ -5,7 +5,7 @@ use catenary::routing_common::transit_graph::{
 };
 use clap::Parser;
 use geojson::{Feature, FeatureCollection, Geometry, JsonObject, Value};
-use prost::Message;
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Input folder containing transit_chunk_*.pbf files
+    /// Input folder containing transit_chunk_*.bincode files
     #[arg(short, long)]
     input: PathBuf,
 
@@ -39,19 +39,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let entry = entry?;
         let path = entry.path();
         if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-            if filename.starts_with("transit_chunk_") && filename.ends_with(".pbf") {
+            if filename.starts_with("transit_chunk_") && filename.ends_with(".bincode") {
                 println!("Loading partition: {}", filename);
-                let mut file = File::open(&path)?;
-                let mut buffer = Vec::new();
-                file.read_to_end(&mut buffer)?;
-                let partition = TransitPartition::decode(&buffer[..])?;
+                let partition: TransitPartition =
+                    catenary::routing_common::transit_graph::load_bincode(path.to_str().unwrap())?;
                 partitions.push(partition);
-            } else if filename == "global_patterns.pbf" {
+            } else if filename == "global_patterns.bincode" {
                 println!("Loading global patterns: {}", filename);
-                let mut file = File::open(&path)?;
-                let mut buffer = Vec::new();
-                file.read_to_end(&mut buffer)?;
-                global_patterns = Some(GlobalPatternIndex::decode(&buffer[..])?);
+                global_patterns = Some(catenary::routing_common::transit_graph::load_bincode(
+                    path.to_str().unwrap(),
+                )?);
             } else if filename == "manifest.json" {
                 println!("Loading manifest: {}", filename);
                 let mut file = File::open(&path)?;

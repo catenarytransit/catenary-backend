@@ -37,19 +37,20 @@ impl GraphManager {
         self.base_path = Some(path.to_path_buf());
 
         // Load Global Patterns
-        let global_path = path.join("global_patterns.pbf");
+        let global_path = path.join("global_patterns.bincode");
         if global_path.exists() {
             println!("Loading global patterns from {:?}", global_path);
-            let index: GlobalPatternIndex = transit_graph::load_pbf(global_path.to_str().unwrap())?;
+            let index: GlobalPatternIndex =
+                transit_graph::load_bincode(global_path.to_str().unwrap())?;
             self.global_index = Some(index);
         }
 
         // Load Global Timetable
-        let timetable_path = path.join("global_timetable.pbf");
+        let timetable_path = path.join("global_timetable.bincode");
         if timetable_path.exists() {
             println!("Loading global timetable from {:?}", timetable_path);
             let timetable: transit_graph::GlobalTimetable =
-                transit_graph::load_pbf(timetable_path.to_str().unwrap())?;
+                transit_graph::load_bincode(timetable_path.to_str().unwrap())?;
             self.global_timetable = Some(timetable);
         }
 
@@ -80,12 +81,12 @@ impl GraphManager {
         // 2. Slow path: Load from disk and insert
         if let Some(base_path) = &self.base_path {
             println!("Loading transit partition {} from disk", partition_id);
-            let filename = format!("transit_chunk_{}.pbf", partition_id);
+            let filename = format!("transit_chunk_{}.bincode", partition_id);
             let path = base_path.join(filename);
             if path.exists() {
                 // println!("Loading transit partition {} from disk", partition_id);
                 if let Ok(partition) =
-                    transit_graph::load_pbf::<TransitPartition>(path.to_str().unwrap())
+                    transit_graph::load_bincode::<TransitPartition>(path.to_str().unwrap())
                 {
                     let arc_partition = Arc::new(partition);
                     let mut map = self.transit_partitions.write().unwrap();
@@ -104,11 +105,11 @@ impl GraphManager {
 
         if let Some(base_path) = &self.base_path {
             println!("Loading transfer partition {} from disk", partition_id);
-            let filename = format!("transfers_chunk_{}.pbf", partition_id);
+            let filename = format!("transfers_chunk_{}.bincode", partition_id);
             let path = base_path.join(filename);
             if path.exists() {
                 if let Ok(partition) =
-                    transit_graph::load_pbf::<TransferChunk>(path.to_str().unwrap())
+                    transit_graph::load_bincode::<TransferChunk>(path.to_str().unwrap())
                 {
                     return Some(partition);
                 }

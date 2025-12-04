@@ -9,9 +9,9 @@ use catenary::routing_common::osm_graph::{load_pbf, save_pbf};
 use catenary::routing_common::transit_graph::BoundaryPoint;
 use catenary::routing_common::transit_graph::{
     CompressedTrip, DagEdge, DirectionPattern, EdgeEntry, EdgeType, ExternalTransfer,
-    GlobalPatternIndex, LocalTransferPattern, Manifest, OsmLink, PartitionBoundary, StaticTransfer,
-    TimeDeltaSequence, TransferChunk, TransitEdge, TransitPartition, TransitStop, TripPattern,
-    WalkEdge,
+    GlobalPatternIndex, LocalTransferPattern, Manifest, OsmLink, PartitionBoundary,
+    PartitionTimetableData, ServiceException, StaticTransfer, TimeDeltaSequence, TimetableData,
+    TransferChunk, TransitEdge, TransitPartition, TransitStop, TripPattern, WalkEdge, save_bincode,
 };
 use clap::Parser;
 use diesel::prelude::*;
@@ -1263,10 +1263,10 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
             partition_id,
             external_transfers,
         };
-        let transfer_filename = format!("transfers_chunk_{}.pbf", partition_id);
+        let transfer_filename = format!("transfers_chunk_{}.bincode", partition_id);
         let transfer_path = args.output.join(transfer_filename);
         println!("Saving transfer chunk to {}", transfer_path.display());
-        save_pbf(&transfer_chunk, transfer_path.to_str().unwrap())?;
+        save_bincode(&transfer_chunk, transfer_path.to_str().unwrap())?;
 
         // Collect global nodes (Hubs + Border Nodes) for global graph
         for stop in &partition.stops {
@@ -1371,7 +1371,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
         partitions.insert(partition_id, partition.clone());
 
-        let filename = format!("transit_chunk_{}.pbf", partition_id);
+        let filename = format!("transit_chunk_{}.bincode", partition_id);
         let path = args.output.join(filename);
 
         // Debug: Print approximate sizes
@@ -1445,7 +1445,7 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
 
         // Saving moved to end of function
         println!("Saving transit chunk to {}", path.display());
-        save_pbf(&partition, path.to_str().unwrap())?;
+        save_bincode(&partition, path.to_str().unwrap())?;
     }
 
     // 6. Transfer Pattern Precomputation (Stubs)
@@ -1521,16 +1521,18 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-            let pid_opt = if filename.starts_with("transit_chunk_") && filename.ends_with(".pbf") {
+            let pid_opt = if filename.starts_with("transit_chunk_")
+                && filename.ends_with(".bincode")
+            {
                 filename
                     .trim_start_matches("transit_chunk_")
-                    .trim_end_matches(".pbf")
+                    .trim_end_matches(".bincode")
                     .parse::<u32>()
                     .ok()
-            } else if filename.starts_with("transfers_chunk_") && filename.ends_with(".pbf") {
+            } else if filename.starts_with("transfers_chunk_") && filename.ends_with(".bincode") {
                 filename
                     .trim_start_matches("transfers_chunk_")
-                    .trim_end_matches(".pbf")
+                    .trim_end_matches(".bincode")
                     .parse::<u32>()
                     .ok()
             } else {
@@ -1592,18 +1594,61 @@ async fn generate_chunks(args: &Args, pool: Arc<CatenaryPostgresPool>) -> Result
         partition_dags,
         long_distance_dags: Vec::new(),
     };
-    let global_path = args.output.join("global_patterns.pbf");
-    if let Err(e) = save_pbf(&global_index, global_path.to_str().unwrap()) {
-        eprintln!("Failed to save global_patterns.pbf: {}", e);
+    let global_path = args.output.join("global_patterns.bincode");
+    if let Err(e) = save_bincode(&global_index, global_path.to_str().unwrap()) {
+        eprintln!("Failed to save global_patterns.bincode: {}", e);
     } else {
-        println!("  - Saved global_patterns.pbf");
+        println!("  - Saved global_patterns.bincode");
+    }
+
+    // 6c. Save Timetable Data (Per Chateau)
+    println!("Saving Timetable Data per Chateau...");
+
+    let mut chateau_partitions: HashMap<String, Vec<u32>> = HashMap::new();
+    for (pid, partition) in &partitions {
+        for chateau in &partition.chateau_ids {
+            chateau_partitions
+                .entry(chateau.clone())
+                .or_default()
+                .push(*pid);
+        }
+    }
+
+    for (chateau_id, pids) in chateau_partitions {
+        let mut partition_timetables = Vec::new();
+        for pid in pids {
+            if let Some(partition) = partitions.get(&pid) {
+                partition_timetables.push(PartitionTimetableData {
+                    partition_id: pid,
+                    trip_patterns: partition.trip_patterns.clone(),
+                    time_deltas: partition.time_deltas.clone(),
+                    service_ids: partition.service_ids.clone(),
+                    service_exceptions: partition.service_exceptions.clone(),
+                    timezones: partition.timezones.clone(),
+                    direction_patterns: partition.direction_patterns.clone(),
+                });
+            }
+        }
+
+        let timetable_data = TimetableData {
+            chateau_id: chateau_id.clone(),
+            partitions: partition_timetables,
+        };
+
+        let filename = format!("timetable_data_{}.bincode", chateau_id);
+        let path = args.output.join(filename);
+        if let Err(e) = save_bincode(&timetable_data, path.to_str().unwrap()) {
+            eprintln!("Failed to save timetable data for {}: {}", chateau_id, e);
+        } else {
+            println!("  - Saved timetable data for {} to {:?}", chateau_id, path);
+        }
     }
 
     // 7. Save Final Partitions (with Global Patterns)
     println!("Saving Final Partitions...");
     for (pid, partition) in partitions {
-        let path = args.output.join(format!("transit_chunk_{}.pbf", pid));
-        if let Err(e) = save_pbf(&partition, path.to_str().unwrap()) {
+        let path = args.output.join(format!("transit_chunk_{}.bincode", pid));
+        if let Err(e) = save_bincode(&partition, path.to_str().unwrap()) {
             eprintln!("Failed to save partition {}: {}", pid, e);
         } else {
             println!("  - Saved partition {} to {:?}", pid, path);

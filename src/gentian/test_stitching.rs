@@ -2,9 +2,9 @@
 mod tests {
     use crate::connectivity::compute_global_patterns;
     use ahash::AHashMap as HashMap;
-    use catenary::routing_common::osm_graph::{load_pbf, save_pbf};
     use catenary::routing_common::transit_graph::{
         GlobalPatternIndex, GlobalTimetable, PartitionDag, PartitionTimetable, TransitPartition,
+        load_bincode, save_bincode,
     };
     use std::path::PathBuf;
 
@@ -46,10 +46,10 @@ mod tests {
                 stop_idx_in_partition: 5,
             });
 
-        let path = output_dir.join("transit_chunk_0.pbf");
-        save_pbf(&partition, path.to_str().unwrap()).unwrap();
+        let path = output_dir.join("transit_chunk_0.bincode");
+        save_bincode(&partition, path.to_str().unwrap()).unwrap();
 
-        let loaded: TransitPartition = load_pbf(path.to_str().unwrap()).unwrap();
+        let loaded: TransitPartition = load_bincode(path.to_str().unwrap()).unwrap();
 
         assert_eq!(loaded.partition_id, 0);
         assert_eq!(loaded.external_hubs.len(), 1);
