@@ -195,15 +195,20 @@ CHATEAU_LIST=$(echo "$CHATEAUS" | tr '\n' ',' | sed 's/,$//' | sed 's/ //g')
 if [ -n "$CHATEAU_LIST" ]; then
     echo "Running Gentian Extract for: $CHATEAU_LIST"
     "$GENTIAN_BIN" \
+        extract \
         --output "$OUTPUT_DIR" \
         --osm-chunks "$OSM_CHUNKS_DIR" \
-        extract \
         --chateau "$CHATEAU_LIST"
 
     echo "Running Gentian Cluster"
     "$GENTIAN_BIN" \
-        --output "$OUTPUT_DIR" \
-        cluster
+        cluster \
+        --output "$OUTPUT_DIR"
+
+    echo "Running Gentian Rebuild Patterns"
+    "$GENTIAN_BIN" \
+        rebuild-patterns \
+        --output "$OUTPUT_DIR"
 else
     echo "No chateaus found to process."
 fi

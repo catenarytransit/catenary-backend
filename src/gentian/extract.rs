@@ -163,7 +163,9 @@ pub async fn run_extraction(
 
     // 4. Build Adjacency Graph
     // Similar to main.rs logic
-    let mut adjacency: HashMap<(String, String), f32> = HashMap::new();
+    // 4. Build Adjacency Graph
+    // Similar to main.rs logic
+    let mut adjacency: HashMap<(String, String), HashMap<String, f32>> = HashMap::new();
 
     // Index patterns
     let mut pattern_rows_map: HashMap<(String, String), Vec<&ItineraryPatternRow>> = HashMap::new();
@@ -205,8 +207,11 @@ pub async fn run_extraction(
                 if let (Some(u), Some(v)) = (&station_ids[i], &station_ids[i + 1]) {
                     if u != v {
                         let (min, max) = if u < v { (u, v) } else { (v, u) };
-                        *adjacency.entry((min.clone(), max.clone())).or_default() +=
-                            trip_count as f32;
+                        *adjacency
+                            .entry((min.clone(), max.clone()))
+                            .or_default()
+                            .entry(chateau_id.clone())
+                            .or_default() += trip_count as f32;
                     }
                 }
             }
@@ -215,10 +220,10 @@ pub async fn run_extraction(
 
     let intermediate_edges: Vec<IntermediateLocalEdge> = adjacency
         .into_iter()
-        .map(|((u, v), w)| IntermediateLocalEdge {
+        .map(|((u, v), weights)| IntermediateLocalEdge {
             u_station_id: u,
             v_station_id: v,
-            weight: w,
+            weights,
         })
         .collect();
 
@@ -275,62 +280,32 @@ pub async fn run_extraction(
             Vec::new()
         };
 
-        // Merge: Sum weights for identical edges? Or replace?
-        // Since we are processing chateaux, and edges come from trips in those chateaux...
-        // If we re-process a chateau, we might double count if we just add.
-        // Ideally, we should replace edges *originating from this chateau*.
-        // But edges don't have chateau ID.
-        //
-        // For now, let's assume we are doing a fresh import or distinct set of chateaux.
-        // A robust solution would tag edges with source chateau.
-        //
-        // Let's just append for now and let the clustering aggregation handle summing.
-        // Wait, if we run the same chateau twice, we double weights.
-        // We should probably deduplicate by (u, v) and maybe take the max? Or just overwrite?
-        //
-        // If we assume `run_extraction` is authoritative for the stations it touches,
-        // we could try to remove old edges involving these stations?
-        //
-        // Simpler: Just map (u, v) -> weight. If key exists, overwrite?
-        // But what if multiple chateaux contribute to the same edge (e.g. shared track)?
-        // Then we WANT to sum.
-        //
-        // Correct approach for incremental:
-        // We need to know which chateau contributed the weight.
-        // Since we don't store that, we can't easily "subtract" old values.
-        //
-        // User said: "If a new stop is added ... mark those as clustered together".
-        //
-        // Let's stick to simple merging (map by u,v) for this implementation.
-        // We will sum weights if they exist in the map? No, that risks double counting on re-run.
-        //
-        // Let's just Overwrite for now if the edge exists?
-        // No, that breaks shared corridors.
-        //
-        // Compromise: We will load existing, and for each new edge, we add it.
-        // To avoid infinite growth on re-runs, we might need a "clear shard" option or similar.
-        // Or we just accept that for now.
-
-        let mut edge_map: HashMap<(String, String), f32> = existing_edges
+        // Merge edges:
+        // We use a map of (u, v) -> {chateau_id -> weight}.
+        // This allows us to update the weights for the current chateau(s) while preserving
+        // weights from other chateaux that are not part of this extraction run.
+        let mut edge_map: HashMap<(String, String), HashMap<String, f32>> = existing_edges
             .into_iter()
-            .map(|e| ((e.u_station_id, e.v_station_id), e.weight))
+            .map(|e| ((e.u_station_id, e.v_station_id), e.weights))
             .collect();
 
         for e in new_edges {
-            // For now, just add. (Assuming distinct chateaux or fresh run).
-            // To prevent massive explosion, maybe we take the MAX if it's very close?
-            // No, sum is correct for frequency.
-            *edge_map
+            let entry = edge_map
                 .entry((e.u_station_id, e.v_station_id))
-                .or_default() += e.weight;
+                .or_default();
+
+            // Merge weights: overwrite if chateau exists (update), else insert
+            for (chateau, weight) in e.weights {
+                entry.insert(chateau, weight);
+            }
         }
 
         let merged_edges: Vec<IntermediateLocalEdge> = edge_map
             .into_iter()
-            .map(|((u, v), w)| IntermediateLocalEdge {
+            .map(|((u, v), weights)| IntermediateLocalEdge {
                 u_station_id: u,
                 v_station_id: v,
-                weight: w,
+                weights,
             })
             .collect();
 

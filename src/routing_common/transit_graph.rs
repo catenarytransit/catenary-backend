@@ -486,6 +486,9 @@ pub struct TimetableData {
 #[derive(Clone, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct PartitionTimetableData {
     pub partition_id: u32,
+    /// List of GTFS Stop IDs referenced by direction patterns in this data.
+    /// Indices in `direction_patterns` refer to this list.
+    pub stops: Vec<String>,
     pub trip_patterns: Vec<TripPattern>,
     pub time_deltas: Vec<TimeDeltaSequence>,
     pub service_ids: Vec<String>,
@@ -516,5 +519,11 @@ pub struct IntermediateStation {
 pub struct IntermediateLocalEdge {
     pub u_station_id: String,
     pub v_station_id: String,
-    pub weight: f32,
+    pub weights: std::collections::HashMap<String, f32>,
+}
+
+impl IntermediateLocalEdge {
+    pub fn total_weight(&self) -> f32 {
+        self.weights.values().sum()
+    }
 }

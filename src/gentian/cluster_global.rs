@@ -80,7 +80,8 @@ pub fn run_global_clustering(output_dir: &Path) -> Result<()> {
                                     (idx_v, idx_u)
                                 };
                                 // Aggregate weight (frequency). Cast to u32 for clustering algo.
-                                *meta_adjacency.entry((min, max)).or_default() += e.weight as u32;
+                                *meta_adjacency.entry((min, max)).or_default() +=
+                                    e.total_weight() as u32;
                             }
                         }
                     }

@@ -1,0 +1,460 @@
+use anyhow::{Context, Result};
+use catenary::models::{
+    Agency, Calendar, CompressedTrip as DbCompressedTrip, ItineraryPatternRow, Route, Stop,
+};
+use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::routing_common::transit_graph::{
+    CompressedTrip, DirectionPattern, Manifest, PartitionTimetableData, ServiceException,
+    TimeDeltaSequence, TimetableData, TripPattern, load_bincode, save_bincode,
+};
+use diesel::prelude::*;
+use diesel_async::RunQueryDsl;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::BufReader;
+use std::path::Path;
+use std::sync::Arc;
+
+use crate::utils::{calculate_service_mask, reindex_deltas};
+
+/// Run the GTFS update for a specific chateau.
+/// This fetches the latest data from the DB and saves it as `timetable_data_{chateau}.bincode`.
+/// It also updates the manifest with the new version.
+pub async fn run_update_gtfs(
+    pool: Arc<CatenaryPostgresPool>,
+    chateau_id: String,
+    output_dir: &Path,
+) -> Result<()> {
+    let mut conn = pool.get().await.context("Failed to get DB connection")?;
+
+    println!("Updating GTFS data for chateau: {}", chateau_id);
+
+    // 1. Fetch Data from DB
+    // We need to fetch everything related to this chateau: Stops, Trips, Patterns, Calendar, Routes, Agencies.
+
+    // Stops
+    use catenary::schema::gtfs::stops::dsl::{chateau as stop_chateau, stops};
+    let db_stops: Vec<Stop> = stops
+        .filter(stop_chateau.eq(&chateau_id))
+        .select(Stop::as_select())
+        .load(&mut conn)
+        .await?;
+
+    // Trips
+    use catenary::schema::gtfs::trips_compressed::dsl::{
+        chateau as trip_chateau, trips_compressed,
+    };
+    let db_trips: Vec<DbCompressedTrip> = trips_compressed
+        .filter(trip_chateau.eq(&chateau_id))
+        .select(DbCompressedTrip::as_select())
+        .load(&mut conn)
+        .await?;
+
+    // Patterns
+    use catenary::schema::gtfs::itinerary_pattern::dsl::{
+        chateau as pattern_chateau, itinerary_pattern,
+    };
+    let db_patterns: Vec<ItineraryPatternRow> = itinerary_pattern
+        .filter(pattern_chateau.eq(&chateau_id))
+        .select(ItineraryPatternRow::as_select())
+        .load(&mut conn)
+        .await?;
+
+    // Calendar
+    use catenary::schema::gtfs::calendar::dsl::{calendar, chateau as cal_chateau};
+    let db_calendar: Vec<Calendar> = calendar
+        .filter(cal_chateau.eq(&chateau_id))
+        .select(Calendar::as_select())
+        .load(&mut conn)
+        .await?;
+
+    // Routes
+    use catenary::schema::gtfs::routes::dsl::{chateau as route_chateau, routes};
+    let db_routes: Vec<Route> = routes
+        .filter(route_chateau.eq(&chateau_id))
+        .select(Route::as_select())
+        .load(&mut conn)
+        .await?;
+
+    // Agencies
+    use catenary::schema::gtfs::agencies::dsl::{agencies, chateau as agency_chateau};
+    let db_agencies: Vec<Agency> = agencies
+        .filter(agency_chateau.eq(&chateau_id))
+        .select(Agency::as_select())
+        .load(&mut conn)
+        .await?;
+
+    println!(
+        "Fetched {} stops, {} trips, {} patterns for {}",
+        db_stops.len(),
+        db_trips.len(),
+        db_patterns.len(),
+        chateau_id
+    );
+
+    // 2. Load Manifest to identify partitions
+    let manifest_path = output_dir.join("manifest.json");
+    let manifest: Manifest = if manifest_path.exists() {
+        let file = File::open(&manifest_path).context("Failed to open manifest.json")?;
+        let reader = BufReader::new(file);
+        serde_json::from_reader(reader).unwrap_or_else(|_| Manifest {
+            chateau_to_partitions: HashMap::new(),
+            partition_to_chateaux: HashMap::new(),
+            partition_boundaries: HashMap::new(),
+        })
+    } else {
+        // If no manifest, we can't really do an incremental update unless we are initializing?
+        // But `update-gtfs` implies updating existing structure.
+        // For now, assume manifest exists or return empty.
+        println!("Warning: No manifest found. Assuming no partitions.");
+        Manifest {
+            chateau_to_partitions: HashMap::new(),
+            partition_to_chateaux: HashMap::new(),
+            partition_boundaries: HashMap::new(),
+        }
+    };
+
+    // Identify partitions that contain this chateau
+    let partition_ids = manifest
+        .chateau_to_partitions
+        .get(&chateau_id)
+        .cloned()
+        .unwrap_or_default();
+
+    println!(
+        "Chateau {} is present in {} partitions: {:?}",
+        chateau_id,
+        partition_ids.len(),
+        partition_ids
+    );
+
+    // 3. Group Data by Partition
+    // We need to split the chateau's data into per-partition chunks.
+    // To do this, we need to know which stops belong to which partition.
+    // We can load `transit_chunk_{pid}.bincode` to find out, OR use `station_to_cluster_map.bincode` if available.
+    // `station_to_cluster_map.bincode` is generated by `cluster_global`.
+
+    let map_path = output_dir.join("station_to_cluster_map.bincode");
+    let station_to_partition: HashMap<String, u32> = if map_path.exists() {
+        load_bincode(map_path.to_str().unwrap())?
+    } else {
+        // Fallback: Load all partitions referenced by manifest?
+        // That's slow.
+        // If map is missing, we might need to rebuild it or fail.
+        return Err(anyhow::anyhow!(
+            "station_to_cluster_map.bincode not found. Run 'gentian cluster' first."
+        ));
+    };
+
+    // We also need to map GTFS Stop ID -> Station ID to look up partition.
+    // We can run station matching or load mappings.
+    // Since we just fetched stops, we can try to match them.
+    // But `station_to_cluster` uses Station IDs.
+    // We need Stop -> Station mapping.
+    // Let's load mappings from DB for this chateau.
+
+    use catenary::models::StopMapping;
+    use catenary::schema::gtfs::stop_mappings::dsl::{feed_id as mapping_feed_id, stop_mappings};
+    let mappings: Vec<StopMapping> = stop_mappings
+        .filter(mapping_feed_id.eq(&chateau_id))
+        .load(&mut conn)
+        .await?;
+
+    let mut stop_to_station: HashMap<String, String> = HashMap::new();
+    for m in mappings {
+        stop_to_station.insert(m.stop_id, m.station_id);
+    }
+
+    // Now group trips/patterns by partition.
+    // A pattern belongs to a partition if its stops are in that partition.
+    // Note: A pattern might cross partitions (border).
+    // In `main.rs`, we assign a pattern to a partition if it "touches" it.
+    // So a pattern can be in multiple partitions.
+
+    let mut partition_data: HashMap<u32, PartitionBuilder> = HashMap::new();
+
+    // Initialize builders for known partitions
+    for pid in &partition_ids {
+        partition_data.insert(*pid, PartitionBuilder::default());
+    }
+
+    // Index patterns
+    let mut pattern_rows_map: HashMap<String, Vec<&ItineraryPatternRow>> = HashMap::new();
+    for row in &db_patterns {
+        pattern_rows_map
+            .entry(row.itinerary_pattern_id.clone())
+            .or_default()
+            .push(row);
+    }
+    for rows in pattern_rows_map.values_mut() {
+        rows.sort_by_key(|r| r.stop_sequence);
+    }
+
+    let mut trips_by_pattern: HashMap<String, Vec<&DbCompressedTrip>> = HashMap::new();
+    for trip in &db_trips {
+        trips_by_pattern
+            .entry(trip.itinerary_pattern_id.clone())
+            .or_default()
+            .push(trip);
+    }
+
+    // Process Patterns
+    for (pattern_id, rows) in pattern_rows_map {
+        // Find which partitions this pattern touches
+        let mut touched_partitions: HashSet<u32> = HashSet::new();
+
+        for row in &rows {
+            if let Some(station_id) = stop_to_station.get(row.stop_id.as_str()) {
+                if let Some(&pid) = station_to_partition.get(station_id) {
+                    touched_partitions.insert(pid);
+                }
+            }
+        }
+
+        // Add pattern to all touched partitions
+        if let Some(trips) = trips_by_pattern.get(&pattern_id) {
+            for pid in touched_partitions {
+                let builder = partition_data.entry(pid).or_default();
+                builder.add_pattern(
+                    &pattern_id,
+                    &rows,
+                    &trips,
+                    &db_calendar,
+                    &db_routes,
+                    &chateau_id,
+                );
+            }
+        }
+    }
+
+    // Build `PartitionTimetableData`
+    let mut partitions_vec: Vec<PartitionTimetableData> = Vec::new();
+
+    for (pid, mut builder) in partition_data {
+        let data = builder.build(pid)?;
+        partitions_vec.push(data);
+    }
+
+    // 4. Save TimetableData
+    let timetable_data = TimetableData {
+        chateau_id: chateau_id.clone(),
+        partitions: partitions_vec,
+    };
+
+    let filename = format!("timetable_data_{}.bincode", chateau_id);
+    let path = output_dir.join(filename);
+    save_bincode(&timetable_data, path.to_str().unwrap())?;
+
+    println!("Saved timetable data to {:?}", path);
+
+    // 5. Update Manifest (Optional: Versioning)
+    // We could add a version field to manifest.
+    // For now, just ensuring the file exists is enough for the next step.
+
+    Ok(())
+}
+
+#[derive(Default)]
+struct PartitionBuilder {
+    patterns: Vec<ProcessedPatternData>,
+    service_ids: HashSet<String>,
+    timezones: HashSet<String>,
+}
+
+struct IntermediateTrip {
+    db_trip: DbCompressedTrip,
+    service_mask: u32,
+}
+
+struct ProcessedPatternData {
+    route_id: String,
+    stop_gtfs_ids: Vec<String>,
+    trips: Vec<IntermediateTrip>,
+    timezone: String,
+    deltas: Vec<u32>,
+}
+
+impl PartitionBuilder {
+    fn add_pattern(
+        &mut self,
+        _pattern_id: &str,
+        rows: &[&ItineraryPatternRow],
+        trips: &[&DbCompressedTrip],
+        calendar: &[Calendar],
+        routes: &[Route],
+        chateau_id: &str,
+    ) {
+        if rows.is_empty() || trips.is_empty() {
+            return;
+        }
+
+        let route_id = trips[0].route_id.clone();
+        let stop_gtfs_ids: Vec<String> = rows.iter().map(|r| r.stop_id.to_string()).collect();
+
+        // Compute Deltas
+        let mut deltas: Vec<u32> = Vec::new();
+        // Stop 0: Travel=0, Dwell = Dep - Arr
+        let s0_arr = rows[0].arrival_time_since_start.unwrap_or(0);
+        let s0_dep = rows[0].departure_time_since_start.unwrap_or(s0_arr);
+        deltas.push(0); // Travel to 0
+        deltas.push((s0_dep - s0_arr) as u32); // Dwell at 0
+
+        for i in 1..rows.len() {
+            let s_prev_dep = rows[i - 1].departure_time_since_start.unwrap_or(0);
+            let s_curr_arr = rows[i].arrival_time_since_start.unwrap_or(0);
+            let s_curr_dep = rows[i].departure_time_since_start.unwrap_or(s_curr_arr);
+
+            let travel = if s_curr_arr > s_prev_dep {
+                s_curr_arr - s_prev_dep
+            } else {
+                0
+            };
+            let dwell = if s_curr_dep > s_curr_arr {
+                s_curr_dep - s_curr_arr
+            } else {
+                0
+            };
+            deltas.push(travel as u32);
+            deltas.push(dwell as u32);
+        }
+
+        // Find timezone
+        let timezone = routes
+            .iter()
+            .find(|r| r.route_id == route_id)
+            .and_then(|r| Some("UTC".to_string())) // Simplified for now
+            .unwrap_or_else(|| "UTC".to_string());
+
+        self.timezones.insert(timezone.clone());
+
+        let mut processed_trips = Vec::new();
+        for trip in trips {
+            self.service_ids.insert(trip.service_id.to_string());
+            let service_mask = calculate_service_mask(&trip.service_id, calendar);
+
+            processed_trips.push(IntermediateTrip {
+                db_trip: (*trip).clone(),
+                service_mask,
+            });
+        }
+
+        self.patterns.push(ProcessedPatternData {
+            route_id,
+            stop_gtfs_ids,
+            trips: processed_trips,
+            timezone,
+            deltas,
+        });
+    }
+
+    fn build(&mut self, partition_id: u32) -> Result<PartitionTimetableData> {
+        let mut service_ids_vec: Vec<String> = self.service_ids.iter().cloned().collect();
+        service_ids_vec.sort();
+        let service_id_map: HashMap<String, u32> = service_ids_vec
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.clone(), i as u32))
+            .collect();
+
+        let mut timezones_vec: Vec<String> = self.timezones.iter().cloned().collect();
+        timezones_vec.sort();
+        let timezone_map: HashMap<String, u32> = timezones_vec
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.clone(), i as u32))
+            .collect();
+
+        // Collect all unique stops referenced
+        let mut unique_stops: HashSet<String> = HashSet::new();
+        for pat in &self.patterns {
+            for stop_id in &pat.stop_gtfs_ids {
+                unique_stops.insert(stop_id.clone());
+            }
+        }
+        let mut stops_vec: Vec<String> = unique_stops.into_iter().collect();
+        stops_vec.sort();
+        let stop_idx_map: HashMap<String, u32> = stops_vec
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.clone(), i as u32))
+            .collect();
+
+        let mut trip_patterns: Vec<TripPattern> = Vec::new();
+        let mut direction_patterns: Vec<DirectionPattern> = Vec::new();
+        let mut direction_pattern_map: HashMap<Vec<u32>, u32> = HashMap::new();
+
+        let mut time_deltas: Vec<TimeDeltaSequence> = Vec::new();
+        let mut time_deltas_map: HashMap<Vec<u32>, u32> = HashMap::new();
+
+        for pat in &self.patterns {
+            let local_stop_indices: Vec<u32> = pat
+                .stop_gtfs_ids
+                .iter()
+                .map(|id| *stop_idx_map.get(id).unwrap())
+                .collect();
+
+            let dp_idx = if let Some(&idx) = direction_pattern_map.get(&local_stop_indices) {
+                idx
+            } else {
+                let idx = direction_patterns.len() as u32;
+                direction_patterns.push(DirectionPattern {
+                    stop_indices: local_stop_indices.clone(),
+                });
+                direction_pattern_map.insert(local_stop_indices.clone(), idx);
+                idx
+            };
+
+            // Time Deltas
+            let td_idx = if let Some(&idx) = time_deltas_map.get(&pat.deltas) {
+                idx
+            } else {
+                let idx = time_deltas.len() as u32;
+                time_deltas.push(TimeDeltaSequence {
+                    deltas: pat.deltas.clone(),
+                });
+                time_deltas_map.insert(pat.deltas.clone(), idx);
+                idx
+            };
+
+            // Timezone
+            let tz_idx = *timezone_map.get(&pat.timezone).unwrap_or(&0);
+
+            // Process Trips
+            let mut final_trips = Vec::new();
+            for trip in &pat.trips {
+                let s_idx = *service_id_map
+                    .get(trip.db_trip.service_id.as_str())
+                    .unwrap_or(&0);
+
+                final_trips.push(CompressedTrip {
+                    gtfs_trip_id: trip.db_trip.trip_id.clone(),
+                    service_mask: trip.service_mask,
+                    start_time: trip.db_trip.start_time,
+                    time_delta_idx: td_idx,
+                    service_idx: s_idx,
+                    bikes_allowed: trip.db_trip.bikes_allowed as u32,
+                    wheelchair_accessible: trip.db_trip.wheelchair_accessible as u32,
+                });
+            }
+
+            trip_patterns.push(TripPattern {
+                chateau_idx: 0,
+                route_id: pat.route_id.clone(),
+                direction_pattern_idx: dp_idx,
+                trips: final_trips,
+                timezone_idx: tz_idx,
+            });
+        }
+
+        Ok(PartitionTimetableData {
+            partition_id,
+            stops: stops_vec,
+            trip_patterns,
+            time_deltas,
+            service_ids: service_ids_vec,
+            service_exceptions: Vec::new(), // Not implemented yet
+            timezones: timezones_vec,
+            direction_patterns,
+        })
+    }
+}
