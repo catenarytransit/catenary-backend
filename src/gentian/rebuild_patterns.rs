@@ -354,11 +354,11 @@ pub async fn run_rebuild_patterns(
         // Also merge service exceptions?
         // We should probably merge ALL service exceptions referenced by the merged services.
         // For simplicity, let's iterate all service exceptions in partition, and if they refer to a service we mapped, we copy them.
-        for sex in &partition.service_exceptions {
-            if let Some(&global_s_idx) = service_map.get(&sex.service_idx) {
-                let mut new_sex = sex.clone();
-                new_sex.service_idx = global_s_idx;
-                global_dc.service_exceptions.push(new_sex);
+        for service_exception in &partition.service_exceptions {
+            if let Some(&global_s_idx) = service_map.get(&service_exception.service_idx) {
+                let mut new_service_exception = service_exception.clone();
+                new_service_exception.service_idx = global_s_idx;
+                global_dc.service_exceptions.push(new_service_exception);
             }
         }
     }
@@ -414,11 +414,14 @@ async fn rebuild_partition(
     // partition.local_dag.clear(); // Will be recomputed
 
     // We need to map `PartitionTimetableData` stops to `TransitPartition` stop indices.
-    let mut stop_id_to_idx: HashMap<String, u32> = HashMap::new();
+    let mut gtfs_to_idx: HashMap<String, u32> = HashMap::new();
+    let mut station_to_idx: HashMap<String, u32> = HashMap::new();
+
     for (i, stop) in partition.stops.iter().enumerate() {
         for gtfs_id in &stop.gtfs_stop_ids {
-            stop_id_to_idx.insert(gtfs_id.clone(), i as u32);
+            gtfs_to_idx.insert(gtfs_id.clone(), i as u32);
         }
+        station_to_idx.insert(stop.station_id.clone(), i as u32);
     }
 
     // Merge loop
@@ -442,7 +445,7 @@ async fn rebuild_partition(
             .iter()
             .find(|p| p.partition_id == partition_id)
         {
-            merge_partition_data(&mut partition, p_data, &stop_id_to_idx);
+            merge_partition_data(&mut partition, p_data, &station_to_idx, &gtfs_to_idx);
             merged_any_timetable = true;
         }
     }
@@ -472,8 +475,20 @@ async fn rebuild_partition(
                 .iter()
                 .find(|p| p.partition_id == partition_id)
             {
-                merge_partition_data(&mut partition, p_data, &stop_id_to_idx);
+                merge_partition_data(&mut partition, p_data, &station_to_idx, &gtfs_to_idx);
                 merged_any_timetable = true;
+            } else {
+                println!(
+                    "Could not find partition {} in timetable data for chateau {} after DB fetch. Known partitions are {}",
+                    partition_id,
+                    chateau_id,
+                    tt_data
+                        .partitions
+                        .iter()
+                        .map(|p| p.partition_id.to_string())
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                );
             }
         }
     }
@@ -584,7 +599,7 @@ fn create_partition_from_scratch(partition_id: u32, output_dir: &Path) -> Result
                             id: stops.len() as u64,
                             chateau_idx: c_idx,
                             station_id: s.station_id.clone(),
-                            gtfs_stop_ids: vec![s.station_id.clone()], // Placeholder
+                            gtfs_stop_ids: s.gtfs_stop_ids.clone(),
                             is_hub: false,
                             is_border: false,
                             is_external_gateway: false,
@@ -623,8 +638,15 @@ fn create_partition_from_scratch(partition_id: u32, output_dir: &Path) -> Result
 fn merge_partition_data(
     partition: &mut TransitPartition,
     source: &PartitionTimetableData,
-    stop_id_to_idx: &HashMap<String, u32>,
+    station_to_idx: &HashMap<String, u32>,
+    gtfs_to_idx: &HashMap<String, u32>,
 ) {
+    println!(
+        "Merging with a source with {} trip patterns. Partition has {} stops.",
+        source.trip_patterns.len(),
+        partition.stops.len()
+    );
+
     // Merge Service IDs
     let service_id_offset = partition.service_ids.len() as u32;
     for sid in &source.service_ids {
@@ -650,7 +672,11 @@ fn merge_partition_data(
         let mut new_indices = Vec::new();
         for &local_idx in &dp.stop_indices {
             if let Some(stop_id) = source.stops.get(local_idx as usize) {
-                if let Some(&global_idx) = stop_id_to_idx.get(stop_id) {
+                // Check Station ID first, then GTFS ID
+                let matched_idx = station_to_idx
+                    .get(stop_id)
+                    .or_else(|| gtfs_to_idx.get(stop_id));
+                if let Some(&global_idx) = matched_idx {
                     new_indices.push(global_idx);
                 }
             }
@@ -686,10 +712,10 @@ fn merge_partition_data(
     }
 
     // Merge Service Exceptions
-    for sex in &source.service_exceptions {
-        let mut new_sex = sex.clone();
-        new_sex.service_idx += service_id_offset;
-        partition.service_exceptions.push(new_sex);
+    for service_exception in &source.service_exceptions {
+        let mut new_service_exception = service_exception.clone();
+        new_service_exception.service_idx += service_id_offset;
+        partition.service_exceptions.push(new_service_exception);
     }
 }
 

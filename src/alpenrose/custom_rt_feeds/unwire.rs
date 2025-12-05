@@ -45,7 +45,7 @@ pub async fn fetch_unwire_dart_data(
                     false,
                     Some(200),
                     Some(200),
-                    Some(200),
+                    None,
                     duration_since_unix_epoch().as_millis() as u64,
                 )
                 .await;
@@ -102,7 +102,7 @@ pub async fn fetch_unwire_fawa_data(
                     false,
                     Some(200),
                     Some(200),
-                    Some(200),
+                    None,
                     duration_since_unix_epoch().as_millis() as u64,
                 )
                 .await;

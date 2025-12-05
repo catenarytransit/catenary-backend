@@ -508,7 +508,6 @@ pub async fn single_fetch_time(
                                 )
                                 .await;
                             }
-
                             "f-9vg-dart~rt~catenary~unwire" => {
                                 let _ = custom_rt_feeds::unwire::fetch_unwire_dart_data(
                                     &mut kv_client,
@@ -517,7 +516,6 @@ pub async fn single_fetch_time(
                                 )
                                 .await;
                             }
-
                             "f-9vff-fortworthtransportationauthority~rt~catenary~unwire" => {
                                 let _ = custom_rt_feeds::unwire::fetch_unwire_fawa_data(
                                     &mut kv_client,

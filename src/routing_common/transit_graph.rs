@@ -521,6 +521,7 @@ pub struct IntermediateStation {
     pub lon: f64,
     pub name: String,
     pub tile_id: String, // 3-char Geohash
+    pub gtfs_stop_ids: Vec<String>,
 }
 
 /// Intermediate Local Edge for the import pipeline.

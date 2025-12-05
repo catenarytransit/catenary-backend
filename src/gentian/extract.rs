@@ -158,6 +158,11 @@ pub async fn run_extraction(
             lon: s.point.x,
             name: s.name.clone(),
             tile_id,
+            gtfs_stop_ids: stop_to_station_map
+                .iter()
+                .filter(|(_, v)| **v == s.station_id)
+                .map(|((_, stop_id), _)| stop_id.clone())
+                .collect(),
         });
     }
 
