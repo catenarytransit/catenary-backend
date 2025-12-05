@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::connectivity::{compute_border_patterns, compute_local_patterns_for_partition};
+use crate::update_gtfs::run_update_gtfs;
 
 /// Run the pattern rebuild process.
 /// This assumes `update-gtfs` has been run for modified chateaux.
@@ -59,7 +60,7 @@ pub async fn run_rebuild_patterns(
 
     // 3. Rebuild Partitions
     for pid in &affected_partitions {
-        rebuild_partition(*pid, &manifest, output_dir).await?;
+        rebuild_partition(*pid, &manifest, output_dir, pool.clone()).await?;
     }
 
     // 4. Recompute Long distance patterns
@@ -378,6 +379,7 @@ async fn rebuild_partition(
     partition_id: u32,
     manifest: &Manifest,
     output_dir: &Path,
+    pool: Arc<CatenaryPostgresPool>,
 ) -> Result<()> {
     println!("Rebuilding Partition {}", partition_id);
 
@@ -420,6 +422,8 @@ async fn rebuild_partition(
     }
 
     // Merge loop
+    let mut merged_any_timetable = false;
+
     for chateau_id in chateaux {
         let tt_path = output_dir.join(format!("timetable_data_{}.bincode", chateau_id));
         if !tt_path.exists() {
@@ -439,13 +443,66 @@ async fn rebuild_partition(
             .find(|p| p.partition_id == partition_id)
         {
             merge_partition_data(&mut partition, p_data, &stop_id_to_idx);
+            merged_any_timetable = true;
         }
     }
 
-    // 4. Recompute Local Patterns
+    // Fallback: if nothing merged (or everything filtered out), fetch fresh timetable data from Postgres
+    if !merged_any_timetable || partition.trip_patterns.is_empty() {
+        println!(
+            "Info: No usable timetable data on disk for partition {}. Fetching from Postgres...",
+            partition_id
+        );
+
+        for chateau_id in chateaux {
+            run_update_gtfs(pool.clone(), chateau_id.clone(), output_dir).await?;
+
+            let tt_path = output_dir.join(format!("timetable_data_{}.bincode", chateau_id));
+            if !tt_path.exists() {
+                println!(
+                    "Warning: Timetable data for {} still missing after DB fetch. Skipping.",
+                    chateau_id
+                );
+                continue;
+            }
+
+            let tt_data: TimetableData = load_bincode(tt_path.to_str().unwrap())?;
+            if let Some(p_data) = tt_data
+                .partitions
+                .iter()
+                .find(|p| p.partition_id == partition_id)
+            {
+                merge_partition_data(&mut partition, p_data, &stop_id_to_idx);
+                merged_any_timetable = true;
+            }
+        }
+    }
+
+    if !merged_any_timetable || partition.trip_patterns.is_empty() {
+        println!(
+            "Warning: No timetable data merged for partition {}. Skipping local pattern rebuild.",
+            partition_id
+        );
+        return Ok(());
+    }
+
+    // 4. Ensure internal transfers exist (especially for freshly created hubs)
+    if partition.internal_transfers.is_empty() {
+        for i in 0..partition.stops.len() as u32 {
+            partition.internal_transfers.push(StaticTransfer {
+                from_stop_idx: i,
+                to_stop_idx: i,
+                duration_seconds: 0,
+                distance_meters: 0,
+                wheelchair_accessible: true,
+            });
+        }
+    }
+
+    // 5. Recompute Local Patterns
     compute_local_patterns_for_partition(&mut partition);
 
-    // 4b. Build Direct Connections Index (Local)
+    // 5b. Build Direct Connections Index (Local)
     partition.direct_connections_index.clear();
     for (p_idx, tp) in partition.trip_patterns.iter().enumerate() {
         let dp = &partition.direction_patterns[tp.direction_pattern_idx as usize];
