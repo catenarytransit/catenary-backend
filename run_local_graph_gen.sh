@@ -205,6 +205,16 @@ if [ -n "$CHATEAU_LIST" ]; then
         cluster \
         --output "$OUTPUT_DIR"
 
+    echo "Running Gentian Update GTFS"
+    IFS=',' read -ra CHATEAU_ARR <<< "$CHATEAU_LIST"
+    for chateau in "${CHATEAU_ARR[@]}"; do
+        echo "Updating GTFS for chateau: $chateau"
+        "$GENTIAN_BIN" \
+            update-gtfs \
+            --chateau "$chateau" \
+            --output "$OUTPUT_DIR"
+    done
+
     echo "Running Gentian Rebuild Patterns"
     "$GENTIAN_BIN" \
         rebuild-patterns \
