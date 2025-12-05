@@ -40,6 +40,8 @@ lazy_static! {
         "f-rtcquebec~rt",
         "f-f244-sto~rt",
         "f-northern~indiana~commuter~transportation~district~catenary~alerts~rt",
+        "f-9vff-fortworthtransportationauthority~rt~catenary~unwire",
+        "f-9vg-dart~rt~catenary~unwire",
     ]);
 }
 
@@ -502,6 +504,24 @@ pub async fn single_fetch_time(
                                     &mut kv_client,
                                     &feed_id,
                                     &amtrak_gtfs,
+                                    &client,
+                                )
+                                .await;
+                            }
+
+                            "f-9vg-dart~rt~catenary~unwire" => {
+                                let _ = custom_rt_feeds::unwire::fetch_unwire_dart_data(
+                                    &mut kv_client,
+                                    &feed_id,
+                                    &client,
+                                )
+                                .await;
+                            }
+
+                            "f-9vff-fortworthtransportationauthority~rt~catenary~unwire" => {
+                                let _ = custom_rt_feeds::unwire::fetch_unwire_fawa_data(
+                                    &mut kv_client,
+                                    &feed_id,
                                     &client,
                                 )
                                 .await;

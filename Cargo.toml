@@ -70,6 +70,7 @@ dotenvy = "0.15.7"
 seahash = "4.1.0"
 dmfr = "0.2"
 chateau = {git = "https://github.com/catenarytransit/chateau"}
+unwire-gtfs-rt = {git = "https://github.com/catenarytransit/unwire-gtfs-rt"}
 rtc-quebec-gtfs-rt = "0.4.2"
 dmfr-dataset-reader = "0.2.5"
 uuid = {version = "1.15", features = ["v4", "fast-rng", "macro-diagnostics"]}
@@ -78,6 +79,7 @@ git2 = "0.20"
 zip-extract = "0.4.1"
 serde_derive = "1.0.197"
 prost = "0.14"
+prost-legacy = { package = "prost", version = "0.12" }
 geozero = "0.14.0"
 diesel = {version = "2.3.2", features = ["ipnet-address","network-address","extras", "numeric", "r2d2", "chrono"]}
 postgis_diesel = "3.0"
