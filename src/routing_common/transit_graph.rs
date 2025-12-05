@@ -134,6 +134,10 @@ pub struct TransitPartition {
     /// Long Distance Transfer Patterns.
     /// DAGs connecting local long-distance stations to external hubs.
     pub long_distance_transfer_patterns: Vec<LocalTransferPattern>,
+
+    /// Index for direct connections within this partition.
+    /// StationID -> List of (PatternIdx, StopIdxInPattern)
+    pub direct_connections_index: std::collections::HashMap<String, Vec<DirectionPatternReference>>,
 }
 
 /// A transfer to a stop in a different Chateau.
@@ -202,6 +206,12 @@ pub struct TransitStop {
 pub struct DirectionPattern {
     /// The sequence of Stop Indices (referencing `stops` vector) for this pattern.
     pub stop_indices: Vec<u32>,
+}
+
+#[derive(Clone, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DirectionPatternReference {
+    pub pattern_idx: u32,
+    pub stop_idx: u32, // Index in the pattern's stop sequence
 }
 
 /// A "Trip Pattern" is a collection of trips that visit the EXACT same
@@ -526,4 +536,33 @@ impl IntermediateLocalEdge {
     pub fn total_weight(&self) -> f32 {
         self.weights.values().sum()
     }
+}
+
+// ===========================================================================
+// 6. DIRECT CONNECTIONS (Global Timetable)
+// ===========================================================================
+
+/// Global lookup for direct connections between two stations.
+/// Used to evaluate edges in the query graph.
+/// Saved as `direct_connections.bincode`.
+#[derive(Clone, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DirectConnections {
+    /// List of Station IDs referenced by direction patterns.
+    pub stops: Vec<String>,
+
+    pub trip_patterns: Vec<TripPattern>,
+    pub time_deltas: Vec<TimeDeltaSequence>,
+    pub service_ids: Vec<String>,
+    pub service_exceptions: Vec<ServiceException>,
+    pub timezones: Vec<String>,
+    pub direction_patterns: Vec<DirectionPattern>,
+
+    /// Inverted Index: StationID -> List of (PatternIdx, StopIdxInPattern)
+    pub index: std::collections::HashMap<String, Vec<DirectionPatternReference>>,
+}
+
+#[derive(Clone, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ConnectionList {
+    /// Sorted list of (dep_time, arr_time, trip_id).
+    pub connections: Vec<(u32, u32, String)>,
 }

@@ -132,6 +132,130 @@ impl QueryGraph {
         }
     }
 
+    pub fn build_direct(
+        &mut self,
+        direct_connections: &catenary::routing_common::transit_graph::DirectConnections,
+        relevant_station_ids: &std::collections::HashSet<String>,
+        station_id_to_node: &HashMap<String, (u32, u32)>,
+    ) {
+        // Map station_id string to index in direct_connections.stops
+        let dc_stop_id_to_idx: HashMap<&String, u32> = direct_connections
+            .stops
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s, i as u32))
+            .collect();
+
+        // Add Access/Egress edges for relevant stations
+        for station_id in relevant_station_ids {
+            if let Some(&(pid, s_idx)) = station_id_to_node.get(station_id) {
+                if let Some(&dc_s_idx) = dc_stop_id_to_idx.get(station_id) {
+                    let local_node = QueryNode {
+                        partition_id: pid,
+                        stop_idx: s_idx,
+                    };
+                    let global_node = QueryNode {
+                        partition_id: u32::MAX,
+                        stop_idx: dc_s_idx,
+                    };
+
+                    // Access: Local -> Global
+                    self.add_edge(QueryEdge {
+                        from: local_node.clone(),
+                        to: global_node.clone(),
+                        edge_type: EdgeType::Walk(
+                            catenary::routing_common::transit_graph::WalkEdge {
+                                duration_seconds: 0,
+                            },
+                        ),
+                    });
+
+                    // Egress: Global -> Local
+                    self.add_edge(QueryEdge {
+                        from: global_node,
+                        to: local_node,
+                        edge_type: EdgeType::Walk(
+                            catenary::routing_common::transit_graph::WalkEdge {
+                                duration_seconds: 0,
+                            },
+                        ),
+                    });
+                }
+            }
+        }
+
+        for (from_station_id_str, refs) in &direct_connections.index {
+            if !relevant_station_ids.contains(from_station_id_str) {
+                continue;
+            }
+
+            let from_dc_stop_idx = *dc_stop_id_to_idx
+                .get(from_station_id_str)
+                .expect("Station ID in index not found in stops list");
+
+            for ref_item in refs {
+                // DirectionPatternReference has pattern_idx and stop_idx
+                let direction_pattern =
+                    &direct_connections.direction_patterns[ref_item.pattern_idx as usize]; // Assuming pattern_idx maps to direction_pattern_idx?
+                // Wait, DirectionPatternReference.pattern_idx usually refers to the TripPattern index in the context of DirectConnections?
+                // Or DirectionPattern index?
+                // In DirectConnections, we have trip_patterns and direction_patterns.
+                // The reference is likely to a TripPattern if it's about a specific trip.
+                // But here we are building the graph. We need the sequence of stops.
+                // If pattern_idx refers to TripPattern, we can get DirectionPattern from it.
+                // If it refers to DirectionPattern, we use it directly.
+                // Let's assume pattern_idx is TripPattern index because we need trip info for edge evaluation.
+
+                let trip_pattern_idx = ref_item.pattern_idx;
+                let trip_pattern = &direct_connections.trip_patterns[trip_pattern_idx as usize];
+                let direction_pattern = &direct_connections.direction_patterns
+                    [trip_pattern.direction_pattern_idx as usize];
+
+                // stop_idx is the index in the pattern's stop sequence
+                let start_stop_idx_in_pattern = ref_item.stop_idx;
+
+                // The end stop is the last stop in the pattern
+                let end_stop_idx_in_pattern = (direction_pattern.stop_indices.len() - 1) as u32;
+
+                // If start is same as end, skip
+                if start_stop_idx_in_pattern >= end_stop_idx_in_pattern {
+                    continue;
+                }
+
+                let to_dc_stop_idx =
+                    direction_pattern.stop_indices[end_stop_idx_in_pattern as usize];
+                let to_station_id_str = &direct_connections.stops[to_dc_stop_idx as usize];
+
+                if !relevant_station_ids.contains(to_station_id_str) {
+                    // println!("Skipping to_station: {} (not relevant)", to_station_id_str);
+                    continue;
+                }
+
+                let from_node = QueryNode {
+                    partition_id: u32::MAX,
+                    stop_idx: from_dc_stop_idx,
+                };
+                let to_node = QueryNode {
+                    partition_id: u32::MAX,
+                    stop_idx: to_dc_stop_idx,
+                };
+
+                self.add_edge(QueryEdge {
+                    from: from_node,
+                    to: to_node,
+                    edge_type: EdgeType::LongDistanceTransit(
+                        catenary::routing_common::transit_graph::TransitEdge {
+                            trip_pattern_idx: trip_pattern_idx,
+                            start_stop_idx: start_stop_idx_in_pattern,
+                            end_stop_idx: end_stop_idx_in_pattern,
+                            min_duration: 0, // Calculated by evaluate_edge
+                        },
+                    ),
+                });
+            }
+        }
+    }
+
     pub fn build_global(
         &mut self,
         start_pid: u32,
@@ -507,12 +631,9 @@ impl QueryGraph {
                 }
             }
             EdgeType::LongDistanceTransit(t) => {
-                // 1. Try to get loaded partition
-                if let Some(partition) = graph_manager.get_transit_partition(edge.from.partition_id)
-                {
-                    let pattern = if let Some(p) = partition
-                        .long_distance_trip_patterns
-                        .get(t.trip_pattern_idx as usize)
+                // Use DirectConnections
+                if let Some(dc) = &graph_manager.direct_connections {
+                    let pattern = if let Some(p) = dc.trip_patterns.get(t.trip_pattern_idx as usize)
                     {
                         p
                     } else {
@@ -520,9 +641,9 @@ impl QueryGraph {
                     };
 
                     self.ensure_service_context(
-                        edge.from.partition_id,
+                        u32::MAX,
                         pattern.timezone_idx,
-                        &partition.timezones,
+                        &dc.timezones,
                         current_time,
                         service_contexts,
                     );
@@ -531,25 +652,31 @@ impl QueryGraph {
                     let mut found = false;
 
                     for ((pid, t_idx, _), context) in service_contexts.iter() {
-                        if *pid != edge.from.partition_id || *t_idx != pattern.timezone_idx {
+                        if *pid != u32::MAX || *t_idx != pattern.timezone_idx {
                             continue;
                         }
 
                         for trip in &pattern.trips {
-                            if !self.is_trip_active(trip, context, &partition.service_exceptions) {
+                            if !self.is_trip_active(trip, context, &dc.service_exceptions) {
                                 continue;
                             }
 
-                            let dep_time = self.calculate_arrival_time_unix(
-                                &partition,
+                            // Calculate departure time
+                            // We need a version of calculate_arrival_time_unix that works with DirectConnections (or generic traits)
+                            // Since TransitPartition and DirectConnections share structure types (TripPattern, TimeDeltaSequence),
+                            // we can perhaps duplicate the logic or extract it.
+                            // For now, let's duplicate the logic but use `dc` fields.
+
+                            let dep_time = self.calculate_arrival_time_unix_dc(
+                                dc,
                                 trip,
                                 t.start_stop_idx as usize,
                                 context.base_unix_time,
                             );
 
                             if dep_time >= current_time as i64 {
-                                let arr_time = self.calculate_arrival_time_unix(
-                                    &partition,
+                                let arr_time = self.calculate_arrival_time_unix_dc(
+                                    dc,
                                     trip,
                                     t.end_stop_idx as usize,
                                     context.base_unix_time,
@@ -565,15 +692,6 @@ impl QueryGraph {
                     }
                     if found { Some(best_arrival) } else { None }
                 } else {
-                    // Long distance patterns are NOT in GlobalTimetable currently (based on my read of connectivity.rs).
-                    // connectivity.rs only populates used_patterns from partition_dags, not long_distance_dags?
-                    // Let's check connectivity.rs.
-                    // "for dag in &global_index.partition_dags { ... }"
-                    // It does NOT iterate long_distance_dags.
-                    // So GlobalTimetable only supports local patterns used in global DAGs.
-                    // If we have LongDistanceTransit edges, we MUST load the partition?
-                    // Or we should have added them to GlobalTimetable.
-                    // For now, return None if not loaded.
                     None
                 }
             }
@@ -890,6 +1008,31 @@ impl QueryGraph {
             }
         }
         true
+    }
+    fn calculate_arrival_time_unix_dc(
+        &self,
+        dc: &catenary::routing_common::transit_graph::DirectConnections,
+        trip: &CompressedTrip,
+        stop_idx_in_pattern: usize,
+        base_unix_time: i64,
+    ) -> i64 {
+        let mut time = trip.start_time;
+        let delta_seq = &dc.time_deltas[trip.time_delta_idx as usize];
+        for k in 0..=stop_idx_in_pattern {
+            let travel_idx = 2 * k;
+            let dwell_idx = 2 * k + 1;
+
+            if travel_idx < delta_seq.deltas.len() {
+                time += delta_seq.deltas[travel_idx];
+            }
+
+            if k < stop_idx_in_pattern {
+                if dwell_idx < delta_seq.deltas.len() {
+                    time += delta_seq.deltas[dwell_idx];
+                }
+            }
+        }
+        base_unix_time + time as i64
     }
 }
 

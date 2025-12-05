@@ -1,5 +1,11 @@
 pub mod tests {
     use crate::trip_based;
+    use crate::trip_based::Transfer;
+    use ahash::AHashMap as HashMap;
+    use catenary::routing_common::transit_graph::{
+        CompressedTrip, DirectionPattern, TimeDeltaSequence, TransitPartition, TransitStop,
+        TripPattern,
+    };
 
     #[test]
     pub fn run_repro() {
@@ -14,7 +20,8 @@ pub mod tests {
                 .map(|i| TransitStop {
                     id: i,
                     chateau_idx: 0,
-                    gtfs_original_id: i.to_string(),
+                    station_id: i.to_string(),
+                    gtfs_stop_ids: vec![i.to_string()],
                     is_hub: false,
                     is_border: false,
                     is_external_gateway: false,

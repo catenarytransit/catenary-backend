@@ -17,7 +17,8 @@ fn test_multi_partition_selection() {
     let stops_p0 = vec![TransitStop {
         id: 0,
         chateau_idx: 0,
-        gtfs_original_id: "S0_P0".to_string(),
+        station_id: "S0_P0".to_string(),
+        gtfs_stop_ids: vec!["S0_P0".to_string()],
         is_hub: false,
         is_border: false,
         is_external_gateway: false,
@@ -44,6 +45,7 @@ fn test_multi_partition_selection() {
         chateau_ids: vec![],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     // Partition 1
@@ -51,7 +53,8 @@ fn test_multi_partition_selection() {
         TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "S0_P1".to_string(),
+            station_id: "S0_P1".to_string(),
+            gtfs_stop_ids: vec!["S0_P1".to_string()],
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
@@ -62,7 +65,8 @@ fn test_multi_partition_selection() {
         TransitStop {
             id: 1,
             chateau_idx: 0,
-            gtfs_original_id: "S1_P1".to_string(),
+            station_id: "S1_P1".to_string(),
+            gtfs_stop_ids: vec!["S1_P1".to_string()],
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
@@ -132,6 +136,7 @@ fn test_multi_partition_selection() {
         chateau_ids: vec!["p1".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     let mut graph = GraphManager::new();

@@ -14,6 +14,7 @@ pub struct GraphManager {
     pub edge_partitions: RwLock<HashMap<u32, Arc<Vec<EdgeEntry>>>>,
     pub global_index: Option<GlobalPatternIndex>,
     pub global_timetable: Option<catenary::routing_common::transit_graph::GlobalTimetable>,
+    pub direct_connections: Option<catenary::routing_common::transit_graph::DirectConnections>,
     pub manifest: Option<catenary::routing_common::transit_graph::Manifest>,
     pub base_path: Option<std::path::PathBuf>,
 }
@@ -27,6 +28,7 @@ impl GraphManager {
             edge_partitions: RwLock::new(HashMap::new()),
             global_index: None,
             global_timetable: None,
+            direct_connections: None,
             manifest: None,
             base_path: None,
         }
@@ -52,6 +54,15 @@ impl GraphManager {
             let timetable: transit_graph::GlobalTimetable =
                 transit_graph::load_bincode(timetable_path.to_str().unwrap())?;
             self.global_timetable = Some(timetable);
+        }
+
+        // Load Direct Connections
+        let dc_path = path.join("direct_connections.bincode");
+        if dc_path.exists() {
+            println!("Loading direct connections from {:?}", dc_path);
+            let dc: transit_graph::DirectConnections =
+                transit_graph::load_bincode(dc_path.to_str().unwrap())?;
+            self.direct_connections = Some(dc);
         }
 
         // Load Manifest

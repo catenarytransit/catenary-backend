@@ -93,6 +93,7 @@ mod tests {
             chateau_ids: vec!["c1".to_string()],
             external_hubs: vec![],
             long_distance_transfer_patterns: vec![],
+            direct_connections_index: Default::default(),
         };
 
         let transfers = compute_initial_transfers(&partition);
@@ -277,6 +278,7 @@ mod tests {
             chateau_ids: vec!["c1".to_string()],
             external_hubs: vec![],
             long_distance_transfer_patterns: vec![],
+            direct_connections_index: Default::default(),
         };
 
         let mut transfers = compute_initial_transfers(&partition);

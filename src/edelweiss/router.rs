@@ -81,23 +81,59 @@ impl<'a> Router<'a> {
 
                 // 2b. Target Partitions & Global DAGs
                 for &end_pid in &end_pids {
-                    if let Some(end_partition) = self.graph.get_transit_partition(end_pid) {
-                        let mut end_stops_to_build = Vec::new();
+                    if *start_pid != end_pid {
+                        // For target partition, we need to build local graph from its border stations
+                        if let Some(end_partition) = self.graph.get_transit_partition(end_pid) {
+                            let mut end_stops_to_build = Vec::new();
 
-                        for (idx, stop) in end_partition.stops.iter().enumerate() {
-                            if stop.is_hub || stop.is_border || stop.is_long_distance {
-                                end_stops_to_build.push((end_pid, idx as u32));
+                            for (idx, stop) in end_partition.stops.iter().enumerate() {
+                                if stop.is_border {
+                                    end_stops_to_build.push((end_pid, idx as u32));
+                                }
+                            }
+                            query_graph.build_local(&end_partition, &end_stops_to_build);
+                        }
+
+                        // Collect relevant station IDs for DirectConnections filtering
+                        let mut relevant_station_ids = std::collections::HashSet::new();
+                        let mut station_id_to_node = HashMap::new();
+
+                        // Add start stops
+                        for (_, idx) in &start_stops_to_build {
+                            if let Some(stop) = start_partition.stops.get(*idx as usize) {
+                                relevant_station_ids.insert(stop.station_id.clone());
+                                station_id_to_node
+                                    .insert(stop.station_id.clone(), (*start_pid, *idx));
+                            }
+                        }
+                        // Add end stops (border stops of target partition)
+                        if let Some(end_partition) = self.graph.get_transit_partition(end_pid) {
+                            for (idx, stop) in end_partition.stops.iter().enumerate() {
+                                if stop.is_border {
+                                    relevant_station_ids.insert(stop.station_id.clone());
+                                    station_id_to_node
+                                        .insert(stop.station_id.clone(), (end_pid, idx as u32));
+                                }
                             }
                         }
 
-                        query_graph.build_local(&end_partition, &end_stops_to_build);
-                    }
-
-                    // 2c. Border to Border (Global DAGs)
-                    if *start_pid != end_pid {
-                        if let Some(global_index) = &self.graph.global_index {
+                        // 2c. Inter-Partition Connectivity: Use DirectConnections if available, otherwise GlobalPatternIndex
+                        if let Some(direct_connections) = &self.graph.direct_connections {
+                            query_graph.build_direct(
+                                direct_connections,
+                                &relevant_station_ids,
+                                &station_id_to_node,
+                            );
+                        } else if let Some(global_index) = &self.graph.global_index {
                             query_graph.build_global(*start_pid, end_pid, global_index);
                         }
+                    } else {
+                        // Same partition, already covered by 2a (if we added all stops? No, we added start + key stops)
+                        // If start and end are in same partition, we need to ensure connectivity to end stops.
+                        // But build_local uses local_dag which should cover it if we start from start_stops.
+                        // However, local_dag is forward.
+                        // If we have end stops that are NOT key stops, we rely on them being reached from start stops.
+                        // This is fine.
                     }
                 }
 
@@ -153,7 +189,7 @@ impl<'a> Router<'a> {
                 for itinerary in &mut dijkstra_itineraries {
                     if let Some(first_leg) = itinerary.legs.first() {
                         if let Some(start_stop_id) = first_leg.start_stop_id() {
-                            for (pid, idx, time, geom) in partition_start_stops {
+                            for (_pid, idx, time, geom) in partition_start_stops {
                                 if let Some(stop) = start_partition.stops.get(*idx as usize) {
                                     if stop.gtfs_stop_ids.contains(start_stop_id) {
                                         // Found match
@@ -484,7 +520,7 @@ impl<'a> Router<'a> {
 mod tests {
     use super::*;
     use catenary::routing_common::transit_graph::{
-        CompressedTrip, DagEdge, DirectionPattern, EdgeType, LocalTransferPattern,
+        CompressedTrip, DagEdge, DagEdgeList, DirectionPattern, EdgeType, LocalTransferPattern,
         TimeDeltaSequence, TransitEdge, TransitPartition, TransitStop, TripPattern,
     };
 
@@ -637,6 +673,7 @@ mod tests {
             chateau_ids: vec!["test".to_string()],
             external_hubs: vec![],
             long_distance_transfer_patterns: vec![],
+            direct_connections_index: HashMap::new(),
         }
     }
 
@@ -883,6 +920,7 @@ mod tests {
             chateau_ids: vec!["p0".to_string()],
             external_hubs: vec![],
             long_distance_transfer_patterns: vec![],
+            direct_connections_index: HashMap::new(),
         };
 
         // Partition 1
@@ -973,6 +1011,7 @@ mod tests {
             chateau_ids: vec!["p1".to_string()],
             external_hubs: vec![],
             long_distance_transfer_patterns: vec![],
+            direct_connections_index: HashMap::new(),
         };
 
         let mut graph = GraphManager::new();
@@ -1171,6 +1210,7 @@ mod tests {
                 chateau_ids: vec!["test".to_string()],
                 external_hubs: vec![],
                 long_distance_transfer_patterns: vec![],
+                direct_connections_index: HashMap::new(),
             }
         }
 
@@ -1231,7 +1271,7 @@ mod tests {
             chateau_idx: 0,
             route_id: "LD_Route".to_string(),
             direction_pattern_idx: dir_idx,
-            trips,
+            trips: trips.clone(),
             timezone_idx: 0,
         });
         let pattern_idx = (partition0.long_distance_trip_patterns.len() - 1) as u32;
@@ -1273,6 +1313,45 @@ mod tests {
             }],
         };
 
+        // Create DirectConnections
+        let mut dc_trips = trips.clone();
+        dc_trips[0].time_delta_idx = 0;
+
+        let mut dc = catenary::routing_common::transit_graph::DirectConnections {
+            stops: vec!["S0".to_string(), "S1_P1".to_string()],
+            trip_patterns: vec![TripPattern {
+                chateau_idx: 0,
+                route_id: "LD_Route".to_string(),
+                direction_pattern_idx: 0,
+                trips: dc_trips,
+                timezone_idx: 0,
+            }],
+            time_deltas: vec![TimeDeltaSequence {
+                deltas: vec![0, 0, 3600, 0],
+            }],
+            service_ids: vec!["daily".to_string()],
+            service_exceptions: vec![],
+            timezones: vec!["UTC".to_string()],
+            direction_patterns: vec![DirectionPattern {
+                stop_indices: vec![0, 1],
+            }],
+            index: HashMap::new(),
+        };
+
+        // Populate index
+        use catenary::routing_common::transit_graph::DirectionPatternReference;
+        dc.index.insert(
+            "S0".to_string(),
+            vec![DirectionPatternReference {
+                pattern_idx: 0,
+                stop_idx: 0,
+            }],
+        );
+
+        graph.direct_connections = Some(dc);
+
+        // We still keep GlobalPatternIndex for now as fallback or if logic requires it,
+        // but Router::route prefers DirectConnections.
         graph.global_index = Some(
             catenary::routing_common::transit_graph::GlobalPatternIndex {
                 partition_dags: vec![],

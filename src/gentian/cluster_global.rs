@@ -8,6 +8,8 @@ use catenary::routing_common::transit_graph::{
 };
 use std::path::Path;
 
+use rand::prelude::*;
+
 /// Run the global clustering phase.
 /// Reads all shards, builds a meta-graph of micro-partitions (tiles),
 /// clusters them, and outputs the final station-to-cluster mapping.
@@ -163,17 +165,6 @@ pub fn run_global_clustering(output_dir: &Path) -> Result<()> {
     // 5. Materialize Output
     // Map: Station ID -> Cluster ID
     let mut station_to_cluster: HashMap<String, u32> = HashMap::new();
-
-    for (cluster_idx, tile_indices) in clusters.iter().enumerate() {
-        for &tile_idx in tile_indices {
-            let tile_id = &tile_ids[tile_idx];
-            // Find all stations in this tile
-            // We need to iterate all stations again? Or keep a map?
-            // We didn't keep a map of Tile -> Stations in memory to save RAM.
-            // But we have `station_to_tile`.
-            // We can iterate `station_to_tile`.
-        }
-    }
 
     // Efficient way:
     // Build Map: Tile Index -> Cluster ID

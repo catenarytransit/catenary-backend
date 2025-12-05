@@ -23,7 +23,8 @@ fn test_hub_mediated_routing() {
         TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "A".to_string(),
+            station_id: "A".to_string(),
+            gtfs_stop_ids: vec!["A".to_string()],
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
@@ -34,7 +35,8 @@ fn test_hub_mediated_routing() {
         TransitStop {
             id: 1,
             chateau_idx: 0,
-            gtfs_original_id: "H".to_string(),
+            station_id: "H".to_string(),
+            gtfs_stop_ids: vec!["H".to_string()],
             is_hub: true, // HUB
             is_border: false,
             is_external_gateway: false,
@@ -45,7 +47,8 @@ fn test_hub_mediated_routing() {
         TransitStop {
             id: 2,
             chateau_idx: 0,
-            gtfs_original_id: "B".to_string(),
+            station_id: "B".to_string(),
+            gtfs_stop_ids: vec!["B".to_string()],
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
@@ -98,6 +101,7 @@ fn test_hub_mediated_routing() {
         chateau_ids: vec!["test_chateau".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     let mut graph = GraphManager::new();
@@ -144,7 +148,8 @@ fn test_long_distance_jump() {
     let stops_p0 = vec![TransitStop {
         id: 0,
         chateau_idx: 0,
-        gtfs_original_id: "A".to_string(),
+        station_id: "A".to_string(),
+        gtfs_stop_ids: vec!["A".to_string()],
         is_hub: false,
         is_border: false,
         is_external_gateway: false,
@@ -157,7 +162,8 @@ fn test_long_distance_jump() {
     let stops_p1 = vec![TransitStop {
         id: 0,
         chateau_idx: 0,
-        gtfs_original_id: "B".to_string(),
+        station_id: "B".to_string(),
+        gtfs_stop_ids: vec!["B".to_string()],
         is_hub: true, // B is a hub (external view)
         is_border: false,
         is_external_gateway: false,
@@ -218,6 +224,7 @@ fn test_long_distance_jump() {
                 })),
             }],
         }],
+        direct_connections_index: HashMap::new(),
     };
 
     let partition1 = TransitPartition {
@@ -238,6 +245,7 @@ fn test_long_distance_jump() {
         chateau_ids: vec!["test_chateau".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     let mut graph = GraphManager::new();
@@ -251,6 +259,48 @@ fn test_long_distance_jump() {
         .write()
         .unwrap()
         .insert(1, Arc::new(partition1));
+
+    // Create DirectConnections
+    let mut dc = catenary::routing_common::transit_graph::DirectConnections {
+        stops: vec!["A".to_string(), "B".to_string()],
+        trip_patterns: vec![TripPattern {
+            chateau_idx: 0,
+            route_id: "LD_R1".to_string(),
+            direction_pattern_idx: 0,
+            trips: vec![CompressedTrip {
+                gtfs_trip_id: "LD_T1".to_string(),
+                service_mask: 127,
+                start_time: 0,
+                time_delta_idx: 0,
+                service_idx: 0,
+                bikes_allowed: 0,
+                wheelchair_accessible: 0,
+            }],
+            timezone_idx: 0,
+        }],
+        time_deltas: vec![TimeDeltaSequence {
+            deltas: vec![0, 0, 3600, 0],
+        }],
+        service_ids: vec!["daily".to_string()],
+        service_exceptions: vec![],
+        timezones: vec!["UTC".to_string()],
+        direction_patterns: vec![DirectionPattern {
+            stop_indices: vec![0, 1], // 0=A, 1=B
+        }],
+        index: HashMap::new(),
+    };
+
+    // Populate index
+    use catenary::routing_common::transit_graph::DirectionPatternReference;
+    dc.index.insert(
+        "A".to_string(),
+        vec![DirectionPatternReference {
+            pattern_idx: 0,
+            stop_idx: 0,
+        }],
+    );
+
+    graph.direct_connections = Some(dc);
 
     let router = Router::new(&graph);
 
@@ -291,7 +341,8 @@ fn test_cross_cluster_dag() {
         TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "A".to_string(),
+            station_id: "A".to_string(),
+            gtfs_stop_ids: vec!["A".to_string()],
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
@@ -302,7 +353,8 @@ fn test_cross_cluster_dag() {
         TransitStop {
             id: 1,
             chateau_idx: 0,
-            gtfs_original_id: "Border1".to_string(),
+            station_id: "Border1".to_string(),
+            gtfs_stop_ids: vec!["Border1".to_string()],
             is_hub: true, // Border/Hub
             is_border: true,
             is_external_gateway: false,
@@ -316,7 +368,8 @@ fn test_cross_cluster_dag() {
         TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "Border2".to_string(),
+            station_id: "Border2".to_string(),
+            gtfs_stop_ids: vec!["Border2".to_string()],
             is_hub: true, // Border/Hub
             is_border: true,
             is_external_gateway: false,
@@ -327,7 +380,8 @@ fn test_cross_cluster_dag() {
         TransitStop {
             id: 1,
             chateau_idx: 0,
-            gtfs_original_id: "B".to_string(),
+            station_id: "B".to_string(),
+            gtfs_stop_ids: vec!["B".to_string()],
             is_hub: false,
             is_border: false,
             is_external_gateway: false,
@@ -366,6 +420,7 @@ fn test_cross_cluster_dag() {
         chateau_ids: vec!["test_chateau".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     let partition1 = TransitPartition {
@@ -397,6 +452,7 @@ fn test_cross_cluster_dag() {
         chateau_ids: vec!["test_chateau".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     let mut graph = GraphManager::new();

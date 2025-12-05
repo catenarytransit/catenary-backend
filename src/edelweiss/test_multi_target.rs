@@ -19,7 +19,8 @@ fn test_multi_partition_target() {
     let stops_p0 = vec![TransitStop {
         id: 0,
         chateau_idx: 0,
-        gtfs_original_id: "A".to_string(),
+        station_id: "A".to_string(),
+        gtfs_stop_ids: vec!["A".to_string()],
         is_hub: true, // Hub for global dag
         is_border: false,
         is_external_gateway: false,
@@ -31,7 +32,8 @@ fn test_multi_partition_target() {
     let stops_p1 = vec![TransitStop {
         id: 0,
         chateau_idx: 0,
-        gtfs_original_id: "B".to_string(),
+        station_id: "B".to_string(),
+        gtfs_stop_ids: vec!["B".to_string()],
         is_hub: true,
         is_border: false,
         is_external_gateway: false,
@@ -43,7 +45,8 @@ fn test_multi_partition_target() {
     let stops_p2 = vec![TransitStop {
         id: 0,
         chateau_idx: 0,
-        gtfs_original_id: "C".to_string(),
+        station_id: "C".to_string(),
+        gtfs_stop_ids: vec!["C".to_string()],
         is_hub: true,
         is_border: false,
         is_external_gateway: false,
@@ -70,6 +73,7 @@ fn test_multi_partition_target() {
         chateau_ids: vec!["test".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     let partition1 = TransitPartition {
@@ -90,6 +94,7 @@ fn test_multi_partition_target() {
         chateau_ids: vec!["test".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     let partition2 = TransitPartition {
@@ -110,6 +115,7 @@ fn test_multi_partition_target() {
         chateau_ids: vec!["test".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     let mut graph = GraphManager::new();
@@ -230,7 +236,8 @@ fn test_multi_partition_target_optimization() {
     let stops_p0 = vec![TransitStop {
         id: 0,
         chateau_idx: 0,
-        gtfs_original_id: "A".to_string(),
+        station_id: "A".to_string(),
+        gtfs_stop_ids: vec!["A".to_string()],
         is_hub: true,
         is_border: false,
         is_external_gateway: false,
@@ -242,7 +249,8 @@ fn test_multi_partition_target_optimization() {
     let stops_p1 = vec![TransitStop {
         id: 0,
         chateau_idx: 0,
-        gtfs_original_id: "B".to_string(),
+        station_id: "B".to_string(),
+        gtfs_stop_ids: vec!["B".to_string()],
         is_hub: true,
         is_border: false,
         is_external_gateway: false,
@@ -254,7 +262,8 @@ fn test_multi_partition_target_optimization() {
     let stops_p2 = vec![TransitStop {
         id: 0,
         chateau_idx: 0,
-        gtfs_original_id: "C".to_string(),
+        station_id: "C".to_string(),
+        gtfs_stop_ids: vec!["C".to_string()],
         is_hub: true,
         is_border: false,
         is_external_gateway: false,
@@ -281,6 +290,7 @@ fn test_multi_partition_target_optimization() {
         chateau_ids: vec!["test".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     let partition1 = TransitPartition {
@@ -301,6 +311,7 @@ fn test_multi_partition_target_optimization() {
         chateau_ids: vec!["test".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     let partition2 = TransitPartition {
@@ -321,6 +332,7 @@ fn test_multi_partition_target_optimization() {
         chateau_ids: vec!["test".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
     let mut graph = GraphManager::new();

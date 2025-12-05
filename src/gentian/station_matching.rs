@@ -183,7 +183,7 @@ fn get_station_match_params(stop: &Stop) -> (f64, f64) {
         // Bus (3), Trolleybus (11)
         3 | 11 => (40.0, 10.0),
         // Tram (0), Subway (1), Rail (2), Monorail (12)
-        0 | 1 | 2 | 12 => (500.0, 100.0),
+        0 | 1 | 2 | 12 => (400.0, 100.0),
         // Default for others (Ferry, etc.)
         _ => (100.0, 30.0),
     }
