@@ -160,6 +160,16 @@ async fn try_to_download(
 ) -> Result<reqwest::Response, reqwest::Error> {
     let new_url = transform_for_bay_area(url.to_string());
 
+    if url.contains("api.odpt.org") && !url.contains("acl:consumerKey") {
+        let mut url_with_key = new_url.clone();
+        if url_with_key.contains("?") {
+            url_with_key.push_str("&acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e");
+        } else {
+            url_with_key.push_str("?acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e");
+        }
+        return client.get(&url_with_key).send().await;
+    }
+
     let client = match feed_id {
         "f-9q5b-torrancetransit" | "f-west~hollywood" => reqwest::ClientBuilder::new()
             .use_rustls_tls()
