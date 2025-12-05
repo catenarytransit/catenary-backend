@@ -81,64 +81,16 @@ pub async fn count_rail_in_box(
 
 #[actix_web::get("/busstops")]
 pub async fn bus_stops_meta(req: HttpRequest) -> impl Responder {
-    let mut fields = std::collections::BTreeMap::new();
-
-    fields.insert(String::from("onestop_feed_id"), String::from("text"));
-    fields.insert(String::from("chateau"), String::from("text"));
-    fields.insert(String::from("attempt_id"), String::from("text"));
-    fields.insert(String::from("gtfs_id"), String::from("text"));
-    fields.insert(String::from("name"), String::from("text"));
-    fields.insert(String::from("displayname"), String::from("text"));
-    fields.insert(String::from("code"), String::from("text"));
-    fields.insert(String::from("gtfs_desc"), String::from("text"));
-    fields.insert(String::from("location_type"), String::from("smallint"));
-    fields.insert(String::from("parent_station"), String::from("text"));
-    fields.insert(String::from("zone_id"), String::from("text"));
-    fields.insert(String::from("url"), String::from("text"));
-    fields.insert(String::from("timezone"), String::from("text"));
-    fields.insert(
-        String::from("wheelchair_boarding"),
-        String::from("smallint"),
-    );
-    fields.insert(String::from("level_id"), String::from("text"));
-    fields.insert(String::from("platform_code"), String::from("text"));
-    fields.insert(String::from("routes"), String::from("text[]"));
-    fields.insert(String::from("route_types"), String::from("smallint[]"));
-    fields.insert(String::from("children_ids"), String::from("text[]"));
-    fields.insert(
-        String::from("children_route_types"),
-        String::from("smallint[]"),
-    );
-
-    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
-
-    let tile_json = TileJSON {
-        vector_layers: Some(vec![fields]),
-        tilejson: String::from("3.0.0"),
-        bounds: None,
-        center: None,
-        data: None,
-        description: None,
-        fillzoom: None,
-        grids: None,
-        legend: None,
-        maxzoom: Some(15),
-        minzoom: None,
-        name: Some(String::from("busstops")),
-        scheme: None,
-        template: None,
-        version: None,
-        other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from(
+    serve_tilejson(
+        get_stops_fields(),
+        String::from("busstops"),
+        vec![String::from(
             "https://birch_stops_tiles.catenarymaps.org/busstops/{z}/{x}/{y}",
         )],
-        attribution: None,
-    };
-
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=1000, public"))
-        .body(serde_json::to_string(&tile_json).unwrap())
+        None,
+        Some(15),
+        1000,
+    )
 }
 
 #[actix_web::get("/busstops/{z}/{x}/{y}")]
@@ -149,127 +101,28 @@ pub async fn bus_stops(
     req: HttpRequest,
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
-
-    //let grid = tile_grid::Grid::wgs84();
-
-    // let bbox = grid.tile_extent(x, y, z);
-
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
-
-    let query_str = format!("
-    SELECT
-    ST_AsMVT(q, 'data', 4096, 'geom')
-FROM (
-    SELECT
-        onestop_feed_id,
-        chateau,
-        attempt_id,
-        gtfs_id,
-        name,
-        displayname,
-        code,
-        gtfs_desc,
-        location_type,
-        parent_station,
-        zone_id,
-        url,
-        timezone,
-        wheelchair_boarding,
-        level_id,
-        platform_code,
-        routes,
-        route_types,
-        children_ids,
-        children_route_types,
-        ST_AsMVTGeom(ST_Transform(point, 3857),
-        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
-    FROM
-        gtfs.stops
-    WHERE
-        (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
-        AND (ARRAY[3,11,200,1700,1500,1702]::smallint[] && route_types::smallint[] OR ARRAY[3,11,200,1700,1500,1702]::smallint[] && children_route_types::smallint[])
-) q", z = z, x = x, y= y);
-
-    // println!("Performing query \n {}", query_str);
-
-    match sqlx::query(query_str.as_str())
-        .fetch_one(sqlx_pool_ref)
-        .await
-    {
-        Ok(mvt_result) => {
-            let mvt_bytes: Vec<u8> = mvt_result.get(0);
-
-            HttpResponse::Ok()
-                .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "max-age=1000, public"))
-                .body(mvt_bytes)
-        }
-        Err(err) => {
-            eprintln!("{:?}", err);
-            HttpResponse::InternalServerError().body("Failed to fetch from postgres!")
-        }
-    }
+    let query_str = build_stops_query(
+        z,
+        x,
+        y,
+        "ARRAY[3,11,200,1700,1500,1702]::smallint[] && route_types::smallint[] OR ARRAY[3,11,200,1700,1500,1702]::smallint[] && children_route_types::smallint[]",
+    );
+    fetch_mvt(sqlx_pool_ref, query_str, 1000).await
 }
 
 #[actix_web::get("/station_features")]
 pub async fn station_features_meta(req: HttpRequest) -> impl Responder {
-    let mut fields = std::collections::BTreeMap::new();
-
-    fields.insert(String::from("onestop_feed_id"), String::from("text"));
-    fields.insert(String::from("attempt_id"), String::from("text"));
-    fields.insert(String::from("gtfs_id"), String::from("text"));
-    fields.insert(String::from("name"), String::from("text"));
-    fields.insert(String::from("displayname"), String::from("text"));
-    fields.insert(String::from("code"), String::from("text"));
-    fields.insert(String::from("gtfs_desc"), String::from("text"));
-    fields.insert(String::from("location_type"), String::from("smallint"));
-    fields.insert(String::from("parent_station"), String::from("text"));
-    fields.insert(String::from("zone_id"), String::from("text"));
-    fields.insert(String::from("url"), String::from("text"));
-    fields.insert(String::from("timezone"), String::from("text"));
-    fields.insert(
-        String::from("wheelchair_boarding"),
-        String::from("smallint"),
-    );
-    fields.insert(String::from("level_id"), String::from("text"));
-    fields.insert(String::from("platform_code"), String::from("text"));
-    fields.insert(String::from("routes"), String::from("text[]"));
-    fields.insert(String::from("route_types"), String::from("smallint[]"));
-    fields.insert(String::from("children_ids"), String::from("text[]"));
-    fields.insert(
-        String::from("children_route_types"),
-        String::from("smallint[]"),
-    );
-
-    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
-
-    let tile_json = TileJSON {
-        vector_layers: Some(vec![fields]),
-        tilejson: String::from("3.0.0"),
-        bounds: None,
-        center: None,
-        data: None,
-        description: None,
-        fillzoom: None,
-        grids: None,
-        legend: None,
-        maxzoom: Some(19),
-        minzoom: Some(7),
-        name: Some(String::from("station_features")),
-        scheme: None,
-        template: None,
-        version: None,
-        other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from(
+    serve_tilejson(
+        get_stops_fields(),
+        String::from("station_features"),
+        vec![String::from(
             "https://birch_stops_tiles.catenarymaps.org/station_features/{z}/{x}/{y}",
         )],
-        attribution: None,
-    };
-
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=1000, public"))
-        .body(serde_json::to_string(&tile_json).unwrap())
+        Some(7),
+        Some(19),
+        1000,
+    )
 }
 
 #[actix_web::get("/station_features/{z}/{x}/{y}")]
@@ -280,71 +133,14 @@ pub async fn station_features(
     req: HttpRequest,
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
-
-    //let grid = tile_grid::Grid::wgs84();
-
-    // let bbox = grid.tile_extent(x, y, z);
-
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
-
-    let query_str = format!(
-        "
-SELECT
-ST_AsMVT(q, 'data', 4096, 'geom')
-FROM (
-SELECT
-    onestop_feed_id,
-    chateau,
-    attempt_id,
-    gtfs_id,
-    name,
-    displayname,
-    code,
-    gtfs_desc,
-    location_type,
-    parent_station,
-    zone_id,
-    url,
-    timezone,
-    wheelchair_boarding,
-    level_id,
-    platform_code,
-    routes,
-    route_types,
-    children_ids,
-    children_route_types,
-    ST_AsMVTGeom(ST_Transform(point, 3857), 
-    ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
-FROM
-    gtfs.stops
-WHERE
-    (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
-    AND (location_type=2 OR location_type=3 OR location_type=4)
-) q",
-        z = z,
-        x = x,
-        y = y
+    let query_str = build_stops_query(
+        z,
+        x,
+        y,
+        "location_type=2 OR location_type=3 OR location_type=4",
     );
-
-    // println!("Performing query \n {}", query_str);
-
-    match sqlx::query(query_str.as_str())
-        .fetch_one(sqlx_pool_ref)
-        .await
-    {
-        Ok(mvt_result) => {
-            let mvt_bytes: Vec<u8> = mvt_result.get(0);
-
-            HttpResponse::Ok()
-                .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "max-age=1000, public"))
-                .body(mvt_bytes)
-        }
-        Err(err) => {
-            eprintln!("{:?}", err);
-            HttpResponse::InternalServerError().body("Failed to fetch from postgres!")
-        }
-    }
+    fetch_mvt(sqlx_pool_ref, query_str, 1000).await
 }
 
 #[actix_web::get("/railstops/{z}/{x}/{y}")]
@@ -360,127 +156,28 @@ pub async fn rail_stops(
         return HttpResponse::BadRequest().body("Zoom level too low");
     }
 
-    //let grid = tile_grid::Grid::wgs84();
-
-    // let bbox = grid.tile_extent(x, y, z);
-
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
-
-    let query_str = format!("
-    SELECT
-    ST_AsMVT(q, 'data', 4096, 'geom')
-FROM (
-    SELECT
-        onestop_feed_id,
-        chateau,
-        attempt_id,
-        gtfs_id,
-        name,
-        displayname,
-        code,
-        gtfs_desc,
-        location_type,
-        parent_station,
-        zone_id,
-        url,
-        timezone,
-        wheelchair_boarding,
-        level_id,
-        platform_code,
-        routes,
-        route_types,
-        children_ids,
-        children_route_types,
-        ST_AsMVTGeom(ST_Transform(point, 3857), 
-        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
-    FROM
-        gtfs.stops
-    WHERE
-        (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
-        AND (ARRAY[0,1,2,5,12]::smallint[] && route_types::smallint[] OR ARRAY[0,1,2,5,12]::smallint[] && children_route_types::smallint[]) 
-) q", z = z, x = x, y= y);
-
-    // println!("Performing query \n {}", query_str);
-
-    match sqlx::query(query_str.as_str())
-        .fetch_one(sqlx_pool_ref)
-        .await
-    {
-        Ok(mvt_result) => {
-            let mvt_bytes: Vec<u8> = mvt_result.get(0);
-
-            HttpResponse::Ok()
-                .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "max-age=1000, public"))
-                .body(mvt_bytes)
-        }
-        Err(err) => {
-            eprintln!("{:?}", err);
-            HttpResponse::InternalServerError().body("Failed to fetch from postgres!")
-        }
-    }
+    let query_str = build_stops_query(
+        z,
+        x,
+        y,
+        "ARRAY[0,1,2,5,12]::smallint[] && route_types::smallint[] OR ARRAY[0,1,2,5,12]::smallint[] && children_route_types::smallint[]",
+    );
+    fetch_mvt(sqlx_pool_ref, query_str, 1000).await
 }
 
 #[actix_web::get("/railstops")]
 pub async fn rail_stops_meta(req: HttpRequest) -> impl Responder {
-    let mut fields = std::collections::BTreeMap::new();
-
-    fields.insert(String::from("onestop_feed_id"), String::from("text"));
-    fields.insert(String::from("chateau"), String::from("text"));
-    fields.insert(String::from("attempt_id"), String::from("text"));
-    fields.insert(String::from("gtfs_id"), String::from("text"));
-    fields.insert(String::from("name"), String::from("text"));
-    fields.insert(String::from("displayname"), String::from("text"));
-    fields.insert(String::from("code"), String::from("text"));
-    fields.insert(String::from("gtfs_desc"), String::from("text"));
-    fields.insert(String::from("location_type"), String::from("smallint"));
-    fields.insert(String::from("parent_station"), String::from("text"));
-    fields.insert(String::from("zone_id"), String::from("text"));
-    fields.insert(String::from("url"), String::from("text"));
-    fields.insert(String::from("timezone"), String::from("text"));
-    fields.insert(
-        String::from("wheelchair_boarding"),
-        String::from("smallint"),
-    );
-    fields.insert(String::from("level_id"), String::from("text"));
-    fields.insert(String::from("platform_code"), String::from("text"));
-    fields.insert(String::from("routes"), String::from("text[]"));
-    fields.insert(String::from("route_types"), String::from("smallint[]"));
-    fields.insert(String::from("children_ids"), String::from("text[]"));
-    fields.insert(
-        String::from("children_route_types"),
-        String::from("smallint[]"),
-    );
-
-    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
-
-    let tile_json = TileJSON {
-        vector_layers: Some(vec![fields]),
-        tilejson: String::from("3.0.0"),
-        bounds: None,
-        center: None,
-        data: None,
-        description: None,
-        fillzoom: None,
-        grids: None,
-        legend: None,
-        maxzoom: Some(15),
-        minzoom: None,
-        name: Some(String::from("railstops")),
-        scheme: None,
-        template: None,
-        version: None,
-        other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from(
+    serve_tilejson(
+        get_stops_fields(),
+        String::from("railstops"),
+        vec![String::from(
             "https://birch_stops_tiles.catenarymaps.org/railstops/{z}/{x}/{y}",
         )],
-        attribution: None,
-    };
-
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=10000, public"))
-        .body(serde_json::to_string(&tile_json).unwrap())
+        None,
+        Some(15),
+        10000,
+    )
 }
 
 #[actix_web::get("/otherstops/{z}/{x}/{y}")]
@@ -496,127 +193,28 @@ pub async fn other_stops(
         return HttpResponse::BadRequest().body("Zoom level too low");
     }
 
-    //let grid = tile_grid::Grid::wgs84();
-
-    // let bbox = grid.tile_extent(x, y, z);
-
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
-
-    let query_str = format!("
-    SELECT
-    ST_AsMVT(q, 'data', 4096, 'geom')
-FROM (
-    SELECT
-        onestop_feed_id,
-        chateau,
-        attempt_id,
-        gtfs_id,
-        name,
-        displayname,
-        code,
-        gtfs_desc,
-        location_type,
-        parent_station,
-        zone_id,
-        url,
-        timezone,
-        wheelchair_boarding,
-        level_id,
-        platform_code,
-        routes,
-        route_types,
-        children_ids,
-        children_route_types,
-        ST_AsMVTGeom(ST_Transform(point, 3857), 
-        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
-    FROM
-        gtfs.stops
-    WHERE
-        (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
-        AND (ARRAY[4,6,7]::smallint[] && route_types::smallint[] OR ARRAY[4,6,7]::smallint[] && children_route_types::smallint[])
-) q", z = z, x = x, y= y);
-
-    // println!("Performing query \n {}", query_str);
-
-    match sqlx::query(query_str.as_str())
-        .fetch_one(sqlx_pool_ref)
-        .await
-    {
-        Ok(mvt_result) => {
-            let mvt_bytes: Vec<u8> = mvt_result.get(0);
-
-            HttpResponse::Ok()
-                .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "max-age=1000, public"))
-                .body(mvt_bytes)
-        }
-        Err(err) => {
-            eprintln!("{:?}", err);
-            HttpResponse::InternalServerError().body("Failed to fetch from postgres!")
-        }
-    }
+    let query_str = build_stops_query(
+        z,
+        x,
+        y,
+        "ARRAY[4,6,7]::smallint[] && route_types::smallint[] OR ARRAY[4,6,7]::smallint[] && children_route_types::smallint[]",
+    );
+    fetch_mvt(sqlx_pool_ref, query_str, 1000).await
 }
 
 #[actix_web::get("/otherstops")]
 pub async fn other_stops_meta(req: HttpRequest) -> impl Responder {
-    let mut fields = std::collections::BTreeMap::new();
-
-    fields.insert(String::from("onestop_feed_id"), String::from("text"));
-    fields.insert(String::from("chateau"), String::from("text"));
-    fields.insert(String::from("attempt_id"), String::from("text"));
-    fields.insert(String::from("gtfs_id"), String::from("text"));
-    fields.insert(String::from("name"), String::from("text"));
-    fields.insert(String::from("displayname"), String::from("text"));
-    fields.insert(String::from("code"), String::from("text"));
-    fields.insert(String::from("gtfs_desc"), String::from("text"));
-    fields.insert(String::from("location_type"), String::from("smallint"));
-    fields.insert(String::from("parent_station"), String::from("text"));
-    fields.insert(String::from("zone_id"), String::from("text"));
-    fields.insert(String::from("url"), String::from("text"));
-    fields.insert(String::from("timezone"), String::from("text"));
-    fields.insert(
-        String::from("wheelchair_boarding"),
-        String::from("smallint"),
-    );
-    fields.insert(String::from("level_id"), String::from("text"));
-    fields.insert(String::from("platform_code"), String::from("text"));
-    fields.insert(String::from("routes"), String::from("text[]"));
-    fields.insert(String::from("route_types"), String::from("smallint[]"));
-    fields.insert(String::from("children_ids"), String::from("text[]"));
-    fields.insert(
-        String::from("children_route_types"),
-        String::from("smallint[]"),
-    );
-
-    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
-
-    let tile_json = TileJSON {
-        vector_layers: Some(vec![fields]),
-        tilejson: String::from("3.0.0"),
-        bounds: None,
-        center: None,
-        data: None,
-        description: None,
-        fillzoom: None,
-        grids: None,
-        legend: None,
-        maxzoom: Some(15),
-        minzoom: None,
-        name: Some(String::from("otherstops")),
-        scheme: None,
-        template: None,
-        version: None,
-        other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from(
+    serve_tilejson(
+        get_stops_fields(),
+        String::from("otherstops"),
+        vec![String::from(
             "https://birch_stops_tiles.catenarymaps.org/otherstops/{z}/{x}/{y}",
         )],
-        attribution: None,
-    };
-
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=10000, public"))
-        .body(serde_json::to_string(&tile_json).unwrap())
+        None,
+        Some(15),
+        10000,
+    )
 }
 
 fn tile_width_degrees_from_z(z: u8) -> f32 {
@@ -669,27 +267,7 @@ pub async fn shapes_intercity_rail(
 
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
-    let query_str = format!("
-    SELECT
-    ST_AsMVT(q, 'data', 4096, 'geom')
-FROM (
-    SELECT
-        onestop_feed_id,
-        shape_id,
-        color,
-        routes,
-        route_type,
-        route_label,
-        text_color,
-        chateau,
-        stop_to_stop_generated,
-        ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857), 
-        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
-    FROM
-        gtfs.shapes
-    WHERE
-        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND route_type = 2
-) q", z = z, x = x, y= y);
+    let query_str = build_shapes_query(z, x, y, simplification_threshold, "route_type = 2");
 
     // println!("Performing query \n {}", query_str);
 
@@ -757,35 +335,9 @@ pub async fn shapes_ferry(
 
     let simplification_threshold = tile_width_degrees * 0.004;
 
-    // let grid = tile_grid::Grid::wgs84();
-
-    //let bbox = grid.tile_extent(x, y, z);
-
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
-    let query_str = format!("
-    SELECT
-    ST_AsMVT(q, 'data', 4096, 'geom')
-FROM (
-    SELECT
-        onestop_feed_id,
-        shape_id,
-        color,
-        routes,
-        route_type,
-        route_label,
-        text_color,
-        chateau,
-        stop_to_stop_generated,
-        ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857), 
-        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
-    FROM
-        gtfs.shapes
-    WHERE
-        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND route_type = 4
-) q", z = z, x = x, y= y);
-
-    // println!("Performing query \n {}", query_str);
+    let query_str = build_shapes_query(z, x, y, simplification_threshold, "route_type = 4");
 
     let max_age = match z {
         4 => 36000,
@@ -794,20 +346,7 @@ FROM (
         _ => 1000,
     };
 
-    match sqlx::query(query_str.as_str())
-        .fetch_one(sqlx_pool_ref)
-        .await
-    {
-        Ok(mvt_result) => {
-            let mvt_bytes: Vec<u8> = mvt_result.get(0);
-
-            HttpResponse::Ok()
-                .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", format!("max-age={}, public", max_age)))
-                .body(mvt_bytes)
-        }
-        Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
-    }
+    fetch_mvt(sqlx_pool_ref, query_str, max_age).await
 }
 
 #[actix_web::get("/shapes_local_rail/{z}/{x}/{y}")]
@@ -827,35 +366,15 @@ pub async fn shapes_local_rail(
 
     let simplification_threshold = tile_width_degrees * 0.001;
 
-    // let grid = tile_grid::Grid::wgs84();
-
-    //let bbox = grid.tile_extent(x, y, z);
-
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
-    let query_str = format!("
-    SELECT
-    ST_AsMVT(q, 'data', 4096, 'geom')
-FROM (
-    SELECT
-        onestop_feed_id,
-        shape_id,
-        color,
-        routes,
-        route_type,
-        route_label,
-        text_color,
-        chateau,
-        stop_to_stop_generated,
-        ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857), 
-        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
-    FROM
-        gtfs.shapes
-    WHERE
-        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND route_type IN (0,1,5,7,11,12)
-) q", z = z, x = x, y= y);
-
-    // println!("Performing query \n {}", query_str);
+    let query_str = build_shapes_query(
+        z,
+        x,
+        y,
+        simplification_threshold,
+        "route_type IN (0,1,5,7,11,12)",
+    );
 
     let max_age = match z {
         4 => 1000,
@@ -864,20 +383,7 @@ FROM (
         _ => 500,
     };
 
-    match sqlx::query(query_str.as_str())
-        .fetch_one(sqlx_pool_ref)
-        .await
-    {
-        Ok(mvt_result) => {
-            let mvt_bytes: Vec<u8> = mvt_result.get(0);
-
-            HttpResponse::Ok()
-                .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", format!("max-age={}, public", max_age)))
-                .body(mvt_bytes)
-        }
-        Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
-    }
+    fetch_mvt(sqlx_pool_ref, query_str, max_age).await
 }
 
 #[actix_web::get("/shapes_bus/{z}/{x}/{y}")]
@@ -905,12 +411,252 @@ pub async fn shapes_bus(
     //lower means better detail
     let simplification_threshold = tile_width_degrees * simp_amount;
 
-    // let grid = tile_grid::Grid::wgs84();
-    // let bbox = grid.tile_extent(x, y, z);
-
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
-    let query_str = format!("
+    let query_str = build_shapes_query(
+        z,
+        x,
+        y,
+        simplification_threshold,
+        "route_type IN (3,11,200) AND routes != '{}' AND chateau != 'greyhound~flix'",
+    );
+
+    fetch_mvt(sqlx_pool_ref, query_str, 1000).await
+}
+
+#[actix_web::get("/shapes_ferry")]
+pub async fn shapes_ferry_meta(req: HttpRequest) -> impl Responder {
+    serve_tilejson(
+        get_shapes_fields(),
+        String::from("shapes_not_bus"),
+        vec![String::from(
+            "https://birch.catenarymaps.org/shapes_ferry/{z}/{x}/{y}",
+        )],
+        None,
+        Some(15),
+        1000,
+    )
+}
+
+#[actix_web::get("/shapes_not_bus")]
+pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
+    serve_tilejson(
+        get_shapes_fields(),
+        String::from("shapes_not_bus"),
+        vec![String::from(
+            "https://birch.catenarymaps.org/shapes_not_bus/{z}/{x}/{y}",
+        )],
+        None,
+        Some(15),
+        1000,
+    )
+}
+
+#[actix_web::get("/shapes_intercity_rail")]
+pub async fn shapes_intercity_rail_meta(req: HttpRequest) -> impl Responder {
+    serve_tilejson(
+        get_shapes_fields(),
+        String::from("shapes_local_rail"),
+        vec![
+            String::from(
+                "https://birch_intercity_rail_shape_1.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}",
+            ),
+            String::from(
+                "https://birch_intercity_rail_shape_2.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}",
+            ),
+            String::from(
+                "https://birch_intercity_rail_shape_3.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}",
+            ),
+        ],
+        None,
+        Some(15),
+        1000,
+    )
+}
+
+#[actix_web::get("/shapes_local_rail")]
+pub async fn shapes_local_rail_meta(req: HttpRequest) -> impl Responder {
+    serve_tilejson(
+        get_shapes_fields(),
+        String::from("shapes_local_rail"),
+        vec![
+            String::from(
+                "https://birch_local_rail_shape_1.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}",
+            ),
+            String::from(
+                "https://birch_local_rail_shape_2.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}",
+            ),
+        ],
+        None,
+        Some(15),
+        1000,
+    )
+}
+
+#[actix_web::get("/shapes_bus")]
+pub async fn shapes_bus_meta(req: HttpRequest) -> impl Responder {
+    serve_tilejson(
+        get_shapes_fields(),
+        String::from("shapes_bus"),
+        vec![String::from(
+            "https://birch_shapes_bus.catenarymaps.org/shapes_bus/{z}/{x}/{y}",
+        )],
+        None,
+        Some(15),
+        1000,
+    )
+}
+
+fn get_stops_fields() -> std::collections::BTreeMap<String, String> {
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(String::from("onestop_feed_id"), String::from("text"));
+    fields.insert(String::from("chateau"), String::from("text"));
+    fields.insert(String::from("attempt_id"), String::from("text"));
+    fields.insert(String::from("gtfs_id"), String::from("text"));
+    fields.insert(String::from("name"), String::from("text"));
+    fields.insert(String::from("displayname"), String::from("text"));
+    fields.insert(String::from("code"), String::from("text"));
+    fields.insert(String::from("gtfs_desc"), String::from("text"));
+    fields.insert(String::from("location_type"), String::from("smallint"));
+    fields.insert(String::from("parent_station"), String::from("text"));
+    fields.insert(String::from("zone_id"), String::from("text"));
+    fields.insert(String::from("url"), String::from("text"));
+    fields.insert(String::from("timezone"), String::from("text"));
+    fields.insert(
+        String::from("wheelchair_boarding"),
+        String::from("smallint"),
+    );
+    fields.insert(String::from("level_id"), String::from("text"));
+    fields.insert(String::from("platform_code"), String::from("text"));
+    fields.insert(String::from("routes"), String::from("text[]"));
+    fields.insert(String::from("route_types"), String::from("smallint[]"));
+    fields.insert(String::from("children_ids"), String::from("text[]"));
+    fields.insert(
+        String::from("children_route_types"),
+        String::from("smallint[]"),
+    );
+    fields
+}
+
+fn get_shapes_fields() -> std::collections::BTreeMap<String, String> {
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(String::from("color"), String::from("text"));
+    fields.insert(String::from("text_color"), String::from("text"));
+    fields.insert(String::from("shape_id"), String::from("text"));
+    fields.insert(String::from("onestop_feed_id"), String::from("text"));
+    fields.insert(String::from("routes"), String::from("text[]"));
+    fields.insert(String::from("route_type"), String::from("smallint"));
+    fields.insert(String::from("route_label"), String::from("text"));
+    fields.insert(String::from("chateau"), String::from("text"));
+    fields.insert(
+        String::from("stop_to_stop_generated"),
+        String::from("boolean"),
+    );
+    fields
+}
+
+fn serve_tilejson(
+    fields: std::collections::BTreeMap<String, String>,
+    name: String,
+    tiles_url: Vec<String>,
+    minzoom: Option<u8>,
+    maxzoom: Option<u8>,
+    max_age: u32,
+) -> HttpResponse {
+    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
+
+    let tile_json = TileJSON {
+        vector_layers: Some(vec![fields]),
+        tilejson: String::from("3.0.0"),
+        bounds: None,
+        center: None,
+        data: None,
+        description: None,
+        fillzoom: None,
+        grids: None,
+        legend: None,
+        maxzoom,
+        minzoom,
+        name: Some(name),
+        scheme: None,
+        template: None,
+        version: None,
+        other: std::collections::BTreeMap::new(),
+        tiles: tiles_url,
+        attribution: None,
+    };
+
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "application/json"))
+        .insert_header(("Cache-Control", format!("max-age={}, public", max_age)))
+        .body(serde_json::to_string(&tile_json).unwrap())
+}
+
+async fn fetch_mvt(
+    sqlx_pool: &sqlx::Pool<sqlx::Postgres>,
+    query_str: String,
+    max_age: u32,
+) -> HttpResponse {
+    match sqlx::query(query_str.as_str()).fetch_one(sqlx_pool).await {
+        Ok(mvt_result) => {
+            let mvt_bytes: Vec<u8> = mvt_result.get(0);
+
+            HttpResponse::Ok()
+                .insert_header(("Content-Type", "application/x-protobuf"))
+                .insert_header(("Cache-Control", format!("max-age={}, public", max_age)))
+                .body(mvt_bytes)
+        }
+        Err(err) => {
+            eprintln!("{:?}", err);
+            HttpResponse::InternalServerError().body("Failed to fetch from postgres!")
+        }
+    }
+}
+
+fn build_stops_query(z: u8, x: u32, y: u32, where_clause: &str) -> String {
+    format!("
+    SELECT
+    ST_AsMVT(q, 'data', 4096, 'geom')
+FROM (
+    SELECT
+        onestop_feed_id,
+        chateau,
+        attempt_id,
+        gtfs_id,
+        name,
+        displayname,
+        code,
+        gtfs_desc,
+        location_type,
+        parent_station,
+        zone_id,
+        url,
+        timezone,
+        wheelchair_boarding,
+        level_id,
+        platform_code,
+        routes,
+        route_types,
+        children_ids,
+        children_route_types,
+        ST_AsMVTGeom(ST_Transform(point, 3857),
+        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
+    FROM
+        gtfs.stops
+    WHERE
+        (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
+        AND ({where_clause})
+) q", z = z, x = x, y= y, where_clause = where_clause)
+}
+
+fn build_shapes_query(
+    z: u8,
+    x: u32,
+    y: u32,
+    simplification_threshold: f32,
+    where_clause: &str,
+) -> String {
+    format!("
     SELECT
     ST_AsMVT(q, 'data', 4096, 'geom')
 FROM (
@@ -924,262 +670,11 @@ FROM (
         text_color,
         chateau,
         stop_to_stop_generated,
-        ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857), 
+        ST_AsMVTGeom(ST_Transform(ST_Simplify(linestring, {simplification_threshold}), 3857),
         ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
         gtfs.shapes
     WHERE
-        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND route_type IN (3,11,200) AND routes != \'{{}}\' AND chateau != 'greyhound~flix'
-) q", z = z, x = x, y= y);
-
-    match sqlx::query(query_str.as_str())
-        .fetch_one(sqlx_pool_ref)
-        .await
-    {
-        Ok(mvt_result) => {
-            let mvt_bytes: Vec<u8> = mvt_result.get(0);
-
-            HttpResponse::Ok()
-                .insert_header(("Content-Type", "application/x-protobuf"))
-                .insert_header(("Cache-Control", "max-age=1000, public"))
-                .body(mvt_bytes)
-        }
-        Err(err) => HttpResponse::InternalServerError().body("Failed to fetch from postgres!"),
-    }
-}
-
-#[actix_web::get("/shapes_ferry")]
-pub async fn shapes_ferry_meta(req: HttpRequest) -> impl Responder {
-    let mut fields = std::collections::BTreeMap::new();
-    fields.insert(String::from("color"), String::from("text"));
-    fields.insert(String::from("text_color"), String::from("text"));
-    fields.insert(String::from("shape_id"), String::from("text"));
-    fields.insert(String::from("onestop_feed_id"), String::from("text"));
-    fields.insert(String::from("routes"), String::from("text[]"));
-    fields.insert(String::from("route_type"), String::from("smallint"));
-    fields.insert(String::from("route_label"), String::from("text"));
-    fields.insert(String::from("chateau"), String::from("text"));
-    fields.insert(
-        String::from("stop_to_stop_generated"),
-        String::from("boolean"),
-    );
-
-    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
-
-    let tile_json = TileJSON {
-        vector_layers: Some(vec![fields]),
-        tilejson: String::from("3.0.0"),
-        bounds: None,
-        center: None,
-        data: None,
-        description: None,
-        fillzoom: None,
-        grids: None,
-        legend: None,
-        maxzoom: Some(15),
-        minzoom: None,
-        name: Some(String::from("shapes_not_bus")),
-        scheme: None,
-        template: None,
-        version: None,
-        other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from(
-            "https://birch.catenarymaps.org/shapes_ferry/{z}/{x}/{y}",
-        )],
-        attribution: None,
-    };
-
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=1000"))
-        .body(serde_json::to_string(&tile_json).unwrap())
-}
-
-#[actix_web::get("/shapes_not_bus")]
-pub async fn shapes_not_bus_meta(req: HttpRequest) -> impl Responder {
-    let mut fields = std::collections::BTreeMap::new();
-    fields.insert(String::from("color"), String::from("text"));
-    fields.insert(String::from("text_color"), String::from("text"));
-    fields.insert(String::from("shape_id"), String::from("text"));
-    fields.insert(String::from("onestop_feed_id"), String::from("text"));
-    fields.insert(String::from("routes"), String::from("text[]"));
-    fields.insert(String::from("route_type"), String::from("smallint"));
-    fields.insert(String::from("route_label"), String::from("text"));
-    fields.insert(String::from("chateau"), String::from("text"));
-
-    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
-
-    let tile_json = TileJSON {
-        vector_layers: Some(vec![fields]),
-        tilejson: String::from("3.0.0"),
-        bounds: None,
-        center: None,
-        data: None,
-        description: None,
-        fillzoom: None,
-        grids: None,
-        legend: None,
-        maxzoom: Some(15),
-        minzoom: None,
-        name: Some(String::from("shapes_not_bus")),
-        scheme: None,
-        template: None,
-        version: None,
-        other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from(
-            "https://birch.catenarymaps.org/shapes_not_bus/{z}/{x}/{y}",
-        )],
-        attribution: None,
-    };
-
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=1000"))
-        .body(serde_json::to_string(&tile_json).unwrap())
-}
-
-#[actix_web::get("/shapes_intercity_rail")]
-pub async fn shapes_intercity_rail_meta(req: HttpRequest) -> impl Responder {
-    let mut fields = std::collections::BTreeMap::new();
-    fields.insert(String::from("color"), String::from("text"));
-    fields.insert(String::from("text_color"), String::from("text"));
-    fields.insert(String::from("shape_id"), String::from("text"));
-    fields.insert(String::from("onestop_feed_id"), String::from("text"));
-    fields.insert(String::from("routes"), String::from("text[]"));
-    fields.insert(String::from("route_type"), String::from("smallint"));
-    fields.insert(String::from("route_label"), String::from("text"));
-    fields.insert(String::from("chateau"), String::from("text"));
-    fields.insert(
-        String::from("stop_to_stop_generated"),
-        String::from("boolean"),
-    );
-
-    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
-
-    let tile_json = TileJSON {
-        vector_layers: Some(vec![fields]),
-        tilejson: String::from("3.0.0"),
-        bounds: None,
-        center: None,
-        data: None,
-        description: None,
-        fillzoom: None,
-        grids: None,
-        legend: None,
-        maxzoom: Some(15),
-        minzoom: None,
-        name: Some(String::from("shapes_local_rail")),
-        scheme: None,
-        template: None,
-        version: None,
-        other: std::collections::BTreeMap::new(),
-        tiles: vec![
-            String::from(
-                "https://birch_intercity_rail_shape_1.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}",
-            ),
-            String::from(
-                "https://birch_intercity_rail_shape_2.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}",
-            ),
-            String::from(
-                "https://birch_intercity_rail_shape_3.catenarymaps.org/shapes_intercity_rail/{z}/{x}/{y}",
-            ),
-        ],
-        attribution: None,
-    };
-
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=1000"))
-        .body(serde_json::to_string(&tile_json).unwrap())
-}
-
-#[actix_web::get("/shapes_local_rail")]
-pub async fn shapes_local_rail_meta(req: HttpRequest) -> impl Responder {
-    let mut fields = std::collections::BTreeMap::new();
-    fields.insert(String::from("color"), String::from("text"));
-    fields.insert(String::from("text_color"), String::from("text"));
-    fields.insert(String::from("shape_id"), String::from("text"));
-    fields.insert(String::from("onestop_feed_id"), String::from("text"));
-    fields.insert(String::from("routes"), String::from("text[]"));
-    fields.insert(String::from("route_type"), String::from("smallint"));
-    fields.insert(String::from("route_label"), String::from("text"));
-    fields.insert(String::from("chateau"), String::from("text"));
-
-    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
-
-    let tile_json = TileJSON {
-        vector_layers: Some(vec![fields]),
-        tilejson: String::from("3.0.0"),
-        bounds: None,
-        center: None,
-        data: None,
-        description: None,
-        fillzoom: None,
-        grids: None,
-        legend: None,
-        maxzoom: Some(15),
-        minzoom: None,
-        name: Some(String::from("shapes_local_rail")),
-        scheme: None,
-        template: None,
-        version: None,
-        other: std::collections::BTreeMap::new(),
-        tiles: vec![
-            String::from(
-                "https://birch_local_rail_shape_1.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}",
-            ),
-            String::from(
-                "https://birch_local_rail_shape_2.catenarymaps.org/shapes_local_rail/{z}/{x}/{y}",
-            ),
-        ],
-        attribution: None,
-    };
-
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=1000"))
-        .body(serde_json::to_string(&tile_json).unwrap())
-}
-
-#[actix_web::get("/shapes_bus")]
-pub async fn shapes_bus_meta(req: HttpRequest) -> impl Responder {
-    let mut fields = std::collections::BTreeMap::new();
-    fields.insert(String::from("color"), String::from("text"));
-    fields.insert(String::from("text_color"), String::from("text"));
-    fields.insert(String::from("shape_id"), String::from("text"));
-    fields.insert(String::from("onestop_feed_id"), String::from("text"));
-    fields.insert(String::from("routes"), String::from("text[]"));
-    fields.insert(String::from("route_type"), String::from("smallint"));
-    fields.insert(String::from("route_label"), String::from("text"));
-    fields.insert(String::from("chateau"), String::from("text"));
-
-    let fields = tilejson::VectorLayer::new(String::from("data"), fields);
-
-    let tile_json = TileJSON {
-        vector_layers: Some(vec![fields]),
-        tilejson: String::from("3.0.0"),
-        bounds: None,
-        center: None,
-        data: None,
-        description: None,
-        fillzoom: None,
-        grids: None,
-        legend: None,
-        maxzoom: Some(15),
-        minzoom: None,
-        name: Some(String::from("shapes_bus")),
-        scheme: None,
-        template: None,
-        version: None,
-        other: std::collections::BTreeMap::new(),
-        tiles: vec![String::from(
-            "https://birch_shapes_bus.catenarymaps.org/shapes_bus/{z}/{x}/{y}",
-        )],
-        attribution: None,
-    };
-
-    HttpResponse::Ok()
-        .insert_header(("Content-Type", "application/json"))
-        .insert_header(("Cache-Control", "max-age=1000, public"))
-        .body(serde_json::to_string(&tile_json).unwrap())
+        (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND ({where_clause})
+) q", z = z, x = x, y= y, simplification_threshold = simplification_threshold, where_clause = where_clause)
 }
