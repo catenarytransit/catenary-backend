@@ -3,9 +3,9 @@ use anyhow::{Context, Result};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::routing_common::transit_graph::{
     ConnectionList, DirectConnections, DirectionPattern, GlobalHub, GlobalPatternIndex,
-    LocalTransferPattern, Manifest, OsmLink, PartitionBoundary, PartitionTimetableData,
-    ServiceException, StaticTransfer, TimeDeltaSequence, TimetableData, TransitPartition,
-    TransitStop, TripPattern, load_bincode, save_bincode,
+    IntermediateStation, LocalTransferPattern, Manifest, OsmLink, PartitionBoundary,
+    PartitionTimetableData, ServiceException, StaticTransfer, TimeDeltaSequence, TimetableData,
+    TransitPartition, TransitStop, TripPattern, load_bincode, save_bincode,
 };
 use std::fs::File;
 use std::io::BufReader;
@@ -30,7 +30,8 @@ pub async fn run_rebuild_patterns(
         let reader = BufReader::new(file);
         serde_json::from_reader(reader)?
     } else {
-        return Err(anyhow::anyhow!("Manifest not found. Cannot rebuild."));
+        println!("Manifest not found. Attempting to reconstruct from station map...");
+        reconstruct_manifest(output_dir)?
     };
 
     // 2. Identify Affected Partitions
@@ -820,6 +821,79 @@ fn run_profile_search_phase2(
     }
 
     results
+}
+
+fn reconstruct_manifest(output_dir: &Path) -> Result<Manifest> {
+    // 1. Load Station -> Cluster Map
+    let map_path = output_dir.join("station_to_cluster_map.bincode");
+    if !map_path.exists() {
+        return Err(anyhow::anyhow!(
+            "Manifest missing and station_to_cluster_map.bincode not found. Cannot rebuild."
+        ));
+    }
+    let station_to_cluster: HashMap<String, u32> = load_bincode(map_path.to_str().unwrap())?;
+
+    // 2. Load Shards to map Station -> Chateau
+    let shards_dir = output_dir.join("shards");
+    let mut station_to_chateau: HashMap<String, String> = HashMap::new();
+
+    for entry in std::fs::read_dir(&shards_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.starts_with("stations_") && name.ends_with(".bincode") {
+                let stations: Vec<IntermediateStation> = load_bincode(path.to_str().unwrap())?;
+                for s in stations {
+                    station_to_chateau.insert(s.station_id, s.chateau_id);
+                }
+            }
+        }
+    }
+
+    // 3. Build Manifest
+    let mut partition_to_chateaux: std::collections::HashMap<u32, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut chateau_to_partitions: std::collections::HashMap<String, Vec<u32>> =
+        std::collections::HashMap::new();
+
+    // Invert station_to_cluster to get partitions
+    let mut partition_chateaux_set: HashMap<u32, HashSet<String>> = HashMap::new();
+
+    for (station_id, &cluster_id) in &station_to_cluster {
+        if let Some(chateau_id) = station_to_chateau.get(station_id) {
+            partition_chateaux_set
+                .entry(cluster_id)
+                .or_default()
+                .insert(chateau_id.clone());
+        }
+    }
+
+    for (pid, chateaux_set) in partition_chateaux_set {
+        let mut chateaux: Vec<String> = chateaux_set.into_iter().collect();
+        chateaux.sort(); // Deterministic order
+        partition_to_chateaux.insert(pid, chateaux.clone());
+
+        for c in chateaux {
+            chateau_to_partitions.entry(c).or_default().push(pid);
+        }
+    }
+
+    let manifest = Manifest {
+        chateau_to_partitions,
+        partition_to_chateaux,
+        partition_boundaries: std::collections::HashMap::new(),
+    };
+
+    // Save it
+    let file = File::create(output_dir.join("manifest.json"))?;
+    serde_json::to_writer_pretty(file, &manifest)?;
+
+    println!(
+        "Reconstructed manifest with {} partitions.",
+        manifest.partition_to_chateaux.len()
+    );
+
+    Ok(manifest)
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
