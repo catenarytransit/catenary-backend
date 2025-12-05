@@ -1,9 +1,12 @@
 use anyhow::{Context, Result};
 use catenary::models::{Station, Stop, StopMapping};
+use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::stations::dsl::*;
 use catenary::schema::gtfs::stop_mappings::dsl::*;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use futures::{StreamExt, stream, stream::FuturesUnordered};
+use std::collections::VecDeque;
 
 use postgis_diesel::types::Point;
 
@@ -11,7 +14,7 @@ use uuid::Uuid;
 
 /// Matches a batch of GTFS stops to existing Stations or creates new ones.
 pub async fn match_stops_to_stations(
-    conn: &mut AsyncPgConnection,
+    pool: &CatenaryPostgresPool,
     feed_id_str: &str,
     stops_to_process: &[Stop],
 ) -> Result<()> {
@@ -21,8 +24,91 @@ pub async fn match_stops_to_stations(
         feed_id_str
     );
 
-    for stop in stops_to_process {
-        process_single_stop(conn, feed_id_str, stop).await?;
+    let concurrency_limit = 20; // Adjust based on DB limits
+
+    let mut results = Vec::new();
+    let mut pending_stops: VecDeque<&Stop> = stops_to_process.iter().collect();
+    let mut active_futures = FuturesUnordered::new();
+    let mut active_coords: Vec<(f64, f64)> = Vec::new(); // (lat, lon)
+
+    loop {
+        // 1. Fill active_futures with non-conflicting stops
+        let initial_pending_len = pending_stops.len();
+        let mut checked_count = 0;
+
+        while active_futures.len() < concurrency_limit && checked_count < initial_pending_len {
+            if let Some(stop) = pending_stops.pop_front() {
+                let mut conflict = false;
+                if let Some(pt) = &stop.point {
+                    for &(ay, ax) in &active_coords {
+                        // Check if closer than 1km (1000m)
+                        if haversine_distance(pt.y, pt.x, ay, ax) < 1000.0 {
+                            conflict = true;
+                            break;
+                        }
+                    }
+                }
+
+                if conflict {
+                    // Defer this stop
+                    pending_stops.push_back(stop);
+                } else {
+                    // Schedule it
+                    if let Some(pt) = &stop.point {
+                        active_coords.push((pt.y, pt.x));
+                    }
+
+                    let pool = pool.clone();
+                    let feed_id_str = feed_id_str.to_string();
+                    let stop_pt = stop.point.clone();
+
+                    active_futures.push(async move {
+                        let mut conn = pool.get().await.context("Failed to get DB connection")?;
+                        let res = process_single_stop(&mut conn, &feed_id_str, stop).await;
+                        Ok((res, stop_pt)) as Result<(Result<()>, Option<Point>)>
+                    });
+                }
+            } else {
+                break;
+            }
+            checked_count += 1;
+        }
+
+        // 2. Wait for at least one future to complete if we can't schedule more
+        if active_futures.is_empty() {
+            if pending_stops.is_empty() {
+                break; // All done
+            }
+            // If we have pending stops but nothing active, it implies all pending stops conflict with... nothing?
+            // This state should be unreachable if logic is correct, as an empty active set causes no conflicts.
+            // However, to be safe against infinite loops in case of logic bugs:
+            break;
+        }
+
+        if let Some(result) = active_futures.next().await {
+            match result {
+                Ok((res, pt_opt)) => {
+                    results.push(res);
+                    // Remove from active_coords
+                    if let Some(pt) = pt_opt {
+                        if let Some(idx) = active_coords
+                            .iter()
+                            .position(|&(y, x)| y == pt.y && x == pt.x)
+                        {
+                            active_coords.swap_remove(idx);
+                        }
+                    }
+                }
+                Err(e) => {
+                    // This handles errors from the async block wrapper itself (unlikely with anyhow::Result wrapper)
+                    results.push(Err(e));
+                }
+            }
+        }
+    }
+
+    for res in results {
+        res?;
     }
 
     Ok(())

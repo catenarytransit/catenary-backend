@@ -94,7 +94,7 @@ pub async fn run_extraction(
             .collect();
 
         if !stops_for_chateau.is_empty() {
-            station_matching::match_stops_to_stations(&mut conn, chateau_id, &stops_for_chateau)
+            station_matching::match_stops_to_stations(&pool, chateau_id, &stops_for_chateau)
                 .await?;
         }
     }
