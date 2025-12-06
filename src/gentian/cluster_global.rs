@@ -4,8 +4,10 @@ use ahash::AHashMap as HashMap;
 use ahash::AHashSet as HashSet;
 use anyhow::{Context, Result};
 use catenary::routing_common::transit_graph::{
-    IntermediateLocalEdge, IntermediateStation, load_bincode, save_bincode,
+    BoundaryPoint, IntermediateLocalEdge, IntermediateStation, load_bincode, save_bincode,
 };
+use geo::algorithm::convex_hull::ConvexHull;
+use geo::{MultiPoint, Point, Polygon};
 use std::path::Path;
 
 use rand::prelude::*;
@@ -23,6 +25,8 @@ pub fn run_global_clustering(output_dir: &Path) -> Result<()> {
 
     let mut tile_sizes: HashMap<String, usize> = HashMap::new();
     let mut station_to_tile: HashMap<String, String> = HashMap::new();
+    let mut station_to_chateau: HashMap<String, String> = HashMap::new();
+    let mut station_locations: HashMap<String, (f64, f64)> = HashMap::new();
 
     // Iterate over station shards
     let entries = std::fs::read_dir(&shards_dir).context("Failed to read shards dir")?;
@@ -37,7 +41,9 @@ pub fn run_global_clustering(output_dir: &Path) -> Result<()> {
                 // Let's trust the stations' tile_id field.
                 for s in stations {
                     *tile_sizes.entry(s.tile_id.clone()).or_default() += 1;
-                    station_to_tile.insert(s.station_id, s.tile_id);
+                    station_to_tile.insert(s.station_id.clone(), s.tile_id);
+                    station_to_chateau.insert(s.station_id.clone(), s.chateau_id);
+                    station_locations.insert(s.station_id, (s.lat, s.lon));
                 }
             }
         }
@@ -186,8 +192,140 @@ pub fn run_global_clustering(output_dir: &Path) -> Result<()> {
     // Save to disk
     let output_path = output_dir.join("station_to_cluster_map.bincode");
     save_bincode(&station_to_cluster, output_path.to_str().unwrap())?;
-
     println!("Saved station-to-cluster map to {:?}", output_path);
+
+    // 6. Build and Save Manifest
+    println!("Building Manifest...");
+    use catenary::routing_common::transit_graph::{Manifest, PartitionBoundary};
+
+    let mut chateau_to_partitions: std::collections::HashMap<String, Vec<u32>> =
+        std::collections::HashMap::new();
+    let mut partition_to_chateaux: std::collections::HashMap<u32, Vec<String>> =
+        std::collections::HashMap::new();
+
+    for (station_id, cluster_id) in &station_to_cluster {
+        if let Some(chateau_id) = station_to_chateau.get(station_id) {
+            chateau_to_partitions
+                .entry(chateau_id.clone())
+                .or_default()
+                .push(*cluster_id);
+            partition_to_chateaux
+                .entry(*cluster_id)
+                .or_default()
+                .push(chateau_id.clone());
+        }
+    }
+
+    // Deduplicate
+    for parts in chateau_to_partitions.values_mut() {
+        parts.sort();
+        parts.dedup();
+    }
+    for chateaux in partition_to_chateaux.values_mut() {
+        chateaux.sort();
+        chateaux.dedup();
+    }
+
+    // Build Partition Boundaries
+    let mut partition_boundaries: std::collections::HashMap<u32, PartitionBoundary> =
+        std::collections::HashMap::new();
+
+    // Group stations by partition
+    let mut partition_points: HashMap<u32, Vec<(f64, f64)>> = HashMap::new();
+    for (station_id, cluster_id) in &station_to_cluster {
+        if let Some(&loc) = station_locations.get(station_id) {
+            partition_points.entry(*cluster_id).or_default().push(loc);
+        }
+    }
+
+    for (cluster_id, points) in partition_points {
+        if points.is_empty() {
+            continue;
+        }
+
+        let boundary_points_vec: Vec<BoundaryPoint>;
+
+        if points.len() >= 3 {
+            let geo_points: Vec<Point<f64>> = points
+                .iter()
+                .map(|(lat, lon)| Point::new(*lon, *lat))
+                .collect();
+            let mp = MultiPoint(geo_points);
+            let hull = mp.convex_hull();
+
+            boundary_points_vec = hull
+                .exterior()
+                .points()
+                .map(|p| BoundaryPoint {
+                    lat: p.y(),
+                    lon: p.x(),
+                })
+                .collect();
+        } else {
+            // Fallback for small clusters: just return the points (maybe as a box if needed, but for now points)
+            // To make it a valid polygon for some renderers, we might need to duplicate points or create a small box.
+            // Let's create a small box around the point(s).
+            let (min_lat, max_lat, min_lon, max_lon) = points.iter().fold(
+                (
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                ),
+                |(min_lat, max_lat, min_lon, max_lon), (lat, lon)| {
+                    (
+                        min_lat.min(*lat),
+                        max_lat.max(*lat),
+                        min_lon.min(*lon),
+                        max_lon.max(*lon),
+                    )
+                },
+            );
+
+            // Buffer size in degrees (approx 100m)
+            let buffer = 0.001;
+            boundary_points_vec = vec![
+                BoundaryPoint {
+                    lat: min_lat - buffer,
+                    lon: min_lon - buffer,
+                },
+                BoundaryPoint {
+                    lat: max_lat + buffer,
+                    lon: min_lon - buffer,
+                },
+                BoundaryPoint {
+                    lat: max_lat + buffer,
+                    lon: max_lon + buffer,
+                },
+                BoundaryPoint {
+                    lat: min_lat - buffer,
+                    lon: max_lon + buffer,
+                },
+                BoundaryPoint {
+                    lat: min_lat - buffer,
+                    lon: min_lon - buffer,
+                }, // Close the loop
+            ];
+        }
+
+        partition_boundaries.insert(
+            cluster_id,
+            PartitionBoundary {
+                points: boundary_points_vec,
+            },
+        );
+    }
+
+    let manifest = Manifest {
+        chateau_to_partitions,
+        partition_to_chateaux,
+        partition_boundaries,
+    };
+
+    let manifest_path = output_dir.join("manifest.json");
+    let file = std::fs::File::create(&manifest_path).context("Failed to create manifest.json")?;
+    serde_json::to_writer_pretty(file, &manifest).context("Failed to write manifest.json")?;
+    println!("Saved manifest to {:?}", manifest_path);
 
     Ok(())
 }

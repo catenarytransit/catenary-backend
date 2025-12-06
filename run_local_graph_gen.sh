@@ -218,7 +218,7 @@ if [ -n "$CHATEAU_LIST" ]; then
     echo "Running Gentian Rebuild Patterns"
     "$GENTIAN_BIN" \
         rebuild-patterns \
-        --output "$OUTPUT_DIR"
+        --output "$OUTPUT_DIR" 
 else
     echo "No chateaus found to process."
 fi

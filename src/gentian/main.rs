@@ -105,6 +105,8 @@ enum Commands {
     RebuildPatterns {
         #[arg(long)]
         output: PathBuf,
+        #[arg(long)]
+        partitions: Option<String>,
     },
 }
 
@@ -149,11 +151,13 @@ async fn main() -> Result<()> {
                 .context("Failed to create output dir")?;
             update_gtfs::run_update_gtfs(pool, chateau, &output).await?;
         }
-        Some(Commands::RebuildPatterns { output }) => {
+        Some(Commands::RebuildPatterns { output, partitions }) => {
             tokio::fs::create_dir_all(&output)
                 .await
                 .context("Failed to create output dir")?;
-            rebuild_patterns::run_rebuild_patterns(pool, &output).await?;
+            let partitions_vec =
+                partitions.map(|s| s.split(',').filter_map(|p| p.parse::<u32>().ok()).collect());
+            rebuild_patterns::run_rebuild_patterns(pool, &output, partitions_vec).await?;
         }
         None => {
             anyhow::bail!("No command specified. Use --help for available commands.");

@@ -21,6 +21,7 @@ use crate::update_gtfs::run_update_gtfs;
 pub async fn run_rebuild_patterns(
     pool: Arc<CatenaryPostgresPool>,
     output_dir: &Path,
+    target_partitions: Option<Vec<u32>>,
 ) -> Result<()> {
     println!("Starting Pattern Rebuild...");
 
@@ -35,25 +36,28 @@ pub async fn run_rebuild_patterns(
         reconstruct_manifest(output_dir)?
     };
 
-    // 2. Identify Affected Partitions
-    // Ideally, we should know WHICH chateaux were updated.
-    // For now, let's assume we rebuild ALL partitions that have a `timetable_data_{chateau}.bincode` present?
-    // Or maybe we should pass a list of updated chateaux?
-    // The user request says "Identify partitions affected by the updated chateau".
-    // But the command doesn't take arguments.
-    //
-    // Let's assume we check file modification times or we just rebuild everything that *can* be rebuilt from available timetable data?
-    // Or maybe we just iterate all partitions in the manifest and rebuild them if their source data is newer?
-    //
-    // For this implementation, let's iterate ALL partitions in the manifest and rebuild them.
-    // This is "safe" but maybe slower than minimal.
-    // Optimization: Check timestamps.
-    //
-    // Let's just iterate all partitions for now to ensure correctness.
-
     let mut affected_partitions: HashSet<u32> = HashSet::new();
-    for pid in manifest.partition_to_chateaux.keys() {
-        affected_partitions.insert(*pid);
+    if let Some(targets) = target_partitions {
+        println!("Filtering to {} requested partitions.", targets.len());
+        for pid in targets {
+            if manifest.partition_to_chateaux.contains_key(&pid) {
+                affected_partitions.insert(pid);
+            } else {
+                println!(
+                    "Warning: Requested partition {} not found in manifest.",
+                    pid
+                );
+                // We might still want to try if we are reconstructing?
+                // Actually reconstruct_manifest *returns* a manifest with all known partitions.
+                // So if it's not there, it really doesn't exist.
+                // BUT, if the user requested it, let's try to add it anyway just in case manifests are out of sync.
+                affected_partitions.insert(pid);
+            }
+        }
+    } else {
+        for pid in manifest.partition_to_chateaux.keys() {
+            affected_partitions.insert(*pid);
+        }
     }
 
     println!("Rebuilding {} partitions...", affected_partitions.len());
@@ -405,12 +409,12 @@ async fn rebuild_partition(
 
     // 3. Load Timetable Data for each Chateau
     // Clear existing timetable data in partition
-    partition.trip_patterns.clear();
-    partition.time_deltas.clear();
-    partition.direction_patterns.clear();
-    partition.service_ids.clear();
-    partition.service_exceptions.clear();
-    partition.timezones.clear();
+//    partition.trip_patterns.clear();
+  //  partition.time_deltas.clear();
+  //  partition.direction_patterns.clear();
+   // partition.service_ids.clear();
+    //partition.service_exceptions.clear();
+   // partition.timezones.clear();
     // partition.local_dag.clear(); // Will be recomputed
 
     // We need to map `PartitionTimetableData` stops to `TransitPartition` stop indices.

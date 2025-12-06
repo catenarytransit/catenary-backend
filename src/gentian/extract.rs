@@ -140,10 +140,10 @@ pub async fn run_extraction(
                 x: s.point.x,
                 y: s.point.y,
             },
-            3,
+            5,
         ) {
             Ok(g) => g,
-            Err(_) => "000".to_string(), // Fallback
+            Err(_) => "00000".to_string(), // Fallback
         };
 
         station_id_to_tile.insert(s.station_id.clone(), tile_id.clone());

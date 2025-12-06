@@ -198,6 +198,13 @@ pub async fn run_update_gtfs(
             .push(trip);
     }
 
+    println!(
+        "Debug: stop_to_station size: {}, station_to_partition size: {}",
+        stop_to_station.len(),
+        station_to_partition.len()
+    );
+
+    let mut patterns_with_no_partition = 0;
     // Process Patterns
     for (pattern_id, rows) in pattern_rows_map {
         // Find which partitions this pattern touches
@@ -207,6 +214,25 @@ pub async fn run_update_gtfs(
             if let Some(station_id) = stop_to_station.get(row.stop_id.as_str()) {
                 if let Some(&pid) = station_to_partition.get(station_id) {
                     touched_partitions.insert(pid);
+                }
+            }
+        }
+
+        if touched_partitions.is_empty() {
+            patterns_with_no_partition += 1;
+            if patterns_with_no_partition <= 10 {
+                println!(
+                    "Debug: Pattern {} touches NO partitions. First stop: {}",
+                    pattern_id, rows[0].stop_id
+                );
+                if let Some(s_id) = stop_to_station.get(rows[0].stop_id.as_str()) {
+                    println!(
+                        "  -> Mapped to Station {}. In partition map? {}",
+                        s_id,
+                        station_to_partition.contains_key(s_id)
+                    );
+                } else {
+                    println!("  -> Stop {} NOT in stop_to_station map", rows[0].stop_id);
                 }
             }
         }
@@ -226,6 +252,11 @@ pub async fn run_update_gtfs(
             }
         }
     }
+    println!(
+        "Debug: {}/{} patterns assigned to NO partition.",
+        patterns_with_no_partition,
+        db_patterns.len()
+    );
 
     // Build `PartitionTimetableData`
     let mut partitions_vec: Vec<PartitionTimetableData> = Vec::new();

@@ -24,7 +24,7 @@ pub async fn match_stops_to_stations(
         feed_id_str
     );
 
-    let concurrency_limit = 40; // Adjust based on DB limits
+    let concurrency_limit = 16; // Adjust based on DB limits
 
     let mut results = Vec::new();
     let mut pending_stops: VecDeque<&Stop> = stops_to_process.iter().collect();
