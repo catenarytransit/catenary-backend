@@ -861,7 +861,10 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         start = end;
     }
 
-    let mut unique_edges: HashSet<DagEdge> = HashSet::new();
+    // Sharded storage for edges to avoid one massive HashSet
+    // Vec index = from_node_idx
+    let mut local_dag_shards: Vec<HashSet<DagEdge>> = vec![HashSet::new(); partition.stops.len()];
+    
     let mut scratch = crate::trip_based::ProfileScratch::new(partition.stops.len(), num_trips, 3);
 
     // Collect hubs
@@ -885,7 +888,7 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         let is_source_hub = hubs.contains(&start_node);
 
         // One profile over [0, end_of_day], like the paper’s 24h profiles
-        let edges = crate::trip_based::compute_profile_query(
+        crate::trip_based::compute_profile_query(
             partition,
             &transfers,
             &trip_transfer_ranges,
@@ -901,20 +904,28 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
             is_source_hub,
         );
 
-        for edge in edges {
-            unique_edges.insert(edge);
+        // Collect unique edges from this query into shards
+        // scratch.dedup_map contains the edges
+        for edge in scratch.dedup_map.values() {
+            if (edge.from_node_idx as usize) < local_dag_shards.len() {
+                local_dag_shards[edge.from_node_idx as usize].insert(edge.clone());
+            }
         }
     }
 
-    // Convert HashSet to HashMap<u32, DagEdgeList>
+    // Convert Shards to HashMap<u32, DagEdgeList>
     let mut local_dag: std::collections::HashMap<u32, DagEdgeList> =
-        std::collections::HashMap::new();
-    for edge in unique_edges {
-        local_dag
-            .entry(edge.from_node_idx)
-            .or_insert_with(|| DagEdgeList { edges: Vec::new() })
-            .edges
-            .push(edge);
+        std::collections::HashMap::with_capacity(local_dag_shards.len());
+        
+    for (from_idx, unique_edges) in local_dag_shards.into_iter().enumerate() {
+        if !unique_edges.is_empty() {
+             local_dag.insert(
+                from_idx as u32,
+                DagEdgeList {
+                    edges: unique_edges.into_iter().collect(),
+                },
+            );
+        }
     }
 
     partition.local_dag = local_dag;

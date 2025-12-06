@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::connectivity::{compute_border_patterns, compute_local_patterns_for_partition};
 use crate::update_gtfs::run_update_gtfs;
+use crate::utils::haversine_distance;
 
 /// Run the pattern rebuild process.
 /// This assumes `update-gtfs` has been run for modified chateaux.
@@ -620,17 +621,63 @@ async fn rebuild_partition(
     }
 
     // 5. Ensure internal transfers exist (especially for freshly created hubs)
-    if partition.internal_transfers.is_empty() {
-        for i in 0..partition.stops.len() as u32 {
-            partition.internal_transfers.push(StaticTransfer {
-                from_stop_idx: i,
-                to_stop_idx: i,
-                duration_seconds: 0,
-                distance_meters: 0,
-                wheelchair_accessible: true,
-            });
+
+    // 5. Ensure internal transfers exist (recompute based on distance)
+    // We clear existing transfers to ensure we get a clean set based on current stops.
+    partition.internal_transfers.clear();
+
+    // Parameters for transfer generation
+    const MAX_TRANSFER_DIST: f64 = 500.0; // meters
+    const WALK_SPEED: f64 = 1.1; // m/s (conservative)
+
+    println!(
+        "    - Generating internal transfers (max dist {}m)...",
+        MAX_TRANSFER_DIST
+    );
+
+    // Naive pairwise (O(N^2)) - acceptable for partition size < 5000 usually.
+    // Optimization: could use simple lat sort or spatial index if needed.
+    // For now, simple brute force is robust.
+    let stops_len = partition.stops.len();
+    for i in 0..stops_len {
+        let s_i = &partition.stops[i];
+
+        // Always add self-loop
+        partition.internal_transfers.push(StaticTransfer {
+            from_stop_idx: i as u32,
+            to_stop_idx: i as u32,
+            duration_seconds: 0,
+            distance_meters: 0,
+            wheelchair_accessible: true,
+        });
+
+        for j in 0..stops_len {
+            if i == j {
+                continue;
+            }
+            let s_j = &partition.stops[j];
+
+            // Quick lat check (1 degree lat ~= 111km) -> 500m is approx 0.005 deg
+            if (s_i.lat - s_j.lat).abs() > 0.01 {
+                continue;
+            }
+
+            let dist = haversine_distance(s_i.lat, s_i.lon, s_j.lat, s_j.lon);
+            if dist <= MAX_TRANSFER_DIST {
+                let duration = (dist / WALK_SPEED).ceil() as u32;
+                let duration = std::cmp::max(1, duration); // Ensure at least 1 second
+
+                partition.internal_transfers.push(StaticTransfer {
+                    from_stop_idx: i as u32,
+                    to_stop_idx: j as u32,
+                    duration_seconds: duration,
+                    distance_meters: dist as u32,
+                    wheelchair_accessible: true, // Optimistic assumption
+                });
+            }
         }
     }
+
 
     // 5. Recompute Local Patterns
     compute_local_patterns_for_partition(&mut partition);

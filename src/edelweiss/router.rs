@@ -230,6 +230,7 @@ impl<'a> Router<'a> {
             }
         }
 
+        println!("Router returning {} itineraries", itineraries.len());
         RoutingResult { itineraries }
     }
 

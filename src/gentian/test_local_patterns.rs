@@ -43,9 +43,10 @@ mod tests {
         // Stops
         for i in 0..3 {
             partition.stops.push(TransitStop {
-                id: i,
+                id: i as u64,
                 chateau_idx: 0,
-                gtfs_original_id: i.to_string(),
+                station_id: i.to_string(),
+                gtfs_stop_ids: vec![i.to_string()],
                 is_hub: i == 1, // H is hub
                 is_border: false,
                 is_external_gateway: false,
@@ -174,7 +175,7 @@ mod tests {
         // Stops
         for i in 0..3 {
             partition.stops.push(TransitStop {
-                id: i,
+                id: i as u64,
                 chateau_idx: 0,
                 station_id: i.to_string(),
                 gtfs_stop_ids: vec![i.to_string()],

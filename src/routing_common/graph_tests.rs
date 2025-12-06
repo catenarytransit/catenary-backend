@@ -1,6 +1,6 @@
 use super::osm_graph::*;
 use super::transit_graph::*;
-use prost::Message;
+use std::collections::HashMap;
 
 #[test]
 fn test_transit_partition_serialization() {
@@ -11,7 +11,8 @@ fn test_transit_partition_serialization() {
             lat: 34.0,
             lon: -118.0,
             chateau_idx: 0,
-            gtfs_original_id: "stop_1".to_string(),
+            station_id: "stop_1".to_string(),
+            gtfs_stop_ids: vec!["stop_1".to_string()],
             is_hub: true,
             is_border: false,
             is_external_gateway: false,
@@ -31,6 +32,8 @@ fn test_transit_partition_serialization() {
                 wheelchair_accessible: 1,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         }],
         time_deltas: vec![],
         direction_patterns: vec![DirectionPattern {
@@ -45,17 +48,18 @@ fn test_transit_partition_serialization() {
             removed_dates: vec![20230101],
         }],
         _deprecated_external_transfers: vec![],
-        local_transfer_patterns: vec![],
+        local_dag: HashMap::new(),
         long_distance_trip_patterns: vec![],
         timezones: vec!["UTC".to_string()],
         boundary: None,
         chateau_ids: vec!["test_chateau".to_string()],
         external_hubs: vec![],
         long_distance_transfer_patterns: vec![],
+        direct_connections_index: HashMap::new(),
     };
 
-    let encoded = partition.encode_to_vec();
-    let decoded = TransitPartition::decode(&encoded[..]).expect("Failed to decode");
+    let encoded = bincode::serialize(&partition).expect("Failed to encode");
+    let decoded: TransitPartition = bincode::deserialize(&encoded).expect("Failed to decode");
 
     assert_eq!(decoded.partition_id, 1);
     assert_eq!(decoded.service_ids.len(), 2);
@@ -87,8 +91,8 @@ fn test_osm_partition_serialization() {
         }],
     };
 
-    let encoded = street_data.encode_to_vec();
-    let decoded = StreetData::decode(&encoded[..]).expect("Failed to decode");
+    let encoded = bincode::serialize(&street_data).expect("Failed to encode");
+    let decoded: StreetData = bincode::deserialize(&encoded).expect("Failed to decode");
 
     assert_eq!(decoded.partition_id, 42);
     assert_eq!(decoded.boundary_nodes.len(), 1);

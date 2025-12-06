@@ -96,7 +96,8 @@ impl<'a> OsmRouter<'a> {
                         node_idx,
                         &predecessors,
                     );
-                    let duration = (cost as f64 / 1000.0 / walk_speed_mps) as u32;
+                    let duration = (cost as f64 / 1000.0 / walk_speed_mps).ceil() as u32;
+                    let duration = if duration == 0 { 1 } else { duration };
                     results.push((stop_idx, duration, geometry));
                 }
             }

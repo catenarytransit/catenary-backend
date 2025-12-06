@@ -197,6 +197,8 @@ fn test_long_distance_jump() {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         }],
         time_deltas: vec![TimeDeltaSequence {
             deltas: vec![0, 0, 3600, 0],
@@ -277,6 +279,8 @@ fn test_long_distance_jump() {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         }],
         time_deltas: vec![TimeDeltaSequence {
             deltas: vec![0, 0, 3600, 0],

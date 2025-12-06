@@ -28,12 +28,19 @@ pub struct Seed {
 
 pub struct ProfileScratch {
     pub r_labels: Vec<Vec<u32>>,
+    // Recycled maps/sets
     pub used_segments: HashMap<usize, Vec<(usize, usize)>>,
     pub used_transfers: HashSet<usize>,
     pub used_initial_walks: HashSet<u32>,
     pub is_target: Vec<bool>,
     pub seeds: Vec<Seed>,
     pub initial_walks: Vec<(u32, u32)>,
+    
+    // New fields for compute_profile_query recycling
+    pub useful_trips: HashMap<(usize, usize), usize>,
+    // Tuple: (from, to, type, p_idx, s_idx, e_idx)
+    pub dedup_map: HashMap<(u32, u32, u8, u32, u32, u32), DagEdge>,
+    pub result_edges: Vec<DagEdge>,
 }
 
 impl ProfileScratch {
@@ -46,6 +53,9 @@ impl ProfileScratch {
             is_target: vec![false; num_stops],
             seeds: Vec::new(),
             initial_walks: Vec::new(),
+            useful_trips: HashMap::new(),
+            dedup_map: HashMap::new(),
+            result_edges: Vec::new(),
         }
     }
 
@@ -55,8 +65,15 @@ impl ProfileScratch {
                 *r = u32::MAX;
             }
         }
-        // The maps and vectors are cleared in compute_profile_query now,
-        // but it's fine to clear them here too if you prefer.
+        self.used_segments.clear();
+        self.used_transfers.clear();
+        self.used_initial_walks.clear();
+        // is_target is cleared/filled in query
+        self.seeds.clear();
+        self.initial_walks.clear();
+        self.useful_trips.clear();
+        self.dedup_map.clear();
+        self.result_edges.clear();
     }
 }
 
@@ -517,7 +534,7 @@ pub fn compute_profile_query(
     scratch: &mut ProfileScratch,
     hubs: &HashSet<u32>,
     is_source_hub: bool,
-) -> Vec<DagEdge> {
+) {
     let num_stops = partition.stops.len();
     let total_trips = flat_id_to_pattern_trip.len();
 
@@ -958,7 +975,8 @@ pub fn compute_profile_query(
     }
 
     // 7. Reconstruct Graph from Used Components
-    let mut result_edges = Vec::new();
+    // Reuse scratch.result_edges
+    scratch.result_edges.clear();
 
     // Add Initial Walks
     for &stop_id in &scratch.used_initial_walks {
@@ -973,7 +991,7 @@ pub fn compute_profile_query(
                 .unwrap_or(0)
         };
 
-        result_edges.push(DagEdge {
+        scratch.result_edges.push(DagEdge {
             from_node_idx: start_stop,
             to_node_idx: stop_id,
             edge_type: Some(EdgeType::Walk(WalkEdge {
@@ -983,7 +1001,7 @@ pub fn compute_profile_query(
     }
 
     // Add Trip Segments
-    for ((n, flat_id), &max_idx) in &useful_trips {
+    for ((n, flat_id), &max_idx) in &scratch.useful_trips {
         let entry_idx = scratch.r_labels[*n][*flat_id] as usize;
         let (p_idx, t_idx) = flat_id_to_pattern_trip[*flat_id];
         let pattern = &partition.trip_patterns[p_idx];
@@ -991,7 +1009,7 @@ pub fn compute_profile_query(
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
 
         // Collect relevant stops
-        let mut relevant_indices = Vec::new();
+        let mut relevant_indices = Vec::with_capacity(max_idx - entry_idx + 2); // heuristic
         relevant_indices.push(entry_idx);
 
         // Check targets
@@ -1035,7 +1053,7 @@ pub fn compute_profile_query(
             let dep = get_departure_time(partition, trip, idx1);
             let dur = arr.saturating_sub(dep);
 
-            result_edges.push(DagEdge {
+            scratch.result_edges.push(DagEdge {
                 from_node_idx: u,
                 to_node_idx: v,
                 edge_type: Some(EdgeType::Transit(TransitEdge {
@@ -1062,7 +1080,7 @@ pub fn compute_profile_query(
             [partition.trip_patterns[p_to].direction_pattern_idx as usize]
             .stop_indices[tr.to_stop_idx_in_pattern];
 
-        result_edges.push(DagEdge {
+        scratch.result_edges.push(DagEdge {
             from_node_idx: u,
             to_node_idx: v,
             edge_type: Some(EdgeType::Walk(WalkEdge {
@@ -1073,9 +1091,13 @@ pub fn compute_profile_query(
 
     // Deduplicate edges
     // Key: (from, to, type (0=Walk, 1=Transit), p_idx, s_idx, e_idx)
-    let mut dedup_map: HashMap<(u32, u32, u8, u32, u32, u32), DagEdge> = HashMap::new();
+    scratch.dedup_map.clear();
 
-    for edge in result_edges {
+    // Iterate result_edges (we can drain or iterate; iteration is fine since we clear result_edges next time)
+    // Actually, we want to leave the FINAL edges in result_edges.
+    // So we populate dedup_map, then write back to result_edges?
+
+    for edge in scratch.result_edges.drain(..) {
         let key = match &edge.edge_type {
             Some(EdgeType::Transit(t)) => (
                 edge.from_node_idx,
@@ -1097,7 +1119,7 @@ pub fn compute_profile_query(
             None => continue,
         };
 
-        match dedup_map.entry(key) {
+        match scratch.dedup_map.entry(key) {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
                 let existing = entry.get_mut();
                 match (&mut existing.edge_type, &edge.edge_type) {
@@ -1128,7 +1150,9 @@ pub fn compute_profile_query(
         }
     }
 
-    dedup_map.into_values().collect()
+    // Move back to result_edges (optional, or just expose dedup_map values)
+    // The previous implementation returned `dedup_map.into_values().collect()`.
+    // We will verify the signature change in the next step.
 }
 
 // Helpers

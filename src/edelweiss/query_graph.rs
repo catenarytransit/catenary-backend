@@ -846,7 +846,7 @@ impl QueryGraph {
 
                 let end_stop = &partition.stops[end_stop_idx_in_partition as usize];
 
-                Some(Leg::Transit(TransitLeg {
+                let leg = Leg::Transit(TransitLeg {
                     start_time,
                     end_time,
                     mode: TravelMode::Transit,
@@ -872,7 +872,9 @@ impl QueryGraph {
                         }
                         geom
                     },
-                }))
+                });
+                debug!("Created Transit Leg: {:?}", leg);
+                Some(leg)
             }
             EdgeType::LongDistanceTransit(t) => {
                 let pattern = &partition.long_distance_trip_patterns[t.trip_pattern_idx as usize];
@@ -915,7 +917,7 @@ impl QueryGraph {
                     }
                 };
 
-                Some(Leg::Transit(TransitLeg {
+                let leg = Leg::Transit(TransitLeg {
                     start_time,
                     end_time,
                     mode: TravelMode::Transit,
@@ -958,7 +960,9 @@ impl QueryGraph {
                         }
                         geom
                     },
-                }))
+                });
+                debug!("Created LongDistanceTransit Leg: {:?}", leg);
+                Some(leg)
             }
         }
     }

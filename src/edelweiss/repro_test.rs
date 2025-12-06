@@ -96,6 +96,8 @@ fn test_multi_partition_selection() {
         direction_pattern_idx: 0,
         trips: trips_p1,
         timezone_idx: 0,
+        route_type: 3,
+        is_border: false,
     }];
 
     let partition1 = TransitPartition {
