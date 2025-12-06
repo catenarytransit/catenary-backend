@@ -13,6 +13,9 @@ non_ascii_idents = "deny"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.release]
+lto = "fat"
+
 [dependencies]
 ahash = { version = "0.8.12", features = ["serde"] }
 crossbeam-utils = "0.8.21"
