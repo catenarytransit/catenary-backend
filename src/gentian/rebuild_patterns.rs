@@ -545,7 +545,40 @@ async fn rebuild_partition(
         return Ok(());
     }
 
-    // 4. Ensure internal transfers exist (especially for freshly created hubs)
+    // 4. Identify Long Distance and Border Stations
+    // We iterate over patterns to flag stops.
+    // Also, we need to ensure is_hub is set.
+    for tp in &partition.trip_patterns {
+        let is_long_distance_pattern = tp.route_type == 2 || // Rail
+            tp.route_type == 1100 || // Air
+            manifest.chateau_to_partitions.iter().any(|(c, _)| c.contains("amtrak") || c.contains("greyhound") || c.contains("flixbus") || c.contains("megabus"));
+
+        // Actually checking chateau for EVERY pattern is inefficient and potentially wrong if partition has mixed chateaux.
+        // But `tp` has `chateau_idx`. We can lookup chateau name.
+        let chateau_id = &partition.chateau_ids[tp.chateau_idx as usize];
+        let is_ld_chateau = chateau_id.contains("amtrak")
+            || chateau_id.contains("greyhound")
+            || chateau_id.contains("flixbus")
+            || chateau_id.contains("megabus");
+
+        let is_ld = tp.route_type == 2 || is_ld_chateau;
+
+        let dp = &partition.direction_patterns[tp.direction_pattern_idx as usize];
+        for &stop_idx in &dp.stop_indices {
+            if let Some(stop) = partition.stops.get_mut(stop_idx as usize) {
+                if is_ld {
+                    stop.is_long_distance = true;
+                    stop.is_hub = true;
+                }
+                if tp.is_border {
+                    stop.is_border = true;
+                    stop.is_hub = true;
+                }
+            }
+        }
+    }
+
+    // 5. Ensure internal transfers exist (especially for freshly created hubs)
     if partition.internal_transfers.is_empty() {
         for i in 0..partition.stops.len() as u32 {
             partition.internal_transfers.push(StaticTransfer {

@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use catenary::routing_common::transit_graph::{
     BoundaryPoint, IntermediateLocalEdge, IntermediateStation, load_bincode, save_bincode,
 };
-use geo::algorithm::convex_hull::ConvexHull;
+use geo::algorithm::concave_hull::ConcaveHull;
 use geo::{MultiPoint, Point, Polygon};
 use std::path::Path;
 
@@ -251,7 +251,7 @@ pub fn run_global_clustering(output_dir: &Path) -> Result<()> {
                 .map(|(lat, lon)| Point::new(*lon, *lat))
                 .collect();
             let mp = MultiPoint(geo_points);
-            let hull = mp.convex_hull();
+            let hull = mp.concave_hull(0.1);
 
             boundary_points_vec = hull
                 .exterior()

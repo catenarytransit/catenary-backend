@@ -87,7 +87,7 @@ impl<'a> Router<'a> {
                             let mut end_stops_to_build = Vec::new();
 
                             for (idx, stop) in end_partition.stops.iter().enumerate() {
-                                if stop.is_border {
+                                if stop.is_border || stop.is_hub || stop.is_long_distance {
                                     end_stops_to_build.push((end_pid, idx as u32));
                                 }
                             }
@@ -520,8 +520,9 @@ impl<'a> Router<'a> {
 mod tests {
     use super::*;
     use catenary::routing_common::transit_graph::{
-        CompressedTrip, DagEdge, DagEdgeList, DirectionPattern, EdgeType, LocalTransferPattern,
-        TimeDeltaSequence, TransitEdge, TransitPartition, TransitStop, TripPattern,
+        CompressedTrip, DagEdge, DagEdgeList, DirectionPattern, EdgeType, GlobalHub,
+        LocalTransferPattern, PartitionDag, TimeDeltaSequence, TransitEdge, TransitPartition,
+        TransitStop, TripPattern,
     };
 
     fn create_test_partition() -> TransitPartition {
@@ -1465,5 +1466,132 @@ mod tests {
         );
         let itin = &result.itineraries[0];
         assert_eq!(itin.end_time, 1704097200);
+    }
+
+    #[test]
+    fn test_hub_entry_routing() {
+        // Partition 0: Start -> Hub A
+        let mut partition0 = create_test_partition();
+        partition0.partition_id = 0;
+        partition0.stops[0].id = 0;
+        partition0.stops[0].lat = 0.0;
+        partition0.stops[0].lon = 0.0;
+        partition0.stops[1].id = 1; // Hub A
+        partition0.stops[1].is_hub = true;
+        partition0.stops[1].lat = 0.01;
+        partition0.stops[1].lon = 0.0;
+        partition0.chateau_ids = vec!["p0".to_string()];
+
+        partition0.local_dag = HashMap::from([(
+            0,
+            DagEdgeList {
+                edges: vec![DagEdge {
+                    from_node_idx: 0,
+                    to_node_idx: 1, // Start -> Hub A
+                    edge_type: Some(EdgeType::Transit(TransitEdge {
+                        trip_pattern_idx: 0,
+                        start_stop_idx: 0,
+                        end_stop_idx: 1,
+                        min_duration: 600,
+                    })),
+                }],
+            },
+        )]);
+
+        // Partition 1: Hub B -> End
+        let mut partition1 = create_test_partition();
+        partition1.partition_id = 1;
+        partition1.stops[0].id = 2; // Hub B (Stop 0 in P1)
+        partition1.stops[0].is_hub = true; // Crucial: IS HUB, BUT NOT BORDER
+        partition1.stops[0].is_border = false;
+        partition1.stops[0].lat = 1.0;
+        partition1.stops[0].lon = 0.0;
+
+        partition1.stops[1].id = 3; // End (Stop 1 in P1)
+        partition1.stops[1].lat = 1.01;
+        partition1.stops[1].lon = 0.0;
+        partition1.chateau_ids = vec!["p1".to_string()];
+
+        partition1.local_dag = HashMap::from([(
+            0,
+            DagEdgeList {
+                edges: vec![DagEdge {
+                    from_node_idx: 0,
+                    to_node_idx: 1, // Hub B -> End
+                    edge_type: Some(EdgeType::Transit(TransitEdge {
+                        trip_pattern_idx: 0, // Using same dummy pattern idx
+                        start_stop_idx: 0,
+                        end_stop_idx: 1,
+                        min_duration: 600,
+                    })),
+                }],
+            },
+        )]);
+
+        let mut graph = GraphManager::new();
+        graph
+            .transit_partitions
+            .write()
+            .unwrap()
+            .insert(0, std::sync::Arc::new(partition0));
+        graph
+            .transit_partitions
+            .write()
+            .unwrap()
+            .insert(1, std::sync::Arc::new(partition1));
+
+        // Connect P0 (Hub A) -> P1 (Hub B) via DirectConnection (or Global DAG)
+        // Let's use Global DAG for simplicity as it is explicitly supported for inter-partition
+        let hub_a = GlobalHub {
+            original_partition_id: 0,
+            stop_idx_in_partition: 1,
+        };
+        let hub_b = GlobalHub {
+            original_partition_id: 1,
+            stop_idx_in_partition: 0,
+        };
+
+        let dag = PartitionDag {
+            from_partition: 0,
+            to_partition: 1,
+            hubs: vec![hub_a, hub_b],
+            edges: vec![DagEdge {
+                from_node_idx: 0, // Hub A index in 'hubs'
+                to_node_idx: 1,   // Hub B index in 'hubs'
+                edge_type: Some(EdgeType::Walk(
+                    catenary::routing_common::transit_graph::WalkEdge {
+                        duration_seconds: 300,
+                    },
+                )),
+            }],
+        };
+
+        graph.global_index = Some(
+            catenary::routing_common::transit_graph::GlobalPatternIndex {
+                partition_dags: vec![dag],
+                long_distance_dags: vec![],
+            },
+        );
+
+        let router = Router::new(&graph);
+
+        let req = RoutingRequest {
+            start_lat: 0.0,
+            start_lon: 0.0,
+            end_lat: 1.01, // P1 Stop 1
+            end_lon: 0.0,
+            mode: TravelMode::Transit,
+            time: 1704095400,
+            speed_mps: 1.0,
+            is_departure_time: true,
+            wheelchair_accessible: false,
+        };
+
+        let result = router.route(&req);
+
+        assert!(
+            !result.itineraries.is_empty(),
+            "Should find itinerary through Hub connection"
+        );
     }
 }

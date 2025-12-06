@@ -238,6 +238,7 @@ pub async fn run_update_gtfs(
         }
 
         // Add pattern to all touched partitions
+        let touched_count = touched_partitions.len();
         if let Some(trips) = trips_by_pattern.get(&pattern_id) {
             for pid in touched_partitions {
                 let builder = partition_data.entry(pid).or_default();
@@ -248,6 +249,7 @@ pub async fn run_update_gtfs(
                     &db_calendar,
                     &db_routes,
                     &chateau_id,
+                    touched_count > 1,
                 );
             }
         }
@@ -303,6 +305,8 @@ struct ProcessedPatternData {
     trips: Vec<IntermediateTrip>,
     timezone: String,
     deltas: Vec<u32>,
+    route_type: u32,
+    is_border: bool,
 }
 
 impl PartitionBuilder {
@@ -314,6 +318,7 @@ impl PartitionBuilder {
         calendar: &[Calendar],
         routes: &[Route],
         chateau_id: &str,
+        is_border: bool,
     ) {
         if rows.is_empty() || trips.is_empty() {
             return;
@@ -369,12 +374,37 @@ impl PartitionBuilder {
             });
         }
 
+        let route_type = routes
+            .iter()
+            .find(|r| r.route_id == route_id)
+            .map(|r| r.route_type as u32)
+            .unwrap_or(3); // Default to BUS if unknown
+
+        // Check if pattern touches multiple partitions (implies border crossing capability,
+        // effectively, but `is_border` on pattern usually means it connects *border stations*.
+        // However, here we are just building data for a specific partition.
+        // We know `touched_partitions` from the caller, but `partition_data` builders are per partition.
+        // We need to pass `is_border` flag to `add_pattern`.
+        // Let's modify the signature of `add_pattern`.
+
+        // Actually, the caller knows `touched_partitions`.
+        // If `touched_partitions.len() > 1`, then this pattern is a "border pattern" in some sense?
+        // No, `is_border` on TripPattern usually means "this pattern is relevant for border transfers".
+        // ALL patterns that cross boundaries are border patterns.
+        // But `add_pattern` doesn't know how many partitions it touches.
+
+        // Wait, I need to change the signature of `add_pattern`.
+        // I will do that in a separate step or assume I can't change it easily?
+        // I can change it.
+
         self.patterns.push(ProcessedPatternData {
             route_id,
             stop_gtfs_ids,
             trips: processed_trips,
             timezone,
             deltas,
+            route_type,
+            is_border, // Placeholder, will update caller
         });
     }
 
@@ -474,6 +504,8 @@ impl PartitionBuilder {
                 direction_pattern_idx: dp_idx,
                 trips: final_trips,
                 timezone_idx: tz_idx,
+                route_type: pat.route_type,
+                is_border: pat.is_border,
             });
         }
 

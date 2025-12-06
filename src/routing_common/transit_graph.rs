@@ -233,6 +233,10 @@ pub struct TripPattern {
 
     /// Index into `TransitPartition.timezones`.
     pub timezone_idx: u32,
+
+    pub route_type: u32,
+
+    pub is_border: bool,
 }
 
 /// A single Trip instance (e.g., "The 8:05 AM Bus").

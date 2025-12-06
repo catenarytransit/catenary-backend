@@ -5,7 +5,6 @@ mod query_graph;
 mod router;
 
 #[cfg(test)]
-#[cfg(test)]
 mod repro_test;
 #[cfg(test)]
 mod test_graph_construction;
