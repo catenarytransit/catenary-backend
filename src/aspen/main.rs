@@ -759,10 +759,8 @@ impl AspenRpc for AspenServer {
             }
 
             if new_data
-                || || {
-                    chateau_id == "dallasarearapidtransit"
-                        || chateau_id.as_str() == "fortworthtransportationauthority"
-                }
+                || chateau_id.as_str() == "dallasarearapidtransit"
+                || chateau_id.as_str() == "fortworthtransportationauthority"
             {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
                     self.authoritative_gtfs_rt_store
@@ -800,7 +798,7 @@ impl AspenRpc for AspenServer {
 
             if new_data
                 || chateau_id.as_str() == "santacruzmetro"
-                || chateau_id == "dallasarearapidtransit"
+                || chateau_id.as_str() == "dallasarearapidtransit"
                 || chateau_id.as_str() == "fortworthtransportationauthority"
             {
                 let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaux.lock().await;
