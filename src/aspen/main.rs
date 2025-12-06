@@ -758,7 +758,12 @@ impl AspenRpc for AspenServer {
                 new_data = true;
             }
 
-            if new_data {
+            if new_data
+                || || {
+                    chateau_id == "dallasarearapidtransit"
+                        || chateau_id.as_str() == "fortworthtransportationauthority"
+                }
+            {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
                     self.authoritative_gtfs_rt_store
                         .entry_async((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
@@ -793,7 +798,11 @@ impl AspenRpc for AspenServer {
 
             //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
-            if new_data || chateau_id.as_str() == "santacruzmetro" {
+            if new_data
+                || chateau_id.as_str() == "santacruzmetro"
+                || chateau_id == "dallasarearapidtransit"
+                || chateau_id.as_str() == "fortworthtransportationauthority"
+            {
                 let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaux.lock().await;
 
                 if !lock_chateau_queue.contains(&chateau_id) {

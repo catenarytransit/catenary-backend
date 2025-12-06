@@ -409,12 +409,12 @@ async fn rebuild_partition(
 
     // 3. Load Timetable Data for each Chateau
     // Clear existing timetable data in partition
-//    partition.trip_patterns.clear();
-  //  partition.time_deltas.clear();
-  //  partition.direction_patterns.clear();
-   // partition.service_ids.clear();
+    //    partition.trip_patterns.clear();
+    //  partition.time_deltas.clear();
+    //  partition.direction_patterns.clear();
+    // partition.service_ids.clear();
     //partition.service_exceptions.clear();
-   // partition.timezones.clear();
+    // partition.timezones.clear();
     // partition.local_dag.clear(); // Will be recomputed
 
     // We need to map `PartitionTimetableData` stops to `TransitPartition` stop indices.
