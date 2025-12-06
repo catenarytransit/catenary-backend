@@ -14,7 +14,8 @@ mod tests {
                 .map(|i| TransitStop {
                     id: i,
                     chateau_idx: 0,
-                    gtfs_original_id: i.to_string(),
+                    station_id: i.to_string(),
+                    gtfs_stop_ids: vec![i.to_string()],
                     is_hub: false,
                     is_border: false,
                     is_external_gateway: false,
@@ -38,6 +39,7 @@ mod tests {
             chateau_ids: vec![],
             external_hubs: vec![],
             long_distance_transfer_patterns: vec![],
+            direct_connections_index: Default::default(),
         }
     }
 
@@ -74,6 +76,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // P2: 3->1->4.
@@ -91,6 +95,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // Add self-loop footpaths (implicitly handled by compute_initial_transfers logic usually, but let's be sure)
@@ -118,6 +124,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         let transfers = trip_based::compute_initial_transfers(&partition);
@@ -150,6 +158,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
         // P1 arrives at 2 at 1200.
         // Transfer P4 -> P1 at stop 2.
@@ -319,6 +329,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // P2: 1->0.
@@ -349,6 +361,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // Redefine P2 for 1->0->2
@@ -432,6 +446,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // P2: 1 -> 2. (B -> C)
@@ -466,6 +482,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // P3: 1 -> 2. (B -> C)
@@ -490,6 +508,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         let mut transfers = vec![

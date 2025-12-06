@@ -168,6 +168,8 @@ hex = { version = "0.4.3", features = ["serde"] }
 sha2 = "0.10.9"
 nictd-gtfs-rt = "0.3.3"
 geohash = "0.13"
+spade = "2.15.0"
+delaunator = "1.0.2"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

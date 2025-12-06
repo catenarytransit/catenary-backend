@@ -17,6 +17,11 @@ impl<'a> Router<'a> {
     }
 
     pub fn route(&self, req: &RoutingRequest) -> RoutingResult {
+        println!(
+            "Starting request {},{} to {},{}",
+            req.start_lat, req.start_lon, req.end_lat, req.end_lon
+        );
+
         // 1. Find access/egress stops
         let start_stops = self.find_nearby_stops(
             req.start_lat,
@@ -609,6 +614,8 @@ mod tests {
             direction_pattern_idx: 0,
             trips,
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         }];
 
         TransitPartition {
@@ -974,6 +981,8 @@ mod tests {
             direction_pattern_idx: 0,
             trips: trips_p1,
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         }];
 
         let partition1 = TransitPartition {
@@ -1146,6 +1155,8 @@ mod tests {
                 direction_pattern_idx: 0,
                 trips,
                 timezone_idx: 0,
+                route_type: 3,
+                is_border: false,
             }];
 
             TransitPartition {
@@ -1274,6 +1285,8 @@ mod tests {
             direction_pattern_idx: dir_idx,
             trips: trips.clone(),
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
         let pattern_idx = (partition0.long_distance_trip_patterns.len() - 1) as u32;
 
@@ -1326,6 +1339,8 @@ mod tests {
                 direction_pattern_idx: 0,
                 trips: dc_trips,
                 timezone_idx: 0,
+                route_type: 3,
+                is_border: false,
             }],
             time_deltas: vec![TimeDeltaSequence {
                 deltas: vec![0, 0, 3600, 0],

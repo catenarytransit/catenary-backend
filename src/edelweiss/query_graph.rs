@@ -5,6 +5,7 @@ use catenary::routing_common::transit_graph::{
 };
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct QueryNode {
@@ -342,6 +343,17 @@ impl QueryGraph {
         graph_manager: &GraphManager,
         service_contexts: &mut HashMap<(u32, u32, i64), ServiceContext>,
     ) -> Vec<Itinerary> {
+        info!(
+            "Dijkstra start: {} start nodes, {} end nodes, time {}",
+            start_nodes.len(),
+            end_nodes.len(),
+            start_time_unix
+        );
+        if start_nodes.is_empty() {
+            error!("No start nodes provided!");
+            return Vec::new();
+        }
+
         let mut dist: HashMap<QueryNode, u64> = HashMap::new();
         let mut heap = BinaryHeap::new();
         let mut predecessors: HashMap<QueryNode, (QueryNode, Option<Leg>)> = HashMap::new();
@@ -464,8 +476,12 @@ impl QueryGraph {
                 reliability_score: 1.0,
                 legs,
             };
+
+            info!("Dijkstra finished: Path found. Cost: {}", min_end_time);
             return vec![itinerary];
         }
+
+        error!("Dijkstra finished: No path found.");
 
         Vec::new()
     }
@@ -487,6 +503,10 @@ impl QueryGraph {
                         if let Some(p) = partition.trip_patterns.get(t.trip_pattern_idx as usize) {
                             p
                         } else {
+                            warn!(
+                                "Trip pattern {} not found in partition {}",
+                                t.trip_pattern_idx, edge.from.partition_id
+                            );
                             return None;
                         };
 
@@ -627,6 +647,10 @@ impl QueryGraph {
                         None
                     }
                 } else {
+                    debug!(
+                        "Partition {} not found for edge evaluation",
+                        edge.from.partition_id
+                    );
                     None
                 }
             }

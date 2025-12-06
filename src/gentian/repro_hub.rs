@@ -76,6 +76,8 @@ pub mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // P2: 5->8. Departs at 1500.
@@ -96,6 +98,8 @@ pub mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // Transfers

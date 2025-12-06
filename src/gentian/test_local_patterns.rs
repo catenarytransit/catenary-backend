@@ -27,6 +27,7 @@ mod tests {
             chateau_ids: vec![],
             external_hubs: vec![],
             long_distance_transfer_patterns: vec![],
+            direct_connections_index: Default::default(),
         }
     }
 
@@ -78,6 +79,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // P2: 1 -> 2
@@ -98,6 +101,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // Transfers
@@ -171,7 +176,8 @@ mod tests {
             partition.stops.push(TransitStop {
                 id: i,
                 chateau_idx: 0,
-                gtfs_original_id: i.to_string(),
+                station_id: i.to_string(),
+                gtfs_stop_ids: vec![i.to_string()],
                 is_hub: false, // NO HUB
                 is_border: false,
                 is_external_gateway: false,
@@ -205,6 +211,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // P2: 1 -> 2
@@ -225,6 +233,8 @@ mod tests {
                 wheelchair_accessible: 0,
             }],
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         });
 
         // Transfers

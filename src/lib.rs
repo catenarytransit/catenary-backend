@@ -59,6 +59,7 @@ use crate::aspen::lib::RealtimeFeedMetadataEtcd;
 pub mod custom_alerts;
 pub mod elasticutils;
 pub mod hashfolder;
+pub mod hull;
 pub mod routing_common;
 pub mod shape_fetcher;
 pub mod travic_types;
@@ -100,7 +101,7 @@ lazy_static! {
         Regex::new(r"(?i)\b(?P<hour>1[0-2]|[1-9])(?::(?P<minute>[0-5][0-9]))?\s*(?P<meridian>[AP]\.?[Mm]\.?)\b(?P<ending>\.)?").unwrap();
 }
 
-pub static throw_away_start_dates: &[&str] = &["san-francisco-bay-area"];
+pub static THROW_AWAY_START_DATES: &[&str] = &["san-francisco-bay-area"];
 
 pub fn fix_stop_times_headsigns(
     input_path: &str,

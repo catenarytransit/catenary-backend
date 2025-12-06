@@ -101,6 +101,9 @@ impl EdelweissService for EdelweissServer {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
     let graph_dir = std::env::var("GRAPH_DIR").unwrap_or_else(|_| "graphs".to_string());
 
     println!("Initializing Edelweiss Routing Engine...");

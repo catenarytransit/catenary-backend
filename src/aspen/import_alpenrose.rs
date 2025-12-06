@@ -986,7 +986,7 @@ pub async fn new_rt_data(
                             .as_ref()
                             .map(|trip| match &trip.start_date {
                                 Some(start_date) => {
-                                    match catenary::throw_away_start_dates.contains(&chateau_id) {
+                                    match catenary::THROW_AWAY_START_DATES.contains(&chateau_id) {
                                         true => None,
                                         false => match chrono::NaiveDate::parse_from_str(
                                             &start_date,
@@ -1225,7 +1225,7 @@ pub async fn new_rt_data(
 
                         let mut trip_descriptor: AspenRawTripInfo = trip_update.trip.clone().into();
 
-                        match catenary::throw_away_start_dates.contains(&chateau_id) {
+                        match catenary::THROW_AWAY_START_DATES.contains(&chateau_id) {
                             true => trip_descriptor.start_date = None,
                             false => {}
                         }

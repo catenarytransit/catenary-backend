@@ -31,6 +31,7 @@ mod tests {
             chateau_ids: vec![],
             external_hubs: vec![],
             long_distance_transfer_patterns: vec![],
+            direct_connections_index: Default::default(),
         }
     }
 
@@ -50,7 +51,8 @@ mod tests {
             partition.stops.push(TransitStop {
                 id: i,
                 chateau_idx: 0,
-                gtfs_original_id: i.to_string(),
+                station_id: i.to_string(),
+                gtfs_stop_ids: vec![i.to_string()],
                 is_hub: true,    // All are hubs
                 is_border: true, // All are border/exposed
                 is_external_gateway: false,
@@ -181,7 +183,8 @@ mod tests {
         p0.stops.push(TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "A".to_string(),
+            station_id: "A".to_string(),
+            gtfs_stop_ids: vec!["A".to_string()],
             is_hub: true,
             is_border: true,
             is_external_gateway: false,
@@ -204,7 +207,8 @@ mod tests {
             p.stops.push(TransitStop {
                 id: 1,
                 chateau_idx: 0,
-                gtfs_original_id: "Z".to_string(),
+                station_id: "Z".to_string(),
+                gtfs_stop_ids: vec!["Z".to_string()],
                 is_hub: false,
                 is_border: false,
                 is_external_gateway: false,
@@ -218,6 +222,8 @@ mod tests {
                 direction_pattern_idx: 0,
                 trips: vec![],
                 timezone_idx: 0,
+                route_type: 3,
+                is_border: false,
             });
         }
 
@@ -227,7 +233,8 @@ mod tests {
         p1.stops.push(TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "H".to_string(),
+            station_id: "H".to_string(),
+            gtfs_stop_ids: vec!["H".to_string()],
             is_hub: true,
             is_border: true,
             is_external_gateway: false,
@@ -241,7 +248,8 @@ mod tests {
         p2.stops.push(TransitStop {
             id: 0,
             chateau_idx: 0,
-            gtfs_original_id: "B".to_string(),
+            station_id: "B".to_string(),
+            gtfs_stop_ids: vec!["B".to_string()],
             is_hub: true,
             is_border: true,
             is_external_gateway: false,

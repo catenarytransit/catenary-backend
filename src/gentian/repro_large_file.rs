@@ -73,6 +73,8 @@ mod tests {
             direction_pattern_idx: 0,
             trips,
             timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
         }];
 
         let partition = TransitPartition {
@@ -242,6 +244,8 @@ mod tests {
                 direction_pattern_idx: 0,
                 trips,
                 timezone_idx: 0,
+                route_type: 3,
+                is_border: false,
             },
             TripPattern {
                 chateau_idx: 0,
@@ -249,6 +253,8 @@ mod tests {
                 direction_pattern_idx: 1,
                 trips: trips_p1,
                 timezone_idx: 0,
+                route_type: 3,
+                is_border: false,
             },
         ];
 

@@ -15,27 +15,31 @@ impl Hydrator {
 
     pub async fn hydrate_stops(
         &self,
-        stop_ids: Vec<(String, String)>, // (chateau, gtfs_id)
+        stop_ids: Vec<(String, String)>, // (chateau, station_id)
     ) -> anyhow::Result<HashMap<(String, String), String>> {
+        println!("Hydrating stops {:#?}", stop_ids);
         use futures::stream::{self, StreamExt};
-        use gtfs::stops::dsl::*;
+        use gtfs::stations::dsl::*;
 
-        // Group by chateau
-        let mut by_chateau: HashMap<String, Vec<String>> = HashMap::new();
-        for (c, id) in stop_ids {
-            by_chateau.entry(c).or_default().push(id);
+        // Collect all unique station IDs
+        let mut unique_ids = Vec::new();
+        for (_, id) in &stop_ids {
+            unique_ids.push(id.clone());
         }
+        unique_ids.sort();
+        unique_ids.dedup();
 
-        let results = stream::iter(by_chateau)
-            .map(|(c_val, ids)| {
+        // Query stations by ID (stations are global, no chateau filter needed)
+        let chunks: Vec<Vec<String>> = unique_ids.chunks(100).map(|c| c.to_vec()).collect();
+        let results = stream::iter(chunks) // Batch query
+            .map(|ids| {
                 let pool = self.pool.clone();
                 async move {
                     let mut conn = pool.get().await.map_err(|e| anyhow::anyhow!(e))?;
-                    stops
-                        .filter(chateau.eq(c_val))
-                        .filter(gtfs_id.eq_any(ids))
-                        .select((chateau, gtfs_id, name))
-                        .load::<(String, String, Option<String>)>(&mut conn)
+                    stations
+                        .filter(station_id.eq_any(ids))
+                        .select((station_id, name))
+                        .load::<(String, String)>(&mut conn)
                         .await
                         .map_err(|e| anyhow::anyhow!(e))
                 }
@@ -44,16 +48,23 @@ impl Hydrator {
             .collect::<Vec<_>>()
             .await;
 
-        let mut map = HashMap::new();
+        let mut id_to_name = HashMap::new();
         for res in results {
             let rows = res?;
-            for (c, id, name_opt) in rows {
-                if let Some(n) = name_opt {
-                    map.insert((c, id), n);
-                }
+            for (id, n) in rows {
+                id_to_name.insert(id, n);
             }
         }
-        Ok(map)
+
+        // Map back to (chateau, id) keys
+        let mut final_map = HashMap::new();
+        for (c, id) in stop_ids {
+            if let Some(n) = id_to_name.get(&id) {
+                final_map.insert((c, id), n.clone());
+            }
+        }
+
+        Ok(final_map)
     }
 
     pub async fn hydrate_routes(
@@ -63,6 +74,7 @@ impl Hydrator {
         use futures::stream::{self, StreamExt};
         use gtfs::routes::dsl::*;
 
+        println!("Hydrating routes {:#?}", route_ids);
         // Group by chateau
         let mut by_chateau: HashMap<String, Vec<String>> = HashMap::new();
         for (c, id) in route_ids {
