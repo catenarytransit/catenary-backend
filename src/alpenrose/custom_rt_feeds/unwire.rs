@@ -3,7 +3,7 @@ use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id_kvclient;
 use etcd_client::KvClient;
 use gtfs_structures::Gtfs;
-use prost_legacy::Message;
+use prost::Message;
 use reqwest::Client;
 use std::sync::Arc;
 use unwire_gtfs_rt::{

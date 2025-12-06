@@ -47,10 +47,6 @@ pub async fn run_rebuild_patterns(
                     "Warning: Requested partition {} not found in manifest.",
                     pid
                 );
-                // We might still want to try if we are reconstructing?
-                // Actually reconstruct_manifest *returns* a manifest with all known partitions.
-                // So if it's not there, it really doesn't exist.
-                // BUT, if the user requested it, let's try to add it anyway just in case manifests are out of sync.
                 affected_partitions.insert(pid);
             }
         }
@@ -62,31 +58,191 @@ pub async fn run_rebuild_patterns(
 
     println!("Rebuilding {} partitions...", affected_partitions.len());
 
-    // 3. Rebuild Partitions
+    // 3. Rebuild Partitions (Local)
+    // This step writes the initial local_v1.bin files.
     for pid in &affected_partitions {
         rebuild_partition(*pid, &manifest, output_dir, pool.clone()).await?;
     }
 
-    // 4. Recompute Long distance patterns
-    println!("Computing Long Distance Patterns...");
-    let mut long_dist_data = LongDistanceData {
-        patterns_by_source: HashMap::new(),
-    };
+    // 4. Global Connectivity Phase
+    // Memory Optimization:
+    // We process DirectConnections (timetable aggregation) incrementally while loading partitions,
+    // then STRIP the heavy timetable data from the partition in memory before proceeding to the global graph search.
 
-    // We need to load ALL partitions to do this global computation
+    println!("Computing Global Connectivity...");
+
+    // Prepare Global DirectConnections structures
+    let mut global_dc = DirectConnections::default();
+    let mut global_stop_to_idx: HashMap<String, u32> = HashMap::new();
     let mut loaded_partitions: HashMap<u32, TransitPartition> = HashMap::new();
+
     for pid in manifest.partition_to_chateaux.keys() {
         let chunk_path = output_dir
             .join("patterns")
             .join(pid.to_string())
             .join("local_v1.bin");
+
         if chunk_path.exists() {
-            let p: TransitPartition = load_bincode(chunk_path.to_str().unwrap())?;
+            let mut p: TransitPartition = load_bincode(chunk_path.to_str().unwrap())?;
+
+            // --- A. Process DirectConnections (Merge into Global) ---
+
+            // Helper to remap indices for this partition
+            let mut service_map: HashMap<u32, u32> = HashMap::new(); // Local -> Global
+            let mut timezone_map: HashMap<u32, u32> = HashMap::new();
+            let mut time_delta_map: HashMap<u32, u32> = HashMap::new();
+            let mut direction_pattern_map: HashMap<u32, u32> = HashMap::new();
+
+            for tp in &p.long_distance_trip_patterns {
+                // 1. Remap Timezone
+                let global_tz_idx = *timezone_map.entry(tp.timezone_idx).or_insert_with(|| {
+                    let tz = &p.timezones[tp.timezone_idx as usize];
+                    if let Some(idx) = global_dc.timezones.iter().position(|t| t == tz) {
+                        idx as u32
+                    } else {
+                        global_dc.timezones.push(tz.clone());
+                        (global_dc.timezones.len() - 1) as u32
+                    }
+                });
+
+                // 2. Remap Direction Patterns
+                let global_dp_idx =
+                    if let Some(&idx) = direction_pattern_map.get(&tp.direction_pattern_idx) {
+                        idx
+                    } else {
+                        let local_dp = &p.direction_patterns[tp.direction_pattern_idx as usize];
+                        let mut new_stop_indices = Vec::new();
+                        for &local_stop_idx in &local_dp.stop_indices {
+                            let stop = &p.stops[local_stop_idx as usize];
+                            let station_id = &stop.station_id;
+
+                            let global_stop_idx =
+                                if let Some(&idx) = global_stop_to_idx.get(station_id) {
+                                    idx
+                                } else {
+                                    let idx = global_dc.stops.len() as u32;
+                                    global_dc.stops.push(station_id.clone());
+                                    global_stop_to_idx.insert(station_id.clone(), idx);
+                                    idx
+                                };
+                            new_stop_indices.push(global_stop_idx);
+                        }
+
+                        let new_dp = DirectionPattern {
+                            stop_indices: new_stop_indices,
+                        };
+                        global_dc.direction_patterns.push(new_dp);
+                        let idx = (global_dc.direction_patterns.len() - 1) as u32;
+                        direction_pattern_map.insert(tp.direction_pattern_idx, idx);
+                        idx
+                    };
+
+                // 3. Process Trips
+                let mut new_trips = Vec::new();
+                for trip in &tp.trips {
+                    // Remap Service
+                    let global_service_idx =
+                        *service_map.entry(trip.service_idx).or_insert_with(|| {
+                            let sid = &p.service_ids[trip.service_idx as usize];
+                            if let Some(idx) = global_dc.service_ids.iter().position(|s| s == sid) {
+                                idx as u32
+                            } else {
+                                global_dc.service_ids.push(sid.clone());
+                                (global_dc.service_ids.len() - 1) as u32
+                            }
+                        });
+
+                    // Remap Time Delta
+                    let global_td_idx =
+                        *time_delta_map
+                            .entry(trip.time_delta_idx)
+                            .or_insert_with(|| {
+                                let td = &p.time_deltas[trip.time_delta_idx as usize];
+                                if let Some(idx) =
+                                    global_dc.time_deltas.iter().position(|t| t == td)
+                                {
+                                    idx as u32
+                                } else {
+                                    global_dc.time_deltas.push(td.clone());
+                                    (global_dc.time_deltas.len() - 1) as u32
+                                }
+                            });
+
+                    let mut new_trip = trip.clone();
+                    new_trip.service_idx = global_service_idx;
+                    new_trip.time_delta_idx = global_td_idx;
+                    new_trips.push(new_trip);
+                }
+
+                let mut new_tp = tp.clone();
+                new_tp.timezone_idx = global_tz_idx;
+                new_tp.direction_pattern_idx = global_dp_idx;
+                new_tp.trips = new_trips;
+
+                global_dc.trip_patterns.push(new_tp);
+                let global_pattern_idx = (global_dc.trip_patterns.len() - 1) as u32;
+
+                // Update Index
+                let dp = &global_dc.direction_patterns[global_dp_idx as usize];
+                for (i, &stop_idx) in dp.stop_indices.iter().enumerate() {
+                    let station_id = &global_dc.stops[stop_idx as usize];
+                    global_dc.index.entry(station_id.clone()).or_default().push(
+                        catenary::routing_common::transit_graph::DirectionPatternReference {
+                            pattern_idx: global_pattern_idx,
+                            stop_idx: i as u32,
+                        },
+                    );
+                }
+            }
+
+            // Merge Service Exceptions (referenced by mapped services)
+            for service_exception in &p.service_exceptions {
+                if let Some(&global_s_idx) = service_map.get(&service_exception.service_idx) {
+                    let mut new_service_exception = service_exception.clone();
+                    new_service_exception.service_idx = global_s_idx;
+                    global_dc.service_exceptions.push(new_service_exception);
+                }
+            }
+
+            // --- B. Strip Partition for Memory Efficiency ---
+            // We retain ONLY what is needed for:
+            // 1. Identifying long-distance/border stations (p.stops)
+            // 2. Running local DAG traversal (p.local_dag)
+            // 3. Storing new external hubs (p.external_hubs) - effectively outputs
+            // 4. Storing new long-dist transfer patterns (p.long_distance_transfer_patterns) - outputs
+
+            p.trip_patterns = Vec::new();
+            p.time_deltas = Vec::new();
+            p.direction_patterns = Vec::new(); // NOTE: local_dag uses indices into stops, not direction patterns.
+            p.service_ids = Vec::new();
+            p.service_exceptions = Vec::new();
+            p.timezones = Vec::new();
+            p.long_distance_trip_patterns = Vec::new(); // Already merged
+            p.direct_connections_index = std::collections::HashMap::new(); // Not needed for graph search topology
+
+            // We strip stops meta-data that isn't needed, but keeping the vector of stops is required for indexing.
+            // We can clear `gtfs_stop_ids` to save some string memory.
+            for stop in &mut p.stops {
+                stop.gtfs_stop_ids = Vec::new();
+            }
+
             loaded_partitions.insert(*pid, p);
         }
     }
 
-    // Identify Long Distance Stations
+    // Save DirectConnections immediately
+    let dc_path = output_dir.join("direct_connections.bincode");
+    save_bincode(&global_dc, dc_path.to_str().unwrap())?;
+    println!(
+        "Saved DirectConnections with {} patterns.",
+        global_dc.trip_patterns.len()
+    );
+
+    // Free up Global DC memory
+    drop(global_dc);
+    drop(global_stop_to_idx);
+
+    // Identify Long Distance Stations (using stripped partitions)
     let mut long_distance_stations: Vec<(u32, u32)> = Vec::new(); // (pid, stop_idx)
     for (pid, p) in &loaded_partitions {
         for (i, stop) in p.stops.iter().enumerate() {
@@ -102,9 +258,10 @@ pub async fn run_rebuild_patterns(
     );
 
     // Phase 1: Long-Distance Patterns
-    // For each long-distance station s:
-    // Run a profile search (TDD) to all long-distance stations in other clusters, but shortcut local parts using local_patterns
-    // Store results in longdist_patterns[s] : PatternDAG.
+    println!("Phase 1: Computing Long Distance Patterns...");
+    let mut long_dist_data = LongDistanceData {
+        patterns_by_source: HashMap::new(),
+    };
 
     for (s_pid, s_idx) in &long_distance_stations {
         let pattern = run_profile_search(
@@ -125,11 +282,7 @@ pub async fn run_rebuild_patterns(
     );
 
     // Phase 2: Border Patterns
-    // For each border station b:
-    // Run a profile search but:
-    // only push border + long-distance stations into the PQ,
-    // reuse both local_patterns and longdist_patterns to shortcut.
-    // As you backtrack optimal routes, write patterns into the cluster’s border_patterns[cluster_of[b]] DAG(s).
+    println!("Phase 2: Computing Border Patterns...");
 
     // Identify Border Stations
     let mut border_stations: Vec<(u32, u32)> = Vec::new();
@@ -140,7 +293,6 @@ pub async fn run_rebuild_patterns(
             }
         }
     }
-
     println!("Found {} border stations.", border_stations.len());
 
     // Map: PartitionID -> List of (SourceIdx, Targets)
@@ -162,14 +314,40 @@ pub async fn run_rebuild_patterns(
     }
 
     // Update Partitions with Border Patterns
-    for (pid, partition) in loaded_partitions.iter_mut() {
-        if let Some(results) = border_results.get(pid) {
+    // Note: We are updating the STRIPPED partitions in memory first with the results.
+    // However, to save, we need to load the FULL partition again and merge.
+
+    println!("Phase 3: Saving Updated Partitions...");
+
+    // Iterate over IDs we have modified
+    // We actually iterate over "loaded_partitions" keys because those are the active ones.
+    for pid in loaded_partitions.keys() {
+        // Did we have updates for this partition?
+        let maybe_results = border_results.get(pid);
+        let has_updates = maybe_results.is_some();
+
+        // We ALWAYS need to re-save if we modify anything (like external hubs or long_distance_transfer_patterns).
+        // Since `border_results` populate `long_distance_transfer_patterns`, if it's empty, we might not need to do much,
+        // BUT `external_hubs` are also populated during the computation?
+        // Wait, the computation logic below populates `partition.external_hubs` based on `border_results`.
+        // So we need to run the logic:
+
+        if let Some(results) = maybe_results {
+            // Load FULL partition again
+            let partition_dir = output_dir.join("patterns").join(pid.to_string());
+            let chunk_path = partition_dir.join("local_v1.bin");
+            let mut full_partition: TransitPartition = load_bincode(chunk_path.to_str().unwrap())?;
+
+            println!(
+                "Updating partition {} with {} border patterns...",
+                pid,
+                results.len()
+            );
+
+            // Now apply the logic to populate `external_hubs` and `long_distance_transfer_patterns`
+            // We can copy the logic from the previous implementation, but applying to `full_partition`.
+
             let mut new_patterns = Vec::new();
-
-            // Helper to get or create external hub index
-            // We need to modify partition.external_hubs
-            // But we are iterating mutable partitions.
-
             for (source_idx, targets) in results {
                 let mut edges = Vec::new();
                 for ((t_pid, t_idx), cost) in targets {
@@ -181,18 +359,17 @@ pub async fn run_rebuild_patterns(
                             original_partition_id: *t_pid,
                             stop_idx_in_partition: *t_idx,
                         };
-                        if let Some(pos) = partition.external_hubs.iter().position(|h| *h == hub) {
-                            (partition.stops.len() + pos) as u32
+                        if let Some(pos) =
+                            full_partition.external_hubs.iter().position(|h| *h == hub)
+                        {
+                            (full_partition.stops.len() + pos) as u32
                         } else {
-                            partition.external_hubs.push(hub);
-                            (partition.stops.len() + partition.external_hubs.len() - 1) as u32
+                            full_partition.external_hubs.push(hub);
+                            (full_partition.stops.len() + full_partition.external_hubs.len() - 1)
+                                as u32
                         }
                     };
 
-                    // Create Edge
-                    // We need to assign an EdgeType.
-                    // Since we don't have the full path, we create a "Direct" edge with the cost.
-                    // We'll use LongDistanceTransit edge type.
                     let edge = catenary::routing_common::transit_graph::DagEdge {
                         from_node_idx: *source_idx,
                         to_node_idx,
@@ -209,169 +386,25 @@ pub async fn run_rebuild_patterns(
                     };
                     edges.push(edge);
                 }
-
                 new_patterns.push(LocalTransferPattern {
                     from_stop_idx: *source_idx,
                     edges,
                 });
             }
 
-            partition.long_distance_transfer_patterns = new_patterns;
+            full_partition.long_distance_transfer_patterns = new_patterns;
+
+            // Save
+            let version_number = 1;
+            tokio::fs::create_dir_all(&partition_dir).await?;
+            let output_path = partition_dir.join(format!("local_v{}.bin", version_number));
+            save_bincode(&full_partition, output_path.to_str().unwrap())?;
+
+            // Also save to old location
+            let legacy_path = output_dir.join(format!("transit_chunk_{}.bincode", pid));
+            save_bincode(&full_partition, legacy_path.to_str().unwrap())?;
         }
     }
-
-    // Phase 3: Persist
-    // Persist: local_patterns + border_patterns + DirectConnections.
-    // Drop: all longdist_patterns (they’ve been “compiled into” border patterns).
-
-    // Save partitions (which now contain border patterns)
-    for (pid, partition) in &loaded_partitions {
-        let version_number = 1;
-        let partition_dir = output_dir.join("patterns").join(pid.to_string());
-        tokio::fs::create_dir_all(&partition_dir).await?;
-        let output_path = partition_dir.join(format!("local_v{}.bin", version_number));
-        save_bincode(&partition, output_path.to_str().unwrap())?;
-
-        // Also save to old location
-        let chunk_path = output_dir.join(format!("transit_chunk_{}.bincode", pid));
-        save_bincode(&partition, chunk_path.to_str().unwrap())?;
-    }
-
-    // Save DirectConnections
-    // We need to aggregate long-distance patterns from all partitions into the global DirectConnections
-    let mut global_dc = DirectConnections::default();
-    let mut global_stop_to_idx: HashMap<String, u32> = HashMap::new();
-
-    for (pid, partition) in &loaded_partitions {
-        // We only care about long_distance_trip_patterns
-        // But wait, `long_distance_trip_patterns` in `TransitPartition` are `TripPattern`s.
-        // They reference `partition.direction_patterns`, `partition.time_deltas`, etc.
-        // OR do they reference their own separate pools?
-        // `TransitPartition` has only one pool for each.
-        // So `long_distance_trip_patterns` use the SAME pools as local patterns.
-
-        // We need to extract ONLY the data used by long_distance_trip_patterns.
-
-        // Helper to remap indices
-        let mut service_map: HashMap<u32, u32> = HashMap::new(); // Local -> Global
-        let mut timezone_map: HashMap<u32, u32> = HashMap::new();
-        let mut time_delta_map: HashMap<u32, u32> = HashMap::new();
-        let mut direction_pattern_map: HashMap<u32, u32> = HashMap::new();
-
-        for tp in &partition.long_distance_trip_patterns {
-            // 1. Remap Timezone
-            let global_tz_idx = *timezone_map.entry(tp.timezone_idx).or_insert_with(|| {
-                let tz = &partition.timezones[tp.timezone_idx as usize];
-                if let Some(idx) = global_dc.timezones.iter().position(|t| t == tz) {
-                    idx as u32
-                } else {
-                    global_dc.timezones.push(tz.clone());
-                    (global_dc.timezones.len() - 1) as u32
-                }
-            });
-
-            // 2. Remap Direction Pattern
-            let global_dp_idx = if let Some(&idx) =
-                direction_pattern_map.get(&tp.direction_pattern_idx)
-            {
-                idx
-            } else {
-                let local_dp = &partition.direction_patterns[tp.direction_pattern_idx as usize];
-                let mut new_stop_indices = Vec::new();
-                for &local_stop_idx in &local_dp.stop_indices {
-                    let stop = &partition.stops[local_stop_idx as usize];
-                    let station_id = &stop.station_id;
-
-                    let global_stop_idx = if let Some(&idx) = global_stop_to_idx.get(station_id) {
-                        idx
-                    } else {
-                        let idx = global_dc.stops.len() as u32;
-                        global_dc.stops.push(station_id.clone());
-                        global_stop_to_idx.insert(station_id.clone(), idx);
-                        idx
-                    };
-                    new_stop_indices.push(global_stop_idx);
-                }
-
-                let new_dp = DirectionPattern {
-                    stop_indices: new_stop_indices,
-                };
-                global_dc.direction_patterns.push(new_dp);
-                let idx = (global_dc.direction_patterns.len() - 1) as u32;
-                direction_pattern_map.insert(tp.direction_pattern_idx, idx);
-                idx
-            };
-
-            // 3. Process Trips
-            let mut new_trips = Vec::new();
-            for trip in &tp.trips {
-                // Remap Service
-                let global_service_idx =
-                    *service_map.entry(trip.service_idx).or_insert_with(|| {
-                        let sid = &partition.service_ids[trip.service_idx as usize];
-                        if let Some(idx) = global_dc.service_ids.iter().position(|s| s == sid) {
-                            idx as u32
-                        } else {
-                            global_dc.service_ids.push(sid.clone());
-                            (global_dc.service_ids.len() - 1) as u32
-                        }
-                    });
-
-                // Remap Time Delta
-                let global_td_idx =
-                    *time_delta_map
-                        .entry(trip.time_delta_idx)
-                        .or_insert_with(|| {
-                            let td = &partition.time_deltas[trip.time_delta_idx as usize];
-                            if let Some(idx) = global_dc.time_deltas.iter().position(|t| t == td) {
-                                idx as u32
-                            } else {
-                                global_dc.time_deltas.push(td.clone());
-                                (global_dc.time_deltas.len() - 1) as u32
-                            }
-                        });
-
-                let mut new_trip = trip.clone();
-                new_trip.service_idx = global_service_idx;
-                new_trip.time_delta_idx = global_td_idx;
-                new_trips.push(new_trip);
-            }
-
-            let mut new_tp = tp.clone();
-            new_tp.timezone_idx = global_tz_idx;
-            new_tp.direction_pattern_idx = global_dp_idx;
-            new_tp.trips = new_trips;
-
-            global_dc.trip_patterns.push(new_tp);
-            let global_pattern_idx = (global_dc.trip_patterns.len() - 1) as u32;
-
-            // Update Index
-            let dp = &global_dc.direction_patterns[global_dp_idx as usize];
-            for (i, &stop_idx) in dp.stop_indices.iter().enumerate() {
-                let station_id = &global_dc.stops[stop_idx as usize];
-                global_dc.index.entry(station_id.clone()).or_default().push(
-                    catenary::routing_common::transit_graph::DirectionPatternReference {
-                        pattern_idx: global_pattern_idx,
-                        stop_idx: i as u32,
-                    },
-                );
-            }
-        }
-
-        // Also merge service exceptions?
-        // We should probably merge ALL service exceptions referenced by the merged services.
-        // For simplicity, let's iterate all service exceptions in partition, and if they refer to a service we mapped, we copy them.
-        for service_exception in &partition.service_exceptions {
-            if let Some(&global_s_idx) = service_map.get(&service_exception.service_idx) {
-                let mut new_service_exception = service_exception.clone();
-                new_service_exception.service_idx = global_s_idx;
-                global_dc.service_exceptions.push(new_service_exception);
-            }
-        }
-    }
-
-    let dc_path = output_dir.join("direct_connections.bincode");
-    save_bincode(&global_dc, dc_path.to_str().unwrap())?;
 
     println!("Rebuild Complete.");
 
