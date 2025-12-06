@@ -753,7 +753,7 @@ impl AspenRpc for AspenServer {
                     save_timestamps(&self, &realtime_feed_id, GtfsRtType::Alerts, alerts_gtfs_rt);
             }
 
-            if feed_id.contains("unwire") {
+            if realtime_feed_id.contains("unwire") {
                 //always treat as new data
                 new_data = true;
             }
