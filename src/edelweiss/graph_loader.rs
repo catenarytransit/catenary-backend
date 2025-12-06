@@ -92,10 +92,13 @@ impl GraphManager {
         // 2. Slow path: Load from disk and insert
         if let Some(base_path) = &self.base_path {
             println!("Loading transit partition {} from disk", partition_id);
-            let filename = format!("transit_chunk_{}.bincode", partition_id);
-            let path = base_path.join(filename);
+            // Try loading from new path structure: patterns/{pid}/local_v1.bin
+            let path = base_path
+                .join("patterns")
+                .join(partition_id.to_string())
+                .join("local_v1.bin");
+
             if path.exists() {
-                // println!("Loading transit partition {} from disk", partition_id);
                 if let Ok(partition) =
                     transit_graph::load_bincode::<TransitPartition>(path.to_str().unwrap())
                 {
@@ -104,6 +107,10 @@ impl GraphManager {
                     map.insert(partition_id, arc_partition.clone());
                     return Some(arc_partition);
                 }
+            } else {
+                // Fallback to old path for backward compatibility if needed, or just log missing
+                // For now, let's keep it strictly new path as per plan to force migration
+                println!("Partition file not found at {:?}", path);
             }
         }
         None

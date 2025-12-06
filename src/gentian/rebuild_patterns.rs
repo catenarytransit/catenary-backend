@@ -76,7 +76,10 @@ pub async fn run_rebuild_patterns(
     // We need to load ALL partitions to do this global computation
     let mut loaded_partitions: HashMap<u32, TransitPartition> = HashMap::new();
     for pid in manifest.partition_to_chateaux.keys() {
-        let chunk_path = output_dir.join(format!("transit_chunk_{}.bincode", pid));
+        let chunk_path = output_dir
+            .join("patterns")
+            .join(pid.to_string())
+            .join("local_v1.bin");
         if chunk_path.exists() {
             let p: TransitPartition = load_bincode(chunk_path.to_str().unwrap())?;
             loaded_partitions.insert(*pid, p);
@@ -390,7 +393,11 @@ async fn rebuild_partition(
     // 1. Load or Create Partition
     // We try to load existing partition to preserve non-timetable data (like OSM links).
     // If it doesn't exist, we create it from shards.
-    let chunk_path = output_dir.join(format!("transit_chunk_{}.bincode", partition_id));
+    let chunk_path = output_dir
+        .join("patterns")
+        .join(partition_id.to_string())
+        .join("local_v1.bin");
+
     let mut partition: TransitPartition = if chunk_path.exists() {
         load_bincode(chunk_path.to_str().unwrap())?
     } else {
