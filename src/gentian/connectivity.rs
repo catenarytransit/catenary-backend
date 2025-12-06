@@ -806,8 +806,11 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     }
 
     // 1. Compute Transfers (Trip-Based Preprocessing)
+    println!("Computing initial transfers");
     let mut transfers = crate::trip_based::compute_initial_transfers(partition);
+    println!("removing u turn transfers");
     crate::trip_based::remove_u_turn_transfers(partition, &mut transfers);
+    println!("refining transfers");
     crate::trip_based::refine_transfers(partition, &mut transfers);
 
     println!(
