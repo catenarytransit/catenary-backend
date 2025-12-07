@@ -20,6 +20,7 @@ use crate::pathfinding::compute_osm_walk;
 use crate::trip_based::{
     ProfileScratch, build_stop_to_patterns, compute_initial_transfers, compute_one_to_all_profile,
     compute_profile_query, get_departure_time, refine_transfers, remove_u_turn_transfers,
+    run_trip_based_profile,
 };
 use crate::update_gtfs::run_update_gtfs;
 use crate::utils::{haversine_distance, lon_lat_to_tile};
@@ -233,6 +234,9 @@ pub async fn run_rebuild_patterns(
             // 3. Storing new external hubs (p.external_hubs) - effectively outputs
             // 4. Storing new long-dist transfer patterns (p.long_distance_transfer_patterns) - outputs
 
+            // --- B. Strip Partition for Memory Efficiency ---
+            // DISABLED for Trip-Based Routing: We need full timetable data in memory.
+            /*
             p.trip_patterns = Vec::new();
             p.time_deltas = Vec::new();
             p.direction_patterns = Vec::new(); // NOTE: local_dag uses indices into stops, not direction patterns.
@@ -247,6 +251,7 @@ pub async fn run_rebuild_patterns(
             for stop in &mut p.stops {
                 stop.gtfs_stop_ids = Vec::new();
             }
+            */
 
             loaded_partitions.insert(*pid, p);
         }
@@ -285,19 +290,20 @@ pub async fn run_rebuild_patterns(
         patterns_by_source: HashMap::new(),
     };
 
-    let patterns_vec: Vec<((u32, u32), Vec<((u32, u32), u32)>)> = long_distance_stations
-        .par_iter()
-        .map(|(s_pid, s_idx)| {
-            let pattern = run_profile_search(
-                *s_pid,
-                *s_idx,
-                &loaded_partitions,
-                &long_distance_stations,
-                true, // is_long_distance_phase
-            );
-            ((*s_pid, *s_idx), pattern)
-        })
-        .collect();
+    let patterns_vec: Vec<((u32, u32), Vec<((u32, u32), Vec<(u32, u32)>)>)> =
+        long_distance_stations
+            .par_iter()
+            .map(|(s_pid, s_idx)| {
+                let profile = run_profile_search(
+                    *s_pid,
+                    *s_idx,
+                    &loaded_partitions,
+                    &long_distance_stations,
+                    None,
+                );
+                ((*s_pid, *s_idx), profile)
+            })
+            .collect();
 
     for (key, val) in patterns_vec {
         long_dist_data.patterns_by_source.insert(key, val);
@@ -324,18 +330,72 @@ pub async fn run_rebuild_patterns(
 
     // Map: PartitionID -> List of (SourceIdx, Targets)
     // Targets: Vec<((TargetPID, TargetIdx), Cost)>
-    let mut border_results: HashMap<u32, Vec<(u32, Vec<((u32, u32), u32)>)>> = HashMap::new();
+    let mut border_results: HashMap<u32, Vec<(u32, Vec<((u32, u32), Vec<(u32, u32)>)>)>> =
+        HashMap::new();
 
-    let results_vec: Vec<(u32, u32, Vec<((u32, u32), u32)>)> = border_stations
+    // REWRITE: Precise Injection
+    for ((src_pid, src_idx), targets) in &long_dist_data.patterns_by_source {
+        let partition = loaded_partitions.get_mut(src_pid).unwrap();
+        for ((tgt_pid, tgt_idx), pareto) in targets {
+            if *src_pid != *tgt_pid {
+                continue;
+            }
+            if pareto.is_empty() {
+                continue;
+            }
+
+            // 1. Create DirectionPattern
+            let dp = DirectionPattern {
+                stop_indices: vec![*src_idx, *tgt_idx],
+            };
+            partition.direction_patterns.push(dp);
+            let dp_idx = (partition.direction_patterns.len() - 1) as u32;
+
+            // 2. Create TimeDeltas
+            // We can create one TimeDelta per trip OR try to share.
+            // Sharing is better for memory.
+            // But pareto points differ.
+            // For simplicity: Create one TimeDelta per trip.
+
+            let mut trips = Vec::new();
+            for (dep, arr) in pareto {
+                let duration = arr - dep;
+                let tds = TimeDeltaSequence {
+                    deltas: vec![duration, 0], // Travel, Dwell
+                };
+                partition.time_deltas.push(tds);
+                let td_idx = (partition.time_deltas.len() - 1) as u32;
+
+                trips.push(catenary::routing_common::transit_graph::CompressedTrip {
+                    gtfs_trip_id: "synthetic".to_string(),
+                    service_mask: u32::MAX,
+                    start_time: *dep,
+                    time_delta_idx: td_idx,
+                    service_idx: 0,
+                    bikes_allowed: 0,
+                    wheelchair_accessible: 0,
+                });
+            }
+
+            // 3. Create TripPattern
+            let pattern = TripPattern {
+                chateau_idx: 0,
+                route_id: "synthetic".to_string(),
+                direction_pattern_idx: dp_idx,
+                trips,
+                timezone_idx: 0,
+                route_type: 0,
+                is_border: false,
+            };
+            partition.trip_patterns.push(pattern);
+        }
+    }
+
+    let results_vec: Vec<(u32, u32, Vec<((u32, u32), Vec<(u32, u32)>)>)> = border_stations
         .par_iter()
         .map(|(b_pid, b_idx)| {
-            let results = run_profile_search_phase2(
-                *b_pid,
-                *b_idx,
-                &loaded_partitions,
-                &long_dist_data,
-                &border_stations,
-            );
+            let results =
+                run_profile_search_phase2(*b_pid, *b_idx, &loaded_partitions, &border_stations);
             (*b_pid, *b_idx, results)
         })
         .collect();
@@ -348,7 +408,8 @@ pub async fn run_rebuild_patterns(
     }
 
     // Combine Results
-    let mut combined_results: HashMap<u32, Vec<(u32, Vec<((u32, u32), u32)>)>> = HashMap::new();
+    let mut combined_results: HashMap<u32, Vec<(u32, Vec<((u32, u32), Vec<(u32, u32)>)>)>> =
+        HashMap::new();
 
     // 1. Add Border Results
     for (pid, results_list) in border_results {
@@ -397,11 +458,27 @@ pub async fn run_rebuild_patterns(
 
         // Now apply the logic to populate `external_hubs` and `long_distance_transfer_patterns`
 
-        // We collect all new patterns
-        let mut new_patterns = Vec::new();
+        // Consolidate results by source_idx to avoid duplicate LocalTransferPatterns
+        let mut results_by_source: HashMap<u32, Vec<((u32, u32), Vec<(u32, u32)>)>> =
+            HashMap::new();
         for (source_idx, targets) in results_list {
+            results_by_source
+                .entry(source_idx)
+                .or_default()
+                .extend(targets);
+        }
+
+        // Apply updates
+        let mut new_patterns = Vec::new();
+
+        for (source_idx, targets) in results_by_source {
             let mut edges = Vec::new();
-            for ((t_pid, t_idx), cost) in targets {
+
+            for ((t_pid, t_idx), pareto) in targets {
+                if pareto.is_empty() {
+                    continue;
+                }
+
                 let to_node_idx = if t_pid == pid {
                     t_idx
                 } else {
@@ -418,17 +495,74 @@ pub async fn run_rebuild_patterns(
                     }
                 };
 
+                // GENERATE SYNTHETIC TRIP PATTERN
+                // 1. Create DirectionPattern [src, tgt]
+                // Note: 'tgt' index depends on if it is internal or external.
+                // Typically DirectionPatterns use internal indices.
+                // For external hubs, we use the virtual index (stops.len() + hub_idx).
+                let dp = DirectionPattern {
+                    stop_indices: vec![source_idx, to_node_idx],
+                };
+
+                // We should check if this DP already exists to save space, but for now simple append.
+                full_partition.direction_patterns.push(dp);
+                let dp_idx = (full_partition.direction_patterns.len() - 1) as u32;
+
+                // 2. Create Trips & TimeDeltas
+                let mut trips = Vec::new();
+                for (dep, arr) in &pareto {
+                    let duration = arr - dep;
+                    let tds = TimeDeltaSequence {
+                        deltas: vec![*duration, 0], // Travel, Dwell
+                    };
+                    full_partition.time_deltas.push(tds);
+                    let td_idx = (full_partition.time_deltas.len() - 1) as u32;
+
+                    trips.push(catenary::routing_common::transit_graph::CompressedTrip {
+                        gtfs_trip_id: "synthetic".to_string(),
+                        service_mask: u32::MAX,
+                        start_time: *dep,
+                        time_delta_idx: td_idx,
+                        service_idx: 0,
+                        bikes_allowed: 0,
+                        wheelchair_accessible: 0,
+                    });
+                }
+
+                let tp = TripPattern {
+                    chateau_idx: 0,
+                    route_id: "synthetic".to_string(),
+                    direction_pattern_idx: dp_idx,
+                    trips,
+                    timezone_idx: 0,
+                    route_type: 2, // Rail/LongDist
+                    is_border: false,
+                };
+
+                full_partition.trip_patterns.push(tp);
+                let tp_idx = (full_partition.trip_patterns.len() - 1) as u32;
+
+                // Link Edge
                 let edge = catenary::routing_common::transit_graph::DagEdge {
                     from_node_idx: source_idx,
                     to_node_idx,
-                    edge_type: Some(catenary::routing_common::transit_graph::EdgeType::Walk(
-                        catenary::routing_common::transit_graph::WalkEdge {
-                            duration_seconds: cost,
-                        },
-                    )),
+                    edge_type: Some(
+                        catenary::routing_common::transit_graph::EdgeType::LongDistanceTransit(
+                            catenary::routing_common::transit_graph::TransitEdge {
+                                trip_pattern_idx: tp_idx,
+                                start_stop_idx: 0,
+                                end_stop_idx: 1, // Synthetic patterns always 2 stops
+                                min_duration: match pareto.iter().map(|(d, a)| a - d).min() {
+                                    Some(m) => m,
+                                    None => 0,
+                                },
+                            },
+                        ),
+                    ),
                 };
                 edges.push(edge);
             }
+
             new_patterns.push(LocalTransferPattern {
                 from_stop_idx: source_idx,
                 edges,
@@ -487,7 +621,9 @@ pub async fn run_rebuild_patterns(
 }
 
 struct LongDistanceData {
-    patterns_by_source: HashMap<(u32, u32), Vec<((u32, u32), u32)>>, // (pid, stop_idx) -> List of (Target(pid, idx), Cost)
+    // (pid, stop_idx) -> List of (Target(pid, idx), ParetoSegments)
+    // ParetoSegments: List of (DepartureTime, ArrivalTime)
+    patterns_by_source: HashMap<(u32, u32), Vec<((u32, u32), Vec<(u32, u32)>)>>,
 }
 
 fn rebuild_partition(
@@ -1084,118 +1220,105 @@ fn run_profile_search(
     start_idx: u32,
     loaded_partitions: &HashMap<u32, TransitPartition>,
     targets: &[(u32, u32)],
-    is_long_distance_phase: bool,
-) -> Vec<((u32, u32), u32)> {
-    // Simplified Dijkstra for now
-    // In a real implementation, this would be a full profile search (CSA or similar).
-    // Here we implement a basic Dijkstra to find connectivity.
+    hubs: Option<&HashSet<u32>>,
+) -> Vec<((u32, u32), Vec<(u32, u32)>)> {
+    // Trip-Based Profile Search (rRAPTOR)
 
-    let mut dist: HashMap<(u32, u32), u32> = HashMap::new();
-    let mut pq = std::collections::BinaryHeap::new();
+    // 1. Get Partition and Init
+    let partition = loaded_partitions.get(&start_pid).unwrap();
 
-    // Pre-build lookup for long-distance patterns if needed.
-    // This optimization prevents us from scanning all patterns for every node visit.
-    let mut long_dist_lookup: HashMap<(u32, u32), &LocalTransferPattern> = HashMap::new();
-    if is_long_distance_phase {
-        for (pid, partition) in loaded_partitions {
-            for pat in &partition.long_distance_transfer_patterns {
-                long_dist_lookup.insert((*pid, pat.from_stop_idx), pat);
-            }
-        }
-    }
+    // 2. Build Transfers (Algorithm 1+2+3)
+    // Note: In production, these should be precomputed or cached?
+    // Calculating per profile search is expensive but safe for rebuild (offline).
+    let mut transfers = compute_initial_transfers(partition);
+    remove_u_turn_transfers(partition, &mut transfers);
+    refine_transfers(partition, &mut transfers);
 
-    dist.insert((start_pid, start_idx), 0);
-    pq.push(State {
-        cost: 0,
-        pid: start_pid,
-        stop_idx: start_idx,
+    // 3. Build Transfer Ranges
+    let mut trip_transfer_ranges: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
+    // Sort transfers
+    transfers.sort_by(|a, b| {
+        a.from_pattern_idx
+            .cmp(&b.from_pattern_idx)
+            .then(a.from_trip_idx.cmp(&b.from_trip_idx))
+            .then(a.from_stop_idx_in_pattern.cmp(&b.from_stop_idx_in_pattern))
     });
 
-    while let Some(State {
-        cost,
-        pid,
-        stop_idx,
-    }) = pq.pop()
-    {
-        if cost > *dist.get(&(pid, stop_idx)).unwrap_or(&u32::MAX) {
-            continue;
+    let mut start = 0;
+    while start < transfers.len() {
+        let t = &transfers[start];
+        let key = (t.from_pattern_idx, t.from_trip_idx);
+        let mut end = start + 1;
+        while end < transfers.len()
+            && transfers[end].from_pattern_idx == key.0
+            && transfers[end].from_trip_idx == key.1
+        {
+            end += 1;
         }
+        trip_transfer_ranges.insert(key, (start, end));
+        start = end;
+    }
 
-        if let Some(partition) = loaded_partitions.get(&pid) {
-            // 1. Local Patterns
-            if let Some(edge_list) = partition.local_dag.get(&stop_idx) {
-                for edge in &edge_list.edges {
-                    let weight = match &edge.edge_type {
-                        Some(catenary::routing_common::transit_graph::EdgeType::Transit(t)) => {
-                            t.min_duration
-                        }
-                        Some(catenary::routing_common::transit_graph::EdgeType::Walk(w)) => {
-                            w.duration_seconds
-                        }
-                        _ => 0,
-                    };
-                    let next_cost = cost + weight;
-                    // Local DAG edges always target nodes within the same partition
-                    let target = (pid, edge.to_node_idx);
-                    if next_cost < *dist.get(&target).unwrap_or(&u32::MAX) {
-                        dist.insert(target, next_cost);
-                        pq.push(State {
-                            cost: next_cost,
-                            pid: target.0,
-                            stop_idx: target.1,
-                        });
-                    }
-                }
-            }
+    // 4. Build Stop to Patterns
+    let stop_to_patterns = build_stop_to_patterns(partition);
 
-            // 2. Long Distance Trip Patterns (Phase 1 only)
-            if is_long_distance_phase {
-                if let Some(pat) = long_dist_lookup.get(&(pid, stop_idx)) {
-                    for edge in &pat.edges {
-                        // Check if this edge goes to an external hub
-                        let ext_idx = edge.to_node_idx as usize;
-                        if ext_idx >= partition.stops.len() {
-                            let hub_idx = ext_idx - partition.stops.len();
-                            if hub_idx < partition.external_hubs.len() {
-                                let global_hub = &partition.external_hubs[hub_idx];
-                                let target_pid = global_hub.original_partition_id;
-                                let target_idx = global_hub.stop_idx_in_partition;
-                                let target = (target_pid, target_idx);
+    // 5. Flatten Trips for r_labels
+    let mut flat_id_to_pattern_trip = Vec::new();
+    let mut pattern_trip_offset = vec![0; partition.trip_patterns.len()];
+    let mut current_offset = 0;
+    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
+        pattern_trip_offset[p_idx] = current_offset;
+        for t_idx in 0..pattern.trips.len() {
+            flat_id_to_pattern_trip.push((p_idx, t_idx));
+        }
+        current_offset += pattern.trips.len();
+    }
 
-                                let weight = match &edge.edge_type {
-                                    Some(catenary::routing_common::transit_graph::EdgeType::Transit(t)) => t.min_duration,
-                                    Some(catenary::routing_common::transit_graph::EdgeType::Walk(w)) => w.duration_seconds,
-                                    Some(catenary::routing_common::transit_graph::EdgeType::LongDistanceTransit(t)) => t.min_duration,
-                                    None => 0,
-                                };
+    // 6. Setup Scratch
+    // Assuming reasonable defaults for max_transfers (e.g. 4)
+    let max_transfers = 4;
+    let mut scratch = ProfileScratch::new(
+        partition.stops.len(),
+        flat_id_to_pattern_trip.len(),
+        max_transfers,
+    );
 
-                                let next_cost = cost + weight;
+    // 7. Filter Targets (Local Only for Trip-Based)
+    let mut local_targets = Vec::new();
 
-                                if next_cost < *dist.get(&target).unwrap_or(&u32::MAX) {
-                                    dist.insert(target, next_cost);
-                                    pq.push(State {
-                                        cost: next_cost,
-                                        pid: target.0,
-                                        stop_idx: target.1,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    for (t_pid, t_idx) in targets {
+        if *t_pid == start_pid {
+            local_targets.push(*t_idx);
         }
     }
+
+    // 8. Run Profile Search
+    let empty_hubs = HashSet::new();
+    let hubs_ref = hubs.unwrap_or(&empty_hubs);
+
+    let raw_results = run_trip_based_profile(
+        partition,
+        &transfers,
+        &trip_transfer_ranges,
+        start_idx,
+        &local_targets,
+        &stop_to_patterns,
+        &flat_id_to_pattern_trip,
+        &pattern_trip_offset,
+        max_transfers,
+        &mut scratch,
+        hubs_ref,
+        false, // is_source_hub (approximation)
+    );
 
     // Construct results
     let mut results = Vec::new();
-    for (t_pid, t_idx) in targets {
-        if *t_pid == start_pid && *t_idx == start_idx {
-            continue;
-        }
-        let target_key = (*t_pid, *t_idx);
-        if let Some(&cost) = dist.get(&target_key) {
-            results.push((target_key, cost));
+    for (t_key, pareto) in raw_results {
+        // Map local target (u32) to global key (start_pid, t_idx)
+        let t_idx = t_key;
+        // Filter out unreachable
+        if !pareto.is_empty() {
+            results.push(((start_pid, t_idx), pareto));
         }
     }
 
@@ -1206,85 +1329,26 @@ fn run_profile_search_phase2(
     start_pid: u32,
     start_idx: u32,
     loaded_partitions: &HashMap<u32, TransitPartition>,
-    long_dist_data: &LongDistanceData,
     targets: &[(u32, u32)],
-) -> Vec<((u32, u32), u32)> {
-    let mut dist: HashMap<(u32, u32), u32> = HashMap::new();
-    let mut pq = std::collections::BinaryHeap::new();
+) -> Vec<((u32, u32), Vec<(u32, u32)>)> {
+    // Phase 2 just runs the search on the augmented partition.
+    // The synthetic trips should have been injected already.
+    // Collect hubs for long-distance pruning
+    let partition = loaded_partitions.get(&start_pid).unwrap();
+    let hubs: HashSet<u32> = partition
+        .stops
+        .iter()
+        .filter(|s| s.is_hub)
+        .map(|s| s.id as u32)
+        .collect();
 
-    dist.insert((start_pid, start_idx), 0);
-    pq.push(State {
-        cost: 0,
-        pid: start_pid,
-        stop_idx: start_idx,
-    });
-
-    while let Some(State {
-        cost,
-        pid,
-        stop_idx,
-    }) = pq.pop()
-    {
-        if cost > *dist.get(&(pid, stop_idx)).unwrap_or(&u32::MAX) {
-            continue;
-        }
-
-        // 1. Local Patterns
-        if let Some(p) = loaded_partitions.get(&pid) {
-            if let Some(edge_list) = p.local_dag.get(&stop_idx) {
-                for edge in &edge_list.edges {
-                    let weight = match &edge.edge_type {
-                        Some(catenary::routing_common::transit_graph::EdgeType::Transit(t)) => {
-                            t.min_duration
-                        }
-                        Some(catenary::routing_common::transit_graph::EdgeType::Walk(w)) => {
-                            w.duration_seconds
-                        }
-                        _ => 0,
-                    };
-                    let next_cost = cost + weight;
-                    let target = (pid, edge.to_node_idx);
-                    if next_cost < *dist.get(&target).unwrap_or(&u32::MAX) {
-                        dist.insert(target, next_cost);
-                        pq.push(State {
-                            cost: next_cost,
-                            pid: target.0,
-                            stop_idx: target.1,
-                        });
-                    }
-                }
-            }
-        }
-
-        // 2. Long Distance Shortcuts (Phase 2)
-        if let Some(shortcuts) = long_dist_data.patterns_by_source.get(&(pid, stop_idx)) {
-            for &((target_pid, target_idx), weight) in shortcuts {
-                let next_cost = cost + weight;
-                let target = (target_pid, target_idx);
-                if next_cost < *dist.get(&target).unwrap_or(&u32::MAX) {
-                    dist.insert(target, next_cost);
-                    pq.push(State {
-                        cost: next_cost,
-                        pid: target.0,
-                        stop_idx: target.1,
-                    });
-                }
-            }
-        }
-    }
-
-    let mut results = Vec::new();
-    for (t_pid, t_idx) in targets {
-        if *t_pid == start_pid && *t_idx == start_idx {
-            continue;
-        }
-        let target_key = (*t_pid, *t_idx);
-        if let Some(&cost) = dist.get(&target_key) {
-            results.push((target_key, cost));
-        }
-    }
-
-    results
+    run_profile_search(
+        start_pid,
+        start_idx,
+        loaded_partitions,
+        targets,
+        Some(&hubs),
+    )
 }
 
 fn reconstruct_manifest(output_dir: &Path) -> Result<Manifest> {

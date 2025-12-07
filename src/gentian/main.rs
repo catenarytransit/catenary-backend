@@ -49,6 +49,8 @@ pub mod update_gtfs;
 
 #[cfg(test)]
 pub mod test_trip_based;
+#[cfg(test)]
+pub mod test_trip_based_profile;
 
 use crate::clustering::merge_based_clustering;
 use crate::connectivity::{

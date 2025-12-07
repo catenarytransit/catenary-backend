@@ -138,7 +138,6 @@ pub fn reduce_borders_by_merging(
 
             // Adaptive Thresholds
             let n = new_size as f64;
-            let r = (0.144371 * n.ln() - 0.861038).min(0.15); // Ratio threshold from paper
 
             // Adaptive absolute threshold
             // Scale by total border weight and inverse log of size?
@@ -150,7 +149,7 @@ pub fn reduce_borders_by_merging(
             // Let's use:
             let abs_threshold = (total_border_weight as f64) * 0.05 / (n.ln().max(1.0));
 
-            let is_candidate = (reduction as f64) > abs_threshold && ratio > r;
+            let is_candidate = (reduction as f64) > abs_threshold;
 
             if is_candidate {
                 // Score: Weighted reduction + fraction of adjacency weight?

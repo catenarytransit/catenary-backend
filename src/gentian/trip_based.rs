@@ -759,9 +759,10 @@ pub fn compute_profile_query(
     scratch: &mut ProfileScratch,
     hubs: &HashSet<u32>,
     is_source_hub: bool,
-) {
+) -> HashMap<u32, u32> {
     let num_stops = partition.stops.len();
     let total_trips = flat_id_to_pattern_trip.len();
+    let mut min_durations = HashMap::new();
 
     scratch.r_labels.clear();
     scratch
@@ -1448,6 +1449,61 @@ pub fn compute_profile_query(
     scratch
         .result_edges
         .extend(scratch.dedup_map.drain().map(|(_, v)| v));
+
+    // 7. Extract Min Arrivals (Pareto Frontier for this departure)
+    // We scan r_labels to find the earliest arrival at each target.
+    for &target_stop in targets {
+        let mut best_arr = u32::MAX;
+
+        // Check Walks
+        for &(s, d) in &scratch.initial_walks {
+            if s == target_stop {
+                let arr = start_time.saturating_add(d);
+                if arr < best_arr {
+                    best_arr = arr;
+                }
+            }
+        }
+
+        // Check Trips
+        if let Some(patterns) = stop_to_patterns.get(target_stop as usize) {
+            for &(p_idx, target_s_idx) in patterns {
+                let pattern = &partition.trip_patterns[p_idx];
+                let offset = pattern_trip_offset[p_idx];
+
+                for k in 0..=max_transfers {
+                    // Iterate all trips in this pattern
+                    for (t_idx, trip) in pattern.trips.iter().enumerate() {
+                        let flat_id = offset + t_idx;
+                        let raw_entry = scratch.r_labels[k][flat_id];
+                        if raw_entry == u32::MAX {
+                            continue;
+                        }
+                        if (raw_entry & INACTIVE_MASK) != 0 {
+                            continue;
+                        }
+
+                        let enter_s_idx = (raw_entry & IDX_MASK) as usize;
+
+                        // If we entered before the target stop, we can alight.
+                        if enter_s_idx < target_s_idx {
+                            // Calculate arrival
+                            let arr = get_arrival_time(partition, trip, target_s_idx);
+                            if arr < best_arr {
+                                best_arr = arr;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if best_arr != u32::MAX {
+            min_durations.insert(target_stop, best_arr);
+        }
+    }
+
+    min_durations
 }
 
 // Helpers
@@ -1725,4 +1781,97 @@ pub fn compute_one_to_all_profile(
     }
 
     min_durations
+}
+
+pub fn run_trip_based_profile(
+    partition: &TransitPartition,
+    transfers: &[Transfer],
+    trip_transfer_ranges: &HashMap<(usize, usize), (usize, usize)>,
+    start_stop: u32,
+    targets: &[u32],
+    stop_to_patterns: &[Vec<(usize, usize)>],
+    flat_id_to_pattern_trip: &[(usize, usize)],
+    pattern_trip_offset: &[usize],
+    max_transfers: usize,
+    scratch: &mut ProfileScratch,
+    hubs: &HashSet<u32>,
+    is_source_hub: bool,
+) -> Vec<(u32, Vec<(u32, u32)>)> {
+    // 1. Collect all departures from start_stop
+    let mut departures: Vec<u32> = Vec::new();
+
+    // Iterate patterns serving start_stop
+    if let Some(patterns) = stop_to_patterns.get(start_stop as usize) {
+        for &(p_idx, s_idx) in patterns {
+            let pattern = &partition.trip_patterns[p_idx];
+            for trip in &pattern.trips {
+                let dep = get_departure_time(partition, trip, s_idx);
+                departures.push(dep);
+            }
+        }
+    }
+
+    // Sort descending for rRaptor
+    departures.sort_unstable_by(|a, b| b.cmp(a));
+    departures.dedup();
+
+    let mut pareto_results: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
+    // Initialize with empty
+    for &t in targets {
+        pareto_results.insert(t, Vec::new());
+    }
+
+    // 2. Iterate Departures (rRaptor)
+    for &dep_time in &departures {
+        // Run Profile Query
+        let outcomes = compute_profile_query(
+            partition,
+            transfers,
+            trip_transfer_ranges,
+            start_stop,
+            dep_time,
+            targets,
+            stop_to_patterns,
+            flat_id_to_pattern_trip,
+            pattern_trip_offset,
+            max_transfers,
+            scratch,
+            hubs,
+            is_source_hub,
+        );
+
+        // Process results
+        for (&target_stop, &arr_time_val) in &outcomes {
+            if arr_time_val == u32::MAX {
+                continue;
+            }
+            let arr_time = arr_time_val;
+
+            let entry = pareto_results.entry(target_stop).or_default();
+
+            // Dominated check:
+            // Since we iterate Departures DESC:
+            // Current (dep, arr). Last stored (last_dep, last_arr) where last_dep > dep.
+            // If arr < last_arr, we keep it. (Earlier arrival allowed by earlier departure).
+            // If arr >= last_arr, we discard. (Earlier departure but same/later arrival).
+            let keep = if let Some(&(_, last_arr)) = entry.last() {
+                arr_time < last_arr
+            } else {
+                true
+            };
+
+            if keep {
+                entry.push((dep_time, arr_time));
+            }
+        }
+    }
+
+    // Reverse the vectors to be chronological (Dep ASC)?
+    // Currently Dep DESC.
+    // Let's reverse them for consumer convenience.
+    for val in pareto_results.values_mut() {
+        val.reverse();
+    }
+
+    pareto_results.into_iter().collect()
 }
