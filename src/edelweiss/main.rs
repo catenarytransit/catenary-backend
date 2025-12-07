@@ -59,8 +59,12 @@ impl EdelweissService for EdelweissServer {
                 if let (Some(id), Some(chateau)) = (leg.route_id(), leg.chateau()) {
                     route_ids.push((chateau.clone(), id.clone()));
                 } else {
-                     println!("Leg missing route info: Mode={:?}, RouteID={:?}, Chateau={:?}", 
-                        leg.mode(), leg.route_id(), leg.chateau());
+                    println!(
+                        "Leg missing route info: Mode={:?}, RouteID={:?}, Chateau={:?}",
+                        leg.mode(),
+                        leg.route_id(),
+                        leg.chateau()
+                    );
                 }
             }
         }
@@ -98,7 +102,10 @@ impl EdelweissService for EdelweissServer {
             }
         }
 
-        println!("EdelweissService returning {} itineraries", result.itineraries.len());
+        println!(
+            "EdelweissService returning {} itineraries",
+            result.itineraries.len()
+        );
         result
     }
 }

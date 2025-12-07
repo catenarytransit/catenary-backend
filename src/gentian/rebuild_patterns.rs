@@ -13,8 +13,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::connectivity::{compute_border_patterns, compute_local_patterns_for_partition};
+use crate::osm::ChunkCache;
+use crate::pathfinding::compute_osm_walk;
 use crate::update_gtfs::run_update_gtfs;
-use crate::utils::haversine_distance;
+use crate::utils::{haversine_distance, lon_lat_to_tile};
 
 /// Run the pattern rebuild process.
 /// This assumes `update-gtfs` has been run for modified chateaux.
@@ -628,19 +630,24 @@ async fn rebuild_partition(
 
     // Parameters for transfer generation
     const MAX_TRANSFER_DIST: f64 = 500.0; // meters
-    const WALK_SPEED: f64 = 1.1; // m/s (conservative)
+    // const WALK_SPEED: f64 = 1.1; // m/s (conservative) - used for fallback
 
     println!(
-        "    - Generating internal transfers (max dist {}m)...",
+        "    - Generating internal transfers (max dist {}m). Using OSM A* if available...",
         MAX_TRANSFER_DIST
     );
 
-    // Naive pairwise (O(N^2)) - acceptable for partition size < 5000 usually.
-    // Optimization: could use simple lat sort or spatial index if needed.
-    // For now, simple brute force is robust.
+    let osm_dir = output_dir.to_path_buf(); // Assuming chunks are directly in output_dir for now, or check extract
+    let mut chunk_cache = ChunkCache::new(50);
+
+    // Cache stop cache tiles to avoid re-calculating tile coords constantly
+    // (Optional, but good for O(N^2))
     let stops_len = partition.stops.len();
+
+    // Naive pairwise (O(N^2))
     for i in 0..stops_len {
         let s_i = &partition.stops[i];
+        let (tx_i, ty_i) = lon_lat_to_tile(s_i.lon, s_i.lat, 12);
 
         // Always add self-loop
         partition.internal_transfers.push(StaticTransfer {
@@ -651,33 +658,79 @@ async fn rebuild_partition(
             wheelchair_accessible: true,
         });
 
+        // Pre-resolve source node if possible
+        let source_node_idx_opt = {
+            if let Some((street_data, rtree)) = chunk_cache.get_or_load(tx_i, ty_i, &osm_dir) {
+                if let Some(nearest) = rtree.nearest_neighbor(&[s_i.lon, s_i.lat]) {
+                    // Check distance to node?
+                    let n = &street_data.nodes[nearest.data as usize];
+                    if haversine_distance(s_i.lat, s_i.lon, n.lat, n.lon) < 200.0 {
+                        Some(nearest.data)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         for j in 0..stops_len {
             if i == j {
                 continue;
             }
             let s_j = &partition.stops[j];
 
-            // Quick lat check (1 degree lat ~= 111km) -> 500m is approx 0.005 deg
             if (s_i.lat - s_j.lat).abs() > 0.01 {
                 continue;
             }
 
             let dist = haversine_distance(s_i.lat, s_i.lon, s_j.lat, s_j.lon);
             if dist <= MAX_TRANSFER_DIST {
-                let duration = (dist / WALK_SPEED).ceil() as u32;
-                let duration = std::cmp::max(1, duration); // Ensure at least 1 second
+                let mut duration_opt = None;
+
+                // Try A* if source node found
+                if let Some(src_node_idx) = source_node_idx_opt {
+                    let (tx_j, ty_j) = lon_lat_to_tile(s_j.lon, s_j.lat, 12);
+                    if tx_i == tx_j && ty_i == ty_j {
+                        // Same tile, use cached data
+                        // (We just re-get it, cache is fast enough)
+                        if let Some((street_data, rtree)) =
+                            chunk_cache.get_or_load(tx_i, ty_i, &osm_dir)
+                        {
+                            if let Some(nearest) = rtree.nearest_neighbor(&[s_j.lon, s_j.lat]) {
+                                let n = &street_data.nodes[nearest.data as usize];
+                                if haversine_distance(s_j.lat, s_j.lon, n.lat, n.lon) < 200.0 {
+                                    let target_node_idx = nearest.data;
+                                    if let Some(walk_sec) =
+                                        compute_osm_walk(src_node_idx, target_node_idx, street_data)
+                                    {
+                                        duration_opt = Some(walk_sec);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fallback to Haversine
+                let duration = duration_opt.unwrap_or_else(|| {
+                    let d = (dist / 1.1).ceil() as u32; // 1.1 m/s fallback
+                    std::cmp::max(1, d)
+                });
 
                 partition.internal_transfers.push(StaticTransfer {
                     from_stop_idx: i as u32,
                     to_stop_idx: j as u32,
                     duration_seconds: duration,
                     distance_meters: dist as u32,
-                    wheelchair_accessible: true, // Optimistic assumption
+                    wheelchair_accessible: true,
                 });
             }
         }
     }
-
 
     // 5. Recompute Local Patterns
     compute_local_patterns_for_partition(&mut partition);

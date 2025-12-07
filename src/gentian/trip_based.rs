@@ -35,7 +35,7 @@ pub struct ProfileScratch {
     pub is_target: Vec<bool>,
     pub seeds: Vec<Seed>,
     pub initial_walks: Vec<(u32, u32)>,
-    
+
     // New fields for compute_profile_query recycling
     pub useful_trips: HashMap<(usize, usize), usize>,
     // Tuple: (from, to, type, p_idx, s_idx, e_idx)
@@ -85,65 +85,68 @@ struct PatternStopInfo {
     departure_time: u32,
 }
 
+// Add a small helper for building stop->patterns
+pub fn build_stop_to_patterns(partition: &TransitPartition) -> Vec<Vec<(usize, usize)>> {
+    let mut stop_to_patterns: Vec<Vec<(usize, usize)>> = vec![Vec::new(); partition.stops.len()];
+    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
+        let stops =
+            &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
+        for (s_idx, &stop_id) in stops.iter().enumerate() {
+            stop_to_patterns[stop_id as usize].push((p_idx, s_idx));
+        }
+    }
+    stop_to_patterns
+}
+
 /// Algorithm 1: Initial transfer computation
 pub fn compute_initial_transfers(partition: &TransitPartition) -> Vec<Transfer> {
     let mut transfers = Vec::new();
 
-    // 1. Precompute stop -> sorted list of trips departing from it
-    let mut stop_to_trips: Vec<Vec<PatternStopInfo>> = vec![Vec::new(); partition.stops.len()];
+    // Build compact stop -> patterns mapping (pattern idx, stop idx in pattern)
+    let stop_to_patterns = build_stop_to_patterns(partition);
 
-    for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
-        let stop_indices =
-            &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
+    println!("compact stop map built");
 
-        for (t_idx, trip) in pattern.trips.iter().enumerate() {
-            let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
-            let mut time = trip.start_time;
+    // Build Footpath Graph
+    let mut footpaths: Vec<Vec<(u32, u32)>> = vec![Vec::new(); partition.stops.len()];
+    let mut change_times = vec![0u32; partition.stops.len()];
 
-            for (i, &stop_idx) in stop_indices.iter().enumerate() {
-                // Arrival at stop i
-                if i > 0 {
-                    if 2 * i < delta_seq.deltas.len() {
-                        time += delta_seq.deltas[2 * i];
-                    }
-                }
-                // Departure from stop i
-                if 2 * i + 1 < delta_seq.deltas.len() {
-                    time += delta_seq.deltas[2 * i + 1];
-                }
-                let departure_time = time;
-
-                stop_to_trips[stop_idx as usize].push(PatternStopInfo {
-                    pattern_idx: p_idx,
-                    trip_idx: t_idx,
-                    stop_idx_in_pattern: i,
-                    departure_time,
-                });
-            }
+    for transfer in &partition.internal_transfers {
+        if transfer.from_stop_idx == transfer.to_stop_idx {
+            change_times[transfer.from_stop_idx as usize] = transfer.duration_seconds;
+        } else {
+            footpaths[transfer.from_stop_idx as usize]
+                .push((transfer.to_stop_idx, transfer.duration_seconds));
         }
     }
 
-    // Sort by departure time
-    for trips in &mut stop_to_trips {
-        trips.sort_by_key(|t| t.departure_time);
-    }
-
-    // 2. Build Footpath Graph
-    let mut footpaths: Vec<Vec<(u32, u32)>> = vec![Vec::new(); partition.stops.len()];
+    // Add self-loops with respecting change times
     for i in 0..partition.stops.len() {
-        footpaths[i].push((i as u32, 0)); // Self-loop
-    }
-    for transfer in &partition.internal_transfers {
-        footpaths[transfer.from_stop_idx as usize]
-            .push((transfer.to_stop_idx, transfer.duration_seconds));
+        footpaths[i].push((i as u32, change_times[i]));
     }
 
-    // 3. Main Loop: Find transfers
+    println!("footpaths built");
+
+    // Reusable buffers
+    let num_patterns = partition.trip_patterns.len();
+    let mut seen_patterns = vec![false; num_patterns];
+    let mut seen_list: Vec<usize> = Vec::new();
+
+    // Reused set for per-source-stop deduplication to avoid allocation churn
+    let mut seen_targets: HashSet<(usize, usize, usize)> = HashSet::default();
+    seen_targets.reserve(128);
+
+    // Reserve a bit of space early to reduce reallocation churn (tweak heuristically)
+    transfers.reserve(1024);
+
+    // For each pattern/trip/stop (same outer loops as before)
+    println!("trip patterns: {}", partition.trip_patterns.len());
     for (p_idx, pattern) in partition.trip_patterns.iter().enumerate() {
         let stop_indices =
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
 
         for (t_idx, trip) in pattern.trips.iter().enumerate() {
+            // Compute arrival/departure times along the trip
             let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
             let mut current_time = trip.start_time;
 
@@ -161,59 +164,86 @@ pub fn compute_initial_transfers(partition: &TransitPartition) -> Vec<Transfer> 
                     current_time += delta_seq.deltas[2 * i + 1];
                 }
 
-                // Check transfers
+                // Skip transfers from first stop
+                if i == 0 {
+                    continue;
+                }
+
+                seen_targets.clear();
+
+                // Check transfers from stop `stop_idx`
                 if let Some(reachable_stops) = footpaths.get(stop_idx as usize) {
                     for &(q, walk_time) in reachable_stops {
                         let min_dep_time = arrival_time + walk_time;
 
-                        if let Some(candidate_trips) = stop_to_trips.get(q as usize) {
-                            // println!("  Stop {} has {} candidate trips", q, candidate_trips.len());
-                            let mut seen_patterns = HashSet::new();
-
-                            // Find earliest trip for each pattern
-                            for cand in candidate_trips {
-                                if cand.departure_time >= min_dep_time {
-                                    if !seen_patterns.contains(&cand.pattern_idx) {
-                                        let is_same_pattern = cand.pattern_idx == p_idx;
-                                        let valid = if is_same_pattern {
-                                            cand.trip_idx < t_idx || cand.stop_idx_in_pattern < i
-                                        } else {
-                                            true
-                                        };
-
-                                        // Fix: Skip transfers from the first stop
-                                        if i == 0 {
-                                            continue;
-                                        }
-
-                                        // Fix: Skip transfers to the last stop
-                                        let cand_pattern =
-                                            &partition.trip_patterns[cand.pattern_idx];
-                                        let cand_stops = &partition.direction_patterns
-                                            [cand_pattern.direction_pattern_idx as usize]
-                                            .stop_indices;
-                                        if cand.stop_idx_in_pattern + 1 == cand_stops.len() {
-                                            continue;
-                                        }
-
-                                        if valid {
-                                            transfers.push(Transfer {
-                                                from_pattern_idx: p_idx,
-                                                from_trip_idx: t_idx,
-                                                from_stop_idx_in_pattern: i,
-                                                to_pattern_idx: cand.pattern_idx,
-                                                to_trip_idx: cand.trip_idx,
-                                                to_stop_idx_in_pattern: cand.stop_idx_in_pattern,
-                                                duration: walk_time,
-                                            });
-                                        }
-                                        seen_patterns.insert(cand.pattern_idx);
+                        // For this reachable stop q: iterate patterns that serve q
+                        if let Some(patterns_at_q) = stop_to_patterns.get(q as usize) {
+                            for &(cand_pattern_idx, cand_stop_idx_in_pattern) in patterns_at_q {
+                                // Find earliest trip in cand_pattern that departs cand_stop_idx_in_pattern >= min_dep_time
+                                let cand_pattern = &partition.trip_patterns[cand_pattern_idx];
+                                let trips = &cand_pattern.trips;
+                                let mut lo = 0usize;
+                                let mut hi = trips.len();
+                                while lo < hi {
+                                    let mid = (lo + hi) / 2;
+                                    let dep = get_departure_time(
+                                        partition,
+                                        &trips[mid],
+                                        cand_stop_idx_in_pattern,
+                                    );
+                                    if dep < min_dep_time {
+                                        lo = mid + 1;
+                                    } else {
+                                        hi = mid;
                                     }
                                 }
-                            }
+                                if lo >= trips.len() {
+                                    continue; // no candidate in this pattern
+                                }
+                                let cand_trip_idx = lo;
+
+                                // Skip transfers to last stop
+                                let cand_stops = &partition.direction_patterns
+                                    [cand_pattern.direction_pattern_idx as usize]
+                                    .stop_indices;
+                                if cand_stop_idx_in_pattern + 1 == cand_stops.len() {
+                                    continue;
+                                }
+
+                                // Additional validity checks (skip if same pattern and invalid)
+                                let is_same_pattern = cand_pattern_idx == p_idx;
+                                let valid = if is_same_pattern {
+                                    cand_trip_idx < t_idx || cand_stop_idx_in_pattern < i
+                                } else {
+                                    true
+                                };
+                                if !valid {
+                                    continue;
+                                }
+
+                                // Deduplicate by exact (pattern, trip, stop) triple for this source stop
+                                let key =
+                                    (cand_pattern_idx, cand_trip_idx, cand_stop_idx_in_pattern);
+                                if !seen_targets.insert(key) {
+                                    // we already added this exact target for this source stop
+                                    continue;
+                                }
+
+                                // push transfer
+                                transfers.push(Transfer {
+                                    from_pattern_idx: p_idx,
+                                    from_trip_idx: t_idx,
+                                    from_stop_idx_in_pattern: i,
+                                    to_pattern_idx: cand_pattern_idx,
+                                    to_trip_idx: cand_trip_idx,
+                                    to_stop_idx_in_pattern: cand_stop_idx_in_pattern,
+                                    duration: walk_time,
+                                });
+                            } // end for patterns_at_q
                         }
-                    }
+                    } // end reachable_stops
                 }
+                // seen_targets dropped/cleared at end of this source stop iteration
             }
         }
     }
@@ -681,8 +711,11 @@ pub fn compute_profile_query(
                     // But wait, if we are ALREADY inactive, we stay inactive.
 
                     let current_stop_global = stop_indices[i];
-                    let becomes_inactive =
-                        hubs.contains(&current_stop_global) && current_stop_global != start_stop;
+                    let becomes_inactive = if !is_source_hub {
+                        hubs.contains(&current_stop_global) && current_stop_global != start_stop
+                    } else {
+                        false
+                    };
 
                     // Process transfers from this stop
                     if n < max_transfers {
@@ -830,6 +863,7 @@ pub fn compute_profile_query(
 
     // Step 6b: Mark Useful Trips and Backtrack
     // useful_trips: Map<(n, flat_id), max_stop_idx>
+    // Step 6b: Mark Useful Trips
     let mut useful_trips: HashMap<(usize, usize), usize> = HashMap::new();
 
     // Re-scan to mark useful trips based on best_arrivals
@@ -1001,15 +1035,14 @@ pub fn compute_profile_query(
     }
 
     // Add Trip Segments
-    for ((n, flat_id), &max_idx) in &scratch.useful_trips {
+    for ((n, flat_id), &max_idx) in &useful_trips {
         let entry_idx = scratch.r_labels[*n][*flat_id] as usize;
         let (p_idx, t_idx) = flat_id_to_pattern_trip[*flat_id];
         let pattern = &partition.trip_patterns[p_idx];
         let stop_indices =
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
 
-        // Collect relevant stops
-        let mut relevant_indices = Vec::with_capacity(max_idx - entry_idx + 2); // heuristic
+        let mut relevant_indices = Vec::with_capacity(max_idx - entry_idx + 2);
         relevant_indices.push(entry_idx);
 
         // Check targets
@@ -1150,9 +1183,10 @@ pub fn compute_profile_query(
         }
     }
 
-    // Move back to result_edges (optional, or just expose dedup_map values)
-    // The previous implementation returned `dedup_map.into_values().collect()`.
-    // We will verify the signature change in the next step.
+    // Move back to result_edges
+    scratch
+        .result_edges
+        .extend(scratch.dedup_map.drain().map(|(_, v)| v));
 }
 
 // Helpers

@@ -1,5 +1,6 @@
 use super::osm_graph::*;
 use super::transit_graph::*;
+use prost::Message;
 use std::collections::HashMap;
 
 #[test]
@@ -58,8 +59,10 @@ fn test_transit_partition_serialization() {
         direct_connections_index: HashMap::new(),
     };
 
-    let encoded = bincode::serialize(&partition).expect("Failed to encode");
-    let decoded: TransitPartition = bincode::deserialize(&encoded).expect("Failed to decode");
+    let config = bincode::config::standard();
+    let encoded = bincode::serde::encode_to_vec(&partition, config).expect("Failed to encode");
+    let (decoded, _): (TransitPartition, usize) =
+        bincode::serde::decode_from_slice(&encoded, config).expect("Failed to decode");
 
     assert_eq!(decoded.partition_id, 1);
     assert_eq!(decoded.service_ids.len(), 2);
@@ -91,8 +94,8 @@ fn test_osm_partition_serialization() {
         }],
     };
 
-    let encoded = bincode::serialize(&street_data).expect("Failed to encode");
-    let decoded: StreetData = bincode::deserialize(&encoded).expect("Failed to decode");
+    let encoded = street_data.encode_to_vec();
+    let decoded: StreetData = StreetData::decode(&*encoded).expect("Failed to decode");
 
     assert_eq!(decoded.partition_id, 42);
     assert_eq!(decoded.boundary_nodes.len(), 1);

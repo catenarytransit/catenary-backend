@@ -1,11 +1,13 @@
 #[cfg(test)]
 mod tests {
     use crate::trip_based::{self, Transfer};
+    use ahash::AHashMap as HashMap;
+    use ahash::AHashSet as HashSet;
     use catenary::routing_common::transit_graph::{
         CompressedTrip, DirectionPattern, StaticTransfer, TimeDeltaSequence, TransitPartition,
         TransitStop, TripPattern,
     };
-    use std::collections::HashMap;
+    use std::collections::HashMap as StdHashMap;
 
     fn create_mock_partition() -> TransitPartition {
         TransitPartition {
@@ -32,7 +34,7 @@ mod tests {
             service_ids: vec![],
             service_exceptions: vec![],
             _deprecated_external_transfers: vec![],
-            local_dag: HashMap::new(),
+            local_dag: StdHashMap::new(),
             long_distance_trip_patterns: vec![],
             timezones: vec![],
             boundary: None,
@@ -541,6 +543,197 @@ mod tests {
         assert_eq!(
             transfers[0].to_pattern_idx, 1,
             "Should keep transfer to P2 (useful)"
+        );
+    }
+    #[test]
+    fn test_initial_transfers_respect_change_time() {
+        let mut partition = create_mock_partition();
+
+        // Time Deltas (10 min travel)
+        partition.time_deltas.push(TimeDeltaSequence {
+            deltas: vec![0, 0, 600, 0],
+        });
+
+        // 5 minute minimum change time at Stop 0
+        partition.internal_transfers.push(StaticTransfer {
+            from_stop_idx: 0,
+            to_stop_idx: 0,
+            duration_seconds: 300,
+            distance_meters: 0,
+            wheelchair_accessible: true,
+        });
+
+        // P1: 1 -> 0
+        partition.direction_patterns.push(DirectionPattern {
+            stop_indices: vec![1, 0],
+        });
+        partition.trip_patterns.push(TripPattern {
+            chateau_idx: 0,
+            route_id: "R1".to_string(),
+            direction_pattern_idx: 0,
+            trips: vec![CompressedTrip {
+                gtfs_trip_id: "T1".to_string(),
+                service_mask: 127,
+                start_time: 36000, // 10:00:00 at 1. Arrives 0 at 10:10:00.
+                time_delta_idx: 0,
+                service_idx: 0,
+                bikes_allowed: 0,
+                wheelchair_accessible: 0,
+            }],
+            timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
+        });
+
+        // P2: 0 -> 2
+        partition.direction_patterns.push(DirectionPattern {
+            stop_indices: vec![0, 2],
+        });
+        partition.trip_patterns.push(TripPattern {
+            chateau_idx: 0,
+            route_id: "R2".to_string(),
+            direction_pattern_idx: 1,
+            trips: vec![
+                // T2a: Departs 0 at 10:14:00.
+                // Arrive 10:10:00. Min change 5m -> 10:15:00.
+                // 10:14:00 is too early. Should NOT transfer.
+                CompressedTrip {
+                    gtfs_trip_id: "T2a".to_string(),
+                    service_mask: 127,
+                    start_time: 36000 + 600 + 240, // 10:14:00
+                    time_delta_idx: 0,
+                    service_idx: 0,
+                    bikes_allowed: 0,
+                    wheelchair_accessible: 0,
+                },
+                // T2b: Departs 0 at 10:16:00.
+                // 10:16:00 >= 10:15:00. Should transfer.
+                CompressedTrip {
+                    gtfs_trip_id: "T2b".to_string(),
+                    service_mask: 127,
+                    start_time: 36000 + 600 + 360, // 10:16:00
+                    time_delta_idx: 0,
+                    service_idx: 0,
+                    bikes_allowed: 0,
+                    wheelchair_accessible: 0,
+                },
+            ],
+            timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
+        });
+
+        let transfers = trip_based::compute_initial_transfers(&partition);
+
+        // Find transfer P1(T1) -> P2
+        let transfers_to_p2: Vec<&Transfer> =
+            transfers.iter().filter(|t| t.to_pattern_idx == 1).collect();
+
+        // Expect exactly 1 transfer (to T2b). T2a should be skipped.
+        assert_eq!(
+            transfers_to_p2.len(),
+            1,
+            "Should only generate transfer to T2b"
+        );
+        assert_eq!(
+            transfers_to_p2[0].to_trip_idx, 1,
+            "Should match T2b (index 1)"
+        );
+        assert_eq!(
+            transfers_to_p2[0].duration, 300,
+            "Duration should be change time"
+        );
+    }
+
+    #[test]
+    fn test_compute_profile_query_generates_segements() {
+        let mut partition = create_mock_partition();
+        // Simple line: 0 -> 1 -> 2
+        // TimeDelta: 10 min travel
+        partition.time_deltas.push(TimeDeltaSequence {
+            deltas: vec![0, 0, 600, 0, 600, 0],
+        });
+        partition.direction_patterns.push(DirectionPattern {
+            stop_indices: vec![0, 1, 2],
+        });
+        partition.trip_patterns.push(TripPattern {
+            chateau_idx: 0,
+            route_id: "R1".to_string(),
+            direction_pattern_idx: 0,
+            trips: vec![CompressedTrip {
+                gtfs_trip_id: "T1".to_string(),
+                service_mask: 127,
+                start_time: 36000, // 10:00:00
+                time_delta_idx: 0,
+                service_idx: 0,
+                bikes_allowed: 0,
+                wheelchair_accessible: 0,
+            }],
+            timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
+        });
+
+        // Prepare inputs for compute_profile_query
+        let num_stops = partition.stops.len();
+        let total_trips = 1;
+        let max_transfers = 1;
+
+        let mut scratch = trip_based::ProfileScratch::new(num_stops, total_trips, max_transfers);
+
+        let transfers: Vec<Transfer> = vec![];
+        let trip_transfer_ranges = HashMap::new();
+        let stop_to_patterns = trip_based::build_stop_to_patterns(&partition);
+        // flat_id_to_pattern_trip: just one trip (p=0, t=0)
+        let flat_id_to_pattern_trip = vec![(0, 0)];
+        let pattern_trip_offset = vec![0];
+        let hubs = HashSet::new();
+
+        let targets = vec![2];
+
+        trip_based::compute_profile_query(
+            &partition,
+            &transfers,
+            &trip_transfer_ranges,
+            0,     // start stop
+            35000, // start time (before trip)
+            &targets,
+            &stop_to_patterns,
+            &flat_id_to_pattern_trip,
+            &pattern_trip_offset,
+            max_transfers,
+            &mut scratch,
+            &hubs,
+            false,
+        );
+
+        // Check result_edges
+        // Should contain Transit edge 0->2 (or 0->1->2 depending on reconstruction logic)
+        // The current logic adds direct edges for contiguous segments if possible?
+        // Logic: "for w in 0..relevant_indices.len() - 1 ... result_edges.push"
+        // It adds segments between relevant indices.
+        // Relevant indices include entry/exit and target stops.
+
+        let transit_edges: Vec<_> = scratch
+            .result_edges
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.edge_type,
+                    Some(catenary::routing_common::transit_graph::EdgeType::Transit(
+                        _
+                    ))
+                )
+            })
+            .collect();
+
+        assert!(!transit_edges.is_empty(), "Should generate transit edges");
+
+        // Specifically, we expect a transit edge reaching 2.
+        let reaches_target = transit_edges.iter().any(|e| e.to_node_idx == 2);
+        assert!(
+            reaches_target,
+            "Should have transit edge to target (stop 2)"
         );
     }
 }

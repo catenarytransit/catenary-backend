@@ -36,31 +36,19 @@ use rstar::primitives::GeomWithData;
 pub mod clustering;
 pub mod connectivity;
 pub mod osm;
+pub mod pathfinding;
 pub mod reduce_borders;
-pub mod repro_hub;
-#[cfg(test)]
-pub mod repro_large_file;
-#[cfg(test)]
-pub mod test_border_patterns;
-#[cfg(test)]
-pub mod test_global_pruning;
-pub mod test_hub;
-#[cfg(test)]
-pub mod test_local_patterns;
-#[cfg(test)]
-pub mod test_reduce_borders;
 pub mod utils;
 
 pub mod cluster_global;
 pub mod extract;
 pub mod rebuild_patterns;
 pub mod station_matching;
-#[cfg(test)]
-pub mod test_stitching;
-pub mod test_trip_based;
-pub mod tp;
 pub mod trip_based;
 pub mod update_gtfs;
+
+#[cfg(test)]
+pub mod test_trip_based;
 
 use crate::clustering::merge_based_clustering;
 use crate::connectivity::{
