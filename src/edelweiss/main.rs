@@ -10,6 +10,9 @@ mod repro_test;
 mod test_graph_construction;
 #[cfg(test)]
 mod test_multi_target;
+#[cfg(test)]
+mod test_direct_connections_intermediate;
+
 
 use crate::graph_loader::GraphManager;
 use crate::hydrator::Hydrator;

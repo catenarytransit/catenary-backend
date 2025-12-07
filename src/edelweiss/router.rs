@@ -165,11 +165,13 @@ impl<'a> Router<'a> {
                     }
                 }
 
+                // (partition_id, stop_idx) -> (access_time_seconds, access_geometry)
                 let end_nodes_map: HashMap<(u32, u32), (u32, Vec<(f64, f64)>)> = end_stops
                     .iter()
                     .map(|(p, s, t, g)| ((*p, *s), (*t, g.clone())))
                     .collect();
 
+                // (partition_id, stop_idx, access_time_seconds)
                 let start_nodes_for_dijkstra: Vec<(u32, u32, u32)> = partition_start_stops
                     .iter()
                     .map(|(p, s, t, _)| (*p, *s, *t))

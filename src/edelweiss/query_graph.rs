@@ -215,44 +215,39 @@ impl QueryGraph {
                 // stop_idx is the index in the pattern's stop sequence
                 let start_stop_idx_in_pattern = ref_item.stop_idx;
 
-                // The end stop is the last stop in the pattern
-                let end_stop_idx_in_pattern = (direction_pattern.stop_indices.len() - 1) as u32;
+                // Iterate over all downstream stops
+                for end_stop_idx_in_pattern in (start_stop_idx_in_pattern + 1)..(direction_pattern.stop_indices.len() as u32) {
+                    let to_dc_stop_idx =
+                        direction_pattern.stop_indices[end_stop_idx_in_pattern as usize];
+                    let to_station_id_str = &direct_connections.stops[to_dc_stop_idx as usize];
 
-                // If start is same as end, skip
-                if start_stop_idx_in_pattern >= end_stop_idx_in_pattern {
-                    continue;
+                    if !relevant_station_ids.contains(to_station_id_str) {
+                        // println!("Skipping to_station: {} (not relevant)", to_station_id_str);
+                        continue;
+                    }
+
+                    let from_node = QueryNode {
+                        partition_id: u32::MAX,
+                        stop_idx: from_dc_stop_idx,
+                    };
+                    let to_node = QueryNode {
+                        partition_id: u32::MAX,
+                        stop_idx: to_dc_stop_idx,
+                    };
+
+                    self.add_edge(QueryEdge {
+                        from: from_node,
+                        to: to_node,
+                        edge_type: EdgeType::LongDistanceTransit(
+                            catenary::routing_common::transit_graph::TransitEdge {
+                                trip_pattern_idx: trip_pattern_idx,
+                                start_stop_idx: start_stop_idx_in_pattern,
+                                end_stop_idx: end_stop_idx_in_pattern,
+                                min_duration: 0, // Calculated by evaluate_edge
+                            },
+                        ),
+                    });
                 }
-
-                let to_dc_stop_idx =
-                    direction_pattern.stop_indices[end_stop_idx_in_pattern as usize];
-                let to_station_id_str = &direct_connections.stops[to_dc_stop_idx as usize];
-
-                if !relevant_station_ids.contains(to_station_id_str) {
-                    // println!("Skipping to_station: {} (not relevant)", to_station_id_str);
-                    continue;
-                }
-
-                let from_node = QueryNode {
-                    partition_id: u32::MAX,
-                    stop_idx: from_dc_stop_idx,
-                };
-                let to_node = QueryNode {
-                    partition_id: u32::MAX,
-                    stop_idx: to_dc_stop_idx,
-                };
-
-                self.add_edge(QueryEdge {
-                    from: from_node,
-                    to: to_node,
-                    edge_type: EdgeType::LongDistanceTransit(
-                        catenary::routing_common::transit_graph::TransitEdge {
-                            trip_pattern_idx: trip_pattern_idx,
-                            start_stop_idx: start_stop_idx_in_pattern,
-                            end_stop_idx: end_stop_idx_in_pattern,
-                            min_duration: 0, // Calculated by evaluate_edge
-                        },
-                    ),
-                });
             }
         }
     }
