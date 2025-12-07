@@ -18,8 +18,8 @@ use crate::connectivity::{compute_border_patterns, compute_local_patterns_for_pa
 use crate::osm::ChunkCache;
 use crate::pathfinding::compute_osm_walk;
 use crate::trip_based::{
-    ProfileScratch, build_stop_to_patterns, compute_initial_transfers, compute_profile_query,
-    get_departure_time, refine_transfers, remove_u_turn_transfers,
+    ProfileScratch, build_stop_to_patterns, compute_initial_transfers, compute_one_to_all_profile,
+    compute_profile_query, get_departure_time, refine_transfers, remove_u_turn_transfers,
 };
 use crate::update_gtfs::run_update_gtfs;
 use crate::utils::{haversine_distance, lon_lat_to_tile};
@@ -1402,145 +1402,26 @@ fn augment_local_dag_with_shortcuts(partition: &mut TransitPartition) {
     refine_transfers(partition, &mut transfers);
 
     // Build Trip Transfer Ranges
-    let mut trip_transfer_ranges = HashMap::new();
-    let mut start = 0;
-    while start < transfers.len() {
-        let t = &transfers[start];
-        let key = (t.from_pattern_idx, t.from_trip_idx);
-        let mut end = start + 1;
-        while end < transfers.len()
-            && transfers[end].from_pattern_idx == key.0
-            && transfers[end].from_trip_idx == key.1
-        {
-            end += 1;
-        }
-        trip_transfer_ranges.insert(key, (start, end));
-        start = end;
-    }
-
-    let stop_to_patterns = build_stop_to_patterns(partition);
-
-    let mut flat_id_to_pattern_trip = Vec::new();
-    let mut pattern_trip_offset = Vec::with_capacity(partition.trip_patterns.len());
-    for (p_idx, tp) in partition.trip_patterns.iter().enumerate() {
-        pattern_trip_offset.push(flat_id_to_pattern_trip.len());
-        for t_idx in 0..tp.trips.len() {
-            flat_id_to_pattern_trip.push((p_idx, t_idx));
-        }
-    }
-
-    let mut scratch = ProfileScratch::new(
-        partition.stops.len(),
-        flat_id_to_pattern_trip.len(),
-        5, // Max transfers constraint for shortcuts? 10 is plenty.
-    );
-
     let targets_vec: Vec<u32> = hubs.iter().cloned().collect();
 
-    // 3. Run Profile Search from Every Hub Departure
+    // 3. Run Profile Search from Each Hub
     let mut shortcuts_added = 0;
     // Map (From, To) -> MinDuration
     let mut best_shortcuts: HashMap<(u32, u32), u32> = HashMap::new();
 
     for &source_node in &hubs {
-        // Collect departure times
-        let mut departure_times = HashSet::new();
-        if let Some(patterns) = stop_to_patterns.get(source_node as usize) {
-            for &(p_idx, s_idx) in patterns {
-                let tp = &partition.trip_patterns[p_idx];
-                for trip in &tp.trips {
-                    let dep = get_departure_time(partition, trip, s_idx);
-                    departure_times.insert(dep);
-                }
+        let min_durations =
+            compute_one_to_all_profile(partition, &transfers, source_node, &targets_vec, 5);
+
+        for (target, dur) in min_durations {
+            if target == source_node {
+                continue;
             }
-        }
-
-        let mut sorted_deps: Vec<u32> = departure_times.into_iter().collect();
-        sorted_deps.sort();
-        sorted_deps.dedup();
-
-        // Optimization: Don't run for every single minute if they are super close?
-        // But for correctness we probably should. Or at least filter duplicates.
-        // Also consider initial walks from source? (e.g. walk to nearby stop then depart)
-        // If source is a hub, we start AT the hub.
-
-        for &start_time in &sorted_deps {
-            compute_profile_query(
-                partition,
-                &transfers,
-                &trip_transfer_ranges,
-                source_node,
-                start_time,
-                &targets_vec,
-                &stop_to_patterns,
-                &flat_id_to_pattern_trip,
-                &pattern_trip_offset,
-                5, // Max transfers
-                &mut scratch,
-                &hubs,
-                true, // is_source_hub
-            );
-
-            // Extract Reachable Targets from scratch.result_edges?
-            // Wait, compute_profile_query populates result_edges with the PATHS.
-            // But we just want the (Target, ArrivalTime) to compute duration.
-            // result_edges is a DAG. We'd have to traverse it to find arrival at target.
-            // That's annoying. compute_profile_query computes paths.
-            // But `scratch.best_arrivals` (internal local var in compute_profile_query) had the info!
-            // But we don't expose it.
-            // We have to inspect `result_edges`.
-            // Alternatively, modification to `compute_profile_query` to returning reached targets?
-            // Or just traverse `result_edges`.
-            // `result_edges` is small (Pareto-optimal subgraph). BFS on it is fast.
-
-            // BFS on result_edges to find min arrival at targets
-            // Nodes in result_edges are indices.
-            // Edge weights are in EdgeType.
-
-            // Build Adjacency List from result_edges
-            let mut adj: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
-            for edge in &scratch.result_edges {
-                let weight = match &edge.edge_type {
-                    Some(EdgeType::Transit(t)) => t.min_duration,
-                    Some(EdgeType::Walk(w)) => w.duration_seconds,
-                    _ => 0,
-                };
-                adj.entry(edge.from_node_idx)
-                    .or_default()
-                    .push((edge.to_node_idx, weight));
-            }
-
-            let mut dist = HashMap::new();
-            let mut q = std::collections::VecDeque::new();
-            dist.insert(source_node, 0);
-            q.push_back(source_node);
-
-            while let Some(u) = q.pop_front() {
-                let d = dist[&u];
-                if let Some(neighbors) = adj.get(&u) {
-                    for &(v, w) in neighbors {
-                        let new_dist = d + w;
-                        if new_dist < *dist.get(&v).unwrap_or(&u32::MAX) {
-                            dist.insert(v, new_dist);
-                            q.push_back(v);
-                        }
-                    }
-                }
-            }
-
-            // Record shortcuts
-            for &target_node in &targets_vec {
-                if target_node == source_node {
-                    continue;
-                }
-                if let Some(&duration) = dist.get(&target_node) {
-                    let entry = best_shortcuts
-                        .entry((source_node, target_node))
-                        .or_insert(u32::MAX);
-                    if duration < *entry {
-                        *entry = duration;
-                    }
-                }
+            let entry = best_shortcuts
+                .entry((source_node, target))
+                .or_insert(u32::MAX);
+            if dur < *entry {
+                *entry = dur;
             }
         }
     }

@@ -1486,9 +1486,243 @@ pub fn get_departure_time(
                 time += delta_seq.deltas[2 * k];
             }
         }
-        if 2 * k + 1 < delta_seq.deltas.len() {
-            time += delta_seq.deltas[2 * k + 1];
+        if k < stop_idx {
+            if 2 * k + 1 < delta_seq.deltas.len() {
+                time += delta_seq.deltas[2 * k + 1];
+            }
         }
     }
+    // Dwell at stop_idx
+    if 2 * stop_idx + 1 < delta_seq.deltas.len() {
+        time += delta_seq.deltas[2 * stop_idx + 1];
+    }
     time
+}
+
+pub fn compute_one_to_all_profile(
+    partition: &TransitPartition,
+    transfers: &[Transfer],
+    source_stop: u32,
+    targets: &[u32],
+    _max_transfers: usize,
+) -> HashMap<u32, u32> {
+    // 1. Setup Maps
+    let mut min_durations = HashMap::new();
+    let n_targets = targets.len();
+    if n_targets == 0 {
+        return min_durations;
+    }
+
+    // Map Target ID -> Index
+    let mut target_to_idx = HashMap::new();
+    for (i, &t) in targets.iter().enumerate() {
+        target_to_idx.insert(t, i);
+    }
+
+    // 2. Flatten Trips and Sort
+    struct FlatTrip {
+        flat_id: usize,
+        p_idx: usize,
+        t_idx: usize,
+        start_time: u32,
+    }
+
+    let mut flat_trips = Vec::new();
+    let mut total_trips = 0;
+    let mut pattern_trip_offset = Vec::with_capacity(partition.trip_patterns.len());
+
+    for (p_idx, tp) in partition.trip_patterns.iter().enumerate() {
+        pattern_trip_offset.push(total_trips);
+        for (t_idx, trip) in tp.trips.iter().enumerate() {
+            flat_trips.push(FlatTrip {
+                flat_id: total_trips,
+                p_idx,
+                t_idx,
+                start_time: trip.start_time,
+            });
+            total_trips += 1;
+        }
+    }
+
+    // Sort descending by time
+    flat_trips.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+
+    // 3. Trip Output Cache (Best arrival at targets from this trip onward)
+    // Flattened: [flat_id * n_targets + target_idx] -> arrival_time
+    let mut trip_labels = vec![u32::MAX; total_trips * n_targets];
+
+    // 4. Build Transfer Ranges
+    // Key: (p_idx, t_idx) -> (start, end) in transfers array
+    // We expect transfers to be sorted by (p, t, stop_idx).
+    // If not, we should sort?
+    // `compute_profile_query` assumes sorted.
+    // We'll assume the caller passes sorted OR we sort here.
+    // Usually `refine_transfers` sorts them.
+    // But let's build the map.
+    let mut trip_transfer_ranges = HashMap::new();
+    let mut start = 0;
+    while start < transfers.len() {
+        let t = &transfers[start];
+        let key = (t.from_pattern_idx, t.from_trip_idx);
+        let mut end = start + 1;
+        while end < transfers.len()
+            && transfers[end].from_pattern_idx == key.0
+            && transfers[end].from_trip_idx == key.1
+        {
+            end += 1;
+        }
+        trip_transfer_ranges.insert(key, (start, end));
+        start = end;
+    }
+
+    // 5. Scan Trips Backwards
+    for ft in flat_trips {
+        let p_idx = ft.p_idx;
+        let t_idx = ft.t_idx;
+        let flat_id = ft.flat_id;
+
+        let pattern = &partition.trip_patterns[p_idx];
+        let trip = &pattern.trips[t_idx];
+        let stop_indices =
+            &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
+
+        // Arrivals buffer for this trip
+        let mut best_arrivals = vec![u32::MAX; n_targets];
+
+        // Precompute trip arrivals at stops?
+        // get_arrival_time is expensive in loop.
+        // We can scan forward to build times, then backward.
+
+        let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
+        let mut times = Vec::with_capacity(stop_indices.len());
+        let mut current_time = trip.start_time;
+
+        // Collect (Arrival, Departure) for each stop
+        // Stop 0: Arr=Start, Dep=Start (or +dwell)
+        for k in 0..stop_indices.len() {
+            let arr = current_time;
+            if 2 * k + 1 < delta_seq.deltas.len() {
+                current_time += delta_seq.deltas[2 * k + 1];
+            }
+            let dep = current_time;
+            // Travel to next
+            if 2 * k + 2 < delta_seq.deltas.len() { // 2*k + 2 is next travel index? No.
+                // pattern: travel, dwell, travel, dwell...
+                // deltas[0]: travel 0->1
+                // deltas[1]: dwell 1
+                // deltas[2]: travel 1->2
+                // Wait, Logic in get_arrival_time:
+                // k=0: time=start.
+                // k>0: add deltas[2*k] (checking indices).
+                // Wait.
+                // stop 0 to 1: deltas[0].
+                // dwell at 1: deltas[1].
+                // stop 1 to 2: deltas[2].
+            }
+            if k + 1 < stop_indices.len() {
+                if 2 * (k + 1) < delta_seq.deltas.len() { // This seems wrong index mapping?
+                    // Revisit get_arrival_time logic
+                    // k=1: 2*k = 2. deltas[2] added?
+                    // Yes. Travel 0->1 is deltas[0] (if k=0 logic applies? No)
+
+                    // Let's copy simple iteration logic:
+                    // current_time starts at trip.start_time.
+                    // Loop i in 0..stop_indices:
+                    //   if i > 0: add deltas[2*i] (travel from i-1? No, logic says 2*i is travel INTO i)
+                    //   record Arr[i] = current_time
+                    //   if not last: add deltas[2*i+1] (dwell at i)
+                }
+            }
+            times.push((arr, dep));
+        }
+
+        // Reconstruct times properly
+        times.clear();
+        let mut t = trip.start_time;
+        for k in 0..stop_indices.len() {
+            if k > 0 {
+                // Add travel to k
+                if 2 * k < delta_seq.deltas.len() {
+                    t += delta_seq.deltas[2 * k];
+                }
+            }
+            let arr = t;
+            // Add dwell
+            if 2 * k + 1 < delta_seq.deltas.len() {
+                t += delta_seq.deltas[2 * k + 1];
+            }
+            let dep = t;
+            times.push((arr, dep));
+        }
+
+        // Get transfer range
+        let tr_range = trip_transfer_ranges
+            .get(&(p_idx, t_idx))
+            .cloned()
+            .unwrap_or((0, 0));
+        let mut tr_ptr = tr_range.1; // Point to END
+
+        // Iterate stops backwards
+        for i in (0..stop_indices.len()).rev() {
+            let stop_id = stop_indices[i];
+            let (arr, dep) = times[i];
+
+            // 1. Check Target Arrival (Self)
+            if let Some(&k) = target_to_idx.get(&stop_id) {
+                best_arrivals[k] = std::cmp::min(best_arrivals[k], arr);
+            }
+
+            // 2. Check Transfers from this stop
+            // Transfers sorted by from_stop_idx?
+            // "refine_transfers" sorts them.
+            // We iterate backwards, so we scan transfers backwards.
+            while tr_ptr > tr_range.0 {
+                let tr = &transfers[tr_ptr - 1];
+                if (tr.from_stop_idx_in_pattern as usize) > i {
+                    tr_ptr -= 1;
+                    continue;
+                }
+                if (tr.from_stop_idx_in_pattern as usize) < i {
+                    break;
+                }
+                // Match
+                tr_ptr -= 1; // Consume transfer
+
+                // Lookup target trip
+                let target_flat = pattern_trip_offset[tr.to_pattern_idx] + tr.to_trip_idx;
+                let target_base = target_flat * n_targets;
+
+                // Propagate
+                for k in 0..n_targets {
+                    let u_arr = trip_labels[target_base + k];
+                    if u_arr != u32::MAX {
+                        best_arrivals[k] = std::cmp::min(best_arrivals[k], u_arr);
+                    }
+                }
+            }
+
+            // 3. Update Source?
+            if stop_id == source_stop {
+                for k in 0..n_targets {
+                    if best_arrivals[k] != u32::MAX {
+                        if best_arrivals[k] >= dep {
+                            let dur = best_arrivals[k] - dep;
+                            let limit = min_durations.get(&targets[k]).cloned().unwrap_or(u32::MAX);
+                            if dur < limit {
+                                min_durations.insert(targets[k], dur);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Save best_arrivals for this trip
+        let base = flat_id * n_targets;
+        for k in 0..n_targets {
+            trip_labels[base + k] = best_arrivals[k];
+        }
+    }
+
+    min_durations
 }

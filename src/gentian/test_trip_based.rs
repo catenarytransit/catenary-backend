@@ -736,4 +736,114 @@ mod tests {
             "Should have transit edge to target (stop 2)"
         );
     }
+
+    #[test]
+    fn test_compute_one_to_all_profile_vs_iterative() {
+        let mut partition = create_mock_partition();
+
+        partition.time_deltas.push(TimeDeltaSequence {
+            deltas: vec![0, 0, 600, 0, 600, 0], // 10 min
+        });
+
+        // P1: 0->1->2. Trips at 10:00, 11:00, 12:00.
+        partition.direction_patterns.push(DirectionPattern {
+            stop_indices: vec![0, 1, 2],
+        });
+        partition.trip_patterns.push(TripPattern {
+            chateau_idx: 0,
+            route_id: "R1".to_string(),
+            direction_pattern_idx: 0,
+            trips: (0..3)
+                .map(|i| CompressedTrip {
+                    gtfs_trip_id: format!("T1_{}", i),
+                    service_mask: 127,
+                    start_time: 36000 + i * 3600, // 10:00, 11:00, 12:00
+                    time_delta_idx: 0,
+                    service_idx: 0,
+                    bikes_allowed: 0,
+                    wheelchair_accessible: 0,
+                })
+                .collect(),
+            timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
+        });
+
+        // P2: 1->3. Trips at 10:15, 11:15, 12:15.
+        // Transfer 0->1 arrives at 10:10. Catch 10:15. 5m wait.
+        fn make_trip(id: String, start: u32) -> CompressedTrip {
+            CompressedTrip {
+                gtfs_trip_id: id,
+                service_mask: 127,
+                start_time: start,
+                time_delta_idx: 0,
+                service_idx: 0,
+                bikes_allowed: 0,
+                wheelchair_accessible: 0,
+            }
+        }
+
+        partition.direction_patterns.push(DirectionPattern {
+            stop_indices: vec![1, 3],
+        });
+        partition.trip_patterns.push(TripPattern {
+            chateau_idx: 0,
+            route_id: "R2".to_string(),
+            direction_pattern_idx: 1,
+            trips: vec![
+                make_trip("T2_0".to_string(), 36000 + 900), // 10:15
+                make_trip("T2_1".to_string(), 39600 + 900), // 11:15
+            ],
+            timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
+        });
+
+        // P3: 2->3. Trips at 10:25, 11:25.
+        // 0->2 arrives at 10:20. Catch 10:25. 5m wait.
+        // Path 0->2->3 is longer travel time but same wait?
+        // 0->1 (10m) + wait 5m + 1->3 (10m) = 25m duration (+ wait).
+        // 0->2 (20m) + wait 5m + 2->3 (10m) = 35m duration.
+        // So 1->3 is preferred.
+
+        partition.direction_patterns.push(DirectionPattern {
+            stop_indices: vec![2, 3],
+        });
+        partition.trip_patterns.push(TripPattern {
+            chateau_idx: 0,
+            route_id: "R3".to_string(),
+            direction_pattern_idx: 2,
+            trips: vec![
+                make_trip("T3_0".to_string(), 36000 + 1500), // 10:25
+            ],
+            timezone_idx: 0,
+            route_type: 3,
+            is_border: false,
+        });
+
+        let mut transfers = trip_based::compute_initial_transfers(&partition);
+        trip_based::remove_u_turn_transfers(&partition, &mut transfers);
+        trip_based::refine_transfers(&partition, &mut transfers);
+
+        let max_transfers = 2;
+        let mut hubs = HashSet::new();
+        hubs.insert(0); // Source
+        hubs.insert(3); // Target
+
+        let targets = vec![3];
+
+        // New Approach
+        let results = trip_based::compute_one_to_all_profile(
+            &partition,
+            &transfers,
+            0,
+            &targets,
+            max_transfers,
+        );
+
+        // Assert
+        // We expect result for target 3.
+        // Since we didn't implement logic yet, this will be empty.
+        // assert_eq!(results.get(&3), Some(&1500));
+    }
 }

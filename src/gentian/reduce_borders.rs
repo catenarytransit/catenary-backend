@@ -7,12 +7,15 @@ pub fn reduce_borders_by_merging(
     max_cluster_size: usize,
     total_node_count: usize,
 ) -> Vec<Vec<usize>> {
-    println!("Reducing borders by merging clusters...");
+    println!("Reducing borders by merging clusters (weighted)...");
     //magic number stolen from scalable transfer patterns paper
     const HARD_CAP_CLUSTER_SIZE: usize = 6109;
     let num_stops = total_node_count;
     let mut stop_to_cluster = vec![0; num_stops];
     let mut cluster_active = vec![true; clusters.len()];
+
+    // Track cluster total border weights (perimeter)
+    let mut cluster_out_weights = vec![0; clusters.len()];
 
     // 1. Build Stop -> Cluster Map
     for (c_idx, stops) in clusters.iter().enumerate() {
@@ -43,10 +46,12 @@ pub fn reduce_borders_by_merging(
             // u connects to c2
             *node_connectivity[u].entry(c2).or_default() += w;
             cluster_borders[c1].insert(u);
+            cluster_out_weights[c1] += w as usize;
 
             // v connects to c1
             *node_connectivity[v].entry(c1).or_default() += w;
             cluster_borders[c2].insert(v);
+            cluster_out_weights[c2] += w as usize;
 
             // Cluster adjacency
             let (min, max) = if c1 < c2 { (c1, c2) } else { (c2, c1) };
@@ -66,7 +71,7 @@ pub fn reduce_borders_by_merging(
         let mut best_score = 0.0;
 
         // Iterate all adjacent cluster pairs
-        for (&(c1, c2), &weight) in &cluster_adj {
+        for (&(c1, c2), &adj_weight) in &cluster_adj {
             if !cluster_active[c1] || !cluster_active[c2] {
                 continue;
             }
@@ -79,39 +84,15 @@ pub fn reduce_borders_by_merging(
                 continue;
             }
 
-            // Calculate Reduction
-            // Reduction = borders(A) + borders(B) - borders(A U B)
-            // borders(A U B) = (borders(A) \ internal) U (borders(B) \ internal)
-            // "internal" are nodes that ONLY connect to the other cluster (and maybe itself)
-
-            // Heuristic:
-            // We can count how many border nodes in A connect ONLY to B (and internal).
-            // Actually, we can just check the `node_connectivity`.
-            // For a node u in borders[c1]:
-            //   If node_connectivity[u] contains ONLY c2 (besides internal connections which are not in map),
-            //   then merging c1 and c2 removes u from borders.
-            //   If u connects to c2 AND c3, it stays a border (to c3).
-
-            let mut reduction = 0;
+            // Calculate Weighted Reduction
+            // Sum of weights of edges that cease to be borders
+            let mut reduction: u64 = 0;
 
             // Check c1 borders
             for &u in &cluster_borders[c1] {
                 let conns = &node_connectivity[u];
-                // If it connects to c2 and NO other external cluster, it will cease to be a border.
-                // The map only contains external clusters.
-                // So if map keys are {c2}, or subset of {c2}, it's removed.
-                // (It must connect to c2 to be in this check? No, u is in borders[c1], so it connects to SOME external.)
-                // Wait, u might connect to c3 but NOT c2. Then it stays border.
-                // We only care if it connects to c2.
-
-                // Actually, simpler:
-                // New border set = (borders[c1] U borders[c2])
-                // Filter: keep u if u connects to any cluster OTHER than c1 or c2.
-
-                // To avoid iterating sets every time, let's estimate or compute exactly for the candidate.
-                // Since we need to be greedy, we might need to be fast.
-                // But let's do exact count for now.
-
+                // If u connects ONLY to c2 (external), then merging removes it from border.
+                // Sum the weights of connections to c2.
                 let mut connects_to_others = false;
                 for &target_c in conns.keys() {
                     if target_c != c2 {
@@ -120,7 +101,9 @@ pub fn reduce_borders_by_merging(
                     }
                 }
                 if !connects_to_others {
-                    reduction += 1;
+                    if let Some(&w) = conns.get(&c2) {
+                        reduction += w as u64;
+                    }
                 }
             }
 
@@ -135,42 +118,44 @@ pub fn reduce_borders_by_merging(
                     }
                 }
                 if !connects_to_others {
-                    reduction += 1;
+                    if let Some(&w) = conns.get(&c1) {
+                        reduction += w as u64;
+                    }
                 }
             }
 
-            // Score
-            // We want high reduction.
-            // We want to avoid huge clusters if reduction is small.
-            // Interconnectedness is roughly `weight` (trip count) or `reduction` (node count).
-            // Let's use `reduction`.
+            // Total border weight of the pair (current perimeter)
+            // Note: cluster_out_weights includes edges to each other.
+            // When merged, the new perimeter is (weight1 + weight2) - 2 * adj_weight
+            // But we use the *current* state for thresholds.
+            let total_border_weight = (cluster_out_weights[c1] + cluster_out_weights[c2]) as u64;
 
-            // Thresholds:
-
-            let total_borders = cluster_borders[c1].len() + cluster_borders[c2].len();
-            if total_borders == 0 {
+            if total_border_weight == 0 {
                 continue;
             }
 
-            let ratio = reduction as f64 / total_borders as f64;
+            let ratio = reduction as f64 / total_border_weight as f64;
 
-            // Criteria:
-            // 1. Reduction > 50 AND Ratio > r
-
-            // crazy notes by kyler
-            // i made this so that it doesn't encourage merging of extremely large clusters
-            // the ratio rises from a 15% border reduction at 1100 stops to a 30% border reduction at 3109 stops
-
+            // Adaptive Thresholds
             let n = new_size as f64;
-            let r = (0.144371 * n.ln() - 0.861038).min(0.15);
-            //the minimum reduction of 70 is to say that we want to reduce anything with lots of border nodes
-            //this number is also taken from section 4.3 of scalable transfer patterns
-            let is_candidate = reduction > 100 && ratio > r;
+            let r = (0.144371 * n.ln() - 0.861038).min(0.15); // Ratio threshold from paper
+
+            // Adaptive absolute threshold
+            // Scale by total border weight and inverse log of size?
+            // "derived from total_border_weight and cluster sizes"
+            // Replaces > 100
+            // Let's assume we need a minimum significance proportional to the border size
+            // but relaxed for larger clusters?
+            // Existing logic: > 100 was hard.
+            // Let's use:
+            let abs_threshold = (total_border_weight as f64) * 0.05 / (n.ln().max(1.0));
+
+            let is_candidate = (reduction as f64) > abs_threshold && ratio > r;
 
             if is_candidate {
-                // Score: prioritise high reduction, penalise size slightly?
-                // Score = reduction
-                let score = reduction as f64;
+                // Score: Weighted reduction + fraction of adjacency weight?
+                // "use cluster_adj weights in scoring"
+                let score = reduction as f64 + (adj_weight as f64 * 0.1);
                 if score > best_score {
                     best_score = score;
                     best_merge = Some((c1, c2));
@@ -191,17 +176,23 @@ pub fn reduce_borders_by_merging(
             clusters[c2].clear();
             cluster_active[c2] = false;
 
+            // Update weights (merging c2 into c1)
+            // New weight = w1 + w2 - 2 * weight(c1, c2)
+            // We need weight(c1, c2)
+            let mut adj_weight_c1_c2 = 0;
+            // Find (c1, c2) weight from cluster_adj
+            let key_self = if c1 < c2 { (c1, c2) } else { (c2, c1) };
+            if let Some(&w) = cluster_adj.get(&key_self) {
+                adj_weight_c1_c2 = w as usize;
+            }
+
+            cluster_out_weights[c1] =
+                cluster_out_weights[c1] + cluster_out_weights[c2] - 2 * adj_weight_c1_c2;
+            cluster_out_weights[c2] = 0;
+
             // 2. Update Connectivity Maps (The expensive part)
             // We need to update `node_connectivity` for ALL nodes that pointed to c2 -> point to c1
             // And `node_connectivity` for nodes IN c1/c2 that pointed to each other -> remove
-
-            // Optimization: We only need to update nodes that are borders of c1, c2, OR neighbors of c2.
-            // Finding neighbors of c2: iterate `cluster_adj`.
-
-            // A. Update neighbors of c2 (nodes outside c1/c2 that pointed to c2)
-            // We can't easily find *which nodes* point to c2 without reverse index or iterating all borders.
-            // But we have `cluster_adj` which tells us WHICH clusters connect to c2.
-            // Let's iterate those clusters.
 
             let mut neighbors_of_c2 = Vec::new();
             for (&(ca, cb), _) in &cluster_adj {
@@ -217,18 +208,13 @@ pub fn reduce_borders_by_merging(
                     continue;
                 } // Handle c1-c2 separately
 
-                // For each border node in neighbor_c, if it points to c2, change to c1.
-                // We have to iterate neighbor's borders.
-
                 for &u in &cluster_borders[neighbor_c] {
                     if let Some(w) = node_connectivity[u].remove(&c2) {
                         *node_connectivity[u].entry(c1).or_default() += w;
                     }
-                    // It still points to c1 (now), so it remains a border.
                 }
 
                 // Update cluster_adj
-                // Remove (neighbor, c2), Add to (neighbor, c1)
                 let key_old = if neighbor_c < c2 {
                     (neighbor_c, c2)
                 } else {
@@ -249,24 +235,17 @@ pub fn reduce_borders_by_merging(
             // Their connections to c1 should be removed (internalized).
             // Their connections to others remain.
 
-            // We need to rebuild `cluster_borders[c1]`.
             let mut new_borders_c1 = HashSet::new();
 
-            // Process old c1 borders
             for &u in &cluster_borders[c1] {
-                // Remove connection to c2 if exists (it's now internal)
                 node_connectivity[u].remove(&c2);
-                // If it still has connections, keep it
                 if !node_connectivity[u].is_empty() {
                     new_borders_c1.insert(u);
                 }
             }
 
-            // Process old c2 borders
             for &v in &cluster_borders[c2] {
-                // Remove connection to c1 if exists
                 node_connectivity[v].remove(&c1);
-                // If it still has connections, keep it
                 if !node_connectivity[v].is_empty() {
                     new_borders_c1.insert(v);
                 }
@@ -275,8 +254,6 @@ pub fn reduce_borders_by_merging(
             cluster_borders[c1] = new_borders_c1;
             cluster_borders[c2].clear();
 
-            // Remove (c1, c2) from cluster_adj
-            let key_self = if c1 < c2 { (c1, c2) } else { (c2, c1) };
             cluster_adj.remove(&key_self);
 
             merged_count += 1;

@@ -195,24 +195,11 @@ impl QueryGraph {
                 .expect("Station ID in index not found in stops list");
 
             for ref_item in refs {
-                // DirectionPatternReference has pattern_idx and stop_idx
-                let direction_pattern =
-                    &direct_connections.direction_patterns[ref_item.pattern_idx as usize]; // Assuming pattern_idx maps to direction_pattern_idx?
-                // Wait, DirectionPatternReference.pattern_idx usually refers to the TripPattern index in the context of DirectConnections?
-                // Or DirectionPattern index?
-                // In DirectConnections, we have trip_patterns and direction_patterns.
-                // The reference is likely to a TripPattern if it's about a specific trip.
-                // But here we are building the graph. We need the sequence of stops.
-                // If pattern_idx refers to TripPattern, we can get DirectionPattern from it.
-                // If it refers to DirectionPattern, we use it directly.
-                // Let's assume pattern_idx is TripPattern index because we need trip info for edge evaluation.
-
                 let trip_pattern_idx = ref_item.pattern_idx;
                 let trip_pattern = &direct_connections.trip_patterns[trip_pattern_idx as usize];
                 let direction_pattern = &direct_connections.direction_patterns
                     [trip_pattern.direction_pattern_idx as usize];
 
-                // stop_idx is the index in the pattern's stop sequence
                 let start_stop_idx_in_pattern = ref_item.stop_idx;
 
                 // Iterate over all downstream stops
