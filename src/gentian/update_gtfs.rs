@@ -248,6 +248,7 @@ pub async fn run_update_gtfs(
                     &trips,
                     &db_calendar,
                     &db_routes,
+                    &db_agencies,
                     &chateau_id,
                     touched_count > 1,
                 );
@@ -316,7 +317,9 @@ impl PartitionBuilder {
         rows: &[&ItineraryPatternRow],
         trips: &[&DbCompressedTrip],
         calendar: &[Calendar],
+
         routes: &[Route],
+        agencies: &[Agency],
         chateau_id: &str,
         is_border: bool,
     ) {
@@ -358,7 +361,22 @@ impl PartitionBuilder {
         let timezone = routes
             .iter()
             .find(|r| r.route_id == route_id)
-            .and_then(|r| Some("UTC".to_string())) // Simplified for now
+            .and_then(|r| {
+                if let Some(agency_id) = &r.agency_id {
+                    agencies
+                        .iter()
+                        .find(|a| a.agency_id == *agency_id)
+                        .map(|a| a.agency_timezone.clone())
+                } else {
+                    // If no agency_id on route, try to use the single agency if present
+                    if agencies.len() == 1 {
+                        Some(agencies[0].agency_timezone.clone())
+                    } else {
+                        // Ambiguous if multiple agencies and no agency_id, but try first one?
+                        agencies.first().map(|a| a.agency_timezone.clone())
+                    }
+                }
+            })
             .unwrap_or_else(|| "UTC".to_string());
 
         self.timezones.insert(timezone.clone());
