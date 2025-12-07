@@ -995,7 +995,11 @@ pub fn compute_profile_query(
     // Step 6d: Mark Initial Walks
     for ((n, flat_id), _) in &useful_trips {
         if *n == 0 {
-            let entry_idx = scratch.r_labels[0][*flat_id] as usize;
+            let entry_val = scratch.r_labels[0][*flat_id];
+            if entry_val == u32::MAX {
+                continue;
+            }
+            let entry_idx = (entry_val & IDX_MASK) as usize;
             let (p_idx, t_idx) = flat_id_to_pattern_trip[*flat_id];
 
             // Iterate seeds to find the source
@@ -1036,13 +1040,27 @@ pub fn compute_profile_query(
 
     // Add Trip Segments
     for ((n, flat_id), &max_idx) in &useful_trips {
-        let entry_idx = scratch.r_labels[*n][*flat_id] as usize;
+        let entry_val = scratch.r_labels[*n][*flat_id];
+        if entry_val == u32::MAX {
+            continue;
+        }
+        let entry_idx = (entry_val & IDX_MASK) as usize;
+
+        // Optional safety assert: this should hold by construction
+        debug_assert!(
+            max_idx >= entry_idx,
+            "max_idx < entry_idx for (n={}, flat_id={})",
+            n,
+            flat_id
+        );
+
         let (p_idx, t_idx) = flat_id_to_pattern_trip[*flat_id];
         let pattern = &partition.trip_patterns[p_idx];
         let stop_indices =
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
 
-        let mut relevant_indices = Vec::with_capacity(max_idx - entry_idx + 2);
+        let cap = max_idx - entry_idx + 2;
+        let mut relevant_indices = Vec::with_capacity(cap);
         relevant_indices.push(entry_idx);
 
         // Check targets
