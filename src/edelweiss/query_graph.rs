@@ -216,7 +216,9 @@ impl QueryGraph {
                 let start_stop_idx_in_pattern = ref_item.stop_idx;
 
                 // Iterate over all downstream stops
-                for end_stop_idx_in_pattern in (start_stop_idx_in_pattern + 1)..(direction_pattern.stop_indices.len() as u32) {
+                for end_stop_idx_in_pattern in
+                    (start_stop_idx_in_pattern + 1)..(direction_pattern.stop_indices.len() as u32)
+                {
                     let to_dc_stop_idx =
                         direction_pattern.stop_indices[end_stop_idx_in_pattern as usize];
                     let to_station_id_str = &direct_connections.stops[to_dc_stop_idx as usize];
@@ -809,7 +811,7 @@ impl QueryGraph {
                     let stop = to_partition.stops.get(edge.to.stop_idx as usize)?;
                     (
                         stop.station_id.clone(),
-                        partition.chateau_ids[stop.chateau_idx as usize].clone(),
+                        to_partition.chateau_ids[stop.chateau_idx as usize].clone(),
                     )
                 };
 

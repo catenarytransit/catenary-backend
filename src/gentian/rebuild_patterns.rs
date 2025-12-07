@@ -7,6 +7,8 @@ use catenary::routing_common::transit_graph::{
     PartitionTimetableData, ServiceException, StaticTransfer, TimeDeltaSequence, TimetableData,
     TransitPartition, TransitStop, TripPattern, load_bincode, save_bincode,
 };
+
+use rayon::prelude::*;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -15,8 +17,13 @@ use std::sync::Arc;
 use crate::connectivity::{compute_border_patterns, compute_local_patterns_for_partition};
 use crate::osm::ChunkCache;
 use crate::pathfinding::compute_osm_walk;
+use crate::trip_based::{
+    ProfileScratch, build_stop_to_patterns, compute_initial_transfers, compute_profile_query,
+    get_departure_time, refine_transfers, remove_u_turn_transfers,
+};
 use crate::update_gtfs::run_update_gtfs;
 use crate::utils::{haversine_distance, lon_lat_to_tile};
+use catenary::routing_common::transit_graph::{DagEdge, EdgeType, TransitEdge, WalkEdge};
 
 /// Run the pattern rebuild process.
 /// This assumes `update-gtfs` has been run for modified chateaux.
@@ -38,6 +45,7 @@ pub async fn run_rebuild_patterns(
         println!("Manifest not found. Attempting to reconstruct from station map...");
         reconstruct_manifest(output_dir)?
     };
+    let manifest = Arc::new(manifest);
 
     let mut affected_partitions: HashSet<u32> = HashSet::new();
     if let Some(targets) = target_partitions {
@@ -63,9 +71,20 @@ pub async fn run_rebuild_patterns(
 
     // 3. Rebuild Partitions (Local)
     // This step writes the initial local_v1.bin files.
-    for pid in &affected_partitions {
-        rebuild_partition(*pid, &manifest, output_dir, pool.clone()).await?;
-    }
+    // 3. Rebuild Partitions (Local)
+    // This step writes the initial local_v1.bin files.
+    // Use Rayon for CPU-bound tasks, with dedicated threads.
+    println!("Using Rayon for partition rebuild (will autopick thread count).");
+
+    let affected_partitions_vec: Vec<u32> = affected_partitions.into_iter().collect();
+    let rt_handle = tokio::runtime::Handle::current();
+
+    affected_partitions_vec.par_iter().try_for_each(|pid| {
+        let pool = pool.clone();
+        let manifest = manifest.clone();
+        let output_dir = output_dir.to_path_buf();
+        rebuild_partition(*pid, &manifest, &output_dir, pool, &rt_handle)
+    })?;
 
     // 4. Global Connectivity Phase
     // Memory Optimization:
@@ -266,17 +285,22 @@ pub async fn run_rebuild_patterns(
         patterns_by_source: HashMap::new(),
     };
 
-    for (s_pid, s_idx) in &long_distance_stations {
-        let pattern = run_profile_search(
-            *s_pid,
-            *s_idx,
-            &loaded_partitions,
-            &long_distance_stations,
-            true, // is_long_distance_phase
-        );
-        long_dist_data
-            .patterns_by_source
-            .insert((*s_pid, *s_idx), pattern);
+    let patterns_vec: Vec<((u32, u32), Vec<((u32, u32), u32)>)> = long_distance_stations
+        .par_iter()
+        .map(|(s_pid, s_idx)| {
+            let pattern = run_profile_search(
+                *s_pid,
+                *s_idx,
+                &loaded_partitions,
+                &long_distance_stations,
+                true, // is_long_distance_phase
+            );
+            ((*s_pid, *s_idx), pattern)
+        })
+        .collect();
+
+    for (key, val) in patterns_vec {
+        long_dist_data.patterns_by_source.insert(key, val);
     }
 
     println!(
@@ -302,18 +326,25 @@ pub async fn run_rebuild_patterns(
     // Targets: Vec<((TargetPID, TargetIdx), Cost)>
     let mut border_results: HashMap<u32, Vec<(u32, Vec<((u32, u32), u32)>)>> = HashMap::new();
 
-    for (b_pid, b_idx) in &border_stations {
-        let results = run_profile_search_phase2(
-            *b_pid,
-            *b_idx,
-            &loaded_partitions,
-            &long_dist_data,
-            &border_stations,
-        );
+    let results_vec: Vec<(u32, u32, Vec<((u32, u32), u32)>)> = border_stations
+        .par_iter()
+        .map(|(b_pid, b_idx)| {
+            let results = run_profile_search_phase2(
+                *b_pid,
+                *b_idx,
+                &loaded_partitions,
+                &long_dist_data,
+                &border_stations,
+            );
+            (*b_pid, *b_idx, results)
+        })
+        .collect();
+
+    for (b_pid, b_idx, results) in results_vec {
         border_results
-            .entry(*b_pid)
+            .entry(b_pid)
             .or_default()
-            .push((*b_idx, results));
+            .push((b_idx, results));
     }
 
     // Combine Results
@@ -441,7 +472,7 @@ pub async fn run_rebuild_patterns(
 
         // Save
         let version_number = 1;
-        tokio::fs::create_dir_all(&partition_dir).await?;
+        rt_handle.block_on(tokio::fs::create_dir_all(&partition_dir))?;
         let output_path = partition_dir.join(format!("local_v{}.bin", version_number));
         save_bincode(&full_partition, output_path.to_str().unwrap())?;
 
@@ -459,11 +490,12 @@ struct LongDistanceData {
     patterns_by_source: HashMap<(u32, u32), Vec<((u32, u32), u32)>>, // (pid, stop_idx) -> List of (Target(pid, idx), Cost)
 }
 
-async fn rebuild_partition(
+fn rebuild_partition(
     partition_id: u32,
     manifest: &Manifest,
     output_dir: &Path,
     pool: Arc<CatenaryPostgresPool>,
+    rt_handle: &tokio::runtime::Handle,
 ) -> Result<()> {
     println!("Rebuilding Partition {}", partition_id);
 
@@ -546,7 +578,11 @@ async fn rebuild_partition(
         );
 
         for chateau_id in chateaux {
-            run_update_gtfs(pool.clone(), chateau_id.clone(), output_dir).await?;
+            rt_handle.block_on(run_update_gtfs(
+                pool.clone(),
+                chateau_id.clone(),
+                output_dir,
+            ))?;
 
             let tt_path = output_dir.join(format!("timetable_data_{}.bincode", chateau_id));
             if !tt_path.exists() {
@@ -735,6 +771,9 @@ async fn rebuild_partition(
     // 5. Recompute Local Patterns
     compute_local_patterns_for_partition(&mut partition);
 
+    // 5a. Augment Local DAG with Profile-Based Shortcuts (Pareto Connectivity)
+    augment_local_dag_with_shortcuts(&mut partition);
+
     // 5b. Build Direct Connections Index (Local)
     partition.direct_connections_index.clear();
     for (p_idx, tp) in partition.trip_patterns.iter().enumerate() {
@@ -760,7 +799,7 @@ async fn rebuild_partition(
     // We'll use version 1 for now.
     let version_number = 1;
     let partition_dir = output_dir.join("patterns").join(partition_id.to_string());
-    tokio::fs::create_dir_all(&partition_dir).await?;
+    rt_handle.block_on(tokio::fs::create_dir_all(&partition_dir))?;
     let output_path = partition_dir.join(format!("local_v{}.bin", version_number));
 
     save_bincode(&partition, output_path.to_str().unwrap())?;
@@ -1338,4 +1377,224 @@ impl PartialOrd for State {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
+}
+
+fn augment_local_dag_with_shortcuts(partition: &mut TransitPartition) {
+    println!("    - Augmenting local DAG with profile-based shortcuts...");
+
+    // 1. Identify Hubs
+    let hubs: HashSet<u32> = partition
+        .stops
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.is_border || s.is_long_distance)
+        .map(|(i, _)| i as u32)
+        .collect();
+
+    if hubs.is_empty() {
+        return;
+    }
+    println!("      Found {} hubs to connect.", hubs.len());
+
+    // 2. Prepare Profile Search Data
+    let mut transfers = compute_initial_transfers(partition);
+    remove_u_turn_transfers(partition, &mut transfers);
+    refine_transfers(partition, &mut transfers);
+
+    // Build Trip Transfer Ranges
+    let mut trip_transfer_ranges = HashMap::new();
+    let mut start = 0;
+    while start < transfers.len() {
+        let t = &transfers[start];
+        let key = (t.from_pattern_idx, t.from_trip_idx);
+        let mut end = start + 1;
+        while end < transfers.len()
+            && transfers[end].from_pattern_idx == key.0
+            && transfers[end].from_trip_idx == key.1
+        {
+            end += 1;
+        }
+        trip_transfer_ranges.insert(key, (start, end));
+        start = end;
+    }
+
+    let stop_to_patterns = build_stop_to_patterns(partition);
+
+    let mut flat_id_to_pattern_trip = Vec::new();
+    let mut pattern_trip_offset = Vec::with_capacity(partition.trip_patterns.len());
+    for (p_idx, tp) in partition.trip_patterns.iter().enumerate() {
+        pattern_trip_offset.push(flat_id_to_pattern_trip.len());
+        for t_idx in 0..tp.trips.len() {
+            flat_id_to_pattern_trip.push((p_idx, t_idx));
+        }
+    }
+
+    let mut scratch = ProfileScratch::new(
+        partition.stops.len(),
+        flat_id_to_pattern_trip.len(),
+        6, // Max transfers constraint for shortcuts? 10 is plenty.
+    );
+
+    let targets_vec: Vec<u32> = hubs.iter().cloned().collect();
+
+    // 3. Run Profile Search from Every Hub Departure
+    let mut shortcuts_added = 0;
+    // Map (From, To) -> MinDuration
+    let mut best_shortcuts: HashMap<(u32, u32), u32> = HashMap::new();
+
+    for &source_node in &hubs {
+        // Collect departure times
+        let mut departure_times = HashSet::new();
+        if let Some(patterns) = stop_to_patterns.get(source_node as usize) {
+            for &(p_idx, s_idx) in patterns {
+                let tp = &partition.trip_patterns[p_idx];
+                for trip in &tp.trips {
+                    let dep = get_departure_time(partition, trip, s_idx);
+                    departure_times.insert(dep);
+                }
+            }
+        }
+
+        let mut sorted_deps: Vec<u32> = departure_times.into_iter().collect();
+        sorted_deps.sort();
+
+        // Optimization: Don't run for every single minute if they are super close?
+        // But for correctness we probably should. Or at least filter duplicates.
+        // Also consider initial walks from source? (e.g. walk to nearby stop then depart)
+        // If source is a hub, we start AT the hub.
+
+        for &start_time in &sorted_deps {
+            compute_profile_query(
+                partition,
+                &transfers,
+                &trip_transfer_ranges,
+                source_node,
+                start_time,
+                &targets_vec,
+                &stop_to_patterns,
+                &flat_id_to_pattern_trip,
+                &pattern_trip_offset,
+                6, // Max transfers
+                &mut scratch,
+                &hubs,
+                true, // is_source_hub
+            );
+
+            // Extract Reachable Targets from scratch.result_edges?
+            // Wait, compute_profile_query populates result_edges with the PATHS.
+            // But we just want the (Target, ArrivalTime) to compute duration.
+            // result_edges is a DAG. We'd have to traverse it to find arrival at target.
+            // That's annoying. compute_profile_query computes paths.
+            // But `scratch.best_arrivals` (internal local var in compute_profile_query) had the info!
+            // But we don't expose it.
+            // We have to inspect `result_edges`.
+            // Alternatively, modification to `compute_profile_query` to returning reached targets?
+            // Or just traverse `result_edges`.
+            // `result_edges` is small (Pareto-optimal subgraph). BFS on it is fast.
+
+            // BFS on result_edges to find min arrival at targets
+            // Nodes in result_edges are indices.
+            // Edge weights are in EdgeType.
+
+            // Build Adjacency List from result_edges
+            let mut adj: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
+            for edge in &scratch.result_edges {
+                let weight = match &edge.edge_type {
+                    Some(EdgeType::Transit(t)) => t.min_duration,
+                    Some(EdgeType::Walk(w)) => w.duration_seconds,
+                    _ => 0,
+                };
+                adj.entry(edge.from_node_idx)
+                    .or_default()
+                    .push((edge.to_node_idx, weight));
+            }
+
+            let mut dist = HashMap::new();
+            let mut q = std::collections::VecDeque::new();
+            dist.insert(source_node, 0);
+            q.push_back(source_node);
+
+            while let Some(u) = q.pop_front() {
+                let d = dist[&u];
+                if let Some(neighbors) = adj.get(&u) {
+                    for &(v, w) in neighbors {
+                        let new_dist = d + w;
+                        if new_dist < *dist.get(&v).unwrap_or(&u32::MAX) {
+                            dist.insert(v, new_dist);
+                            q.push_back(v);
+                        }
+                    }
+                }
+            }
+
+            // Record shortcuts
+            for &target_node in &targets_vec {
+                if target_node == source_node {
+                    continue;
+                }
+                if let Some(&duration) = dist.get(&target_node) {
+                    let entry = best_shortcuts
+                        .entry((source_node, target_node))
+                        .or_insert(u32::MAX);
+                    if duration < *entry {
+                        *entry = duration;
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Inject Shortcuts into Local DAG
+    for ((u, v), duration) in best_shortcuts {
+        let edge_list = partition.local_dag.entry(u).or_default();
+
+        // Check if existing edge is better
+        let existing = edge_list.edges.iter_mut().find(|e| e.to_node_idx == v);
+
+        if let Some(e) = existing {
+            // If existing duration is worse, update it?
+            // Or add parallel edge?
+            // If we update `min_duration` of a TransitEdge, that might be confusing if it doesn't match the pattern.
+            // Better to add a separate LongDistanceTransit edge if strictly better.
+            // Or update if it's already a LongDistanceTransit edge.
+            // If it's a Pattern edge (Transit), and we found a faster way (via transfer),
+            // we should probably add a LongDistanceTransit edge.
+
+            let current_min = match &e.edge_type {
+                Some(EdgeType::Transit(t)) => t.min_duration,
+                Some(EdgeType::Walk(w)) => w.duration_seconds,
+                Some(EdgeType::LongDistanceTransit(t)) => t.min_duration,
+                None => u32::MAX,
+            };
+
+            if duration < current_min {
+                // Add new edge
+                edge_list.edges.push(DagEdge {
+                    from_node_idx: u,
+                    to_node_idx: v,
+                    edge_type: Some(EdgeType::LongDistanceTransit(TransitEdge {
+                        trip_pattern_idx: u32::MAX, // Pseudo-pattern
+                        start_stop_idx: u,
+                        end_stop_idx: v,
+                        min_duration: duration,
+                    })),
+                });
+                shortcuts_added += 1;
+            }
+        } else {
+            edge_list.edges.push(DagEdge {
+                from_node_idx: u,
+                to_node_idx: v,
+                edge_type: Some(EdgeType::LongDistanceTransit(TransitEdge {
+                    trip_pattern_idx: u32::MAX,
+                    start_stop_idx: u,
+                    end_stop_idx: v,
+                    min_duration: duration,
+                })),
+            });
+            shortcuts_added += 1;
+        }
+    }
+
+    println!("      Added {} profile-based shortcuts.", shortcuts_added);
 }
