@@ -1288,16 +1288,63 @@ pub fn compute_profile_query(
         relevant_indices.sort();
         relevant_indices.dedup();
 
+        let trip = &pattern.trips[t_idx];
+        let delta_seq = &partition.time_deltas[trip.time_delta_idx as usize];
+        let mut current_time = trip.start_time;
+        // current_idx tracks the stop index corresponding to 'current_time' (as Arrival Time)
+        let mut current_idx = 0;
+
         for w in 0..relevant_indices.len() - 1 {
-            let idx1 = relevant_indices[w];
-            let idx2 = relevant_indices[w + 1];
+            let idx1 = relevant_indices[w] as usize;
+            let idx2 = relevant_indices[w + 1] as usize;
 
-            let u = stop_indices[idx1 as usize];
-            let v = stop_indices[idx2 as usize];
+            let u = stop_indices[idx1];
+            let v = stop_indices[idx2];
 
-            let trip = &pattern.trips[t_idx];
-            let arr = get_arrival_time(partition, trip, idx2 as usize);
-            let dep = get_departure_time(partition, trip, idx1 as usize);
+            // 1. Catch up to idx1 (Arrival) if needed
+            while current_idx < idx1 {
+                // Dwell at current
+                if 2 * current_idx + 1 < delta_seq.deltas.len() {
+                    current_time += delta_seq.deltas[2 * current_idx + 1];
+                }
+                current_idx += 1;
+                // Travel to next
+                if 2 * current_idx < delta_seq.deltas.len() {
+                    current_time += delta_seq.deltas[2 * current_idx];
+                }
+            }
+            // Now current_time is Arrival at idx1.
+
+            // 2. Calculate Departure at idx1
+            let mut dep = current_time;
+            if 2 * idx1 + 1 < delta_seq.deltas.len() {
+                dep += delta_seq.deltas[2 * idx1 + 1];
+            }
+
+            // 3. Advance to Arrival at idx2
+            // We update current_time to follow the path from idx1 to idx2
+            // Since we move forward, we commit the dwell at idx1 to current_time first
+            if 2 * current_idx + 1 < delta_seq.deltas.len() {
+                current_time += delta_seq.deltas[2 * current_idx + 1];
+            }
+
+            // Iterate intermediate stops
+            // current_idx starts at idx1
+            while current_idx < idx2 {
+                current_idx += 1;
+                // Travel to next
+                if 2 * current_idx < delta_seq.deltas.len() {
+                    current_time += delta_seq.deltas[2 * current_idx];
+                }
+                // If this is not the target (idx2), add dwell
+                if current_idx < idx2 {
+                    if 2 * current_idx + 1 < delta_seq.deltas.len() {
+                        current_time += delta_seq.deltas[2 * current_idx + 1];
+                    }
+                }
+            }
+            // current_time is now Arrival at idx2.
+            let arr = current_time;
             let dur = arr.saturating_sub(dep);
 
             scratch.result_edges.push(DagEdge {
