@@ -8,11 +8,11 @@ use catenary::routing_common::transit_graph::{
 pub struct Transfer {
     pub from_pattern_idx: usize,
     pub from_trip_idx: usize,
-    pub from_stop_idx_in_pattern: usize,
+    pub from_stop_idx_in_pattern: u16,
 
     pub to_pattern_idx: usize,
     pub to_trip_idx: usize,
-    pub to_stop_idx_in_pattern: usize,
+    pub to_stop_idx_in_pattern: u16,
     pub duration: u32,
 }
 
@@ -233,10 +233,10 @@ pub fn compute_initial_transfers(partition: &TransitPartition) -> Vec<Transfer> 
                                 transfers.push(Transfer {
                                     from_pattern_idx: p_idx,
                                     from_trip_idx: t_idx,
-                                    from_stop_idx_in_pattern: i,
+                                    from_stop_idx_in_pattern: i as u16,
                                     to_pattern_idx: cand_pattern_idx,
                                     to_trip_idx: cand_trip_idx,
-                                    to_stop_idx_in_pattern: cand_stop_idx_in_pattern,
+                                    to_stop_idx_in_pattern: cand_stop_idx_in_pattern as u16,
                                     duration: walk_time,
                                 });
                             } // end for patterns_at_q
@@ -247,6 +247,8 @@ pub fn compute_initial_transfers(partition: &TransitPartition) -> Vec<Transfer> 
             }
         }
     }
+
+    println!("{} initial transfers", transfers.len());
 
     transfers
 }
@@ -261,23 +263,23 @@ pub fn remove_u_turn_transfers(partition: &TransitPartition, transfers: &mut Vec
         let from_pattern = &partition.trip_patterns[tr.from_pattern_idx];
         let from_stops =
             &partition.direction_patterns[from_pattern.direction_pattern_idx as usize].stop_indices;
-        let prev_stop_idx = from_stops[tr.from_stop_idx_in_pattern - 1];
+        let prev_stop_idx = from_stops[tr.from_stop_idx_in_pattern as usize - 1];
 
         let to_pattern = &partition.trip_patterns[tr.to_pattern_idx];
         let to_stops =
             &partition.direction_patterns[to_pattern.direction_pattern_idx as usize].stop_indices;
 
-        if tr.to_stop_idx_in_pattern + 1 >= to_stops.len() {
+        if (tr.to_stop_idx_in_pattern as usize) + 1 >= to_stops.len() {
             return true;
         }
-        let next_stop_idx_on_target = to_stops[tr.to_stop_idx_in_pattern + 1];
+        let next_stop_idx_on_target = to_stops[tr.to_stop_idx_in_pattern as usize + 1];
 
         if prev_stop_idx == next_stop_idx_on_target {
             let t_trip = &from_pattern.trips[tr.from_trip_idx];
             let u_trip = &to_pattern.trips[tr.to_trip_idx];
 
-            let arr_t_prev = get_arrival_time(partition, t_trip, tr.from_stop_idx_in_pattern - 1);
-            let dep_u_next = get_departure_time(partition, u_trip, tr.to_stop_idx_in_pattern + 1);
+            let arr_t_prev = get_arrival_time(partition, t_trip, tr.from_stop_idx_in_pattern as usize - 1);
+            let dep_u_next = get_departure_time(partition, u_trip, tr.to_stop_idx_in_pattern as usize + 1);
 
             // Fix: Use actual change time (self-transfer duration)
             let prev_stop_global_idx = prev_stop_idx; // This is already the global index
@@ -439,7 +441,7 @@ pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transf
                     // But binary search or linear scan in the small range is fine.
                     for tr_idx in start_tr..end_tr {
                         let tr = &transfers[tr_idx];
-                        if tr.from_stop_idx_in_pattern != i {
+                        if (tr.from_stop_idx_in_pattern as usize) != i {
                             continue;
                         }
 
@@ -452,7 +454,7 @@ pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transf
 
                         // Calculate arrival at target stop (boarding point)
                         // Actually we need to simulate the WHOLE trip from boarding point onwards.
-                        let boarding_stop_idx = tr.to_stop_idx_in_pattern;
+                        let boarding_stop_idx = tr.to_stop_idx_in_pattern as usize;
                         let boarding_time = get_departure_time(partition, trip, i) + tr.duration;
 
                         // Check if we can actually make the transfer?
@@ -721,11 +723,11 @@ pub fn compute_profile_query(
                     if n < max_transfers {
                         while tr_ptr < tr_end {
                             let tr = &transfers[tr_ptr];
-                            if tr.from_stop_idx_in_pattern < i {
+                            if (tr.from_stop_idx_in_pattern as usize) < i {
                                 tr_ptr += 1;
                                 continue;
                             }
-                            if tr.from_stop_idx_in_pattern > i {
+                            if (tr.from_stop_idx_in_pattern as usize) > i {
                                 break;
                             }
 
@@ -974,16 +976,16 @@ pub fn compute_profile_query(
                 let r_val = scratch.r_labels[n][target_flat];
                 let r_idx = (r_val & IDX_MASK) as usize;
 
-                if tr.to_stop_idx_in_pattern == r_idx {
+                if (tr.to_stop_idx_in_pattern as usize) == r_idx {
                     let source_flat = get_flat_id(tr.from_pattern_idx, tr.from_trip_idx);
                     let source_entry_val = scratch.r_labels[n - 1][source_flat];
                     let source_entry_idx = (source_entry_val & IDX_MASK) as usize;
 
                     if source_entry_val != u32::MAX
-                        && source_entry_idx <= tr.from_stop_idx_in_pattern
+                        && source_entry_idx <= tr.from_stop_idx_in_pattern as usize
                     {
                         let entry = useful_trips.entry((n - 1, source_flat)).or_insert(0);
-                        *entry = std::cmp::max(*entry, tr.from_stop_idx_in_pattern);
+                        *entry = std::cmp::max(*entry, tr.from_stop_idx_in_pattern as usize);
 
                         scratch.used_transfers.insert(tr_idx);
                     }
@@ -1060,8 +1062,8 @@ pub fn compute_profile_query(
             &partition.direction_patterns[pattern.direction_pattern_idx as usize].stop_indices;
 
         let cap = max_idx - entry_idx + 2;
-        let mut relevant_indices = Vec::with_capacity(cap);
-        relevant_indices.push(entry_idx);
+        let mut relevant_indices: Vec<u16> = Vec::with_capacity(cap);
+        relevant_indices.push(entry_idx as u16);
 
         // Check targets
         for k in (entry_idx)..=max_idx {
@@ -1072,7 +1074,7 @@ pub fn compute_profile_query(
                 if best_arrivals[stop_id].contains(&(*n, arr, false))
                     || best_arrivals[stop_id].contains(&(*n, arr, true))
                 {
-                    relevant_indices.push(k);
+                    relevant_indices.push(k as u16);
                 }
             }
         }
@@ -1082,8 +1084,8 @@ pub fn compute_profile_query(
             let tr = &transfers[tr_idx];
             if tr.from_pattern_idx == p_idx
                 && tr.from_trip_idx == t_idx
-                && tr.from_stop_idx_in_pattern >= entry_idx
-                && tr.from_stop_idx_in_pattern <= max_idx
+                && tr.from_stop_idx_in_pattern as usize >= entry_idx
+                && tr.from_stop_idx_in_pattern as usize <= max_idx
             {
                 relevant_indices.push(tr.from_stop_idx_in_pattern);
             }
@@ -1096,12 +1098,12 @@ pub fn compute_profile_query(
             let idx1 = relevant_indices[w];
             let idx2 = relevant_indices[w + 1];
 
-            let u = stop_indices[idx1];
-            let v = stop_indices[idx2];
+            let u = stop_indices[idx1 as usize];
+            let v = stop_indices[idx2 as usize];
 
             let trip = &pattern.trips[t_idx];
-            let arr = get_arrival_time(partition, trip, idx2);
-            let dep = get_departure_time(partition, trip, idx1);
+            let arr = get_arrival_time(partition, trip, idx2 as usize);
+            let dep = get_departure_time(partition, trip, idx1 as usize);
             let dur = arr.saturating_sub(dep);
 
             scratch.result_edges.push(DagEdge {
@@ -1126,10 +1128,10 @@ pub fn compute_profile_query(
 
         let u = partition.direction_patterns
             [partition.trip_patterns[p_from].direction_pattern_idx as usize]
-            .stop_indices[tr.from_stop_idx_in_pattern];
+            .stop_indices[tr.from_stop_idx_in_pattern as usize];
         let v = partition.direction_patterns
             [partition.trip_patterns[p_to].direction_pattern_idx as usize]
-            .stop_indices[tr.to_stop_idx_in_pattern];
+            .stop_indices[tr.to_stop_idx_in_pattern as usize];
 
         scratch.result_edges.push(DagEdge {
             from_node_idx: u,
