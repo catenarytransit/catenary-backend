@@ -1054,14 +1054,23 @@ fn run_profile_search(
     let mut dist: HashMap<(u32, u32), u32> = HashMap::new();
     let mut pq = std::collections::BinaryHeap::new();
 
+    // Pre-build lookup for long-distance patterns if needed.
+    // This optimization prevents us from scanning all patterns for every node visit.
+    let mut long_dist_lookup: HashMap<(u32, u32), &LocalTransferPattern> = HashMap::new();
+    if is_long_distance_phase {
+        for (pid, partition) in loaded_partitions {
+            for pat in &partition.long_distance_transfer_patterns {
+                long_dist_lookup.insert((*pid, pat.from_stop_idx), pat);
+            }
+        }
+    }
+
     dist.insert((start_pid, start_idx), 0);
     pq.push(State {
         cost: 0,
         pid: start_pid,
         stop_idx: start_idx,
     });
-
-    let mut edges_out: Vec<catenary::routing_common::transit_graph::DagEdge> = Vec::new();
 
     while let Some(State {
         cost,
@@ -1073,12 +1082,10 @@ fn run_profile_search(
             continue;
         }
 
-        // 1. Local Patterns
-        if let Some(p) = loaded_partitions.get(&pid) {
-            if let Some(edge_list) = p.local_dag.get(&stop_idx) {
+        if let Some(partition) = loaded_partitions.get(&pid) {
+            // 1. Local Patterns
+            if let Some(edge_list) = partition.local_dag.get(&stop_idx) {
                 for edge in &edge_list.edges {
-                    let next_cost = cost + 0; // Simplified: assume 0 cost for local pattern traversal for connectivity?
-                    // No, we should use the edge weight.
                     let weight = match &edge.edge_type {
                         Some(catenary::routing_common::transit_graph::EdgeType::Transit(t)) => {
                             t.min_duration
@@ -1089,6 +1096,7 @@ fn run_profile_search(
                         _ => 0,
                     };
                     let next_cost = cost + weight;
+                    // Local DAG edges always target nodes within the same partition
                     let target = (pid, edge.to_node_idx);
                     if next_cost < *dist.get(&target).unwrap_or(&u32::MAX) {
                         dist.insert(target, next_cost);
@@ -1103,31 +1111,44 @@ fn run_profile_search(
 
             // 2. Long Distance Trip Patterns (Phase 1 only)
             if is_long_distance_phase {
-                // Iterate over long distance trip patterns in this partition
-                // This is expensive if we do it for every node.
-                // Ideally we pre-index which patterns serve which node.
-                // For now, let's assume we only check if the current node is a stop in a long-distance pattern.
-                // ... implementation omitted for brevity, assuming local_dag covers local moves
-                // and we need to jump to other partitions.
-                //
-                // If this partition has external hubs, and we are at a node that connects to them?
-                // Actually, `local_dag` should connect to `external_hubs` if they are in the graph?
-                // No, `external_hubs` are "virtual" stops.
-                //
-                // Let's assume for this task that `local_dag` handles intra-partition.
-                // Inter-partition requires `long_distance_trip_patterns`.
+                if let Some(pat) = long_dist_lookup.get(&(pid, stop_idx)) {
+                    for edge in &pat.edges {
+                        // Check if this edge goes to an external hub
+                        let ext_idx = edge.to_node_idx as usize;
+                        if ext_idx >= partition.stops.len() {
+                            let hub_idx = ext_idx - partition.stops.len();
+                            if hub_idx < partition.external_hubs.len() {
+                                let global_hub = &partition.external_hubs[hub_idx];
+                                let target_pid = global_hub.original_partition_id;
+                                let target_idx = global_hub.stop_idx_in_partition;
+                                let target = (target_pid, target_idx);
+
+                                let weight = match &edge.edge_type {
+                                    Some(catenary::routing_common::transit_graph::EdgeType::Transit(t)) => t.min_duration,
+                                    Some(catenary::routing_common::transit_graph::EdgeType::Walk(w)) => w.duration_seconds,
+                                    Some(catenary::routing_common::transit_graph::EdgeType::LongDistanceTransit(t)) => t.min_duration,
+                                    None => 0,
+                                };
+
+                                let next_cost = cost + weight;
+
+                                if next_cost < *dist.get(&target).unwrap_or(&u32::MAX) {
+                                    dist.insert(target, next_cost);
+                                    pq.push(State {
+                                        cost: next_cost,
+                                        pid: target.0,
+                                        stop_idx: target.1,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    // Construct the result pattern
-    // For each target, if reachable, add an edge.
-    // We need to reconstruct the path or just add direct edges if we are building a transitive closure?
-    // "Store results in longdist_patterns[s] : PatternDAG."
-    // A PatternDAG usually contains edges to *next hops*.
-    // But here we might want edges to *targets*.
-    // Let's assume we want to output edges to the targets found.
-
+    // Construct results
     let mut results = Vec::new();
     for (t_pid, t_idx) in targets {
         if *t_pid == start_pid && *t_idx == start_idx {
