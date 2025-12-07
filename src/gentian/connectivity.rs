@@ -867,7 +867,7 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     // Sharded storage for edges to avoid one massive HashSet
     // Vec index = from_node_idx
     let mut local_dag_shards: Vec<HashSet<DagEdge>> = vec![HashSet::new(); partition.stops.len()];
-    
+
     let mut scratch = crate::trip_based::ProfileScratch::new(partition.stops.len(), num_trips, 3);
 
     // Collect hubs
@@ -884,6 +884,12 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         "      - Running profile search from {} stops (all stops)",
         all_stops.len()
     );
+
+    let times = vec![
+        0, 3600, 7200, 10800, 14400, 18000, 21600, 25200, 28800, 32400, 36000, 39600, 43200, 46800,
+        50400, 54000, 57600, 61200, 64800, 68400, 72000, 75600, 79200, 82800, 86400,
+    ];
+
     for &start_node in &all_stops {
         // Full reset for this source
         scratch.reset();
@@ -891,21 +897,23 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         let is_source_hub = hubs.contains(&start_node);
 
         // One profile over [0, end_of_day], like the paper’s 24h profiles
-        crate::trip_based::compute_profile_query(
-            partition,
-            &transfers,
-            &trip_transfer_ranges,
-            start_node,
-            0, // departures >= 0
-            &all_stops,
-            &stop_to_patterns,
-            &flat_id_to_pattern_trip,
-            &pattern_trip_offset,
-            3,
-            &mut scratch,
-            &hubs,
-            is_source_hub,
-        );
+        for start_time in times.iter() {
+            crate::trip_based::compute_profile_query(
+                partition,
+                &transfers,
+                &trip_transfer_ranges,
+                start_node,
+                *start_time as u32,
+                &all_stops,
+                &stop_to_patterns,
+                &flat_id_to_pattern_trip,
+                &pattern_trip_offset,
+                3,
+                &mut scratch,
+                &hubs,
+                is_source_hub,
+            );
+        }
 
         // Collect unique edges from this query into shards
         // scratch.dedup_map contains the edges
@@ -919,10 +927,10 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     // Convert Shards to HashMap<u32, DagEdgeList>
     let mut local_dag: std::collections::HashMap<u32, DagEdgeList> =
         std::collections::HashMap::with_capacity(local_dag_shards.len());
-        
+
     for (from_idx, unique_edges) in local_dag_shards.into_iter().enumerate() {
         if !unique_edges.is_empty() {
-             local_dag.insert(
+            local_dag.insert(
                 from_idx as u32,
                 DagEdgeList {
                     edges: unique_edges.into_iter().collect(),

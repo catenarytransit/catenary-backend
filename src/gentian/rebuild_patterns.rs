@@ -1432,7 +1432,7 @@ fn augment_local_dag_with_shortcuts(partition: &mut TransitPartition) {
     let mut scratch = ProfileScratch::new(
         partition.stops.len(),
         flat_id_to_pattern_trip.len(),
-        6, // Max transfers constraint for shortcuts? 10 is plenty.
+        5, // Max transfers constraint for shortcuts? 10 is plenty.
     );
 
     let targets_vec: Vec<u32> = hubs.iter().cloned().collect();
@@ -1457,6 +1457,7 @@ fn augment_local_dag_with_shortcuts(partition: &mut TransitPartition) {
 
         let mut sorted_deps: Vec<u32> = departure_times.into_iter().collect();
         sorted_deps.sort();
+        sorted_deps.dedup();
 
         // Optimization: Don't run for every single minute if they are super close?
         // But for correctness we probably should. Or at least filter duplicates.
@@ -1474,7 +1475,7 @@ fn augment_local_dag_with_shortcuts(partition: &mut TransitPartition) {
                 &stop_to_patterns,
                 &flat_id_to_pattern_trip,
                 &pattern_trip_offset,
-                6, // Max transfers
+                5, // Max transfers
                 &mut scratch,
                 &hubs,
                 true, // is_source_hub
