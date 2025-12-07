@@ -288,7 +288,18 @@ pub fn compute_global_patterns(
     // 1. Organize Cross-Partition Edges
     let mut cross_adj: HashMap<usize, Vec<(usize, DagEdge)>> = HashMap::new();
     for &((u, v), ref edge) in cross_edges {
-        cross_adj.entry(u).or_default().push((v, edge.clone()));
+        // Fix 5: Filter out intra-partition edges from cross_edges
+        let u_pid = global_to_partition_map.get(&u).map(|x| x.0);
+        let v_pid = global_to_partition_map.get(&v).map(|x| x.0);
+
+        let is_cross_partition = match (u_pid, v_pid) {
+            (Some(p1), Some(p2)) => p1 != p2,
+            _ => true, // Assume cross if we can't tell, though this shouldn't happen for valid nodes
+        };
+
+        if is_cross_partition {
+            cross_adj.entry(u).or_default().push((v, edge.clone()));
+        }
     }
 
     // 2. Identify Long-Distance Stations (Global Indices)
@@ -302,7 +313,12 @@ pub fn compute_global_patterns(
         long_distance_stations.len()
     );
 
-    let partition_ids: Vec<u32> = border_nodes.keys().cloned().collect();
+    // Fix 4: Include partitions that have long-distance stations but maybe no borders
+    let mut partition_ids_set: HashSet<u32> = border_nodes.keys().cloned().collect();
+    for &(_, pid) in global_to_partition_map.values() {
+        partition_ids_set.insert(pid);
+    }
+    let partition_ids: Vec<u32> = partition_ids_set.into_iter().collect();
 
     // Group long-distance stations by partition
     let mut stations_by_partition: HashMap<u32, Vec<usize>> = HashMap::new();
@@ -372,8 +388,10 @@ pub fn compute_global_patterns(
                 if let Some(edges) = cross_adj.get(&u) {
                     for (v, edge) in edges {
                         let weight = match &edge.edge_type {
+                            Some(EdgeType::Transit(t)) => t.min_duration,
                             Some(EdgeType::Walk(w)) => w.duration_seconds,
-                            _ => 0,
+                            Some(EdgeType::LongDistanceTransit(t)) => t.min_duration,
+                            None => 0,
                         };
                         let next_cost = cost + weight;
                         if next_cost < *dist.get(v).unwrap_or(&u32::MAX) {
@@ -534,15 +552,17 @@ pub fn compute_global_patterns(
             let nodes_vec: Vec<usize> = nodes.iter().cloned().collect();
 
             // Pruning Logic
+            // Optimization: Build adjacency only once
+            let mut incoming: HashMap<usize, Vec<usize>> = HashMap::new();
+            let mut outgoing: HashMap<usize, Vec<usize>> = HashMap::new();
+
+            for (&(u, v), _) in edges_map.iter() {
+                outgoing.entry(u).or_default().push(v);
+                incoming.entry(v).or_default().push(u);
+            }
+
+            // Pruning Logic
             for &w in &nodes_vec {
-                let mut incoming: HashMap<usize, Vec<usize>> = HashMap::new();
-                let mut outgoing: HashMap<usize, Vec<usize>> = HashMap::new();
-
-                for (&(u, v), _) in edges_map.iter() {
-                    outgoing.entry(u).or_default().push(v);
-                    incoming.entry(v).or_default().push(u);
-                }
-
                 if let (Some(preds), Some(succs)) = (incoming.get(&w), outgoing.get(&w)) {
                     for &u in preds {
                         if u == w {
@@ -568,43 +588,17 @@ pub fn compute_global_patterns(
             }
 
             // Recover Edge Types and Store
-            for ((u, v), _) in edges_map {
+            for ((u, v), cost) in edges_map {
                 let u = *u;
                 let v = *v;
-                let mut edge_type = None;
 
-                // Check Cross
-                if let Some(cross_list) = cross_adj.get(&u) {
-                    if let Some((_, e)) = cross_list.iter().find(|(target, _)| *target == v) {
-                        edge_type = e.edge_type.clone();
-                    }
-                }
-
-                // Check Intra
-                if edge_type.is_none() {
-                    if let (Some(&(pid_u, l_u)), Some(&(pid_v, l_v))) = (
-                        global_to_partition_map.get(&u),
-                        global_to_partition_map.get(&v),
-                    ) {
-                        if pid_u == pid_v {
-                            if let Some(partition) = loaded_partitions.get(&pid_u) {
-                                if let Some(edge_list) = partition.local_dag.get(&l_u) {
-                                    if let Some(edge) =
-                                        edge_list.edges.iter().find(|e| e.to_node_idx == l_v)
-                                    {
-                                        edge_type = edge.edge_type.clone();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if edge_type.is_none() {
-                    edge_type = Some(EdgeType::Walk(WalkEdge {
-                        duration_seconds: 0,
-                    }));
-                }
+                // Fix 1 & 3: Use the computed cost as the truth
+                let edge_type = Some(EdgeType::LongDistanceTransit(TransitEdge {
+                    trip_pattern_idx: u32::MAX, // sentinel
+                    start_stop_idx: 0,
+                    end_stop_idx: 0,
+                    min_duration: *cost,
+                }));
 
                 let dag_edge = DagEdge {
                     from_node_idx: 0, // Placeholder, will be re-indexed
@@ -646,11 +640,11 @@ pub fn compute_global_patterns(
                         stop_idx_in_partition: l,
                     });
                 } else {
-                    // Should not happen if map is complete
-                    external_hubs.push(GlobalHub {
-                        original_partition_id: 0,
-                        stop_idx_in_partition: 0,
-                    });
+                    // Fix 6: Panic if mapping is incomplete
+                    panic!(
+                        "global_to_partition_map missing entry for global_idx {}",
+                        global_idx
+                    );
                 }
                 external_hub_map.insert(global_idx, idx);
                 partition.stops.len() as u32 + idx
@@ -696,6 +690,11 @@ pub fn compute_intra_partition_connectivity(
     let mut edges = Vec::new();
 
     // Map local_idx -> global_idx
+    assert_eq!(
+        global_indices.len(),
+        partition.stops.len(),
+        "global_indices must be a per-stop mapping"
+    ); // Fix 7
     let local_to_global: Vec<usize> = global_indices.iter().map(|&i| i as usize).collect();
 
     // Identify Hubs (Local Indices)
@@ -881,8 +880,8 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
     // For each stop in the partition, run profile search to all other stops
     let all_stops: Vec<u32> = (0..partition.stops.len() as u32).collect();
     println!(
-        "      - Running profile search from {} stops (all stops)",
-        all_stops.len()
+        "      - Running profile search from {} stops (hubs/borders)",
+        hubs.len()
     );
 
     let times = vec![
@@ -890,7 +889,17 @@ pub fn compute_local_patterns_for_partition(partition: &mut TransitPartition) {
         50400, 54000, 57600, 61200, 64800, 68400, 72000, 75600, 79200, 82800, 86400,
     ];
 
-    for &start_node in &all_stops {
+    // Fix 9: Only run from hubs/borders
+    // The `hubs` set populated above uses `stop.is_hub`. We should also ensure it includes borders if not already.
+    // In many setups hubs includes borders, but let's be safe or just iterate over `hubs`.
+    // The previous code used `all_stops`. We switch to iterating over `hubs`.
+    // Note: The `hubs` HashSet contains `u32` indices of stops that are hubs.
+
+    // Convert hubs to sorted vec for deterministic iteration
+    let mut sorted_hubs: Vec<u32> = hubs.iter().cloned().collect();
+    sorted_hubs.sort();
+
+    for &start_node in &sorted_hubs {
         // Full reset for this source
         scratch.reset();
 

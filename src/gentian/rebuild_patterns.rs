@@ -337,26 +337,36 @@ pub async fn run_rebuild_patterns(
     for ((src_pid, src_idx), targets) in &long_dist_data.patterns_by_source {
         let partition = loaded_partitions.get_mut(src_pid).unwrap();
         for ((tgt_pid, tgt_idx), pareto) in targets {
-            if *src_pid != *tgt_pid {
-                continue;
-            }
+            // ALLOW cross-partition injection
             if pareto.is_empty() {
                 continue;
             }
 
+            // Determine Target Node Index (Local or External)
+            let to_node_idx = if *src_pid == *tgt_pid {
+                *tgt_idx
+            } else {
+                // Find or add external hub
+                let hub = GlobalHub {
+                    original_partition_id: *tgt_pid,
+                    stop_idx_in_partition: *tgt_idx,
+                };
+                if let Some(pos) = partition.external_hubs.iter().position(|h| *h == hub) {
+                    (partition.stops.len() + pos) as u32
+                } else {
+                    partition.external_hubs.push(hub);
+                    (partition.stops.len() + partition.external_hubs.len() - 1) as u32
+                }
+            };
+
             // 1. Create DirectionPattern
             let dp = DirectionPattern {
-                stop_indices: vec![*src_idx, *tgt_idx],
+                stop_indices: vec![*src_idx, to_node_idx],
             };
             partition.direction_patterns.push(dp);
             let dp_idx = (partition.direction_patterns.len() - 1) as u32;
 
             // 2. Create TimeDeltas
-            // We can create one TimeDelta per trip OR try to share.
-            // Sharing is better for memory.
-            // But pareto points differ.
-            // For simplicity: Create one TimeDelta per trip.
-
             let mut trips = Vec::new();
             for (dep, arr) in pareto {
                 let duration = arr - dep;
@@ -388,6 +398,12 @@ pub async fn run_rebuild_patterns(
                 is_border: false,
             };
             partition.trip_patterns.push(pattern);
+
+            // Also inject into long_distance_transfer_patterns to ensure graph connectivity for the router!
+            // The trip-based router mostly uses TripPatterns, but if we want DAG connectivity
+            // we should ensure it's represented. However, TripPattern is usually enough for the Router
+            // IF the router is Trip-Based. The `augment_local_dag` uses `compute_initial_transfers`
+            // which uses `trip_patterns`. So this should be sufficient for the router to "see" the edge.
         }
     }
 
@@ -513,7 +529,7 @@ pub async fn run_rebuild_patterns(
                 for (dep, arr) in &pareto {
                     let duration = arr - dep;
                     let tds = TimeDeltaSequence {
-                        deltas: vec![*duration, 0], // Travel, Dwell
+                        deltas: vec![duration, 0], // Travel, Dwell
                     };
                     full_partition.time_deltas.push(tds);
                     let td_idx = (full_partition.time_deltas.len() - 1) as u32;
@@ -1283,12 +1299,25 @@ fn run_profile_search(
         max_transfers,
     );
 
-    // 7. Filter Targets (Local Only for Trip-Based)
+    // 7. Filter Targets (Local + Reachable External Hubs)
     let mut local_targets = Vec::new();
+    let mut target_map: HashMap<u32, (u32, u32)> = HashMap::new(); // local_idx -> (real_pid, real_idx)
 
     for (t_pid, t_idx) in targets {
         if *t_pid == start_pid {
             local_targets.push(*t_idx);
+            target_map.insert(*t_idx, (*t_pid, *t_idx));
+        } else {
+            // Check if it exists as external hub in partition
+            let hub = GlobalHub {
+                original_partition_id: *t_pid,
+                stop_idx_in_partition: *t_idx,
+            };
+            if let Some(pos) = partition.external_hubs.iter().position(|h| *h == hub) {
+                let virtual_idx = (partition.stops.len() + pos) as u32;
+                local_targets.push(virtual_idx);
+                target_map.insert(virtual_idx, (*t_pid, *t_idx));
+            }
         }
     }
 
@@ -1314,11 +1343,11 @@ fn run_profile_search(
     // Construct results
     let mut results = Vec::new();
     for (t_key, pareto) in raw_results {
-        // Map local target (u32) to global key (start_pid, t_idx)
-        let t_idx = t_key;
-        // Filter out unreachable
-        if !pareto.is_empty() {
-            results.push(((start_pid, t_idx), pareto));
+        // Map local target (u32) back to global key
+        if let Some(global_key) = target_map.get(&t_key) {
+            if !pareto.is_empty() {
+                results.push((*global_key, pareto));
+            }
         }
     }
 
