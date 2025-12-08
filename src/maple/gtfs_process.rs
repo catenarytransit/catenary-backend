@@ -52,6 +52,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Instant;
+use std::io::{self, Write};
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -90,6 +91,8 @@ fn execute_pfaedle_rs(
     let run = run.output();
 
     println!("ran pfaedle for {}, {:#?}", gtfs_path, run);
+    io::stdout().write_all(&run.stdout);
+    io::stderr().write_all(&run.stderr);
 
     let run_output = run?;
 
@@ -241,6 +244,30 @@ pub async fn gtfs_process_feed(
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railway-filtered-japan-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
+        "f-ouigo" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
+        "f-pol~regio~pl" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
+        "f-pkp~intercity~pl" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
                 None,
                 true,
             )?;
