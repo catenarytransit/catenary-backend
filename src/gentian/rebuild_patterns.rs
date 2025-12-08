@@ -923,9 +923,6 @@ fn rebuild_partition(
     // 5. Recompute Local Patterns
     compute_local_patterns_for_partition(&mut partition);
 
-    // 5a. Augment Local DAG with Profile-Based Shortcuts (Pareto Connectivity)
-    augment_local_dag_with_shortcuts(&mut partition);
-
     // 5b. Build Direct Connections Index (Local)
     partition.direct_connections_index.clear();
     for (p_idx, tp) in partition.trip_patterns.iter().enumerate() {
