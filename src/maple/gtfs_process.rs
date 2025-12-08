@@ -90,7 +90,7 @@ fn execute_pfaedle_rs(
 
     let run = run.output();
 
-    println!("ran pfaedle for {}, {:#?}", gtfs_path, run);
+    println!("ran pfaedle for {}, {:#?}", gtfs_path, &run);
     io::stdout().write_all(&run.stdout);
     io::stderr().write_all(&run.stderr);
 
