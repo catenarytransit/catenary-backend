@@ -27,12 +27,18 @@ mkdir -p "$TEMP_DIR"
 export PATH="$BIN_DIR:$PATH"
 
 # Argument parsing
+# Argument parsing
 GENTIAN_ONLY=false
+SKIP_EXTRACT=false
 
 for arg in "$@"; do
     case $arg in
         --gentian-only)
             GENTIAN_ONLY=true
+            shift
+            ;;
+        --skip-extract)
+            SKIP_EXTRACT=true
             shift
             ;;
         *)
@@ -193,12 +199,16 @@ CHATEAUS=$(psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "
 CHATEAU_LIST=$(echo "$CHATEAUS" | tr '\n' ',' | sed 's/,$//' | sed 's/ //g')
 
 if [ -n "$CHATEAU_LIST" ]; then
-   echo "Running Gentian Extract for: $CHATEAU_LIST"
-   "$GENTIAN_BIN" \
-        extract \
-        --output "$OUTPUT_DIR" \
-       --osm-chunks "$OSM_CHUNKS_DIR" \
-        --chateau "$CHATEAU_LIST"
+    if [ "$SKIP_EXTRACT" = false ]; then
+       echo "Running Gentian Extract for: $CHATEAU_LIST"
+       "$GENTIAN_BIN" \
+            extract \
+            --output "$OUTPUT_DIR" \
+           --osm-chunks "$OSM_CHUNKS_DIR" \
+            --chateau "$CHATEAU_LIST"
+    else
+        echo "Skipping Gentian Extract (--skip-extract)"
+    fi
 
     echo "Running Gentian Cluster"
     "$GENTIAN_BIN" \
