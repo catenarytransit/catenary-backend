@@ -1,4 +1,3 @@
-
 #[cfg(test)]
 mod tests {
     use crate::graph_loader::GraphManager;

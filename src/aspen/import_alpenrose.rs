@@ -7,6 +7,7 @@ use crate::delay_calculation::calculate_delay;
 use crate::metrolink_california_additions::vehicle_pos_supplement;
 use crate::persistence;
 use crate::route_type_overrides::apply_route_type_overrides;
+use crate::stop_time_logic::find_closest_stop_time_update;
 use crate::track_number::*;
 use ahash::{AHashMap, AHashSet};
 use catenary::aspen_dataset::option_i32_to_occupancy_status;
@@ -34,7 +35,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
-use crate::stop_time_logic::find_closest_stop_time_update;
 
 lazy_static! {
     static ref LAST_SAVE_TIME: SccHashMap<String, Instant> = SccHashMap::new();
@@ -459,12 +459,14 @@ pub async fn new_rt_data(
             .map(|x| x.to_string())
             .collect::<Vec<String>>();
 
-
         let pool_cal = pool.clone();
         let service_ids_cal = service_ids_to_lookup.clone();
         let chateau_cal = chateau_id.to_string();
         let calendar_future = async move {
-            let mut conn = pool_cal.get().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            let mut conn = pool_cal
+                .get()
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
             catenary::schema::gtfs::calendar::dsl::calendar
                 .filter(catenary::schema::gtfs::calendar::dsl::chateau.eq(&chateau_cal))
                 .filter(catenary::schema::gtfs::calendar::dsl::service_id.eq_any(&service_ids_cal))
@@ -477,10 +479,15 @@ pub async fn new_rt_data(
         let service_ids_cd = service_ids_to_lookup.clone();
         let chateau_cd = chateau_id.to_string();
         let calendar_dates_future = async move {
-            let mut conn = pool_cd.get().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            let mut conn = pool_cd
+                .get()
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
             catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
                 .filter(catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(&chateau_cd))
-                .filter(catenary::schema::gtfs::calendar_dates::dsl::service_id.eq_any(&service_ids_cd))
+                .filter(
+                    catenary::schema::gtfs::calendar_dates::dsl::service_id.eq_any(&service_ids_cd),
+                )
                 .load::<catenary::models::CalendarDate>(&mut conn)
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
@@ -498,7 +505,6 @@ pub async fn new_rt_data(
             CompactString,
             gtfs_realtime::trip_update::StopTimeUpdate,
         > = AHashMap::new();
-
 
         let current_time_unix_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -539,7 +545,6 @@ pub async fn new_rt_data(
                         //otherwise, we pick the one with the next next arrival / departure time, by sorting it by time
                         //if every departure time is already in the past, just pick the last one
 
-
                         let closest_stop_time_update = find_closest_stop_time_update(
                             &trip_update.stop_time_update,
                             current_time_unix_timestamp,
@@ -568,7 +573,6 @@ pub async fn new_rt_data(
             }
         }
 
-
         // Move calculation of list_of_itinerary_patterns_to_lookup here
         let mut list_of_itinerary_patterns_to_lookup: AHashSet<String> = AHashSet::new();
         for trip in trip_id_to_trip.values() {
@@ -584,34 +588,48 @@ pub async fn new_rt_data(
             if stop_ids_stops.is_empty() {
                 return Ok(vec![]);
             }
-            let mut conn = pool_stops.get().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            let mut conn = pool_stops
+                .get()
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
             let stops_answer = catenary::schema::gtfs::stops::dsl::stops
-                 .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&chateau_stops))
-                 .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq_any(&stop_ids_stops))
-                 .select(catenary::models::Stop::as_select())
-                 .load::<catenary::models::Stop>(&mut conn)
-                 .await;
-            
+                .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&chateau_stops))
+                .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq_any(&stop_ids_stops))
+                .select(catenary::models::Stop::as_select())
+                .load::<catenary::models::Stop>(&mut conn)
+                .await;
+
             match stops_answer {
                 Ok(stops) => Ok(stops),
                 Err(e) => {
-                     println!("Error fetching stops: {}", e);
-                     Ok(vec![])
+                    println!("Error fetching stops: {}", e);
+                    Ok(vec![])
                 }
             }
         };
 
         // Itinerary Patterns Future
         let pool_ip = pool.clone();
-        let list_ip = list_of_itinerary_patterns_to_lookup.iter().cloned().collect::<Vec<_>>();
-        let list_ip_2 = list_ip.clone(); 
+        let list_ip = list_of_itinerary_patterns_to_lookup
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let list_ip_2 = list_ip.clone();
         let chateau_ip = chateau_id.to_string();
-        
+
         let itinerary_patterns_future = async move {
-             let mut conn = pool_ip.get().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-             catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(catenary::schema::gtfs::itinerary_pattern_meta::dsl::chateau.eq(&chateau_ip))
-                .filter(catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_id.eq_any(&list_ip))
+            let mut conn = pool_ip
+                .get()
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern_meta::dsl::chateau.eq(&chateau_ip),
+                )
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_id
+                        .eq_any(&list_ip),
+                )
                 .select(catenary::models::ItineraryPatternMeta::as_select())
                 .load::<catenary::models::ItineraryPatternMeta>(&mut conn)
                 .await
@@ -622,10 +640,16 @@ pub async fn new_rt_data(
         let pool_ipr = pool.clone();
         let chateau_ipr = chateau_id.to_string();
         let itinerary_pattern_rows_future = async move {
-             let mut conn = pool_ipr.get().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-             catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+            let mut conn = pool_ipr
+                .get()
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
                 .filter(catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(&chateau_ipr))
-                .filter(catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id.eq_any(&list_ip_2))
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id
+                        .eq_any(&list_ip_2),
+                )
                 .select(catenary::models::ItineraryPatternRow::as_select())
                 .load::<catenary::models::ItineraryPatternRow>(&mut conn)
                 .await
@@ -634,23 +658,24 @@ pub async fn new_rt_data(
 
         let join_start = std::time::Instant::now();
         let (calendar, calendar_dates, stops, itinerary_patterns, itinerary_pattern_rows) = tokio::try_join!(
-            calendar_future, 
+            calendar_future,
             calendar_dates_future,
             stops_future,
             itinerary_patterns_future,
             itinerary_pattern_rows_future
         )?;
-        
+
         let itin_lookup_duration = join_start.elapsed();
         let itinerary_pattern_row_duration = join_start.elapsed();
-        
-        let calendar_structure = catenary::make_calendar_structure_from_pg_single_chateau(calendar, calendar_dates);
+
+        let calendar_structure =
+            catenary::make_calendar_structure_from_pg_single_chateau(calendar, calendar_dates);
 
         let stop_id_to_stop_from_postgres: AHashMap<String, catenary::models::Stop> = stops
             .into_iter()
             .map(|stop| (stop.gtfs_id.clone(), stop))
             .collect();
-            
+
         let mut itinerary_pattern_id_to_itinerary_pattern_meta: AHashMap<
             String,
             catenary::models::ItineraryPatternMeta,
@@ -702,7 +727,6 @@ pub async fn new_rt_data(
         let direction_pattern_id_to_direction_pattern_meta =
             direction_pattern_id_to_direction_pattern_meta;
 
-
         //split into hashmap by itinerary pattern id, sort by stop sequence
 
         let mut itinerary_pattern_id_to_itinerary_pattern_rows: AHashMap<
@@ -721,10 +745,13 @@ pub async fn new_rt_data(
             itinerary_pattern_rows.sort_by(|a, b| a.stop_sequence.cmp(&b.stop_sequence));
         }
 
-        let mut itinerary_pattern_id_to_scheduled_stop_ids: AHashMap<String, Option<AHashSet<String>>> = AHashMap::new();
+        let mut itinerary_pattern_id_to_scheduled_stop_ids: AHashMap<
+            String,
+            Option<AHashSet<String>>,
+        > = AHashMap::new();
         for (id, rows) in &itinerary_pattern_id_to_itinerary_pattern_rows {
-             let set: AHashSet<String> = rows.iter().map(|x| x.stop_id.to_string()).collect();
-             itinerary_pattern_id_to_scheduled_stop_ids.insert(id.clone(), Some(set));
+            let set: AHashSet<String> = rows.iter().map(|x| x.stop_id.to_string()).collect();
+            itinerary_pattern_id_to_scheduled_stop_ids.insert(id.clone(), Some(set));
         }
 
         let itinerary_pattern_id_to_itinerary_pattern_rows =
@@ -1105,11 +1132,11 @@ pub async fn new_rt_data(
                             .flatten();
 
                         let scheduled_stop_ids_hashset = compressed_trip
-                             .and_then(|compressed_trip| {
-                                 itinerary_pattern_id_to_scheduled_stop_ids
-                                     .get(&compressed_trip.itinerary_pattern_id)
-                             })
-                             .unwrap_or(&empty_scheduled_stops_option);
+                            .and_then(|compressed_trip| {
+                                itinerary_pattern_id_to_scheduled_stop_ids
+                                    .get(&compressed_trip.itinerary_pattern_id)
+                            })
+                            .unwrap_or(&empty_scheduled_stops_option);
 
                         if compressed_trip.is_none() {
                             for trip_update in trip_update.stop_time_update.iter() {

@@ -63,6 +63,39 @@ pub struct GtfsSummary {
     pub bbox: Option<geo::Rect>,
 }
 
+fn execute_pfaedle_rs(
+    gtfs_path: &str,
+    osm_path: &str,
+    mots: Option<Vec<String>>,
+    drop_shapes: bool,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let mut command_pfaedle = Command::new("pfaedle-rs");
+
+    let mut run = command_pfaedle
+        .arg("--gtfs-dir")
+        .arg(&gtfs_path)
+        .arg("--osm-file")
+        .arg(&osm_path);
+
+    if drop_shapes {
+        run = run.arg("--wipe-shapes");
+    }
+
+    run = run.arg("--write-colors");
+
+    if let Some(mots) = mots {
+        run = run.arg("--mots").arg(mots.iter().join(","));
+    }
+
+    let run = run.output();
+
+    println!("ran pfaedle for {}, {:#?}", gtfs_path, run);
+
+    let run_output = run?;
+
+    Ok(())
+}
+
 fn execute_pfaedle(
     gtfs_path: &str,
     osm_path: &str,
@@ -214,9 +247,9 @@ pub async fn gtfs_process_feed(
             )?;
         }
         "f-f24-octranspo" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-ontario-latest.osm",
+                "./pfaedle-filtered-ontario-latest.osm.pbf",
                 None,
                 true,
             )?;
