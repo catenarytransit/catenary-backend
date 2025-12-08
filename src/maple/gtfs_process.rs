@@ -254,6 +254,31 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
+        //japan
+        "f-jr~east" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railway-filtered-japan-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
+        "f-tokyo~metro" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railway-filtered-japan-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
+        "f-toeibus~gtfs~jp" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railway-filtered-japan-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
         _ => {
             //no pfaedle needed
         }
