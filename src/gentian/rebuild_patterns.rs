@@ -71,8 +71,6 @@ pub async fn run_rebuild_patterns(
 
     // 3. Rebuild Partitions (Local)
     // This step writes the initial local_v1.bin files.
-    // 3. Rebuild Partitions (Local)
-    // This step writes the initial local_v1.bin files.
     // Use Rayon for CPU-bound tasks, with dedicated threads.
     println!("Using Rayon for partition rebuild (will autopick thread count).");
 
