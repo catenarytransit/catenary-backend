@@ -234,23 +234,22 @@ pub async fn run_rebuild_patterns(
             // 4. Storing new long-dist transfer patterns (p.long_distance_transfer_patterns) - outputs
 
             // --- B. Strip Partition for Memory Efficiency ---
-            // DISABLED for Trip-Based Routing: We need full timetable data in memory.
-            /*
-            p.trip_patterns = Vec::new();
-            p.time_deltas = Vec::new();
-            p.direction_patterns = Vec::new(); // NOTE: local_dag uses indices into stops, not direction patterns.
-            p.service_ids = Vec::new();
-            p.service_exceptions = Vec::new();
-            p.timezones = Vec::new();
-            p.long_distance_trip_patterns = Vec::new(); // Already merged
-            p.direct_connections_index = std::collections::HashMap::new(); // Not needed for graph search topology
+            // Optimization: Remove indices and metadata NOT needed for Trip-Based Profile Search (Topology only).
 
-            // We strip stops meta-data that isn't needed, but keeping the vector of stops is required for indexing.
-            // We can clear `gtfs_stop_ids` to save some string memory.
+            // 1. Remove API Index (Large map)
+            p.direct_connections_index.clear();
+
+            // 2. Remove Pre-computed Local DAG (we use dynamic trip-based search)
+            p.local_dag.clear(); // Important: Trip-Based Router doesn't use this.
+
+            // 3. Remove metadata unused by routing core
+            p.service_exceptions.clear(); // Profile search uses service_mask in trips.
+            p.long_distance_trip_patterns.clear(); // Merged into Global DC.
+
+            // 4. Clear stop metadata
             for stop in &mut p.stops {
                 stop.gtfs_stop_ids = Vec::new();
             }
-            */
 
             loaded_partitions.insert(*pid, p);
         }
@@ -313,10 +312,22 @@ pub async fn run_rebuild_patterns(
         long_dist_data.patterns_by_source.len()
     );
 
-    // Phase 2: Border Patterns
-    println!("Phase 2: Computing Border Patterns...");
+    // Phase 2: Border Patterns & Saving
+    println!("Phase 2: Computing Border Patterns & Saving...");
 
-    // Identify Border Stations
+    // 1. Regroup LD patterns by Partition
+    let mut ld_patterns_by_pid: HashMap<u32, Vec<(u32, Vec<((u32, u32), Vec<(u32, u32)>)>)>> =
+        HashMap::new();
+    for ((pid, idx), patterns) in long_dist_data.patterns_by_source {
+        ld_patterns_by_pid
+            .entry(pid)
+            .or_default()
+            .push((idx, patterns));
+    }
+    // long_dist_data is now partially moved/consumed, so memory is largely freed (fields moved).
+    // drop(long_dist_data); // REMOVED to avoid use-after-move error.
+
+    // 2. Identify All Border Stations (Global Targets)
     let mut border_stations: Vec<(u32, u32)> = Vec::new();
     for (pid, p) in &loaded_partitions {
         for (i, stop) in p.stops.iter().enumerate() {
@@ -327,165 +338,85 @@ pub async fn run_rebuild_patterns(
     }
     println!("Found {} border stations.", border_stations.len());
 
-    // Map: PartitionID -> List of (SourceIdx, Targets)
-    // Targets: Vec<((TargetPID, TargetIdx), Cost)>
-    let mut border_results: HashMap<u32, Vec<(u32, Vec<((u32, u32), Vec<(u32, u32)>)>)>> =
-        HashMap::new();
-
-    // REWRITE: Precise Injection
-    for ((src_pid, src_idx), targets) in &long_dist_data.patterns_by_source {
-        let partition = loaded_partitions.get_mut(src_pid).unwrap();
-        for ((tgt_pid, tgt_idx), pareto) in targets {
-            // ALLOW cross-partition injection
-            if pareto.is_empty() {
-                continue;
-            }
-
-            // Determine Target Node Index (Local or External)
-            let to_node_idx = if *src_pid == *tgt_pid {
-                *tgt_idx
-            } else {
-                // Find or add external hub
-                let hub = GlobalHub {
-                    original_partition_id: *tgt_pid,
-                    stop_idx_in_partition: *tgt_idx,
-                };
-                if let Some(pos) = partition.external_hubs.iter().position(|h| *h == hub) {
-                    (partition.stops.len() + pos) as u32
-                } else {
-                    partition.external_hubs.push(hub);
-                    (partition.stops.len() + partition.external_hubs.len() - 1) as u32
-                }
-            };
-
-            // 1. Create DirectionPattern
-            let dp = DirectionPattern {
-                stop_indices: vec![*src_idx, to_node_idx],
-            };
-            partition.direction_patterns.push(dp);
-            let dp_idx = (partition.direction_patterns.len() - 1) as u32;
-
-            // 2. Create TimeDeltas
-            let mut trips = Vec::new();
-            for (dep, arr) in pareto {
-                let duration = arr - dep;
-                let tds = TimeDeltaSequence {
-                    deltas: vec![duration, 0], // Travel, Dwell
-                };
-                partition.time_deltas.push(tds);
-                let td_idx = (partition.time_deltas.len() - 1) as u32;
-
-                trips.push(catenary::routing_common::transit_graph::CompressedTrip {
-                    gtfs_trip_id: "synthetic".to_string(),
-                    service_mask: u32::MAX,
-                    start_time: *dep,
-                    time_delta_idx: td_idx,
-                    service_idx: 0,
-                    bikes_allowed: 0,
-                    wheelchair_accessible: 0,
-                });
-            }
-
-            // 3. Create TripPattern
-            let pattern = TripPattern {
-                chateau_idx: 0,
-                route_id: "synthetic".to_string(),
-                direction_pattern_idx: dp_idx,
-                trips,
-                timezone_idx: 0,
-                route_type: 0,
-                is_border: false,
-            };
-            partition.trip_patterns.push(pattern);
-
-            // Also inject into long_distance_transfer_patterns to ensure graph connectivity for the router!
-            // The trip-based router mostly uses TripPatterns, but if we want DAG connectivity
-            // we should ensure it's represented. However, TripPattern is usually enough for the Router
-            // IF the router is Trip-Based. The `augment_local_dag` uses `compute_initial_transfers`
-            // which uses `trip_patterns`. So this should be sufficient for the router to "see" the edge.
+    // 3. Identify Partitions to Process
+    // Valid partitions are those that have EITHER Long Distance Patterns OR Border Nodes.
+    let mut partitions_to_process: HashSet<u32> = ld_patterns_by_pid.keys().cloned().collect();
+    for (pid, p) in &loaded_partitions {
+        if p.stops.iter().any(|s| s.is_border) {
+            partitions_to_process.insert(*pid);
         }
     }
+    let mut partitions_to_process_vec: Vec<u32> = partitions_to_process.into_iter().collect();
+    partitions_to_process_vec.sort();
 
-    let results_vec: Vec<(u32, u32, Vec<((u32, u32), Vec<(u32, u32)>)>)> = border_stations
-        .par_iter()
-        .map(|(b_pid, b_idx)| {
-            let results =
-                run_profile_search_phase2(*b_pid, *b_idx, &loaded_partitions, &border_stations);
-            (*b_pid, *b_idx, results)
-        })
-        .collect();
+    println!(
+        "Updating {} partitions with new patterns...",
+        partitions_to_process_vec.len()
+    );
 
-    for (b_pid, b_idx, results) in results_vec {
-        border_results
-            .entry(b_pid)
-            .or_default()
-            .push((b_idx, results));
-    }
+    // 4. Iterate Partitions (Sequential Load/Save)
+    for pid in partitions_to_process_vec {
+        // A. Retrieve Long Distance Results
+        let mut partition_results = ld_patterns_by_pid.remove(&pid).unwrap_or_default();
 
-    // Combine Results
-    let mut combined_results: HashMap<u32, Vec<(u32, Vec<((u32, u32), Vec<(u32, u32)>)>)>> =
-        HashMap::new();
+        // B. Compute Border Patterns
+        // Find border stops for THIS partition
+        if let Some(partition_ref) = loaded_partitions.get(&pid) {
+            let border_indices: Vec<u32> = partition_ref
+                .stops
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.is_border)
+                .map(|(i, _)| i as u32)
+                .collect();
 
-    // 1. Add Border Results
-    for (pid, results_list) in border_results {
-        combined_results.insert(pid, results_list);
-    }
+            if !border_indices.is_empty() {
+                // Run search in parallel for these border nodes
+                let border_results: Vec<(u32, Vec<((u32, u32), Vec<(u32, u32)>)>)> = border_indices
+                    .par_iter()
+                    .map(|&idx| {
+                        let results = run_profile_search_phase2(
+                            pid,
+                            idx,
+                            &loaded_partitions,
+                            &border_stations,
+                        );
+                        (idx, results)
+                    })
+                    .collect();
 
-    // 2. Add Long Distance Results
-    // We need to invert the mapping from (pid, idx) -> results to pid -> list of (idx, results)
-    for ((pid, idx), patterns) in long_dist_data.patterns_by_source {
-        combined_results
-            .entry(pid)
-            .or_default()
-            .push((idx, patterns));
-    }
+                partition_results.extend(border_results);
+            }
+        }
 
-    // Update Partitions with Combined Patterns
-    // Note: We are updating the STRIPPED partitions in memory first with the results.
-    // However, to save, we need to load the FULL partition again and merge.
+        if partition_results.is_empty() {
+            continue;
+        }
 
-    println!("Phase 3: Saving Updated Partitions...");
-
-    // Iterate over IDs we have modified
-    // We actually iterate over "combined_results" keys because those are the affected ones.
-    for (pid, results_list) in combined_results {
-        // Load FULL partition again
+        // C. Load FULL Partition, Update, Save
         let partition_dir = output_dir.join("patterns").join(pid.to_string());
         let chunk_path = partition_dir.join("local_v1.bin");
 
-        // If partition doesn't exist (e.g. it was skipped?), we can't update it.
-        // But it should exist if we computed patterns for it.
         if !chunk_path.exists() {
-            println!(
-                "Warning: Partition {} to be updated not found on disk.",
-                pid
-            );
+            println!("Warning: Partition {} not found. Skipping update.", pid);
             continue;
         }
 
         let mut full_partition: TransitPartition = load_bincode(chunk_path.to_str().unwrap())?;
 
-        println!(
-            "Updating partition {} with {} sets of patterns...",
-            pid,
-            results_list.len()
-        );
-
-        // Now apply the logic to populate `external_hubs` and `long_distance_transfer_patterns`
-
-        // Consolidate results by source_idx to avoid duplicate LocalTransferPatterns
+        // Consolidate results by source_idx
         let mut results_by_source: HashMap<u32, Vec<((u32, u32), Vec<(u32, u32)>)>> =
             HashMap::new();
-        for (source_idx, targets) in results_list {
+        for (source_idx, targets) in partition_results {
             results_by_source
                 .entry(source_idx)
                 .or_default()
                 .extend(targets);
         }
 
-        // Apply updates
         let mut new_patterns = Vec::new();
 
+        // [LOGIC COPIED FROM PREVIOUS IMPLEMENTATION]
         for (source_idx, targets) in results_by_source {
             let mut edges = Vec::new();
 
@@ -511,24 +442,17 @@ pub async fn run_rebuild_patterns(
                 };
 
                 // GENERATE SYNTHETIC TRIP PATTERN
-                // 1. Create DirectionPattern [src, tgt]
-                // Note: 'tgt' index depends on if it is internal or external.
-                // Typically DirectionPatterns use internal indices.
-                // For external hubs, we use the virtual index (stops.len() + hub_idx).
                 let dp = DirectionPattern {
                     stop_indices: vec![source_idx, to_node_idx],
                 };
-
-                // We should check if this DP already exists to save space, but for now simple append.
                 full_partition.direction_patterns.push(dp);
                 let dp_idx = (full_partition.direction_patterns.len() - 1) as u32;
 
-                // 2. Create Trips & TimeDeltas
                 let mut trips = Vec::new();
                 for (dep, arr) in &pareto {
                     let duration = arr - dep;
                     let tds = TimeDeltaSequence {
-                        deltas: vec![duration, 0], // Travel, Dwell
+                        deltas: vec![duration, 0],
                     };
                     full_partition.time_deltas.push(tds);
                     let td_idx = (full_partition.time_deltas.len() - 1) as u32;
@@ -550,10 +474,9 @@ pub async fn run_rebuild_patterns(
                     direction_pattern_idx: dp_idx,
                     trips,
                     timezone_idx: 0,
-                    route_type: 2, // Rail/LongDist
+                    route_type: 2,
                     is_border: false,
                 };
-
                 full_partition.trip_patterns.push(tp);
                 let tp_idx = (full_partition.trip_patterns.len() - 1) as u32;
 
@@ -566,7 +489,7 @@ pub async fn run_rebuild_patterns(
                             catenary::routing_common::transit_graph::TransitEdge {
                                 trip_pattern_idx: tp_idx,
                                 start_stop_idx: 0,
-                                end_stop_idx: 1, // Synthetic patterns always 2 stops
+                                end_stop_idx: 1,
                                 min_duration: match pareto.iter().map(|(d, a)| a - d).min() {
                                     Some(m) => m,
                                     None => 0,
@@ -584,40 +507,19 @@ pub async fn run_rebuild_patterns(
             });
         }
 
-        // We should merge with existing long_distance_transfer_patterns if any?
-        // Currently we just overwrite. Since we combined results, this should be fine
-        // as long as we don't have multiple entries for the same source_idx in results_list.
-        // The way we constructed combined_results, we might have multiple entries if a node was both border and long dist?
-        // Let's check overlap.
-        // Border stations are subset of all stops. Long distance are subset.
-        // A stop CAN be both.
-        // If it is both, we have entries in `border_results` AND `long_dist_data`.
-        // We just pushed them both to the vector.
-        // So `new_patterns` will have two `LocalTransferPattern` for same `from_stop_idx`.
-        // We should consolidate them.
+        // Merge/Append new patterns
+        // We accumulate by source_idx again to handle potential existing patterns?
+        // Actually, we are OVERWRITING long_distance_transfer_patterns logic from previous approach.
+        // We'll trust `new_patterns`.
+        // But what if `full_partition` already had some (e.g. from previous run)?
+        // `full_partition.long_distance_transfer_patterns` should be replaced or appended?
+        // Let's replace to be clean.
 
-        // Consolidate patterns by source index
-        let mut final_patterns_map: HashMap<
-            u32,
-            Vec<catenary::routing_common::transit_graph::DagEdge>,
-        > = HashMap::new();
+        // Wait, `new_patterns` is `Vec<LocalTransferPattern>`.
+        // We might have multiple entries for same source if `results_by_source` Logic produced it?
+        // No, `results_by_source` is a Map, so one entry per source.
 
-        for p in new_patterns {
-            final_patterns_map
-                .entry(p.from_stop_idx)
-                .or_default()
-                .extend(p.edges);
-        }
-
-        let mut final_patterns = Vec::new();
-        for (src, edges) in final_patterns_map {
-            final_patterns.push(LocalTransferPattern {
-                from_stop_idx: src,
-                edges,
-            });
-        }
-
-        full_partition.long_distance_transfer_patterns = final_patterns;
+        full_partition.long_distance_transfer_patterns = new_patterns;
 
         // Save
         let version_number = 1;
