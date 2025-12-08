@@ -81,7 +81,7 @@ fn execute_pfaedle_rs(
         run = run.arg("--wipe-shapes");
     }
 
-   // run = run.arg("--write-colors");
+    run = run.arg("--write-colours");
 
     if let Some(mots) = mots {
         run = run.arg("--mots").arg(mots.iter().join(","));
@@ -96,7 +96,7 @@ fn execute_pfaedle_rs(
     Ok(())
 }
 
-fn execute_pfaedle(
+fn execute_pfaedle_rs(
     gtfs_path: &str,
     osm_path: &str,
     mots: Option<Vec<String>>,
@@ -159,89 +159,89 @@ pub async fn gtfs_process_feed(
 
     match feed_id {
         "f-u05-tcl~systral" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-france-latest.osm",
+                "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 true,
             )?;
         }
         "f-hauts~de~france~du~nord~2" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-france-latest.osm",
+                "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
             )?;
         }
         "f-hauts~de~france~pas~de~calais" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-france-latest.osm",
+                "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
             )?;
         }
         "f-mobigo~nièvre" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-france-latest.osm",
+                "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
             )?;
         }
         "f-mobigo~yonne" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-france-latest.osm",
+                "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
             )?;
         }
         "f-hauts~de~france~somme" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-france-latest.osm",
+                "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
             )?;
         }
         "f-ametis" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-france-latest.osm",
+                "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
             )?;
         }
         "f-artis~arras" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-france-latest.osm",
+                "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 true,
             )?;
         }
         "f-hauts~de~france~laisne" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-france-latest.osm",
+                "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
             )?;
         }
         "f-keolis~dijon~fr" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-france-latest.osm",
+                "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 true,
             )?;
         }
         "f-mobigo~côte~dor" => {
-            let _ = execute_pfaedle(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-france-latest.osm",
+                "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 true,
             )?;
