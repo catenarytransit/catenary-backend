@@ -115,7 +115,7 @@ fn execute_pfaedle(
         run = run.arg("--mots").arg(mots.iter().join(","));
     }
 
-    run = run.arg("--write-colors");
+   // run = run.arg("--write-colors");
 
     if drop_shapes {
         run = run.arg("--drop-shapes").arg("true");
