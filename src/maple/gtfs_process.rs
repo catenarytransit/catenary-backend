@@ -271,7 +271,7 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
-        "f-toeibus~gtfs~jp" => {
+        "f-toei~metro" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railway-filtered-japan-latest.osm.pbf",
