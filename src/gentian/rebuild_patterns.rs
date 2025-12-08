@@ -79,12 +79,26 @@ pub async fn run_rebuild_patterns(
     let affected_partitions_vec: Vec<u32> = affected_partitions.into_iter().collect();
     let rt_handle = tokio::runtime::Handle::current();
 
-    affected_partitions_vec.par_iter().try_for_each(|pid| {
-        let pool = pool.clone();
-        let manifest = manifest.clone();
-        let output_dir = output_dir.to_path_buf();
-        rebuild_partition(*pid, &manifest, &output_dir, pool, &rt_handle)
-    })?;
+    // Spawn blocking task to run Rayon loop, preventing "cannot start a runtime from within a runtime"
+    // caused by `block_on` inside the loop (via rebuild_partition).
+    let pool_for_task = pool.clone();
+    let manifest_for_task = manifest.clone();
+    let output_dir_buf = output_dir.to_path_buf();
+    let rt_handle_for_task = rt_handle.clone();
+
+    tokio::task::spawn_blocking(move || {
+        affected_partitions_vec.par_iter().try_for_each(|pid| {
+            // rebuild_partition takes &Manifest, &Path, Arc<Pool>, &Handle
+            rebuild_partition(
+                *pid,
+                &manifest_for_task,
+                &output_dir_buf,
+                pool_for_task.clone(),
+                &rt_handle_for_task,
+            )
+        })
+    })
+    .await??;
 
     // 4. Global Connectivity Phase
     // Memory Optimization:
@@ -523,7 +537,7 @@ pub async fn run_rebuild_patterns(
 
         // Save
         let version_number = 1;
-        rt_handle.block_on(tokio::fs::create_dir_all(&partition_dir))?;
+        std::fs::create_dir_all(&partition_dir)?;
         let output_path = partition_dir.join(format!("local_v{}.bin", version_number));
         save_bincode(&full_partition, output_path.to_str().unwrap())?;
 
@@ -849,7 +863,7 @@ fn rebuild_partition(
     // We'll use version 1 for now.
     let version_number = 1;
     let partition_dir = output_dir.join("patterns").join(partition_id.to_string());
-    rt_handle.block_on(tokio::fs::create_dir_all(&partition_dir))?;
+    std::fs::create_dir_all(&partition_dir)?;
     let output_path = partition_dir.join(format!("local_v{}.bin", version_number));
 
     save_bincode(&partition, output_path.to_str().unwrap())?;
