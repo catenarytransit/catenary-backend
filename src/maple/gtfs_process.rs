@@ -94,8 +94,8 @@ fn execute_pfaedle_rs(
 
     let run_output = run?;
 
-    io::stdout().write_all(&run_output.stdout);
-    io::stderr().write_all(&run_output.stderr);
+    let _ = io::stdout().write_all(&run_output.stdout);
+    let _ = io::stderr().write_all(&run_output.stderr);
 
     Ok(())
 }
