@@ -18,9 +18,8 @@ use crate::connectivity::{compute_border_patterns, compute_local_patterns_for_pa
 use crate::osm::ChunkCache;
 use crate::pathfinding::compute_osm_walk;
 use crate::trip_based::{
-    ProfileScratch, build_stop_to_patterns, compute_initial_transfers, compute_one_to_all_profile,
-    compute_profile_query, get_departure_time, refine_transfers, remove_u_turn_transfers,
-    run_trip_based_profile,
+    ProfileScratch, build_stop_to_patterns, compute_initial_transfers, compute_profile_query,
+    get_departure_time, refine_transfers, remove_u_turn_transfers, run_trip_based_profile,
 };
 use crate::update_gtfs::run_update_gtfs;
 use crate::utils::{haversine_distance, lon_lat_to_tile};
@@ -1448,125 +1447,4 @@ fn reconstruct_manifest(output_dir: &Path) -> Result<Manifest> {
     );
 
     Ok(manifest)
-}
-
-#[derive(Copy, Clone, Eq, PartialEq)]
-struct State {
-    cost: u32,
-    pid: u32,
-    stop_idx: u32,
-}
-
-impl Ord for State {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other.cost.cmp(&self.cost)
-    }
-}
-
-impl PartialOrd for State {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-fn augment_local_dag_with_shortcuts(partition: &mut TransitPartition) {
-    println!("    - Augmenting local DAG with profile-based shortcuts...");
-
-    // 1. Identify Hubs
-    let hubs: HashSet<u32> = partition
-        .stops
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.is_border || s.is_long_distance)
-        .map(|(i, _)| i as u32)
-        .collect();
-
-    if hubs.is_empty() {
-        return;
-    }
-    println!("      Found {} hubs to connect.", hubs.len());
-
-    // 2. Prepare Profile Search Data
-    let mut transfers = compute_initial_transfers(partition);
-    remove_u_turn_transfers(partition, &mut transfers);
-    refine_transfers(partition, &mut transfers);
-
-    // Build Trip Transfer Ranges
-    let targets_vec: Vec<u32> = hubs.iter().cloned().collect();
-
-    // 3. Run Profile Search from Each Hub
-    let mut shortcuts_added = 0;
-    // Map (From, To) -> MinDuration
-    let mut best_shortcuts: HashMap<(u32, u32), u32> = HashMap::new();
-
-    for &source_node in &hubs {
-        let min_durations =
-            compute_one_to_all_profile(partition, &transfers, source_node, &targets_vec, 5);
-
-        for (target, dur) in min_durations {
-            if target == source_node {
-                continue;
-            }
-            let entry = best_shortcuts
-                .entry((source_node, target))
-                .or_insert(u32::MAX);
-            if dur < *entry {
-                *entry = dur;
-            }
-        }
-    }
-
-    // 4. Inject Shortcuts into Local DAG
-    for ((u, v), duration) in best_shortcuts {
-        let edge_list = partition.local_dag.entry(u).or_default();
-
-        // Check if existing edge is better
-        let existing = edge_list.edges.iter_mut().find(|e| e.to_node_idx == v);
-
-        if let Some(e) = existing {
-            // If existing duration is worse, update it?
-            // Or add parallel edge?
-            // If we update `min_duration` of a TransitEdge, that might be confusing if it doesn't match the pattern.
-            // Better to add a separate LongDistanceTransit edge if strictly better.
-            // Or update if it's already a LongDistanceTransit edge.
-            // If it's a Pattern edge (Transit), and we found a faster way (via transfer),
-            // we should probably add a LongDistanceTransit edge.
-
-            let current_min = match &e.edge_type {
-                Some(EdgeType::Transit(t)) => t.min_duration,
-                Some(EdgeType::Walk(w)) => w.duration_seconds,
-                Some(EdgeType::LongDistanceTransit(t)) => t.min_duration,
-                None => u32::MAX,
-            };
-
-            if duration < current_min {
-                // Add new edge
-                edge_list.edges.push(DagEdge {
-                    from_node_idx: u,
-                    to_node_idx: v,
-                    edge_type: Some(EdgeType::LongDistanceTransit(TransitEdge {
-                        trip_pattern_idx: u32::MAX, // Pseudo-pattern
-                        start_stop_idx: u,
-                        end_stop_idx: v,
-                        min_duration: duration,
-                    })),
-                });
-                shortcuts_added += 1;
-            }
-        } else {
-            edge_list.edges.push(DagEdge {
-                from_node_idx: u,
-                to_node_idx: v,
-                edge_type: Some(EdgeType::LongDistanceTransit(TransitEdge {
-                    trip_pattern_idx: u32::MAX,
-                    start_stop_idx: u,
-                    end_stop_idx: v,
-                    min_duration: duration,
-                })),
-            });
-            shortcuts_added += 1;
-        }
-    }
-
-    println!("      Added {} profile-based shortcuts.", shortcuts_added);
 }
