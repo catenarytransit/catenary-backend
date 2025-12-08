@@ -81,7 +81,7 @@ fn execute_pfaedle_rs(
         run = run.arg("--wipe-shapes");
     }
 
-    run = run.arg("--write-colors");
+   // run = run.arg("--write-colors");
 
     if let Some(mots) = mots {
         run = run.arg("--mots").arg(mots.iter().join(","));
@@ -115,7 +115,7 @@ fn execute_pfaedle(
         run = run.arg("--mots").arg(mots.iter().join(","));
     }
 
-   // run = run.arg("--write-colors");
+    run = run.arg("--write-colors");
 
     if drop_shapes {
         run = run.arg("--drop-shapes").arg("true");
