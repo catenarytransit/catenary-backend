@@ -257,6 +257,22 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
+        "f-thello" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
+        "f-mavcsoport" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
         "f-pol~regio~pl" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
