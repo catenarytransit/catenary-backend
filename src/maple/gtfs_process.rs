@@ -283,6 +283,22 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
+        "f-u3j-lodzka~kolej~aglomeracyjna" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
+        "f-hrvatske~željeznice" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
         "f-pkp~intercity~pl" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
