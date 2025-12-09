@@ -82,6 +82,8 @@ fn execute_pfaedle_rs(
         run = run.arg("--wipe-shapes");
     }
 
+    run = run.arg("--low-priority");
+
     run = run.arg("--write-colours");
 
     if let Some(mots) = mots {

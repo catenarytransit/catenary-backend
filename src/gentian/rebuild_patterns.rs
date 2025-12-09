@@ -99,18 +99,23 @@ pub async fn run_rebuild_patterns(
     .await??;
 
     // 4. Global Connectivity Phase
-    // Memory Optimization:
-    // We process DirectConnections (timetable aggregation) incrementally while loading partitions,
-    // then STRIP the heavy timetable data from the partition in memory before proceeding to the global graph search.
+    // Memory Optimization: Process sequentially and drop.
 
     println!("Computing Global Connectivity...");
 
-    // Prepare Global DirectConnections structures
     let mut global_dc = DirectConnections::default();
     let mut global_stop_to_idx: HashMap<String, u32> = HashMap::new();
-    let mut loaded_partitions: HashMap<u32, TransitPartition> = HashMap::new();
 
-    for pid in manifest.partition_to_chateaux.keys() {
+    // Global Metadata for searches (collected during pass 1)
+    let mut long_distance_stations: Vec<(u32, u32)> = Vec::new();
+    let mut border_stations: Vec<(u32, u32)> = Vec::new();
+    let mut partitions_with_border_stops: HashSet<u32> = HashSet::new();
+
+    // Loop through all partitions to build Global DirectConnections and collect metadata
+    let mut pids: Vec<u32> = manifest.partition_to_chateaux.keys().cloned().collect();
+    pids.sort(); // Deterministic order
+
+    for pid in pids {
         let chunk_path = output_dir
             .join("patterns")
             .join(pid.to_string())
@@ -238,32 +243,18 @@ pub async fn run_rebuild_patterns(
                 }
             }
 
-            // --- B. Strip Partition for Memory Efficiency ---
-            // We retain ONLY what is needed for:
-            // 1. Identifying long-distance/border stations (p.stops)
-            // 2. Running local DAG traversal (p.local_dag)
-            // 3. Storing new external hubs (p.external_hubs) - effectively outputs
-            // 4. Storing new long-dist transfer patterns (p.long_distance_transfer_patterns) - outputs
-
-            // --- B. Strip Partition for Memory Efficiency ---
-            // Optimization: Remove indices and metadata NOT needed for Trip-Based Profile Search (Topology only).
-
-            // 1. Remove API Index (Large map)
-            p.direct_connections_index.clear();
-
-            // 2. Remove Pre-computed Local DAG (we use dynamic trip-based search)
-            p.local_dag.clear(); // Important: Trip-Based Router doesn't use this.
-
-            // 3. Remove metadata unused by routing core
-            p.service_exceptions.clear(); // Profile search uses service_mask in trips.
-            p.long_distance_trip_patterns.clear(); // Merged into Global DC.
-
-            // 4. Clear stop metadata
-            for stop in &mut p.stops {
-                stop.gtfs_stop_ids = Vec::new();
+            // Collect Metadata for Search Phases
+            for (i, stop) in p.stops.iter().enumerate() {
+                if stop.is_long_distance {
+                    long_distance_stations.push((pid, i as u32));
+                }
+                if stop.is_border {
+                    border_stations.push((pid, i as u32));
+                    partitions_with_border_stops.insert(pid);
+                }
             }
 
-            loaded_partitions.insert(*pid, p);
+            // Dropping `p` here frees memory immediately!
         }
     }
 
@@ -279,16 +270,6 @@ pub async fn run_rebuild_patterns(
     drop(global_dc);
     drop(global_stop_to_idx);
 
-    // Identify Long Distance Stations (using stripped partitions)
-    let mut long_distance_stations: Vec<(u32, u32)> = Vec::new(); // (pid, stop_idx)
-    for (pid, p) in &loaded_partitions {
-        for (i, stop) in p.stops.iter().enumerate() {
-            if stop.is_long_distance {
-                long_distance_stations.push((*pid, i as u32));
-            }
-        }
-    }
-
     println!(
         "Found {} long-distance stations.",
         long_distance_stations.len()
@@ -296,68 +277,67 @@ pub async fn run_rebuild_patterns(
 
     // Phase 1: Long-Distance Patterns
     println!("Phase 1: Computing Long Distance Patterns...");
-    let mut long_dist_data = LongDistanceData {
-        patterns_by_source: HashMap::new(),
-    };
 
-    let patterns_vec: Vec<((u32, u32), Vec<((u32, u32), Vec<(u32, u32)>)>)> =
-        long_distance_stations
-            .par_iter()
-            .map(|(s_pid, s_idx)| {
-                let profile = run_profile_search(
-                    *s_pid,
-                    *s_idx,
-                    &loaded_partitions,
-                    &long_distance_stations,
-                    None,
-                );
-                ((*s_pid, *s_idx), profile)
-            })
-            .collect();
+    // Group LD stations by PID to process distinct partitions
+    let mut ld_stations_by_pid: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (pid, idx) in &long_distance_stations {
+        ld_stations_by_pid.entry(*pid).or_default().push(*idx);
+    }
 
-    for (key, val) in patterns_vec {
-        long_dist_data.patterns_by_source.insert(key, val);
+    let mut ld_patterns_by_pid: HashMap<u32, Vec<(u32, Vec<((u32, u32), Vec<(u32, u32)>)>)>> =
+        HashMap::new();
+
+    // Process each partition that has LD stations
+    for (pid, indices) in ld_stations_by_pid {
+        let chunk_path = output_dir
+            .join("patterns")
+            .join(pid.to_string())
+            .join("local_v1.bin");
+        if chunk_path.exists() {
+            let mut p: TransitPartition = load_bincode(chunk_path.to_str().unwrap())?;
+
+            // STRIP PARTITION FOR MEMORY EFFICIENCY DURING SEARCH
+            // Optimization: Remove indices and metadata NOT needed for Trip-Based Profile Search (Topology only).
+            p.direct_connections_index.clear();
+            p.local_dag.clear();
+            p.service_exceptions.clear();
+            p.long_distance_trip_patterns.clear();
+            for stop in &mut p.stops {
+                stop.gtfs_stop_ids = Vec::new();
+            }
+
+            // Run Parallel Search for stops in this partition
+            // Note: we pass `long_distance_stations` as the VALID TARGETS list.
+            let results: Vec<_> = indices
+                .par_iter()
+                .map(|&idx| {
+                    let profile = run_profile_search(pid, idx, &p, &long_distance_stations, None);
+                    (idx, profile)
+                })
+                .collect();
+
+            ld_patterns_by_pid.insert(pid, results);
+
+            // Partition `p` is dropped here
+        }
     }
 
     println!(
-        "Computed {} long-distance patterns.",
-        long_dist_data.patterns_by_source.len()
+        "Computed long-distance patterns for {} partitions.",
+        ld_patterns_by_pid.len()
     );
 
     // Phase 2: Border Patterns & Saving
     println!("Phase 2: Computing Border Patterns & Saving...");
-
-    // 1. Regroup LD patterns by Partition
-    let mut ld_patterns_by_pid: HashMap<u32, Vec<(u32, Vec<((u32, u32), Vec<(u32, u32)>)>)>> =
-        HashMap::new();
-    for ((pid, idx), patterns) in long_dist_data.patterns_by_source {
-        ld_patterns_by_pid
-            .entry(pid)
-            .or_default()
-            .push((idx, patterns));
-    }
-    // long_dist_data is now partially moved/consumed, so memory is largely freed (fields moved).
-    // drop(long_dist_data); // REMOVED to avoid use-after-move error.
-
-    // 2. Identify All Border Stations (Global Targets)
-    let mut border_stations: Vec<(u32, u32)> = Vec::new();
-    for (pid, p) in &loaded_partitions {
-        for (i, stop) in p.stops.iter().enumerate() {
-            if stop.is_border {
-                border_stations.push((*pid, i as u32));
-            }
-        }
-    }
     println!("Found {} border stations.", border_stations.len());
 
-    // 3. Identify Partitions to Process
+    // Identify Partitions to Process
     // Valid partitions are those that have EITHER Long Distance Patterns OR Border Nodes.
-    let mut partitions_to_process: HashSet<u32> = ld_patterns_by_pid.keys().cloned().collect();
-    for (pid, p) in &loaded_partitions {
-        if p.stops.iter().any(|s| s.is_border) {
-            partitions_to_process.insert(*pid);
-        }
+    let mut partitions_to_process: HashSet<u32> = partitions_with_border_stops;
+    for pid in ld_patterns_by_pid.keys() {
+        partitions_to_process.insert(*pid);
     }
+
     let mut partitions_to_process_vec: Vec<u32> = partitions_to_process.into_iter().collect();
     partitions_to_process_vec.sort();
 
@@ -371,41 +351,6 @@ pub async fn run_rebuild_patterns(
         // A. Retrieve Long Distance Results
         let mut partition_results = ld_patterns_by_pid.remove(&pid).unwrap_or_default();
 
-        // B. Compute Border Patterns
-        // Find border stops for THIS partition
-        if let Some(partition_ref) = loaded_partitions.get(&pid) {
-            let border_indices: Vec<u32> = partition_ref
-                .stops
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| s.is_border)
-                .map(|(i, _)| i as u32)
-                .collect();
-
-            if !border_indices.is_empty() {
-                // Run search in parallel for these border nodes
-                let border_results: Vec<(u32, Vec<((u32, u32), Vec<(u32, u32)>)>)> = border_indices
-                    .par_iter()
-                    .map(|&idx| {
-                        let results = run_profile_search_phase2(
-                            pid,
-                            idx,
-                            &loaded_partitions,
-                            &border_stations,
-                        );
-                        (idx, results)
-                    })
-                    .collect();
-
-                partition_results.extend(border_results);
-            }
-        }
-
-        if partition_results.is_empty() {
-            continue;
-        }
-
-        // C. Load FULL Partition, Update, Save
         let partition_dir = output_dir.join("patterns").join(pid.to_string());
         let chunk_path = partition_dir.join("local_v1.bin");
 
@@ -414,8 +359,38 @@ pub async fn run_rebuild_patterns(
             continue;
         }
 
+        // Load FULL partition for saving
         let mut full_partition: TransitPartition = load_bincode(chunk_path.to_str().unwrap())?;
 
+        // B. Compute Border Patterns
+        // Find border stops for THIS partition
+        let border_indices: Vec<u32> = full_partition
+            .stops
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.is_border)
+            .map(|(i, _)| i as u32)
+            .collect();
+
+        if !border_indices.is_empty() {
+            // Run search in parallel for these border nodes
+            let border_results: Vec<(u32, Vec<((u32, u32), Vec<(u32, u32)>)>)> = border_indices
+                .par_iter()
+                .map(|&idx| {
+                    let results =
+                        run_profile_search_phase2(pid, idx, &full_partition, &border_stations);
+                    (idx, results)
+                })
+                .collect();
+
+            partition_results.extend(border_results);
+        }
+
+        if partition_results.is_empty() {
+            continue;
+        }
+
+        // C. Update and Save
         // Consolidate results by source_idx
         let mut results_by_source: HashMap<u32, Vec<((u32, u32), Vec<(u32, u32)>)>> =
             HashMap::new();
@@ -518,18 +493,6 @@ pub async fn run_rebuild_patterns(
                 edges,
             });
         }
-
-        // Merge/Append new patterns
-        // We accumulate by source_idx again to handle potential existing patterns?
-        // Actually, we are OVERWRITING long_distance_transfer_patterns logic from previous approach.
-        // We'll trust `new_patterns`.
-        // But what if `full_partition` already had some (e.g. from previous run)?
-        // `full_partition.long_distance_transfer_patterns` should be replaced or appended?
-        // Let's replace to be clean.
-
-        // Wait, `new_patterns` is `Vec<LocalTransferPattern>`.
-        // We might have multiple entries for same source if `results_by_source` Logic produced it?
-        // No, `results_by_source` is a Map, so one entry per source.
 
         full_partition.long_distance_transfer_patterns = new_patterns;
 
@@ -1144,14 +1107,14 @@ fn splice_time_deltas(original_deltas: &[u32], kept_indices: &[usize]) -> (Vec<u
 fn run_profile_search(
     start_pid: u32,
     start_idx: u32,
-    loaded_partitions: &HashMap<u32, TransitPartition>,
+    partition: &TransitPartition,
     targets: &[(u32, u32)],
     hubs: Option<&HashSet<u32>>,
 ) -> Vec<((u32, u32), Vec<(u32, u32)>)> {
     // Trip-Based Profile Search (rRAPTOR)
 
     // 1. Get Partition and Init
-    let partition = loaded_partitions.get(&start_pid).unwrap();
+    // Partition is passed in
 
     // 2. Build Transfers (Algorithm 1+2+3)
     // Note: In production, these should be precomputed or cached?
@@ -1267,13 +1230,13 @@ fn run_profile_search(
 fn run_profile_search_phase2(
     start_pid: u32,
     start_idx: u32,
-    loaded_partitions: &HashMap<u32, TransitPartition>,
+    partition: &TransitPartition,
     targets: &[(u32, u32)],
 ) -> Vec<((u32, u32), Vec<(u32, u32)>)> {
     // Phase 2 just runs the search on the augmented partition.
     // The synthetic trips should have been injected already.
     // Collect hubs for long-distance pruning
-    let partition = loaded_partitions.get(&start_pid).unwrap();
+
     let hubs: HashSet<u32> = partition
         .stops
         .iter()
@@ -1281,13 +1244,7 @@ fn run_profile_search_phase2(
         .map(|s| s.id as u32)
         .collect();
 
-    run_profile_search(
-        start_pid,
-        start_idx,
-        loaded_partitions,
-        targets,
-        Some(&hubs),
-    )
+    run_profile_search(start_pid, start_idx, partition, targets, Some(&hubs))
 }
 
 fn reconstruct_manifest(output_dir: &Path) -> Result<Manifest> {
