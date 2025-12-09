@@ -48,11 +48,11 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Instant;
-use std::io::{self, Write};
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -323,7 +323,9 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
-        "f-czptt" | "f-oebb~at" => {
+        "f-czptt"
+        | "f-oebb~at"
+        | "f-u1j-kvbkölnerverkehrs~betriebeag~wupsiwupsigmbh~dbdeutschebahn" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
