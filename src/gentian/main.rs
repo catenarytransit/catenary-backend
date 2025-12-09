@@ -104,6 +104,12 @@ enum Commands {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    if let Err(e) = rustix::process::nice(10) {
+        eprintln!("Failed to set priority: {}", e);
+    } else {
+        println!("Process priority set to low (nice +10).");
+    }
+
     // Initialize logging
     tracing_subscriber::fmt::init();
 
