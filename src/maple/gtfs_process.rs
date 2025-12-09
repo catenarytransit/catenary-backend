@@ -251,14 +251,6 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
-        "f-mir~tsukuba" => {
-            let _ = execute_pfaedle_rs(
-                path.as_str(),
-                "./railway-filtered-japan-latest.osm.pbf",
-                None,
-                true,
-            )?; 
-        }
         "f-tokyo~metro" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
@@ -324,6 +316,14 @@ pub async fn gtfs_process_feed(
             )?;
         }
         "f-pkp~intercity~pl" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
+        "f-czptt" | "f-oebb~at" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
