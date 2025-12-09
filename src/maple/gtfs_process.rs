@@ -323,6 +323,14 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
+        "f-czptt" | "f-oebb~at" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                None,
+                true,
+            )?;
+        }
         _ => {
             //no pfaedle needed
         }
