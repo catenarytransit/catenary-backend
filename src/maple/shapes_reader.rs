@@ -1,4 +1,5 @@
 use ahash::AHashMap;
+use anyhow::Context;
 use ecow::EcoString;
 use geo::Point;
 use serde::Deserialize;
@@ -59,7 +60,7 @@ fn maybe_sort_by_sequence(points: &mut Vec<ShapePoint>) {
 pub fn faster_shape_reader(
     path: PathBuf,
 ) -> Result<AHashMap<String, Vec<ShapePoint>>, Box<dyn Error>> {
-    let file = File::open(path)?;
+    let file = File::open(path).context("Failed to open shapes.txt in the faster shapes reader")?;
     let buf_reader = BufReader::new(file);
     let mut rdr = csv::Reader::from_reader(buf_reader);
 
