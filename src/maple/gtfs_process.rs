@@ -530,7 +530,6 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
-
         "f-los~angeles~international~airport~shuttle" => {
             let mut gtfs = gtfs;
 

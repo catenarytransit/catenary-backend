@@ -81,6 +81,7 @@ use terrain_tiles_proxy::*;
 mod block_api;
 mod connections_lookup;
 mod openrailwaymap_proxy;
+mod shapes;
 mod stop_preview;
 mod text_search;
 mod vehicle_api;
@@ -904,6 +905,8 @@ async fn main() -> std::io::Result<()> {
             .service(calfireproxy)
             .service(ip_addr_to_geo_api)
             .service(route_info::route_info)
+            .service(route_info::route_info_v2)
+            .service(shapes::get_shape)
             .service(proxy_for_watchduty_tiles)
             .service(gtfs_rt_api::gtfs_rt)
             .service(shapes_local_rail)
