@@ -341,7 +341,8 @@ pub async fn gtfs_process_feed(
 
     let gtfs = gtfs_structures::GtfsReader::default()
         .read_shapes(false)
-        .read(path.as_str())?;
+        .read(path.as_str())
+        .context("Failed to read GTFS via gtfs_structures")?;
 
     let shapes_txt_path = format!("{}/{}/shapes.txt", gtfs_unzipped_path, feed_id);
 
