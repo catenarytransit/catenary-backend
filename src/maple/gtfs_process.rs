@@ -323,7 +323,8 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
-        "f-czptt"
+        "f-networkrail"
+        | "f-czptt"
         | "f-oebb~at"
         | "f-u1j-kvbkölnerverkehrs~betriebeag~wupsiwupsigmbh~dbdeutschebahn" => {
             let _ = execute_pfaedle_rs(
