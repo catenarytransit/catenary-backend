@@ -4,6 +4,7 @@
 
 use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
+use anyhow::Context;
 // Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
 use crate::DownloadedFeedsInformation;
@@ -463,7 +464,7 @@ pub async fn gtfs_process_feed(
                 .iter()
                 .filter_map(|(route_id, route)| match route.desc {
                     Some(ref desc) => {
-                        if desc.contains("School") {
+                        if desc.as_str().contains("School") {
                             None
                         } else {
                             Some(route_id)
