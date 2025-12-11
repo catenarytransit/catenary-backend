@@ -82,6 +82,7 @@ struct NearbyFromStops {
     chateau_id: String,
     greater_than_time: Option<u64>,
     less_than_time: Option<u64>,
+    include_shapes: Option<bool>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -203,6 +204,8 @@ pub async fn departures_at_stop(
     let greater_than_time = query.greater_than_time.unwrap_or(now_secs - 3600);
     let less_than_time = query.less_than_time.unwrap_or(now_secs + 60 * 60 * 24);
     let requested_window_secs = less_than_time.saturating_sub(greater_than_time);
+
+    let include_shapes = query.include_shapes.unwrap_or(true);
 
     // grace to catch boundary events straddling pages
     let grace_secs: i64 = 5 * 60; // 5 minutes
@@ -449,31 +452,35 @@ pub async fn departures_at_stop(
                     .insert(direction.direction_pattern_id.clone(), direction.clone());
             }
 
-            let shapes_result = catenary::schema::gtfs::shapes::dsl::shapes
-                .filter(catenary::schema::gtfs::shapes::chateau.eq(chateau_id.clone()))
-                .filter(
-                    catenary::schema::gtfs::shapes::shape_id
-                        .eq_any(&shape_ids_to_fetch_for_this_chateau),
-                )
-                .load::<catenary::models::Shape>(&mut conn)
-                .await
-                .unwrap_or_default();
-
             let mut shape_polyline_for_chateau: BTreeMap<EcoString, String> = BTreeMap::new();
-            for db_shape in shapes_result {
-                let shape_polyline = polyline::encode_coordinates(
-                    geo::LineString::new(
-                        db_shape
-                            .linestring
-                            .points
-                            .iter()
-                            .map(|point| coord! { x: point.x, y: point.y })
-                            .collect::<Vec<_>>(),
-                    ),
-                    5,
-                )
-                .unwrap();
-                shape_polyline_for_chateau.insert(db_shape.shape_id.clone().into(), shape_polyline);
+
+            if include_shapes {
+                let shapes_result = catenary::schema::gtfs::shapes::dsl::shapes
+                    .filter(catenary::schema::gtfs::shapes::chateau.eq(chateau_id.clone()))
+                    .filter(
+                        catenary::schema::gtfs::shapes::shape_id
+                            .eq_any(&shape_ids_to_fetch_for_this_chateau),
+                    )
+                    .load::<catenary::models::Shape>(&mut conn)
+                    .await
+                    .unwrap_or_default();
+
+                for db_shape in shapes_result {
+                    let shape_polyline = polyline::encode_coordinates(
+                        geo::LineString::new(
+                            db_shape
+                                .linestring
+                                .points
+                                .iter()
+                                .map(|point| coord! { x: point.x, y: point.y })
+                                .collect::<Vec<_>>(),
+                        ),
+                        5,
+                    )
+                    .unwrap();
+                    shape_polyline_for_chateau
+                        .insert(db_shape.shape_id.clone().into(), shape_polyline);
+                }
             }
 
             let direction_row_query =
