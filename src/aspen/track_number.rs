@@ -7,6 +7,7 @@ pub enum TrackData {
     //output Option<MetrolinkOutputTrackData> instead
     Metrolink(Option<MetrolinkOutputTrackData>),
     Amtrak(AmtrakTrackDataMultisource),
+    NationalRail(HashMap<String, HashMap<String, String>>),
     None,
 }
 
@@ -222,6 +223,22 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
             }
 
             TrackData::Amtrak(multisource)
+        }
+        "nationalrailuk" => {
+            let url = "http://localhost:26993/platforms";
+            match reqwest::get(url).await {
+                Ok(r) => match r.json::<HashMap<String, HashMap<String, String>>>().await {
+                    Ok(response) => TrackData::NationalRail(response),
+                    Err(e) => {
+                        println!("Error decoding National Rail data: {}", e);
+                        TrackData::NationalRail(HashMap::new())
+                    }
+                },
+                Err(e) => {
+                    println!("Error fetching National Rail data: {}", e);
+                    TrackData::NationalRail(HashMap::new())
+                }
+            }
         }
         _ => TrackData::None,
     }
