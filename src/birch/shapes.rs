@@ -1,4 +1,12 @@
-use actix_web::{HttpRequest, HttpResponse, Responder, web};
+use crate::CatenaryPostgresPool;
+use actix_web::{HttpResponse, Responder, web};
+use catenary::models::Shape;
+use diesel::prelude::*;
+use diesel_async::RunQueryDsl;
+use geo::Simplify;
+use geo::algorithm::intersects::Intersects;
+use geo::coord;
+use geojson::GeoJson;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -11,60 +19,87 @@ pub struct ShapeQueryParams {
     pub max_x: Option<f64>,
     pub max_y: Option<f64>,
     pub simplify: Option<f64>,
+    pub format: Option<String>,
 }
 
 #[actix_web::get("/get_shape")]
 pub async fn get_shape(
     query: web::Query<ShapeQueryParams>,
-    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
 ) -> impl Responder {
-    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+    let conn_pool = pool.as_ref();
+    let conn_pre = conn_pool.get().await;
 
-    let mut query_str = "SELECT ST_AsGeoJSON(".to_string();
-
-    // Logic to wrap the geometry based on options
-    // Base: linestring FROM gtfs.shapes
-
-    let mut geom_selector = "linestring".to_string();
-
-    // Simplification
-    // ST_Simplify(geom, tolerance)
-    if let Some(tolerance_meters) = query.simplify {
-        // Approximate degrees. 1 degree ~= 111,111 meters.
-        // This makes sense at the equator but less so elsewhere, but standard for simple stuff.
-        // For better accuracy, we could cast to geography, but let's stick to geometry simple calc for performance if requested.
-        let tolerance_deg = tolerance_meters / 111_111.0;
-        geom_selector = format!("ST_Simplify({}, {})", geom_selector, tolerance_deg);
+    if let Err(conn_pre) = &conn_pre {
+        eprintln!("Error connecting to postgres: {}", conn_pre);
+        return HttpResponse::InternalServerError().body("Error connecting to postgres");
     }
 
-    // Cropping / Intersection
-    // ST_Intersection(geom, envelope)
-    // Note: ST_Intersection might return MultiLineString or GeometryCollection
-    if let (Some(min_x), Some(min_y), Some(max_x), Some(max_y)) =
-        (query.min_x, query.min_y, query.max_x, query.max_y)
-    {
-        geom_selector = format!(
-            "ST_Intersection({}, ST_MakeEnvelope({}, {}, {}, {}, 4326))",
-            geom_selector, min_x, min_y, max_x, max_y
-        );
-    }
+    let conn = &mut conn_pre.unwrap();
 
-    query_str.push_str(&geom_selector);
-    query_str.push_str(") as geojson FROM gtfs.shapes WHERE chateau = $1 AND shape_id = $2");
-
-    let row: Result<(String,), _> = sqlx::query_as(query_str.as_str())
-        .bind(&query.chateau)
-        .bind(&query.shape_id)
-        .fetch_one(sqlx_pool_ref)
+    // Fetch the shape using Diesel
+    let shape_data: Result<Vec<Shape>, _> = catenary::schema::gtfs::shapes::dsl::shapes
+        .filter(catenary::schema::gtfs::shapes::dsl::chateau.eq(&query.chateau))
+        .filter(catenary::schema::gtfs::shapes::dsl::shape_id.eq(&query.shape_id))
+        .select(Shape::as_select())
+        .load(conn)
         .await;
 
-    match row {
-        Ok((geojson,)) => HttpResponse::Ok()
-            .insert_header(("Content-Type", "application/json"))
-            .body(geojson),
+    match shape_data {
+        Ok(shapes) => {
+            if shapes.is_empty() {
+                return HttpResponse::NotFound().body("Shape not found");
+            }
+
+            let shape = &shapes[0];
+            let linestring_points = &shape.linestring.points;
+
+            // Convert to geo::LineString
+            let mut geo_linestring = geo::LineString::new(
+                linestring_points
+                    .iter()
+                    .map(|p| coord! { x: p.x, y: p.y })
+                    .collect(),
+            );
+
+            // Simplification
+            if let Some(tolerance_meters) = query.simplify {
+                let tolerance_deg = tolerance_meters / 111_111.0;
+                geo_linestring = geo_linestring.simplify(tolerance_deg);
+            }
+
+            // Cropping (check intersection with bbox)
+            if let (Some(min_x), Some(min_y), Some(max_x), Some(max_y)) =
+                (query.min_x, query.min_y, query.max_x, query.max_y)
+            {
+                let bbox =
+                    geo::Rect::new(coord! { x: min_x, y: min_y }, coord! { x: max_x, y: max_y });
+
+                if !geo_linestring.intersects(&bbox) {
+                    geo_linestring = geo::LineString::new(vec![]);
+                }
+            }
+
+            let format = query.format.as_deref().unwrap_or("geojson");
+
+            if format == "polyline" {
+                // Encode to polyline
+                let poly = polyline::encode_coordinates(geo_linestring, 5).unwrap();
+                HttpResponse::Ok()
+                    .insert_header(("Content-Type", "application/json"))
+                    .json(serde_json::json!({ "polyline": poly }))
+            } else {
+                // Default to GeoJSON
+                let geometry = geojson::Geometry::from(&geo_linestring);
+                let geojson = GeoJson::Geometry(geometry);
+                HttpResponse::Ok()
+                    .insert_header(("Content-Type", "application/json"))
+                    .body(geojson.to_string())
+            }
+        }
         Err(err) => {
             eprintln!("Error fetching shape: {:?}", err);
-            HttpResponse::InternalServerError().body("Error fetching shape or shape not found")
+            HttpResponse::InternalServerError().body("Error fetching shape")
         }
     }
 }
