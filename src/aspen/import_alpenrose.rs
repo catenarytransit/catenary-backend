@@ -1292,6 +1292,31 @@ pub async fn new_rt_data(
 
                                         track_resp
                                     }
+                                    "nationalrailuk" => {
+                                        if let TrackData::NationalRail(nr_data) = &fetched_track_data {
+                                            if let (Some(trip_id), Some(stop_id)) =
+                                                (&trip_descriptor.trip_id, &stu.stop_id)
+                                            {
+                                                if let Some(trip_platforms) =
+                                                    nr_data.get(trip_id.as_str())
+                                                {
+                                                    if let Some(platform) =
+                                                        trip_platforms.get(stop_id.as_str())
+                                                    {
+                                                        Some(platform.clone().into())
+                                                    } else {
+                                                        None
+                                                    }
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    }
                                     _ => None,
                                 },
                                 schedule_relationship:
