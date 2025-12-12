@@ -564,23 +564,23 @@ pub async fn nearby_from_coords_v2(
 
     //write some join, select * from itinerary patterns
 
-    //chateau, direction id, stop sequence
+    //chateau, direction id, stop sequence, stop_id
     let directions_idx_to_get = directions_with_headsign_to_closest_stop
         .iter()
-        .map(|(k, v)| (k.0.clone(), k.1.to_string(), v.1))
+        .map(|(k, v)| (k.0.clone(), k.1.to_string(), v.1, v.0.clone()))
         .collect::<Vec<_>>();
 
-    //chateau -> (direction_id, stop_sequence)
-    let mut hashmap_of_directions_lookup: AHashMap<String, HashSet<(String, u32)>> =
+    //chateau -> (direction_id, stop_sequence, stop_id)
+    let mut hashmap_of_directions_lookup: AHashMap<String, HashSet<(String, u32, String)>> =
         AHashMap::new();
 
-    for (chateau, direction_id, stop_sequence) in directions_idx_to_get {
+    for (chateau, direction_id, stop_sequence, stop_id) in directions_idx_to_get {
         match hashmap_of_directions_lookup.entry(chateau.clone()) {
             Entry::Occupied(mut oe) => {
-                oe.get_mut().insert((direction_id, stop_sequence));
+                oe.get_mut().insert((direction_id, stop_sequence, stop_id.to_string()));
             }
             Entry::Vacant(mut ve) => {
-                ve.insert(HashSet::from_iter([(direction_id, stop_sequence)]));
+                ve.insert(HashSet::from_iter([(direction_id, stop_sequence, stop_id.to_string())]));
             }
         }
     }
@@ -754,13 +754,13 @@ pub async fn nearby_from_coords_v2(
 
     let itin_meta_table = itin_meta_table;
 
-    //make a hashmap of Chateau -> (itinerary_pattern_id, stop_sequence)
-    let mut itineraries_and_seq_to_lookup: AHashMap<String, Vec<(String, u32)>> = AHashMap::new();
+    //make a hashmap of Chateau -> (itinerary_pattern_id, stop_id)
+    let mut itineraries_and_seq_to_lookup: AHashMap<String, HashSet<(String, String)>> = AHashMap::new();
 
     for (chateau, set_of_directions) in hashmap_of_directions_lookup.iter() {
-        let mut vec_to_insert: Vec<(String, u32)> = vec![];
+        let mut vec_to_insert: HashSet<(String, String)> = HashSet::new();
 
-        for (direction_id, stop_sequence) in set_of_directions.iter() {
+        for (direction_id, _stop_sequence, stop_id) in set_of_directions.iter() {
             if let Some(itinerary_pattern_ids_in_chateau) =
                 chateau_direction_to_itin_meta_id.get(chateau)
             {
@@ -768,7 +768,7 @@ pub async fn nearby_from_coords_v2(
                     itinerary_pattern_ids_in_chateau.get(direction_id)
                 {
                     for itinerary_pattern_id in itinerary_pattern_ids.iter() {
-                        vec_to_insert.push((itinerary_pattern_id.clone(), *stop_sequence));
+                        vec_to_insert.insert((itinerary_pattern_id.clone(), stop_id.clone()));
                     }
                 }
             }
@@ -780,18 +780,6 @@ pub async fn nearby_from_coords_v2(
     //lock the table to prevent further changes
     let itineraries_and_seq_to_lookup = itineraries_and_seq_to_lookup;
 
-    let mut itineraries_and_seq_to_lookup_join = vec![];
-
-    for (chateau, set_of_directions) in itineraries_and_seq_to_lookup.iter() {
-        for (itinerary_pattern_id, stop_sequence) in set_of_directions.iter() {
-            itineraries_and_seq_to_lookup_join.push((
-                chateau.clone(),
-                itinerary_pattern_id.clone(),
-                *stop_sequence,
-            ));
-        }
-    }
-
     println!("Starting to search for itineraries");
 
     let itineraries_timer = Instant::now();
@@ -799,27 +787,33 @@ pub async fn nearby_from_coords_v2(
     let pool_clone = pool.clone();
 
     let new_seek_itinerary_list =
-        futures::stream::iter(itineraries_and_seq_to_lookup_join.into_iter().map(
-            |(chateau, itin_id, stop_seq)| {
+        futures::stream::iter(itineraries_and_seq_to_lookup.iter().map(
+            |(chateau, set_of_itins)| {
                 let conn_clone = pool_clone.clone();
+                let chateau = chateau.clone();
+                // flatten the hashset to vectors for the query
+                let itinerary_ids: Vec<String> = set_of_itins.iter().map(|x| x.0.clone()).collect();
+                let stop_ids: Vec<String> = set_of_itins.iter().map(|x| x.1.clone()).collect();
+                // We use stops to filter the query, stop_sequence is used for post-filtering
+
                 async move {
                     let conn = conn_clone.get().await;
                     match conn {
                         Ok(mut conn) => {
                             catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
                                 .filter(
-                                    catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(chateau.clone()),
+                                    catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(chateau),
                                 )
                                 .filter(
                                     catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id
-                                        .eq(itin_id.clone()),
+                                        .eq_any(itinerary_ids),
                                 )
                                 .filter(
-                                    catenary::schema::gtfs::itinerary_pattern::dsl::stop_sequence
-                                        .eq(stop_seq as i32),
+                                    catenary::schema::gtfs::itinerary_pattern::dsl::stop_id
+                                        .eq_any(stop_ids),
                                 )
                                 .select(catenary::models::ItineraryPatternRow::as_select())
-                                .first::<catenary::models::ItineraryPatternRow>(&mut conn)
+                                .load::<catenary::models::ItineraryPatternRow>(&mut conn)
                                 .await
                         }
                         Err(_) => Err(diesel::result::Error::NotFound),
@@ -828,7 +822,7 @@ pub async fn nearby_from_coords_v2(
             },
         ))
         .buffer_unordered(32)
-        .collect::<Vec<diesel::QueryResult<ItineraryPatternRow>>>()
+        .collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternRow>>>>()
         .await;
 
     println!(
@@ -848,54 +842,67 @@ pub async fn nearby_from_coords_v2(
 
     for seek_for_itineraries in new_seek_itinerary_list {
         match seek_for_itineraries {
-            Ok(itinerary) => {
-                match itins_per_chateau.entry(itinerary.chateau.clone()) {
-                    Entry::Occupied(mut oe) => {
-                        oe.get_mut().insert(itinerary.itinerary_pattern_id.clone());
+            Ok(itineraries) => {
+                for itinerary in itineraries {
+                    // Filter in memory to ensure we match the requested (itinerary_pattern_id, stop_id)
+                    // This handles the case where stop_id IN (...) might return rows for non-requested combinations
+                    let chateau = itinerary.chateau.clone();
+                    if let Some(requested_set) = itineraries_and_seq_to_lookup.get(&chateau) {
+                        if !requested_set.contains(&(itinerary.itinerary_pattern_id.clone(), itinerary.stop_id.to_string())) {
+                             continue;
+                        }
+                    } else {
+                        continue;
                     }
-                    Entry::Vacant(mut ve) => {
-                        ve.insert(AHashSet::from_iter([itinerary
-                            .itinerary_pattern_id
-                            .clone()]));
-                    }
-                }
 
-                let itin_meta_ref = itin_meta_table
-                    .get(&itinerary.chateau)
-                    .unwrap()
-                    .get(&itinerary.itinerary_pattern_id)
-                    .unwrap();
-
-                if let Some(itinerary_direction_id) = &itin_meta_ref.direction_pattern_id {
-                    let new_itinerary = ItineraryPatternRowMerge {
-                        onestop_feed_id: itinerary.onestop_feed_id.clone(),
-                        attempt_id: itinerary.attempt_id.clone(),
-                        itinerary_pattern_id: itinerary.itinerary_pattern_id.clone(),
-                        arrival_time_since_start: itinerary.arrival_time_since_start,
-                        departure_time_since_start: itinerary.departure_time_since_start,
-                        interpolated_time_since_start: itinerary.interpolated_time_since_start,
-                        stop_id: itinerary.stop_id.clone(),
-                        chateau: itinerary.chateau.clone().into(),
-                        gtfs_stop_sequence: itinerary.gtfs_stop_sequence,
-                        direction_pattern_id: itinerary_direction_id.clone(),
-                        trip_headsign: itin_meta_ref.trip_headsign.clone(),
-                        trip_headsign_translations: itin_meta_ref
-                            .trip_headsign_translations
-                            .clone(),
-                        timezone: itin_meta_ref.timezone.clone(),
-                        route_id: itin_meta_ref.route_id.clone(),
-                        stop_headsign_idx: itinerary.stop_headsign_idx,
-                    };
-
-                    match itinerary_table.entry((
-                        itinerary.chateau.clone(),
-                        itinerary.itinerary_pattern_id.clone(),
-                    )) {
+                    match itins_per_chateau.entry(itinerary.chateau.clone()) {
                         Entry::Occupied(mut oe) => {
-                            oe.get_mut().push(new_itinerary);
+                            oe.get_mut().insert(itinerary.itinerary_pattern_id.clone());
                         }
                         Entry::Vacant(mut ve) => {
-                            ve.insert(vec![new_itinerary]);
+                            ve.insert(AHashSet::from_iter([itinerary
+                                .itinerary_pattern_id
+                                .clone()]));
+                        }
+                    }
+
+                    let itin_meta_ref = itin_meta_table
+                        .get(&itinerary.chateau)
+                        .unwrap()
+                        .get(&itinerary.itinerary_pattern_id)
+                        .unwrap();
+
+                    if let Some(itinerary_direction_id) = &itin_meta_ref.direction_pattern_id {
+                        let new_itinerary = ItineraryPatternRowMerge {
+                            onestop_feed_id: itinerary.onestop_feed_id.clone(),
+                            attempt_id: itinerary.attempt_id.clone(),
+                            itinerary_pattern_id: itinerary.itinerary_pattern_id.clone(),
+                            arrival_time_since_start: itinerary.arrival_time_since_start,
+                            departure_time_since_start: itinerary.departure_time_since_start,
+                            interpolated_time_since_start: itinerary.interpolated_time_since_start,
+                            stop_id: itinerary.stop_id.clone(),
+                            chateau: itinerary.chateau.clone().into(),
+                            gtfs_stop_sequence: itinerary.gtfs_stop_sequence,
+                            direction_pattern_id: itinerary_direction_id.clone(),
+                            trip_headsign: itin_meta_ref.trip_headsign.clone(),
+                            trip_headsign_translations: itin_meta_ref
+                                .trip_headsign_translations
+                                .clone(),
+                            timezone: itin_meta_ref.timezone.clone(),
+                            route_id: itin_meta_ref.route_id.clone(),
+                            stop_headsign_idx: itinerary.stop_headsign_idx,
+                        };
+
+                        match itinerary_table.entry((
+                            itinerary.chateau.clone(),
+                            itinerary.itinerary_pattern_id.clone(),
+                        )) {
+                            Entry::Occupied(mut oe) => {
+                                oe.get_mut().push(new_itinerary);
+                            }
+                            Entry::Vacant(mut ve) => {
+                                ve.insert(vec![new_itinerary]);
+                            }
                         }
                     }
                 }
