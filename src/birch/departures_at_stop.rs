@@ -1239,7 +1239,8 @@ pub async fn departures_at_stop(
                                             .stop_headsigns_unique_list
                                             .as_ref()
                                             .and_then(|list| list.get(*idx as usize))
-                                            .cloned(),
+                                            .cloned()
+                                            .flatten(),
                                         None => None,
                                     },
                                     trip_headsign_translations: None,
