@@ -11,6 +11,7 @@ use actix_web::Responder;
 use actix_web::web;
 use actix_web::web::Query;
 use amtrak_gtfs_rt::asm::Stop;
+use catenary::CalendarUnified;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::TripsSelectionResponse;
@@ -44,6 +45,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use tokio::join;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItinOption {
@@ -154,27 +156,27 @@ struct NearbyFromStopsResponse {
 }
 
 struct AlertIndex {
-    by_route: HashMap<String, Vec<catenary::aspen_dataset::AspenisedAlert>>,
-    by_trip: HashMap<String, Vec<catenary::aspen_dataset::AspenisedAlert>>,
-    general: Vec<catenary::aspen_dataset::AspenisedAlert>,
+    by_route: HashMap<String, Vec<(String, catenary::aspen_dataset::AspenisedAlert)>>,
+    by_trip: HashMap<String, Vec<(String, catenary::aspen_dataset::AspenisedAlert)>>,
+    general: Vec<(String, catenary::aspen_dataset::AspenisedAlert)>,
 }
 
 impl AlertIndex {
     fn new(alerts: &BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>) -> Self {
-        let mut by_route: HashMap<String, Vec<catenary::aspen_dataset::AspenisedAlert>> = HashMap::new();
-        let mut by_trip: HashMap<String, Vec<catenary::aspen_dataset::AspenisedAlert>> = HashMap::new();
+        let mut by_route: HashMap<String, Vec<(String, catenary::aspen_dataset::AspenisedAlert)>> = HashMap::new();
+        let mut by_trip: HashMap<String, Vec<(String, catenary::aspen_dataset::AspenisedAlert)>> = HashMap::new();
         let mut general = Vec::new();
 
-        for alert in alerts.values() {
+        for (id, alert) in alerts {
             let mut specific = false;
             for entity in &alert.informed_entity {
                 if let Some(r_id) = &entity.route_id {
-                    by_route.entry(r_id.clone()).or_default().push(alert.clone());
+                    by_route.entry(r_id.clone()).or_default().push((id.clone(), alert.clone()));
                     specific = true;
                 }
                 if let Some(trip) = &entity.trip {
                     if let Some(t_id) = &trip.trip_id {
-                        by_trip.entry(t_id.clone()).or_default().push(alert.clone());
+                        by_trip.entry(t_id.clone()).or_default().push((id.clone(), alert.clone()));
                         specific = true;
                     }
                 }
@@ -185,12 +187,12 @@ impl AlertIndex {
         }
         
         for v in by_route.values_mut() {
-            v.sort_by_key(|a| a.id.clone());
-            v.dedup_by_key(|a| a.id.clone());
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v.dedup_by(|a, b| a.0 == b.0);
         }
         for v in by_trip.values_mut() {
-            v.sort_by_key(|a| a.id.clone());
-            v.dedup_by_key(|a| a.id.clone());
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v.dedup_by(|a, b| a.0 == b.0);
         }
 
         Self {
@@ -201,18 +203,18 @@ impl AlertIndex {
     }
 
     fn search(&self, route_id: &str, trip_id: &str) -> Vec<&catenary::aspen_dataset::AspenisedAlert> {
-        let mut result = Vec::new();
+        let mut candidates = Vec::new();
         if let Some(alerts) = self.by_route.get(route_id) {
-            result.extend(alerts);
+            candidates.extend(alerts);
         }
         if let Some(alerts) = self.by_trip.get(trip_id) {
-            result.extend(alerts);
+            candidates.extend(alerts);
         }
         
-        result.sort_by_key(|a| &a.id);
-        result.dedup_by_key(|a| &a.id);
+        candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        candidates.dedup_by(|a, b| a.0 == b.0);
         
-        result
+        candidates.into_iter().map(|(_, alert)| alert).collect()
     }
 }
 
@@ -220,7 +222,7 @@ fn estimate_service_date(
     valid_trip: &ValidTripSet,
     trip_update: &AspenisedTripUpdate,
     itin_option: &ItinOption,
-    calendar_structure: &HashMap<String, catenary::models::Service>,
+    calendar_structure: &BTreeMap<String, CalendarUnified>,
     chateau_id: &str,
 ) -> bool {
     let trip_offset = itin_option.departure_time_since_start.unwrap_or(
