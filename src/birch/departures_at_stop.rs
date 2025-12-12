@@ -843,17 +843,20 @@ pub async fn departures_at_stop(
         calendar_dates_responses.push(calendar_dates);
     }
 
-    let calendar_structure =
-        make_calendar_structure_from_pg(calender_responses, calendar_dates_responses).unwrap();
+    let calendar_structure = make_calendar_structure_from_pg(calender_responses, calendar_dates_responses)
+        .unwrap_or_default();
 
-    let point_raw = stop.point.clone().unwrap();
     let stop_tz_txt = match &stop.timezone {
         Some(tz) => tz.clone(),
         None => {
-            match (-90.0..=90.0).contains(&point_raw.y) && (-180.0..=180.0).contains(&point_raw.x) {
-                true => tz_search::lookup(point_raw.y, point_raw.x)
-                    .unwrap_or_else(|| String::from("Etc/GMT")),
-                false => String::from("Etc/GMT"),
+            if let Some(point_raw) = &stop.point {
+                match (-90.0..=90.0).contains(&point_raw.y) && (-180.0..=180.0).contains(&point_raw.x) {
+                    true => tz_search::lookup(point_raw.y, point_raw.x)
+                        .unwrap_or_else(|| String::from("Etc/GMT")),
+                    false => String::from("Etc/GMT"),
+                }
+            } else {
+                String::from("Etc/GMT")
             }
         }
     };
@@ -864,38 +867,23 @@ pub async fn departures_at_stop(
 
     //compute new scheduled time for the stop for trip modifications
 
-    let stop_tz_txt = match &stop.timezone {
-        Some(tz) => tz.clone(),
-        None => {
-            match -90.0 <= point_raw.y
-                && point_raw.y <= 90.0
-                && -180.0 <= point_raw.x
-                && point_raw.x <= 180.0
-            {
-                true => tz_search::lookup(point_raw.y, point_raw.x)
-                    .unwrap_or_else(|| String::from("Etc/GMT")),
-                false => String::from("Etc/GMT"),
-            }
-        }
-    };
-
-    let stop_tz = chrono_tz::Tz::from_str_insensitive(&stop_tz_txt).unwrap();
+    let stop_tz = chrono_tz::Tz::from_str_insensitive(&stop_tz_txt).unwrap_or(chrono_tz::UTC);
 
     // Convert bounds to DateTime in stop tz (start anchor for service search) and UTC for comparisons
-    let gt_utc = chrono::DateTime::from_timestamp(greater_than_time as i64, 0).unwrap();
+    let gt_utc = chrono::DateTime::from_timestamp(greater_than_time as i64, 0).unwrap_or_default();
     let gt_in_stop_tz = gt_utc.with_timezone(&stop_tz);
-    let lt_utc = chrono::DateTime::from_timestamp(less_than_time as i64, 0).unwrap();
+    let lt_utc = chrono::DateTime::from_timestamp(less_than_time as i64, 0).unwrap_or_default();
 
     //convert greater than time to DateTime Tz
 
     let greater_than_time_utc =
-        chrono::DateTime::from_timestamp(greater_than_time as i64, 0).unwrap();
+        chrono::DateTime::from_timestamp(greater_than_time as i64, 0).unwrap_or_default();
 
     let greater_than_date_time = greater_than_time_utc.with_timezone(&stop_tz);
 
     //seek back a minimum of 8 days
 
-    let less_than_time_utc = chrono::DateTime::from_timestamp(less_than_time as i64, 0).unwrap();
+    let less_than_time_utc = chrono::DateTime::from_timestamp(less_than_time as i64, 0).unwrap_or_default();
     let less_than_date_time = less_than_time_utc.with_timezone(&stop_tz);
 
     let greater_than_naive_date = greater_than_date_time.naive_local();
@@ -1143,31 +1131,39 @@ pub async fn departures_at_stop(
 
             let freq_converted = frequency.map(|x| protobuf_to_frequencies(&x));
 
-            let itin_for_this_trip = itin_meta_btreemap_by_chateau
+            let itin_for_this_trip = match itin_meta_btreemap_by_chateau
                 .get(chateau_id)
-                .unwrap()
-                .get(&trip_compressed.itinerary_pattern_id)
-                .unwrap();
+                .and_then(|m| m.get(&trip_compressed.itinerary_pattern_id))
+            {
+                Some(x) => x,
+                None => continue,
+            };
 
-            let itinerary_rows = itins_btreemap_by_chateau
+            let itinerary_rows = match itins_btreemap_by_chateau
                 .get(chateau_id)
-                .unwrap()
-                .get(&trip_compressed.itinerary_pattern_id)
-                .unwrap();
+                .and_then(|m| m.get(&trip_compressed.itinerary_pattern_id))
+            {
+                Some(x) => x,
+                None => continue,
+            };
 
-            let direction_meta = direction_meta_btreemap_by_chateau
+            let direction_pattern_id = match &itin_for_this_trip.direction_pattern_id {
+                Some(id) => id,
+                None => continue,
+            };
+
+            let direction_meta = match direction_meta_btreemap_by_chateau
                 .get(chateau_id)
-                .unwrap()
-                .get(
-                    itin_for_this_trip
-                        .direction_pattern_id
-                        .as_ref()
-                        .unwrap()
-                        .as_str(),
-                )
-                .unwrap();
+                .and_then(|m| m.get(direction_pattern_id.as_str()))
+            {
+                Some(x) => x,
+                None => continue,
+            };
 
-            let itin_ref = itinerary_rows.last().unwrap();
+            let itin_ref = match itinerary_rows.last() {
+                Some(x) => x,
+                None => continue,
+            };
 
             let time_since_start = match itin_ref.departure_time_since_start {
                 Some(departure_time_since_start) => departure_time_since_start,
@@ -1177,24 +1173,30 @@ pub async fn departures_at_stop(
                 },
             };
 
+            let timezone = match chrono_tz::Tz::from_str(itin_for_this_trip.timezone.as_str()) {
+                Ok(tz) => tz,
+                Err(_) => continue,
+            };
+
+            let time_delta = match chrono::TimeDelta::new(time_since_start.into(), 0) {
+                Some(td) => td,
+                None => continue,
+            };
+
             let t_to_find_schedule_for = catenary::TripToFindScheduleFor {
                 trip_id: trip_id.clone(),
                 chateau: chateau_id.clone(),
-                timezone: chrono_tz::Tz::from_str(itin_for_this_trip.timezone.as_str()).unwrap(),
+                timezone,
                 frequency: freq_converted.clone(),
                 itinerary_id: itin_for_this_trip.itinerary_pattern_id.clone(),
-                direction_id: itin_for_this_trip.direction_pattern_id.clone().unwrap(),
-                time_since_start_of_service_date: chrono::TimeDelta::new(
-                    time_since_start.into(),
-                    0,
-                )
-                .unwrap(),
+                direction_id: direction_pattern_id.clone(),
+                time_since_start_of_service_date: time_delta,
             };
 
-            let service = calendar_structure
-                .get(chateau_id.as_str())
-                .unwrap()
-                .get(trip_compressed.service_id.as_str());
+            let service = match calendar_structure.get(chateau_id.as_str()) {
+                Some(cal) => cal.get(trip_compressed.service_id.as_str()),
+                None => continue,
+            };
 
             if let Some(service) = service {
                 let dates = catenary::find_service_ranges(
@@ -1236,8 +1238,8 @@ pub async fn departures_at_stop(
                                         Some(idx) => direction_meta
                                             .stop_headsigns_unique_list
                                             .as_ref()
-                                            .unwrap()[*idx as usize]
-                                            .clone(),
+                                            .and_then(|list| list.get(*idx as usize))
+                                            .cloned(),
                                         None => None,
                                     },
                                     trip_headsign_translations: None,
