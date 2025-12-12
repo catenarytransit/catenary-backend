@@ -1293,7 +1293,9 @@ pub async fn new_rt_data(
                                         track_resp
                                     }
                                     "nationalrailuk" => {
-                                        if let TrackData::NationalRail(nr_data) = &fetched_track_data {
+                                        if let TrackData::NationalRail(nr_data) =
+                                            &fetched_track_data
+                                        {
                                             if let (Some(trip_id), Some(stop_id)) =
                                                 (&trip_descriptor.trip_id, &stu.stop_id)
                                             {
