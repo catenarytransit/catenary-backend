@@ -33,8 +33,12 @@ pub async fn make_async_pool() -> Result<
             database_url_for_env(),
             custom_conf,
         );
+    let max_size = env::var("POSTGRES_MAX_CONNECTIONS")
+        .unwrap_or_else(|_| "128".to_string())
+        .parse::<u32>()
+        .unwrap_or(128);
     let pool = Pool::builder()
-        .max_size(128)
+        .max_size(max_size)
         .min_idle(Some(16))
         .build(config)
         .await?;
