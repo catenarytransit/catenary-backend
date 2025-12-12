@@ -927,7 +927,7 @@ pub async fn nearby_from_coords_v2(
 
     let trip_lookup_queries_to_perform =
         futures::stream::iter(itins_per_chateau.iter().flat_map(|(chateau, set_of_itin)| {
-            let chunk_size = 512;
+            let chunk_size = 1024;
             let itins_vec: Vec<String> = set_of_itin.iter().cloned().collect();
             let chunks: Vec<Vec<String>> =
                 itins_vec.chunks(chunk_size).map(|c| c.to_vec()).collect();
@@ -951,7 +951,7 @@ pub async fn nearby_from_coords_v2(
                 }
             })
         }))
-        .buffer_unordered(16)
+        .buffer_unordered(8)
         .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CompressedTrip>>>>()
         .await;
 
