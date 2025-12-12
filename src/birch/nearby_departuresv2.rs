@@ -917,15 +917,30 @@ pub async fn nearby_from_coords_v2(
     let timer_trips = Instant::now();
 
     let trip_lookup_queries_to_perform =
-        futures::stream::iter(itins_per_chateau.iter().map(|(chateau, set_of_itin)| {
-            catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau))
-                .filter(
-                    catenary::schema::gtfs::trips_compressed::dsl::itinerary_pattern_id
-                        .eq_any(set_of_itin),
-                )
-                .select(catenary::models::CompressedTrip::as_select())
-                .load::<catenary::models::CompressedTrip>(conn)
+        futures::stream::iter(itins_per_chateau.iter().flat_map(|(chateau, set_of_itin)| {
+            let chunk_size = 512;
+            let itins_vec: Vec<String> = set_of_itin.iter().cloned().collect();
+            let chunks: Vec<Vec<String>> =
+                itins_vec.chunks(chunk_size).map(|c| c.to_vec()).collect();
+            let pool_super = pool.clone();
+            let chateau_super = chateau.clone();
+
+            chunks.into_iter().map(move |chunk| {
+                let pool = pool_super.clone();
+                let chateau = chateau_super.clone();
+                async move {
+                    let mut conn = pool.get().await.unwrap();
+                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                        .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau))
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::dsl::itinerary_pattern_id
+                                .eq_any(chunk),
+                        )
+                        .select(catenary::models::CompressedTrip::as_select())
+                        .load::<catenary::models::CompressedTrip>(&mut conn)
+                        .await
+                }
+            })
         }))
         .buffer_unordered(16)
         .collect::<Vec<diesel::QueryResult<Vec<catenary::models::CompressedTrip>>>>()
@@ -944,6 +959,9 @@ pub async fn nearby_from_coords_v2(
     for trip_group in trip_lookup_queries_to_perform {
         match trip_group {
             Ok(compressed_trip_group) => {
+                if compressed_trip_group.is_empty() {
+                    continue;
+                }
                 let chateau = compressed_trip_group[0].chateau.to_string();
 
                 let service_ids = compressed_trip_group
@@ -956,9 +974,18 @@ pub async fn nearby_from_coords_v2(
                     .map(|x| x.route_id.clone())
                     .collect::<BTreeSet<String>>();
 
-                services_to_lookup_table.insert(chateau.clone(), service_ids);
-                compressed_trips_table.insert(chateau.clone(), compressed_trip_group);
-                routes_to_lookup_table.insert(chateau, route_ids);
+                services_to_lookup_table
+                    .entry(chateau.clone())
+                    .or_default()
+                    .extend(service_ids);
+                compressed_trips_table
+                    .entry(chateau.clone())
+                    .or_default()
+                    .extend(compressed_trip_group);
+                routes_to_lookup_table
+                    .entry(chateau)
+                    .or_default()
+                    .extend(route_ids);
             }
             Err(err) => {
                 return HttpResponse::InternalServerError().body(format!("{:#?}", err));
@@ -969,7 +996,7 @@ pub async fn nearby_from_coords_v2(
     let compressed_trips_table = compressed_trips_table;
     let services_to_lookup_table = services_to_lookup_table;
 
-    let chateaus = services_to_lookup_table
+    let chateaux = services_to_lookup_table
         .keys()
         .cloned()
         .collect::<Vec<String>>();
@@ -1071,7 +1098,7 @@ pub async fn nearby_from_coords_v2(
 
     let etcd_timer = Instant::now();
 
-    for chateau_id in chateaus {
+    for chateau_id in chateaux {
         let etcd_data = etcd
             .get(
                 format!("/aspen_assigned_chateaux/{}", chateau_id.clone()).as_str(),
