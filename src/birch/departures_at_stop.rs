@@ -670,19 +670,64 @@ pub async fn departures_at_stop(
             };
 
             // Task B: Schedule Data (Trips, Calendar)
-            let mut conn2 = pool.get().await.unwrap();
+            let pool_for_schedule = pool.clone();
             let chateau_id_clone2 = chateau_id.clone();
             let schedule_task = async {
-                let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                    .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_id_clone2.clone()))
-                    .filter(
-                        catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
-                            .eq_any(&itinerary_list_clone),
-                    )
-                    .select(catenary::models::CompressedTrip::as_select())
-                    .load::<catenary::models::CompressedTrip>(&mut conn2)
-                    .await
-                    .unwrap_or_default();
+                let chunk_size = 100;
+                let use_parallel_fetching = itinerary_list_clone.len() > 200;
+
+                let trips = if use_parallel_fetching {
+                    let chunks: Vec<Vec<String>> = itinerary_list_clone
+                        .chunks(chunk_size)
+                        .map(|chunk| chunk.to_vec())
+                        .collect();
+
+                    let futures_trips = chunks.into_iter().map(|chunk| {
+                        let pool = pool_for_schedule.clone();
+                        let chateau = chateau_id_clone2.clone();
+                        async move {
+                            let mut conn = pool.get().await.unwrap();
+                            catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                                .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau))
+                                .filter(
+                                    catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                                        .eq_any(chunk),
+                                )
+                                .select(catenary::models::CompressedTrip::as_select())
+                                .load::<catenary::models::CompressedTrip>(&mut conn)
+                                .await
+                                .unwrap_or_default()
+                        }
+                    });
+
+                    let results: Vec<Vec<catenary::models::CompressedTrip>> =
+                        futures::stream::iter(futures_trips)
+                            .buffer_unordered(10) // Allow up to 10 concurrent connections
+                            .collect()
+                            .await;
+
+                    results.into_iter().flatten().collect::<Vec<_>>()
+                } else {
+                    let mut conn2 = pool_for_schedule.get().await.unwrap();
+                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::chateau
+                                .eq(chateau_id_clone2.clone()),
+                        )
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                                .eq_any(&itinerary_list_clone),
+                        )
+                        .select(catenary::models::CompressedTrip::as_select())
+                        .load::<catenary::models::CompressedTrip>(&mut conn2)
+                        .await
+                        .unwrap_or_default()
+                };
+
+                // We need a connection for calendar fetching. 
+                // We can reuse one from the pool, or if we were in non-parallel mode we could have reused conn2 but we moved away from that structure slightly.
+                // Just get a new one or keep using pool.
+                let mut conn_calendar = pool_for_schedule.get().await.unwrap();
 
                 let mut trip_compressed_btreemap =
                     BTreeMap::<String, catenary::models::CompressedTrip>::new();
@@ -699,7 +744,7 @@ pub async fn departures_at_stop(
                         catenary::schema::gtfs::calendar::service_id.eq_any(&service_ids_to_search),
                     )
                     .select(catenary::models::Calendar::as_select())
-                    .load::<catenary::models::Calendar>(&mut conn2)
+                    .load::<catenary::models::Calendar>(&mut conn_calendar)
                     .await
                     .unwrap_or_default();
 
@@ -713,7 +758,7 @@ pub async fn departures_at_stop(
                             .eq_any(&service_ids_to_search),
                     )
                     .select(catenary::models::CalendarDate::as_select())
-                    .load::<catenary::models::CalendarDate>(&mut conn2)
+                    .load::<catenary::models::CalendarDate>(&mut conn_calendar)
                     .await
                     .unwrap_or_default();
 
