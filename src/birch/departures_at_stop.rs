@@ -153,6 +153,133 @@ struct NearbyFromStopsResponse {
     pub alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>>,
 }
 
+struct AlertIndex {
+    by_route: HashMap<String, Vec<catenary::aspen_dataset::AspenisedAlert>>,
+    by_trip: HashMap<String, Vec<catenary::aspen_dataset::AspenisedAlert>>,
+    general: Vec<catenary::aspen_dataset::AspenisedAlert>,
+}
+
+impl AlertIndex {
+    fn new(alerts: &BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>) -> Self {
+        let mut by_route: HashMap<String, Vec<catenary::aspen_dataset::AspenisedAlert>> = HashMap::new();
+        let mut by_trip: HashMap<String, Vec<catenary::aspen_dataset::AspenisedAlert>> = HashMap::new();
+        let mut general = Vec::new();
+
+        for alert in alerts.values() {
+            let mut specific = false;
+            for entity in &alert.informed_entity {
+                if let Some(r_id) = &entity.route_id {
+                    by_route.entry(r_id.clone()).or_default().push(alert.clone());
+                    specific = true;
+                }
+                if let Some(trip) = &entity.trip {
+                    if let Some(t_id) = &trip.trip_id {
+                        by_trip.entry(t_id.clone()).or_default().push(alert.clone());
+                        specific = true;
+                    }
+                }
+            }
+            if !specific {
+                // Keep general empty as per analysis of original logic (only route/trip matching used for cancellations)
+            }
+        }
+        
+        for v in by_route.values_mut() {
+            v.sort_by_key(|a| a.id.clone());
+            v.dedup_by_key(|a| a.id.clone());
+        }
+        for v in by_trip.values_mut() {
+            v.sort_by_key(|a| a.id.clone());
+            v.dedup_by_key(|a| a.id.clone());
+        }
+
+        Self {
+            by_route,
+            by_trip,
+            general,
+        }
+    }
+
+    fn search(&self, route_id: &str, trip_id: &str) -> Vec<&catenary::aspen_dataset::AspenisedAlert> {
+        let mut result = Vec::new();
+        if let Some(alerts) = self.by_route.get(route_id) {
+            result.extend(alerts);
+        }
+        if let Some(alerts) = self.by_trip.get(trip_id) {
+            result.extend(alerts);
+        }
+        
+        result.sort_by_key(|a| &a.id);
+        result.dedup_by_key(|a| &a.id);
+        
+        result
+    }
+}
+
+fn estimate_service_date(
+    valid_trip: &ValidTripSet,
+    trip_update: &AspenisedTripUpdate,
+    itin_option: &ItinOption,
+    calendar_structure: &HashMap<String, catenary::models::Service>,
+    chateau_id: &str,
+) -> bool {
+    let trip_offset = itin_option.departure_time_since_start.unwrap_or(
+        itin_option.arrival_time_since_start.unwrap_or(
+            itin_option.interpolated_time_since_start.unwrap_or(0)
+        )
+    ) as u64;
+
+    let naive_date_approx_guess = trip_update.stop_time_update.iter()
+        .filter(|x| x.departure.is_some() || x.arrival.is_some())
+        .filter_map(|x| {
+            if let Some(departure) = &x.departure {
+                Some(departure.time)
+            } else if let Some(arrival) = &x.arrival {
+                Some(arrival.time)
+            } else {
+                None
+            }
+        }).flatten().min();
+
+    match naive_date_approx_guess {
+        Some(least_num) => {
+            let tz = valid_trip.timezone.as_ref().unwrap();
+            let rt_least_naive_date = tz.timestamp(least_num as i64, 0);
+            let approx_service_date_start = rt_least_naive_date - chrono::Duration::seconds(trip_offset as i64);
+            let approx_service_date = approx_service_date_start.date();
+
+            let day_before = approx_service_date - chrono::Duration::days(2);
+            
+            let mut best_date_score = i64::MAX;
+            let mut best_date = None;
+
+            for day in day_before.naive_local().iter_days().take(3) {
+                 let service_id = valid_trip.service_id.as_str();
+                 let service_opt = calendar_structure.get(service_id);
+
+                 if let Some(service) = service_opt {
+                     if catenary::datetime_in_service(service, day) {
+                         let day_in_tz_midnight = day.and_hms(12, 0, 0).and_local_timezone(*tz).unwrap() - chrono::Duration::hours(12);
+                         let time_delta = rt_least_naive_date.signed_duration_since(day_in_tz_midnight).num_seconds().abs();
+                         
+                         if time_delta < best_date_score {
+                             best_date_score = time_delta;
+                             best_date = Some(day_in_tz_midnight.date());
+                         }
+                     }
+                 }
+            }
+
+            if let Some(best_date) = best_date {
+                valid_trip.trip_service_date == best_date.naive_local()
+            } else {
+                false
+            }
+        },
+        None => false,
+    }
+}
+
 #[actix_web::get("/departures_at_stop")]
 pub async fn departures_at_stop(
     req: HttpRequest,
@@ -399,168 +526,208 @@ pub async fn departures_at_stop(
             }
 
             let itinerary_list: Vec<String> = itins_btreemap.keys().cloned().collect();
+            let itinerary_list_clone = itinerary_list.clone();
 
-            let itin_meta =
-                catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                    .filter(
-                        catenary::schema::gtfs::itinerary_pattern_meta::chateau
-                            .eq(chateau_id.clone()),
-                    )
-                    .filter(
-                        catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id
-                            .eq_any(&itinerary_list),
-                    )
-                    .select(catenary::models::ItineraryPatternMeta::as_select())
-                    .load::<catenary::models::ItineraryPatternMeta>(&mut conn)
-                    .await
-                    .unwrap_or_default();
+            // Task A: Meta Data
+            let mut conn1 = conn; // Reuse first connection
+            let chateau_id_clone = chateau_id.clone();
+            let meta_task = async {
+                let itin_meta =
+                    catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                        .filter(
+                            catenary::schema::gtfs::itinerary_pattern_meta::chateau
+                                .eq(chateau_id_clone.clone()),
+                        )
+                        .filter(
+                            catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id
+                                .eq_any(&itinerary_list),
+                        )
+                        .select(catenary::models::ItineraryPatternMeta::as_select())
+                        .load::<catenary::models::ItineraryPatternMeta>(&mut conn1)
+                        .await
+                        .unwrap_or_default();
 
-            let mut itin_meta_btreemap =
-                BTreeMap::<String, catenary::models::ItineraryPatternMeta>::new();
-            for itin in &itin_meta {
-                itin_meta_btreemap.insert(itin.itinerary_pattern_id.clone(), itin.clone());
-            }
-
-            let direction_ids_to_search: Vec<String> = itin_meta
-                .iter()
-                .filter_map(|x| x.direction_pattern_id.clone())
-                .collect();
-
-            let direction_meta =
-                catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
-                    .filter(
-                        catenary::schema::gtfs::direction_pattern_meta::chateau
-                            .eq(chateau_id.clone()),
-                    )
-                    .filter(
-                        catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id
-                            .eq_any(&direction_ids_to_search),
-                    )
-                    .select(catenary::models::DirectionPatternMeta::as_select())
-                    .load::<catenary::models::DirectionPatternMeta>(&mut conn)
-                    .await
-                    .unwrap_or_default();
-
-            let mut direction_meta_btreemap =
-                BTreeMap::<String, catenary::models::DirectionPatternMeta>::new();
-            let mut shape_ids_to_fetch_for_this_chateau = BTreeSet::new();
-            for direction in &direction_meta {
-                if let Some(shape_id) = &direction.gtfs_shape_id {
-                    shape_ids_to_fetch_for_this_chateau.insert(shape_id.clone());
+                let mut itin_meta_btreemap =
+                    BTreeMap::<String, catenary::models::ItineraryPatternMeta>::new();
+                for itin in &itin_meta {
+                    itin_meta_btreemap.insert(itin.itinerary_pattern_id.clone(), itin.clone());
                 }
-                direction_meta_btreemap
-                    .insert(direction.direction_pattern_id.clone(), direction.clone());
-            }
 
-            let mut shape_polyline_for_chateau: BTreeMap<EcoString, String> = BTreeMap::new();
+                let direction_ids_to_search: Vec<String> = itin_meta
+                    .iter()
+                    .filter_map(|x| x.direction_pattern_id.clone())
+                    .collect();
 
-            if include_shapes {
-                let shapes_result = catenary::schema::gtfs::shapes::dsl::shapes
-                    .filter(catenary::schema::gtfs::shapes::chateau.eq(chateau_id.clone()))
-                    .filter(
-                        catenary::schema::gtfs::shapes::shape_id
-                            .eq_any(&shape_ids_to_fetch_for_this_chateau),
-                    )
-                    .load::<catenary::models::Shape>(&mut conn)
-                    .await
-                    .unwrap_or_default();
+                let direction_meta =
+                    catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                        .filter(
+                            catenary::schema::gtfs::direction_pattern_meta::chateau
+                                .eq(chateau_id_clone.clone()),
+                        )
+                        .filter(
+                            catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id
+                                .eq_any(&direction_ids_to_search),
+                        )
+                        .select(catenary::models::DirectionPatternMeta::as_select())
+                        .load::<catenary::models::DirectionPatternMeta>(&mut conn1)
+                        .await
+                        .unwrap_or_default();
 
-                for db_shape in shapes_result {
-                    let shape_polyline = polyline::encode_coordinates(
-                        geo::LineString::new(
-                            db_shape
-                                .linestring
-                                .points
-                                .iter()
-                                .map(|point| coord! { x: point.x, y: point.y })
-                                .collect::<Vec<_>>(),
-                        ),
-                        5,
-                    )
-                    .unwrap();
-                    shape_polyline_for_chateau
-                        .insert(db_shape.shape_id.clone().into(), shape_polyline);
+                let mut direction_meta_btreemap =
+                    BTreeMap::<String, catenary::models::DirectionPatternMeta>::new();
+                let mut shape_ids_to_fetch_for_this_chateau = BTreeSet::new();
+                for direction in &direction_meta {
+                    if let Some(shape_id) = &direction.gtfs_shape_id {
+                        shape_ids_to_fetch_for_this_chateau.insert(shape_id.clone());
+                    }
+                    direction_meta_btreemap
+                        .insert(direction.direction_pattern_id.clone(), direction.clone());
                 }
-            }
 
-            let direction_row_query =
-                catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
-                    .filter(
-                        catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_id.clone()),
-                    )
-                    .filter(
-                        catenary::schema::gtfs::direction_pattern::direction_pattern_id
-                            .eq_any(&direction_ids_to_search),
-                    )
-                    .select(catenary::models::DirectionPatternRow::as_select())
-                    .load::<catenary::models::DirectionPatternRow>(&mut conn)
+                let mut shape_polyline_for_chateau: BTreeMap<EcoString, String> = BTreeMap::new();
+
+                if include_shapes {
+                    let shapes_result = catenary::schema::gtfs::shapes::dsl::shapes
+                        .filter(catenary::schema::gtfs::shapes::chateau.eq(chateau_id_clone.clone()))
+                        .filter(
+                            catenary::schema::gtfs::shapes::shape_id
+                                .eq_any(&shape_ids_to_fetch_for_this_chateau),
+                        )
+                        .load::<catenary::models::Shape>(&mut conn1)
+                        .await
+                        .unwrap_or_default();
+
+                    for db_shape in shapes_result {
+                        let shape_polyline = polyline::encode_coordinates(
+                            geo::LineString::new(
+                                db_shape
+                                    .linestring
+                                    .points
+                                    .iter()
+                                    .map(|point| coord! { x: point.x, y: point.y })
+                                    .collect::<Vec<_>>(),
+                            ),
+                            5,
+                        )
+                        .unwrap();
+                        shape_polyline_for_chateau
+                            .insert(db_shape.shape_id.clone().into(), shape_polyline);
+                    }
+                }
+
+                let direction_row_query =
+                    catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+                        .filter(
+                            catenary::schema::gtfs::direction_pattern::chateau
+                                .eq(chateau_id_clone.clone()),
+                        )
+                        .filter(
+                            catenary::schema::gtfs::direction_pattern::direction_pattern_id
+                                .eq_any(&direction_ids_to_search),
+                        )
+                        .select(catenary::models::DirectionPatternRow::as_select())
+                        .load::<catenary::models::DirectionPatternRow>(&mut conn1)
+                        .await
+                        .unwrap_or_default();
+
+                let mut direction_rows_for_chateau =
+                    BTreeMap::<String, Vec<catenary::models::DirectionPatternRow>>::new();
+                for direction_row in direction_row_query {
+                    let entry = direction_rows_for_chateau
+                        .entry(direction_row.direction_pattern_id.clone())
+                        .or_insert_with(Vec::new);
+                    entry.push(direction_row);
+                }
+                for entry in direction_rows_for_chateau.values_mut() {
+                    entry.sort_by_key(|x| x.stop_sequence);
+                }
+
+                let route_ids: Vec<CompactString> =
+                    itin_meta.iter().map(|x| x.route_id.clone()).collect();
+
+                let routes_ret = catenary::schema::gtfs::routes::dsl::routes
+                    .filter(catenary::schema::gtfs::routes::chateau.eq(chateau_id_clone.clone()))
+                    .filter(catenary::schema::gtfs::routes::route_id.eq_any(&route_ids))
+                    .select(catenary::models::Route::as_select())
+                    .load::<catenary::models::Route>(&mut conn1)
                     .await
                     .unwrap_or_default();
 
-            let mut direction_rows_for_chateau =
-                BTreeMap::<String, Vec<catenary::models::DirectionPatternRow>>::new();
-            for direction_row in direction_row_query {
-                let entry = direction_rows_for_chateau
-                    .entry(direction_row.direction_pattern_id.clone())
-                    .or_insert_with(Vec::new);
-                entry.push(direction_row);
-                entry.sort_by_key(|x| x.stop_sequence);
-            }
+                let mut routes_btreemap = BTreeMap::<String, catenary::models::Route>::new();
+                for route in &routes_ret {
+                    routes_btreemap.insert(route.route_id.clone().into(), route.clone());
+                }
 
-            let route_ids: Vec<CompactString> =
-                itin_meta.iter().map(|x| x.route_id.clone()).collect();
-
-            let routes_ret = catenary::schema::gtfs::routes::dsl::routes
-                .filter(catenary::schema::gtfs::routes::chateau.eq(chateau_id.clone()))
-                .filter(catenary::schema::gtfs::routes::route_id.eq_any(&route_ids))
-                .select(catenary::models::Route::as_select())
-                .load::<catenary::models::Route>(&mut conn)
-                .await
-                .unwrap_or_default();
-
-            let mut routes_btreemap = BTreeMap::<String, catenary::models::Route>::new();
-            for route in &routes_ret {
-                routes_btreemap.insert(route.route_id.clone().into(), route.clone());
-            }
-
-            let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_id.clone()))
-                .filter(
-                    catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
-                        .eq_any(&itinerary_list),
+                (
+                    itin_meta_btreemap,
+                    direction_meta_btreemap,
+                    shape_polyline_for_chateau,
+                    direction_rows_for_chateau,
+                    routes_btreemap,
                 )
-                .select(catenary::models::CompressedTrip::as_select())
-                .load::<catenary::models::CompressedTrip>(&mut conn)
-                .await
-                .unwrap_or_default();
+            };
 
-            let mut trip_compressed_btreemap =
-                BTreeMap::<String, catenary::models::CompressedTrip>::new();
-            for trip in &trips {
-                trip_compressed_btreemap.insert(trip.trip_id.clone(), trip.clone());
-            }
+            // Task B: Schedule Data (Trips, Calendar)
+            let mut conn2 = pool.get().await.unwrap();
+            let chateau_id_clone2 = chateau_id.clone();
+            let schedule_task = async {
+                let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                    .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_id_clone2.clone()))
+                    .filter(
+                        catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                            .eq_any(&itinerary_list_clone),
+                    )
+                    .select(catenary::models::CompressedTrip::as_select())
+                    .load::<catenary::models::CompressedTrip>(&mut conn2)
+                    .await
+                    .unwrap_or_default();
 
-            let service_ids_to_search: BTreeSet<CompactString> =
-                trips.iter().map(|x| x.service_id.clone()).collect();
+                let mut trip_compressed_btreemap =
+                    BTreeMap::<String, catenary::models::CompressedTrip>::new();
+                let mut service_ids_to_search: BTreeSet<CompactString> = BTreeSet::new();
 
-            let calendar = catenary::schema::gtfs::calendar::dsl::calendar
-                .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_id.clone()))
-                .filter(catenary::schema::gtfs::calendar::service_id.eq_any(&service_ids_to_search))
-                .select(catenary::models::Calendar::as_select())
-                .load::<catenary::models::Calendar>(&mut conn)
-                .await
-                .unwrap_or_default();
+                for trip in &trips {
+                    trip_compressed_btreemap.insert(trip.trip_id.clone(), trip.clone());
+                    service_ids_to_search.insert(trip.service_id.clone());
+                }
 
-            let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
-                .filter(catenary::schema::gtfs::calendar_dates::chateau.eq(chateau_id.clone()))
-                .filter(
-                    catenary::schema::gtfs::calendar_dates::service_id
-                        .eq_any(&service_ids_to_search),
-                )
-                .select(catenary::models::CalendarDate::as_select())
-                .load::<catenary::models::CalendarDate>(&mut conn)
-                .await
-                .unwrap_or_default();
+                let calendar = catenary::schema::gtfs::calendar::dsl::calendar
+                    .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_id_clone2.clone()))
+                    .filter(
+                        catenary::schema::gtfs::calendar::service_id.eq_any(&service_ids_to_search),
+                    )
+                    .select(catenary::models::Calendar::as_select())
+                    .load::<catenary::models::Calendar>(&mut conn2)
+                    .await
+                    .unwrap_or_default();
+
+                let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                    .filter(
+                        catenary::schema::gtfs::calendar_dates::chateau
+                            .eq(chateau_id_clone2.clone()),
+                    )
+                    .filter(
+                        catenary::schema::gtfs::calendar_dates::service_id
+                            .eq_any(&service_ids_to_search),
+                    )
+                    .select(catenary::models::CalendarDate::as_select())
+                    .load::<catenary::models::CalendarDate>(&mut conn2)
+                    .await
+                    .unwrap_or_default();
+
+                (trip_compressed_btreemap, calendar, calendar_dates)
+            };
+
+            let (
+                (
+                    itin_meta_btreemap,
+                    direction_meta_btreemap,
+                    shape_polyline_for_chateau,
+                    direction_rows_for_chateau,
+                    routes_btreemap,
+                ),
+                (trip_compressed_btreemap, calendar, calendar_dates),
+            ) = tokio::join!(meta_task, schedule_task);
 
             (
                 chateau_id,
@@ -880,6 +1047,11 @@ pub async fn departures_at_stop(
     }
     alerts = filtered_alerts;
 
+    let mut alert_indices: HashMap<String, AlertIndex> = HashMap::new();
+    for (chateau_id, chateau_alerts) in &alerts {
+        alert_indices.insert(chateau_id.clone(), AlertIndex::new(chateau_alerts));
+    }
+
     //look through time compressed and decompress the itineraries, using timezones and calendar calcs
 
     for (chateau_id, trips_compressed_data) in &trip_compressed_btreemap_by_chateau {
@@ -1039,39 +1211,25 @@ pub async fn departures_at_stop(
 
                         let mut trip_update_for_event: Option<&AspenisedTripUpdate> = None;
 
-                        if let Some(chateau_alerts) = alerts.get(chateau_id) {
-                            for alert in chateau_alerts.values() {
-                                let effect_is_no_service = alert.effect == Some(1); // NO_SERVICE
-                                if effect_is_no_service {
-                                    let applies_to_trip = alert.informed_entity.iter().any(|e| {
-                                        let route_match = e
-                                            .route_id
-                                            .as_ref()
-                                            .map_or(false, |r_id| *r_id == valid_trip.route_id);
-                                        let trip_match = e.trip.as_ref().map_or(false, |t| {
-                                            t.trip_id
-                                                .as_ref()
-                                                .map_or(false, |t_id| *t_id == valid_trip.trip_id)
-                                        });
-                                        route_match || trip_match
+                        if let Some(index) = alert_indices.get(chateau_id) {
+                            let relevant_alerts = index.search(&valid_trip.route_id, &valid_trip.trip_id);
+                            for alert in relevant_alerts {
+                                if alert.effect == Some(1) { // NO_SERVICE
+                                    let event_time = valid_trip
+                                        .reference_start_of_service_date
+                                        .timestamp()
+                                        as u64
+                                        + valid_trip.trip_start_time as u64
+                                        + itin_option.departure_time_since_start.unwrap_or(0)
+                                            as u64;
+                                        
+                                    let is_active = alert.active_period.iter().any(|ap| {
+                                        let start = ap.start.unwrap_or(0);
+                                        let end = ap.end.unwrap_or(u64::MAX);
+                                        event_time >= start && event_time <= end
                                     });
-
-                                    if applies_to_trip {
-                                        let event_time = valid_trip
-                                            .reference_start_of_service_date
-                                            .timestamp()
-                                            as u64
-                                            + valid_trip.trip_start_time as u64
-                                            + itin_option.departure_time_since_start.unwrap_or(0)
-                                                as u64;
-                                        let is_active = alert.active_period.iter().any(|ap| {
-                                            let start = ap.start.unwrap_or(0);
-                                            let end = ap.end.unwrap_or(u64::MAX);
-                                            event_time >= start && event_time <= end
-                                        });
-                                        if is_active {
-                                            trip_cancelled = true;
-                                        }
+                                    if is_active {
+                                        trip_cancelled = true;
                                     }
                                 }
                             }
@@ -1110,7 +1268,7 @@ pub async fn departures_at_stop(
                                                 )
                                             })
                                             .filter(
-                                                |(x, trip_update)| match does_trip_set_use_dates {
+                                                |(_x, trip_update)| match does_trip_set_use_dates {
                                                     true => {
                                                         trip_update.trip.start_date
                                                             == Some(
@@ -1118,85 +1276,13 @@ pub async fn departures_at_stop(
                                                             )
                                                     }
                                                     false => {
-                                                        //if there is only 1 trip update, assign it to the current service date
-
-                                                        //what is the current trip offset from the reference start of service date
-
-                                                        let trip_offset = itin_option.departure_time_since_start.unwrap_or(
-                                                            itin_option.arrival_time_since_start.unwrap_or(
-                                                                itin_option.interpolated_time_since_start.unwrap_or(0)
-                                                            )
-                                                        );
-
-                                                        // get current naive date in the timezone from the earliest item in the trip update
-
-                                                        let naive_date_approx_guess = trip_update.stop_time_update.iter()
-                                                        .filter(|x| x.departure.is_some() || x.arrival.is_some())
-                                                        .filter_map(|x| {
-                                                            if let Some(departure) = &x.departure {
-                                                                Some(departure.time)
-                                                            } else {
-                                                                if let Some(arrival) = &x.arrival {
-                                                                    Some(arrival.time)
-                                                                } else {
-                                                                    None
-                                                                }
-                                                            }
-                                                        }).flatten().min();
-
-                                                        match naive_date_approx_guess {
-                                                            Some(least_num) => {
-                                                                let tz = valid_trip.timezone.as_ref().unwrap();
-
-                                                                let rt_least_naive_date = tz.timestamp(least_num as i64, 0);
-
-                                                                let approx_service_date_start = rt_least_naive_date - chrono::Duration::seconds(trip_offset as i64);
-
-                                                                let approx_service_date = approx_service_date_start.date();
-
-                                                                //score dates within 1 day of the service date
-                                                                let mut vec_possible_dates: Vec<(chrono::Date<chrono_tz::Tz>, i64)> = vec![];
-
-                                                                //iter from day before to day after
-
-                                                                let day_before = approx_service_date - chrono::Duration::days(2);
-
-                                                                for day in day_before.naive_local().iter_days().take(3) {
-                                                                   //check service id for trip id, then check if calendar is allowed
-
-                                                                     let service_id = valid_trip.service_id.as_str();
-
-                                                                    let service = calendar_structure
-                                                                    .get(chateau_id.as_str())
-                                                                    .unwrap().get(service_id);
-
-                                                                    if let Some(service) = service {
-                                                                        if catenary::datetime_in_service(&service, day) {
-                                                                            let day_in_tz_midnight = day.and_hms(12, 0, 0).and_local_timezone(*tz).unwrap() - chrono::Duration::hours(12);
-
-                                                                            let time_delta = rt_least_naive_date.signed_duration_since(day_in_tz_midnight);
-    
-                                                                            vec_possible_dates.push((day_in_tz_midnight.date(), time_delta.num_seconds().abs()));
-                                                                        }
-                                                                    }
-                                                                }
-
-                                                                let best_service_date = vec_possible_dates.iter().min_by_key(|x| x.1);
-
-                                                                match best_service_date {
-                                                                    Some(best_service_date) => {
-                                                                        valid_trip.trip_service_date == best_service_date.0.naive_local()
-                                                                    },
-                                                                    None => {
-                                                                        false
-                                                                    }
-                                                                }
-
-                                                            },
-                                                            None => {
-                                                                false
-                                                            }
-                                                        }
+                                                        estimate_service_date(
+                                                            valid_trip,
+                                                            trip_update,
+                                                            itin_option,
+                                                            calendar_structure.get(chateau_id.as_str()).unwrap(),
+                                                            chateau_id
+                                                        )
                                                     },
                                                 },
                                             )
@@ -1507,108 +1593,13 @@ pub async fn departures_at_stop(
                                                             == Some(valid_trip.trip_service_date)
                                                     }
                                                     false => {
-                                                        // Heuristic for "false" dates (same as non-freq logic)
-                                                        let trip_offset = itin_option
-                                                            .departure_time_since_start
-                                                            .unwrap_or(
-                                                                itin_option
-                                                                    .arrival_time_since_start
-                                                                    .unwrap_or(
-                                                                        itin_option
-                                                                            .interpolated_time_since_start
-                                                                            .unwrap_or(0),
-                                                                    ),
-                                                            )
-                                                            as u64;
-
-                                                        let naive_date_approx_guess = trip_update
-                                                            .stop_time_update
-                                                            .iter()
-                                                            .filter(|x| {
-                                                                x.departure.is_some()
-                                                                    || x.arrival.is_some()
-                                                            })
-                                                            .filter_map(|x| {
-                                                                if let Some(departure) = &x.departure {
-                                                                    Some(departure.time)
-                                                                } else if let Some(arrival) =
-                                                                    &x.arrival
-                                                                {
-                                                                    Some(arrival.time)
-                                                                } else {
-                                                                    None
-                                                                }
-                                                            })
-                                                            .flatten()
-                                                            .min();
-
-                                                        match naive_date_approx_guess {
-                                                            Some(least_num) => {
-                                                                let tz = valid_trip
-                                                                    .timezone
-                                                                    .as_ref()
-                                                                    .unwrap();
-                                                                let rt_least_naive_date =
-                                                                    tz.timestamp(least_num as i64, 0);
-                                                                let approx_service_date_start =
-                                                                    rt_least_naive_date
-                                                                        - chrono::Duration::seconds(
-                                                                            trip_offset as i64,
-                                                                        );
-                                                                let approx_service_date =
-                                                                    approx_service_date_start.date();
-
-                                                                let day_before = approx_service_date
-                                                                    - chrono::Duration::days(2);
-                                                                let mut vec_possible_dates: Vec<(
-                                                                    chrono::Date<chrono_tz::Tz>,
-                                                                    i64,
-                                                                )> = vec![];
-
-                                                                for day in day_before
-                                                                    .naive_local()
-                                                                    .iter_days()
-                                                                    .take(3)
-                                                                {
-                                                                    let service_id =
-                                                                        valid_trip.service_id.as_str();
-                                                                    let service = calendar_structure
-                                                                        .get(chateau_id.as_str())
-                                                                        .unwrap()
-                                                                        .get(service_id);
-
-                                                                    if let Some(service) = service {
-                                                                        if catenary::datetime_in_service(
-                                                                            &service, day,
-                                                                        ) {
-                                                                            let day_in_tz_midnight = day.and_hms(12, 0, 0).and_local_timezone(*tz).unwrap() - chrono::Duration::hours(12);
-                                                                            let time_delta = rt_least_naive_date.signed_duration_since(day_in_tz_midnight);
-                                                                            vec_possible_dates.push((
-                                                                                day_in_tz_midnight
-                                                                                    .date(),
-                                                                                time_delta
-                                                                                    .num_seconds()
-                                                                                    .abs(),
-                                                                            ));
-                                                                        }
-                                                                    }
-                                                                }
-
-                                                                match vec_possible_dates
-                                                                    .iter()
-                                                                    .min_by_key(|x| x.1)
-                                                                {
-                                                                    Some(best_service_date) => {
-                                                                        valid_trip.trip_service_date
-                                                                            == best_service_date
-                                                                                .0
-                                                                                .naive_local()
-                                                                    }
-                                                                    None => false,
-                                                                }
-                                                            }
-                                                            None => false,
-                                                        }
+                                                        estimate_service_date(
+                                                            valid_trip,
+                                                            trip_update,
+                                                            itin_option,
+                                                            calendar_structure.get(chateau_id.as_str()).unwrap(),
+                                                            chateau_id
+                                                        )
                                                     }
                                                 })
                                                 .collect();
@@ -1688,45 +1679,28 @@ pub async fn departures_at_stop(
                             }
 
                             // 2. Alert Logic (Recalculated for Frequency Offset)
-                            if let Some(chateau_alerts) = alerts.get(chateau_id) {
-                                for alert in chateau_alerts.values() {
-                                    let effect_is_no_service = alert.effect == Some(1); // NO_SERVICE
-                                    if effect_is_no_service {
-                                        let applies_to_trip =
-                                            alert.informed_entity.iter().any(|e| {
-                                                let route_match =
-                                                    e.route_id.as_ref().map_or(false, |r_id| {
-                                                        *r_id == valid_trip.route_id
-                                                    });
-                                                let trip_match =
-                                                    e.trip.as_ref().map_or(false, |t| {
-                                                        t.trip_id.as_ref().map_or(false, |t_id| {
-                                                            *t_id == valid_trip.trip_id
-                                                        })
-                                                    });
-                                                route_match || trip_match
-                                            });
+                            if let Some(index) = alert_indices.get(chateau_id) {
+                                let relevant_alerts = index.search(&valid_trip.route_id, &valid_trip.trip_id);
+                                for alert in relevant_alerts {
+                                    if alert.effect == Some(1) { // NO_SERVICE
+                                        // Use the frequency specific start time for the event time calculation
+                                        let event_time = valid_trip
+                                            .reference_start_of_service_date
+                                            .timestamp()
+                                            as u64
+                                            + scheduled_frequency_start_time as u64
+                                            + itin_option
+                                                .departure_time_since_start
+                                                .unwrap_or(0)
+                                                as u64;
 
-                                        if applies_to_trip {
-                                            // Use the frequency specific start time for the event time calculation
-                                            let event_time = valid_trip
-                                                .reference_start_of_service_date
-                                                .timestamp()
-                                                as u64
-                                                + scheduled_frequency_start_time as u64
-                                                + itin_option
-                                                    .departure_time_since_start
-                                                    .unwrap_or(0)
-                                                    as u64;
-
-                                            let is_active = alert.active_period.iter().any(|ap| {
-                                                let start = ap.start.unwrap_or(0);
-                                                let end = ap.end.unwrap_or(u64::MAX);
-                                                event_time >= start && event_time <= end
-                                            });
-                                            if is_active {
-                                                trip_cancelled = true;
-                                            }
+                                        let is_active = alert.active_period.iter().any(|ap| {
+                                            let start = ap.start.unwrap_or(0);
+                                            let end = ap.end.unwrap_or(u64::MAX);
+                                            event_time >= start && event_time <= end
+                                        });
+                                        if is_active {
+                                            trip_cancelled = true;
                                         }
                                     }
                                 }
