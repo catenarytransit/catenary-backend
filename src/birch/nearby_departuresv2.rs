@@ -577,10 +577,15 @@ pub async fn nearby_from_coords_v2(
     for (chateau, direction_id, stop_sequence, stop_id) in directions_idx_to_get {
         match hashmap_of_directions_lookup.entry(chateau.clone()) {
             Entry::Occupied(mut oe) => {
-                oe.get_mut().insert((direction_id, stop_sequence, stop_id.to_string()));
+                oe.get_mut()
+                    .insert((direction_id, stop_sequence, stop_id.to_string()));
             }
             Entry::Vacant(mut ve) => {
-                ve.insert(HashSet::from_iter([(direction_id, stop_sequence, stop_id.to_string())]));
+                ve.insert(HashSet::from_iter([(
+                    direction_id,
+                    stop_sequence,
+                    stop_id.to_string(),
+                )]));
             }
         }
     }
@@ -755,7 +760,8 @@ pub async fn nearby_from_coords_v2(
     let itin_meta_table = itin_meta_table;
 
     //make a hashmap of Chateau -> (itinerary_pattern_id, stop_id)
-    let mut itineraries_and_seq_to_lookup: AHashMap<String, HashSet<(String, String)>> = AHashMap::new();
+    let mut itineraries_and_seq_to_lookup: AHashMap<String, HashSet<(String, String)>> =
+        AHashMap::new();
 
     for (chateau, set_of_directions) in hashmap_of_directions_lookup.iter() {
         let mut vec_to_insert: HashSet<(String, String)> = HashSet::new();
@@ -848,8 +854,11 @@ pub async fn nearby_from_coords_v2(
                     // This handles the case where stop_id IN (...) might return rows for non-requested combinations
                     let chateau = itinerary.chateau.clone();
                     if let Some(requested_set) = itineraries_and_seq_to_lookup.get(&chateau) {
-                        if !requested_set.contains(&(itinerary.itinerary_pattern_id.clone(), itinerary.stop_id.to_string())) {
-                             continue;
+                        if !requested_set.contains(&(
+                            itinerary.itinerary_pattern_id.clone(),
+                            itinerary.stop_id.to_string(),
+                        )) {
+                            continue;
                         }
                     } else {
                         continue;
