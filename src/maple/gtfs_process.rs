@@ -348,7 +348,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./pfaedle-filtered-dach-latest.osm.pbf",
                 Some(
-                    "subway,metro,bus,ferry,cablecar,gondala,funicular,coach,trolley,monorail,tram"
+                    "subway,metro,bus,ferry,cablecar,funicular,coach,trolley,monorail,tram"
                         .split(",")
                         .map(String::from)
                         .collect::<Vec<String>>(),
