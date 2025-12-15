@@ -341,7 +341,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 Some(vec![String::from("rail")]),
-                true,
+                false,
             )?;
 
             let _ = execute_pfaedle_rs(
@@ -353,7 +353,7 @@ pub async fn gtfs_process_feed(
                         .map(String::from)
                         .collect::<Vec<String>>(),
                 ),
-                true,
+                false,
             )?;
         }
         _ => {
