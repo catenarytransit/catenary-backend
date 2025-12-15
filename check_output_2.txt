@@ -412,42 +412,19 @@ warning: fields `start` and `end` are never read
    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 warning: `catenary-backend` (lib) generated 60 warnings (run `cargo fix --lib -p catenary-backend` to apply 52 suggestions)
-error[E0432]: unresolved imports `gtfs_realtime::StopTimeEvent`, `gtfs_realtime::StopTimeUpdate`
- --> src/aspen/compact_formats.rs:2:49
+error[E0432]: unresolved imports `gtfs_realtime::trip_update::TripModifications`, `gtfs_realtime::trip_update::TripUpdate`
+ --> src/aspen/compact_formats.rs:2:65
   |
-2 |     Alert, FeedEntity, FeedHeader, FeedMessage, StopTimeEvent, StopTimeUpdate, TripUpdate,
-  |                                                 ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^ no `StopTimeUpdate` in the root
-  |                                                 |
-  |                                                 no `StopTimeEvent` in the root
+2 | use gtfs_realtime::trip_update::{StopTimeEvent, StopTimeUpdate, TripModifications, TripUpdate};
+  |                                                                 ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^ no `TripUpdate` in `trip_update`
+  |                                                                 |
+  |                                                                 no `TripModifications` in `trip_update`
   |
+  = help: consider importing this struct instead:
+          gtfs_realtime::TripModifications
   = help: consider importing one of these structs instead:
-          gtfs_realtime::trip_update::StopTimeEvent
-          unwire_gtfs_rt::gtfs::StopTimeEvent
-  = help: consider importing one of these structs instead:
-          gtfs_realtime::trip_update::StopTimeUpdate
-          unwire_gtfs_rt::gtfs::StopTimeUpdate
-
-error[E0412]: cannot find type `StopTimeProperties` in crate `gtfs_realtime`
-  --> src/aspen/compact_formats.rs:55:57
-   |
-55 |     pub stop_time_properties: Option<Box<gtfs_realtime::StopTimeProperties>>, // Verify type
-   |                                                         ^^^^^^^^^^^^^^^^^^ not found in `gtfs_realtime`
-   |
-help: consider importing this struct
-   |
- 1 + use gtfs_realtime::trip_update::stop_time_update::StopTimeProperties;
-   |
-help: if you import `StopTimeProperties`, refer to it directly
-   |
-55 -     pub stop_time_properties: Option<Box<gtfs_realtime::StopTimeProperties>>, // Verify type
-55 +     pub stop_time_properties: Option<Box<StopTimeProperties>>, // Verify type
-   |
-
-error[E0573]: expected type, found crate `i24`
-  --> src/aspen/compact_formats.rs:61:22
-   |
-61 |     pub time: Option<i24>,
-   |                      ^^^ help: a builtin type with a similar name exists: `i64`
+          gtfs_realtime::TripUpdate
+          unwire_gtfs_rt::gtfs::TripUpdate
 
 warning: unused import: `tokio::time`
   --> src/aspen/main.rs:56:5
@@ -499,17 +476,17 @@ warning: unused import: `BTreeMap`
 77 | use std::collections::{BTreeMap, HashMap};
    |                        ^^^^^^^^
 
-warning: unused imports: `FeedEntity`, `FeedHeader`, `FeedMessage`, and `TripUpdate`
- --> src/aspen/compact_formats.rs:2:12
+warning: unused imports: `StopTimeEvent` and `StopTimeUpdate`
+ --> src/aspen/compact_formats.rs:2:34
   |
-2 |     Alert, FeedEntity, FeedHeader, FeedMessage, StopTimeEvent, StopTimeUpdate, TripUpdate,
-  |            ^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^                                 ^^^^^^^^^^
+2 | use gtfs_realtime::trip_update::{StopTimeEvent, StopTimeUpdate, TripModifications, TripUpdate};
+  |                                  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
 
-warning: unused import: `i24::i24`
- --> src/aspen/compact_formats.rs:5:5
+warning: unused imports: `FeedEntity`, `FeedHeader`, and `FeedMessage`
+ --> src/aspen/compact_formats.rs:3:28
   |
-5 | use i24::i24;
-  |     ^^^^^^^^
+3 | use gtfs_realtime::{Alert, FeedEntity, FeedHeader, FeedMessage, VehiclePosition};
+  |                            ^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^
 
 warning: variable does not need to be mutable
    --> src/aspen/import_alpenrose.rs:214:9
@@ -919,7 +896,6 @@ warning: unused variable: `result`
 1801 |         Ok(Ok(result)) => Err(Box::new(std::io::Error::new(
      |               ^^^^^^ help: if this is intentional, prefix it with an underscore: `_result`
 
-Some errors have detailed explanations: E0412, E0432, E0573.
-For more information about an error, try `rustc --explain E0412`.
+For more information about this error, try `rustc --explain E0432`.
 warning: `catenary-backend` (bin "aspen") generated 71 warnings
-error: could not compile `catenary-backend` (bin "aspen") due to 3 previous errors; 71 warnings emitted
+error: could not compile `catenary-backend` (bin "aspen") due to 1 previous error; 71 warnings emitted

@@ -21,7 +21,8 @@ use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use ecow::EcoString;
-use gtfs_realtime::FeedMessage;
+
+use crate::compact_formats::{CompactFeedMessage, CompactStopTimeUpdate};
 use lazy_static::lazy_static;
 use redis::RedisResult;
 use regex::Regex;
@@ -116,7 +117,7 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
 
 pub async fn new_rt_data(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
-    authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), FeedMessage>>,
+    authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     chateau_id: &str,
     realtime_feed_id: &str,
     has_vehicles: bool,
@@ -503,7 +504,7 @@ pub async fn new_rt_data(
 
         let mut vehicle_id_to_closest_temporal_stop_update: AHashMap<
             CompactString,
-            gtfs_realtime::trip_update::StopTimeUpdate,
+            CompactStopTimeUpdate,
         > = AHashMap::new();
 
         let current_time_unix_timestamp = std::time::SystemTime::now()
@@ -520,6 +521,7 @@ pub async fn new_rt_data(
             .await
         {
             let trip_gtfs_rt_for_feed_id = trip_gtfs_rt_for_feed_id.get();
+            let ref_epoch = trip_gtfs_rt_for_feed_id.reference_epoch;
 
             for trip_entity in trip_gtfs_rt_for_feed_id.entity.iter() {
                 if let Some(trip_update) = &trip_entity.trip_update {
@@ -548,6 +550,7 @@ pub async fn new_rt_data(
                         let closest_stop_time_update = find_closest_stop_time_update(
                             &trip_update.stop_time_update,
                             current_time_unix_timestamp,
+                            ref_epoch,
                         );
 
                         if let Some(closest_stop_time_update) = closest_stop_time_update {
@@ -1099,6 +1102,7 @@ pub async fn new_rt_data(
                 .await
             {
                 let trip_updates_gtfs_rt_for_feed_id = trip_updates_gtfs_rt_for_feed_id.get();
+                let ref_epoch = trip_updates_gtfs_rt_for_feed_id.reference_epoch;
 
                 //let make_supplimental_db = get_supplemental_data
 
@@ -1195,8 +1199,10 @@ pub async fn new_rt_data(
                                 arrival: stu.arrival.clone().map(|arrival| AspenStopTimeEvent {
                                     delay: None,
                                     time: match arrival.time {
-                                        Some(time) if time <= 0 => None,
-                                        Some(time) => Some(time),
+                                        Some(diff) => {
+                                           let time = (ref_epoch as i64) + (i32::from(diff) as i64);
+                                           if time <= 0 { None } else { Some(time) }
+                                        },
                                         None => None,
                                     },
                                     uncertainty: arrival.uncertainty,
@@ -1205,8 +1211,10 @@ pub async fn new_rt_data(
                                     AspenStopTimeEvent {
                                         delay: None,
                                         time: match departure.time {
-                                            Some(time) if time <= 0 => None,
-                                            Some(time) => Some(time),
+                                            Some(diff) => {
+                                               let time = (ref_epoch as i64) + (i32::from(diff) as i64);
+                                               if time <= 0 { None } else { Some(time) }
+                                            },
                                             None => None,
                                         },
                                         uncertainty: departure.uncertainty,
@@ -1333,7 +1341,7 @@ pub async fn new_rt_data(
                                 stop_time_properties: stu
                                     .stop_time_properties
                                     .clone()
-                                    .map(|x| x.into()),
+                                    .map(|x| (*x).into()),
                             })
                             .collect();
 
@@ -1565,7 +1573,7 @@ pub async fn new_rt_data(
                         if let Some(shape_id) = &shape.shape_id {
                             shape_id_to_shape.insert(
                                 shape_id.clone().into(),
-                                shape.encoded_polyline.as_ref().map(|x| x.into()),
+                                shape.encoded_polyline.as_ref().map(|x| x.clone().into()),
                             );
                         }
                     }

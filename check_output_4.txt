@@ -412,43 +412,6 @@ warning: fields `start` and `end` are never read
    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 warning: `catenary-backend` (lib) generated 60 warnings (run `cargo fix --lib -p catenary-backend` to apply 52 suggestions)
-error[E0432]: unresolved imports `gtfs_realtime::StopTimeEvent`, `gtfs_realtime::StopTimeUpdate`
- --> src/aspen/compact_formats.rs:2:49
-  |
-2 |     Alert, FeedEntity, FeedHeader, FeedMessage, StopTimeEvent, StopTimeUpdate, TripUpdate,
-  |                                                 ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^ no `StopTimeUpdate` in the root
-  |                                                 |
-  |                                                 no `StopTimeEvent` in the root
-  |
-  = help: consider importing one of these structs instead:
-          gtfs_realtime::trip_update::StopTimeEvent
-          unwire_gtfs_rt::gtfs::StopTimeEvent
-  = help: consider importing one of these structs instead:
-          gtfs_realtime::trip_update::StopTimeUpdate
-          unwire_gtfs_rt::gtfs::StopTimeUpdate
-
-error[E0412]: cannot find type `StopTimeProperties` in crate `gtfs_realtime`
-  --> src/aspen/compact_formats.rs:55:57
-   |
-55 |     pub stop_time_properties: Option<Box<gtfs_realtime::StopTimeProperties>>, // Verify type
-   |                                                         ^^^^^^^^^^^^^^^^^^ not found in `gtfs_realtime`
-   |
-help: consider importing this struct
-   |
- 1 + use gtfs_realtime::trip_update::stop_time_update::StopTimeProperties;
-   |
-help: if you import `StopTimeProperties`, refer to it directly
-   |
-55 -     pub stop_time_properties: Option<Box<gtfs_realtime::StopTimeProperties>>, // Verify type
-55 +     pub stop_time_properties: Option<Box<StopTimeProperties>>, // Verify type
-   |
-
-error[E0573]: expected type, found crate `i24`
-  --> src/aspen/compact_formats.rs:61:22
-   |
-61 |     pub time: Option<i24>,
-   |                      ^^^ help: a builtin type with a similar name exists: `i64`
-
 warning: unused import: `tokio::time`
   --> src/aspen/main.rs:56:5
    |
@@ -498,18 +461,6 @@ warning: unused import: `BTreeMap`
    |
 77 | use std::collections::{BTreeMap, HashMap};
    |                        ^^^^^^^^
-
-warning: unused imports: `FeedEntity`, `FeedHeader`, `FeedMessage`, and `TripUpdate`
- --> src/aspen/compact_formats.rs:2:12
-  |
-2 |     Alert, FeedEntity, FeedHeader, FeedMessage, StopTimeEvent, StopTimeUpdate, TripUpdate,
-  |            ^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^                                 ^^^^^^^^^^
-
-warning: unused import: `i24::i24`
- --> src/aspen/compact_formats.rs:5:5
-  |
-5 | use i24::i24;
-  |     ^^^^^^^^
 
 warning: variable does not need to be mutable
    --> src/aspen/import_alpenrose.rs:214:9
@@ -568,6 +519,67 @@ warning: variable does not need to be mutable
     |             ----^^^^^^^^^^^^^^^^^^
     |             |
     |             help: remove this `mut`
+
+error[E0063]: missing fields `shape`, `stop` and `trip_modifications` in initializer of `FeedEntity`
+   --> src/aspen/compact_formats.rs:129:9
+    |
+129 |         FeedEntity {
+    |         ^^^^^^^^^^ missing `shape`, `stop` and `trip_modifications`
+
+error[E0308]: mismatched types
+   --> src/aspen/compact_formats.rs:154:30
+    |
+154 |             trip_properties: tu.trip_properties,
+    |                              ^^^^^^^^^^^^^^^^^^ expected `Option<TripModifications>`, found `Option<TripProperties>`
+    |
+    = note: expected enum `std::option::Option<TripModifications>`
+               found enum `std::option::Option<TripProperties>`
+
+error[E0308]: mismatched types
+   --> src/aspen/compact_formats.rs:169:30
+    |
+169 |             trip_properties: self.trip_properties.clone(),
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<TripProperties>`, found `Option<TripModifications>`
+    |
+    = note: expected enum `std::option::Option<TripProperties>`
+               found enum `std::option::Option<TripModifications>`
+
+error[E0599]: no function or associated item named `new` found for struct `I24` in the current scope
+   --> src/aspen/compact_formats.rs:214:18
+    |
+214 |             I24::new(diff as i32)
+    |                  ^^^ function or associated item not found in `I24`
+    |
+note: if you're trying to build a new `I24` consider using one of the following associated functions:
+      I24::wrapping_from_i32
+      I24::saturating_from_i32
+      I24::from_ne_bytes
+      I24::from_le_bytes
+      and 12 others
+   --> /home/kyler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i24-2.2.6/src/types/i24.rs:190:5
+    |
+190 |     pub const fn wrapping_from_i32(n: i32) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+206 |     pub const fn saturating_from_i32(n: i32) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+260 |     pub const fn from_ne_bytes(bytes: [u8; 3]) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+274 |     pub const fn from_le_bytes(bytes: [u8; 3]) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is a method `ne` with a similar name
+    |
+214 -             I24::new(diff as i32)
+214 +             I24::ne(diff as i32)
+    |
+
+error[E0063]: missing field `scheduled_time` in initializer of `StopTimeEvent`
+   --> src/aspen/compact_formats.rs:228:9
+    |
+228 |         StopTimeEvent {
+    |         ^^^^^^^^^^^^^ missing `scheduled_time`
 
 warning: unreachable expression
     --> src/aspen/main.rs:1721:17
@@ -919,7 +931,7 @@ warning: unused variable: `result`
 1801 |         Ok(Ok(result)) => Err(Box::new(std::io::Error::new(
      |               ^^^^^^ help: if this is intentional, prefix it with an underscore: `_result`
 
-Some errors have detailed explanations: E0412, E0432, E0573.
-For more information about an error, try `rustc --explain E0412`.
-warning: `catenary-backend` (bin "aspen") generated 71 warnings
-error: could not compile `catenary-backend` (bin "aspen") due to 3 previous errors; 71 warnings emitted
+Some errors have detailed explanations: E0063, E0308, E0599.
+For more information about an error, try `rustc --explain E0063`.
+warning: `catenary-backend` (bin "aspen") generated 69 warnings
+error: could not compile `catenary-backend` (bin "aspen") due to 5 previous errors; 69 warnings emitted

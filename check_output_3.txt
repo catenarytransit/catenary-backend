@@ -412,43 +412,6 @@ warning: fields `start` and `end` are never read
    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 warning: `catenary-backend` (lib) generated 60 warnings (run `cargo fix --lib -p catenary-backend` to apply 52 suggestions)
-error[E0432]: unresolved imports `gtfs_realtime::StopTimeEvent`, `gtfs_realtime::StopTimeUpdate`
- --> src/aspen/compact_formats.rs:2:49
-  |
-2 |     Alert, FeedEntity, FeedHeader, FeedMessage, StopTimeEvent, StopTimeUpdate, TripUpdate,
-  |                                                 ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^ no `StopTimeUpdate` in the root
-  |                                                 |
-  |                                                 no `StopTimeEvent` in the root
-  |
-  = help: consider importing one of these structs instead:
-          gtfs_realtime::trip_update::StopTimeEvent
-          unwire_gtfs_rt::gtfs::StopTimeEvent
-  = help: consider importing one of these structs instead:
-          gtfs_realtime::trip_update::StopTimeUpdate
-          unwire_gtfs_rt::gtfs::StopTimeUpdate
-
-error[E0412]: cannot find type `StopTimeProperties` in crate `gtfs_realtime`
-  --> src/aspen/compact_formats.rs:55:57
-   |
-55 |     pub stop_time_properties: Option<Box<gtfs_realtime::StopTimeProperties>>, // Verify type
-   |                                                         ^^^^^^^^^^^^^^^^^^ not found in `gtfs_realtime`
-   |
-help: consider importing this struct
-   |
- 1 + use gtfs_realtime::trip_update::stop_time_update::StopTimeProperties;
-   |
-help: if you import `StopTimeProperties`, refer to it directly
-   |
-55 -     pub stop_time_properties: Option<Box<gtfs_realtime::StopTimeProperties>>, // Verify type
-55 +     pub stop_time_properties: Option<Box<StopTimeProperties>>, // Verify type
-   |
-
-error[E0573]: expected type, found crate `i24`
-  --> src/aspen/compact_formats.rs:61:22
-   |
-61 |     pub time: Option<i24>,
-   |                      ^^^ help: a builtin type with a similar name exists: `i64`
-
 warning: unused import: `tokio::time`
   --> src/aspen/main.rs:56:5
    |
@@ -499,17 +462,17 @@ warning: unused import: `BTreeMap`
 77 | use std::collections::{BTreeMap, HashMap};
    |                        ^^^^^^^^
 
-warning: unused imports: `FeedEntity`, `FeedHeader`, `FeedMessage`, and `TripUpdate`
- --> src/aspen/compact_formats.rs:2:12
+warning: unused imports: `StopTimeEvent` and `StopTimeUpdate`
+ --> src/aspen/compact_formats.rs:2:34
   |
-2 |     Alert, FeedEntity, FeedHeader, FeedMessage, StopTimeEvent, StopTimeUpdate, TripUpdate,
-  |            ^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^                                 ^^^^^^^^^^
+2 | use gtfs_realtime::trip_update::{StopTimeEvent, StopTimeUpdate};
+  |                                  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
 
-warning: unused import: `i24::i24`
- --> src/aspen/compact_formats.rs:5:5
+warning: unused imports: `FeedEntity`, `FeedHeader`, `FeedMessage`, and `TripUpdate`
+ --> src/aspen/compact_formats.rs:4:12
   |
-5 | use i24::i24;
-  |     ^^^^^^^^
+4 |     Alert, FeedEntity, FeedHeader, FeedMessage, TripModifications, TripUpdate, VehiclePosition,
+  |            ^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^                     ^^^^^^^^^^
 
 warning: variable does not need to be mutable
    --> src/aspen/import_alpenrose.rs:214:9
@@ -919,7 +882,63 @@ warning: unused variable: `result`
 1801 |         Ok(Ok(result)) => Err(Box::new(std::io::Error::new(
      |               ^^^^^^ help: if this is intentional, prefix it with an underscore: `_result`
 
-Some errors have detailed explanations: E0412, E0432, E0573.
-For more information about an error, try `rustc --explain E0412`.
-warning: `catenary-backend` (bin "aspen") generated 71 warnings
-error: could not compile `catenary-backend` (bin "aspen") due to 3 previous errors; 71 warnings emitted
+warning: function `flatten` is never used
+    --> src/aspen/main.rs:1816:10
+     |
+1816 | async fn flatten<T>(
+     |          ^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `assign_chateaus` is never used
+  --> src/aspen/aspen_assignment.rs:16:14
+   |
+16 | pub async fn assign_chateaus(
+   |              ^^^^^^^^^^^^^^^
+
+warning: struct `CompactFeedMessage` is never constructed
+  --> src/aspen/compact_formats.rs:10:12
+   |
+10 | pub struct CompactFeedMessage {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `CompactFeedHeader` is never constructed
+  --> src/aspen/compact_formats.rs:17:12
+   |
+17 | pub struct CompactFeedHeader {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `CompactFeedEntity` is never constructed
+  --> src/aspen/compact_formats.rs:24:12
+   |
+24 | pub struct CompactFeedEntity {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `CompactTripUpdate` is never constructed
+  --> src/aspen/compact_formats.rs:33:12
+   |
+33 | pub struct CompactTripUpdate {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `CompactStopTimeUpdate` is never constructed
+  --> src/aspen/compact_formats.rs:43:12
+   |
+43 | pub struct CompactStopTimeUpdate {
+   |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `CompactStopTimeEvent` is never constructed
+  --> src/aspen/compact_formats.rs:54:12
+   |
+54 | pub struct CompactStopTimeEvent {
+   |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `MetrolinkEventType` is never used
+  --> src/aspen/track_number.rs:51:6
+   |
+51 | enum MetrolinkEventType {
+   |      ^^^^^^^^^^^^^^^^^^
+
+warning: `catenary-backend` (bin "aspen") generated 80 warnings (run `cargo fix --bin "aspen" -p catenary-backend` to apply 61 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.58s
+warning: the following packages contain code that will be rejected by a future version of Rust: buf_redux v0.8.4, multipart v0.18.0
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 5`
