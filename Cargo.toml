@@ -171,6 +171,7 @@ geohash = "0.13"
 spade = "2.15.0"
 delaunator = "1.0.2"
 rustix = "1.1.2"
+i24 = { version = "2.2.6", features = ["alloc", "serde", "zerocopy", "num-cast", "std"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

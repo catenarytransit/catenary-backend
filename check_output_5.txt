@@ -412,42 +412,14 @@ warning: fields `start` and `end` are never read
    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 warning: `catenary-backend` (lib) generated 60 warnings (run `cargo fix --lib -p catenary-backend` to apply 52 suggestions)
-error[E0432]: unresolved imports `gtfs_realtime::StopTimeEvent`, `gtfs_realtime::StopTimeUpdate`
- --> src/aspen/compact_formats.rs:2:49
+error[E0432]: unresolved import `gtfs_realtime::TripProperties`
+ --> src/aspen/compact_formats.rs:4:81
   |
-2 |     Alert, FeedEntity, FeedHeader, FeedMessage, StopTimeEvent, StopTimeUpdate, TripUpdate,
-  |                                                 ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^ no `StopTimeUpdate` in the root
-  |                                                 |
-  |                                                 no `StopTimeEvent` in the root
+4 |     Alert, FeedEntity, FeedHeader, FeedMessage, Shape, Stop, TripModifications, TripProperties,
+  |                                                                                 ^^^^^^^^^^^^^^ no `TripProperties` in the root
   |
-  = help: consider importing one of these structs instead:
-          gtfs_realtime::trip_update::StopTimeEvent
-          unwire_gtfs_rt::gtfs::StopTimeEvent
-  = help: consider importing one of these structs instead:
-          gtfs_realtime::trip_update::StopTimeUpdate
-          unwire_gtfs_rt::gtfs::StopTimeUpdate
-
-error[E0412]: cannot find type `StopTimeProperties` in crate `gtfs_realtime`
-  --> src/aspen/compact_formats.rs:55:57
-   |
-55 |     pub stop_time_properties: Option<Box<gtfs_realtime::StopTimeProperties>>, // Verify type
-   |                                                         ^^^^^^^^^^^^^^^^^^ not found in `gtfs_realtime`
-   |
-help: consider importing this struct
-   |
- 1 + use gtfs_realtime::trip_update::stop_time_update::StopTimeProperties;
-   |
-help: if you import `StopTimeProperties`, refer to it directly
-   |
-55 -     pub stop_time_properties: Option<Box<gtfs_realtime::StopTimeProperties>>, // Verify type
-55 +     pub stop_time_properties: Option<Box<StopTimeProperties>>, // Verify type
-   |
-
-error[E0573]: expected type, found crate `i24`
-  --> src/aspen/compact_formats.rs:61:22
-   |
-61 |     pub time: Option<i24>,
-   |                      ^^^ help: a builtin type with a similar name exists: `i64`
+  = help: consider importing this struct instead:
+          gtfs_realtime::trip_update::TripProperties
 
 warning: unused import: `tokio::time`
   --> src/aspen/main.rs:56:5
@@ -498,18 +470,6 @@ warning: unused import: `BTreeMap`
    |
 77 | use std::collections::{BTreeMap, HashMap};
    |                        ^^^^^^^^
-
-warning: unused imports: `FeedEntity`, `FeedHeader`, `FeedMessage`, and `TripUpdate`
- --> src/aspen/compact_formats.rs:2:12
-  |
-2 |     Alert, FeedEntity, FeedHeader, FeedMessage, StopTimeEvent, StopTimeUpdate, TripUpdate,
-  |            ^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^                                 ^^^^^^^^^^
-
-warning: unused import: `i24::i24`
- --> src/aspen/compact_formats.rs:5:5
-  |
-5 | use i24::i24;
-  |     ^^^^^^^^
 
 warning: variable does not need to be mutable
    --> src/aspen/import_alpenrose.rs:214:9
@@ -568,6 +528,12 @@ warning: variable does not need to be mutable
     |             ----^^^^^^^^^^^^^^^^^^
     |             |
     |             help: remove this `mut`
+
+error[E0063]: missing field `scheduled_time` in initializer of `StopTimeEvent`
+   --> src/aspen/compact_formats.rs:238:9
+    |
+238 |         StopTimeEvent {
+    |         ^^^^^^^^^^^^^ missing `scheduled_time`
 
 warning: unreachable expression
     --> src/aspen/main.rs:1721:17
@@ -919,7 +885,7 @@ warning: unused variable: `result`
 1801 |         Ok(Ok(result)) => Err(Box::new(std::io::Error::new(
      |               ^^^^^^ help: if this is intentional, prefix it with an underscore: `_result`
 
-Some errors have detailed explanations: E0412, E0432, E0573.
-For more information about an error, try `rustc --explain E0412`.
-warning: `catenary-backend` (bin "aspen") generated 71 warnings
-error: could not compile `catenary-backend` (bin "aspen") due to 3 previous errors; 71 warnings emitted
+Some errors have detailed explanations: E0063, E0432.
+For more information about an error, try `rustc --explain E0063`.
+warning: `catenary-backend` (bin "aspen") generated 69 warnings
+error: could not compile `catenary-backend` (bin "aspen") due to 2 previous errors; 69 warnings emitted

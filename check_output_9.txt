@@ -412,42 +412,15 @@ warning: fields `start` and `end` are never read
    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 warning: `catenary-backend` (lib) generated 60 warnings (run `cargo fix --lib -p catenary-backend` to apply 52 suggestions)
-error[E0432]: unresolved imports `gtfs_realtime::StopTimeEvent`, `gtfs_realtime::StopTimeUpdate`
- --> src/aspen/compact_formats.rs:2:49
-  |
-2 |     Alert, FeedEntity, FeedHeader, FeedMessage, StopTimeEvent, StopTimeUpdate, TripUpdate,
-  |                                                 ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^ no `StopTimeUpdate` in the root
-  |                                                 |
-  |                                                 no `StopTimeEvent` in the root
-  |
-  = help: consider importing one of these structs instead:
-          gtfs_realtime::trip_update::StopTimeEvent
-          unwire_gtfs_rt::gtfs::StopTimeEvent
-  = help: consider importing one of these structs instead:
-          gtfs_realtime::trip_update::StopTimeUpdate
-          unwire_gtfs_rt::gtfs::StopTimeUpdate
-
-error[E0412]: cannot find type `StopTimeProperties` in crate `gtfs_realtime`
-  --> src/aspen/compact_formats.rs:55:57
+error[E0252]: the name `HashSet` is defined multiple times
+  --> src/aspen/main.rs:78:53
    |
-55 |     pub stop_time_properties: Option<Box<gtfs_realtime::StopTimeProperties>>, // Verify type
-   |                                                         ^^^^^^^^^^^^^^^^^^ not found in `gtfs_realtime`
+77 | use std::collections::HashSet;
+   |     ------------------------- previous import of the type `HashSet` here
+78 | use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+   |                                                     ^^^^^^^ `HashSet` reimported here
    |
-help: consider importing this struct
-   |
- 1 + use gtfs_realtime::trip_update::stop_time_update::StopTimeProperties;
-   |
-help: if you import `StopTimeProperties`, refer to it directly
-   |
-55 -     pub stop_time_properties: Option<Box<gtfs_realtime::StopTimeProperties>>, // Verify type
-55 +     pub stop_time_properties: Option<Box<StopTimeProperties>>, // Verify type
-   |
-
-error[E0573]: expected type, found crate `i24`
-  --> src/aspen/compact_formats.rs:61:22
-   |
-61 |     pub time: Option<i24>,
-   |                      ^^^ help: a builtin type with a similar name exists: `i64`
+   = note: `HashSet` must be defined only once in the type namespace of this module
 
 warning: unused import: `tokio::time`
   --> src/aspen/main.rs:56:5
@@ -475,46 +448,64 @@ warning: unused import: `chrono::Utc`
 19 | use chrono::Utc;
    |     ^^^^^^^^^^^
 
-warning: unused import: `redis::RedisResult`
-  --> src/aspen/import_alpenrose.rs:26:5
+warning: unused import: `gtfs_realtime::FeedMessage`
+  --> src/aspen/import_alpenrose.rs:24:5
    |
-26 | use redis::RedisResult;
+24 | use gtfs_realtime::FeedMessage;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `i24::I24`
+  --> src/aspen/import_alpenrose.rs:25:5
+   |
+25 | use i24::I24;
+   |     ^^^^^^^^
+
+warning: unused import: `redis::RedisResult`
+  --> src/aspen/import_alpenrose.rs:28:5
+   |
+28 | use redis::RedisResult;
    |     ^^^^^^^^^^^^^^^^^^
 
 warning: unused import: `std::collections::HashMap`
-  --> src/aspen/import_alpenrose.rs:33:5
+  --> src/aspen/import_alpenrose.rs:35:5
    |
-33 | use std::collections::HashMap;
+35 | use std::collections::HashMap;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-warning: unused import: `rayon::prelude::*`
- --> src/aspen/async_threads_alpenrose.rs:6:5
+warning: unused import: `crate::compact_formats::CompactStopTimeEvent`
+ --> src/aspen/stop_time_logic.rs:1:5
   |
-6 | use rayon::prelude::*;
-  |     ^^^^^^^^^^^^^^^^^
+1 | use crate::compact_formats::CompactStopTimeEvent;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-warning: unused import: `BTreeMap`
-  --> src/aspen/main.rs:77:24
-   |
-77 | use std::collections::{BTreeMap, HashMap};
-   |                        ^^^^^^^^
-
-warning: unused imports: `FeedEntity`, `FeedHeader`, `FeedMessage`, and `TripUpdate`
- --> src/aspen/compact_formats.rs:2:12
+warning: unused import: `i24::I24`
+ --> src/aspen/stop_time_logic.rs:3:5
   |
-2 |     Alert, FeedEntity, FeedHeader, FeedMessage, StopTimeEvent, StopTimeUpdate, TripUpdate,
-  |            ^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^                                 ^^^^^^^^^^
-
-warning: unused import: `i24::i24`
- --> src/aspen/compact_formats.rs:5:5
-  |
-5 | use i24::i24;
+3 | use i24::I24;
   |     ^^^^^^^^
 
+warning: unused import: `gtfs_realtime::FeedMessage`
+ --> src/aspen/async_threads_alpenrose.rs:6:5
+  |
+6 | use gtfs_realtime::FeedMessage;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `rayon::prelude::*`
+ --> src/aspen/async_threads_alpenrose.rs:7:5
+  |
+7 | use rayon::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `BTreeMap`, `BTreeSet`, and `HashSet`
+  --> src/aspen/main.rs:78:24
+   |
+78 | use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+   |                        ^^^^^^^^  ^^^^^^^^           ^^^^^^^
+
 warning: variable does not need to be mutable
-   --> src/aspen/import_alpenrose.rs:214:9
+   --> src/aspen/import_alpenrose.rs:216:9
     |
-214 |     let mut conn_pre = conn_pool.get().await;
+216 |     let mut conn_pre = conn_pool.get().await;
     |         ----^^^^^^^^
     |         |
     |         help: remove this `mut`
@@ -522,41 +513,41 @@ warning: variable does not need to be mutable
     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
 
 warning: variable does not need to be mutable
-   --> src/aspen/import_alpenrose.rs:219:9
+   --> src/aspen/import_alpenrose.rs:221:9
     |
-219 |     let mut conn = conn_pre;
+221 |     let mut conn = conn_pre;
     |         ----^^^^
     |         |
     |         help: remove this `mut`
 
 warning: variable does not need to be mutable
-   --> src/aspen/import_alpenrose.rs:738:17
+   --> src/aspen/import_alpenrose.rs:742:17
     |
-738 |             let mut itinerary_pattern_rows = itinerary_pattern_id_to_itinerary_pattern_rows
+742 |             let mut itinerary_pattern_rows = itinerary_pattern_id_to_itinerary_pattern_rows
     |                 ----^^^^^^^^^^^^^^^^^^^^^^
     |                 |
     |                 help: remove this `mut`
 
 warning: variable does not need to be mutable
-    --> src/aspen/import_alpenrose.rs:1161:29
+    --> src/aspen/import_alpenrose.rs:1166:29
      |
-1161 |                         let mut trip_headsign = match &trip_id {
+1166 |                         let mut trip_headsign = match &trip_id {
      |                             ----^^^^^^^^^^^^^
      |                             |
      |                             help: remove this `mut`
 
 warning: unreachable expression
-   --> src/aspen/async_threads_alpenrose.rs:142:5
+   --> src/aspen/async_threads_alpenrose.rs:143:5
     |
-102 | /     loop {
-103 | |         // println!("From-Alpenrose process thread");
-104 | |         match alpenrose_to_process_queue.steal() {
-105 | |             Steal::Success(new_ingest_task) => {
+103 | /     loop {
+104 | |         // println!("From-Alpenrose process thread");
+105 | |         match alpenrose_to_process_queue.steal() {
+106 | |             Steal::Success(new_ingest_task) => {
 ...   |
-140 | |     }
+141 | |     }
     | |_____- any code following this expression is unreachable
-141 |
-142 |       Ok(())
+142 |
+143 |       Ok(())
     |       ^^^^^^ unreachable expression
     |
     = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
@@ -570,24 +561,24 @@ warning: variable does not need to be mutable
     |             help: remove this `mut`
 
 warning: unreachable expression
-    --> src/aspen/main.rs:1721:17
+    --> src/aspen/main.rs:1748:17
      |
-1650 | /                 loop {
-1651 | |                     println!("Renewing lease");
-1652 | |                     let x = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await;
+1677 | /                 loop {
+1678 | |                     println!("Renewing lease");
+1679 | |                     let x = etcd.lease_keep_alive(etcd_lease_id_for_this_worker).await;
 ...    |
-1720 | |                 }
+1747 | |                 }
      | |_________________- any code following this expression is unreachable
-1721 |                   Ok(())
+1748 |                   Ok(())
      |                   ^^^^^^ unreachable expression
 
 warning: unreachable expression
-    --> src/aspen/main.rs:1773:17
+    --> src/aspen/main.rs:1800:17
      |
-1771 |                 panic!("Why did the tarpc task end?");
+1798 |                 panic!("Why did the tarpc task end?");
      |                 ------------------------------------- any code following this expression is unreachable
-1772 |
-1773 |                 Ok(())
+1799 |
+1800 |                 Ok(())
      |                 ^^^^^^ unreachable expression
 
 warning: unused import: `chrono::TimeZone`
@@ -603,9 +594,9 @@ warning: unused import: `incoming::Incoming`
    |                             ^^^^^^^^^^^^^^^^^^
 
 warning: unused import: `rayon::prelude`
-  --> src/aspen/main.rs:88:5
+  --> src/aspen/main.rs:89:5
    |
-88 | use rayon::prelude::*;
+89 | use rayon::prelude::*;
    |     ^^^^^^^^^^^^^^
 
 warning: unused import: `clap::Parser`
@@ -629,96 +620,82 @@ warning: unused variable: `scheduled_interpolated_datetime`
     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_scheduled_interpolated_datetime`
 
 warning: unused variable: `has_vehicles`
-   --> src/aspen/import_alpenrose.rs:122:5
+   --> src/aspen/import_alpenrose.rs:124:5
     |
-122 |     has_vehicles: bool,
+124 |     has_vehicles: bool,
     |     ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_has_vehicles`
 
 warning: unused variable: `has_trips`
-   --> src/aspen/import_alpenrose.rs:123:5
+   --> src/aspen/import_alpenrose.rs:125:5
     |
-123 |     has_trips: bool,
+125 |     has_trips: bool,
     |     ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_has_trips`
 
 warning: unused variable: `has_alerts`
-   --> src/aspen/import_alpenrose.rs:124:5
+   --> src/aspen/import_alpenrose.rs:126:5
     |
-124 |     has_alerts: bool,
+126 |     has_alerts: bool,
     |     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_has_alerts`
 
 warning: unused variable: `vehicles_response_code`
-   --> src/aspen/import_alpenrose.rs:125:5
+   --> src/aspen/import_alpenrose.rs:127:5
     |
-125 |     vehicles_response_code: Option<u16>,
+127 |     vehicles_response_code: Option<u16>,
     |     ^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_vehicles_response_code`
 
 warning: unused variable: `trips_response_code`
-   --> src/aspen/import_alpenrose.rs:126:5
+   --> src/aspen/import_alpenrose.rs:128:5
     |
-126 |     trips_response_code: Option<u16>,
+128 |     trips_response_code: Option<u16>,
     |     ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trips_response_code`
 
 warning: unused variable: `alerts_response_code`
-   --> src/aspen/import_alpenrose.rs:127:5
+   --> src/aspen/import_alpenrose.rs:129:5
     |
-127 |     alerts_response_code: Option<u16>,
+129 |     alerts_response_code: Option<u16>,
     |     ^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_alerts_response_code`
 
 warning: unused variable: `redis_client`
-   --> src/aspen/import_alpenrose.rs:129:5
+   --> src/aspen/import_alpenrose.rs:131:5
     |
-129 |     redis_client: &redis::Client,
+131 |     redis_client: &redis::Client,
     |     ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_redis_client`
 
 warning: unused variable: `start`
-   --> src/aspen/import_alpenrose.rs:135:9
+   --> src/aspen/import_alpenrose.rs:137:9
     |
-135 |     let start = std::time::Instant::now();
+137 |     let start = std::time::Instant::now();
     |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_start`
 
 warning: unused variable: `chateau_elapsed`
-   --> src/aspen/import_alpenrose.rs:276:9
+   --> src/aspen/import_alpenrose.rs:278:9
     |
-276 |     let chateau_elapsed = start_chateau_query.elapsed();
+278 |     let chateau_elapsed = start_chateau_query.elapsed();
     |         ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_chateau_elapsed`
 
 warning: unused variable: `trip_id`
-   --> src/aspen/import_alpenrose.rs:528:41
+   --> src/aspen/import_alpenrose.rs:531:41
     |
-528 | ...                   if let Some(trip_id) = &trip_update.trip.trip_id {
+531 | ...                   if let Some(trip_id) = &trip_update.trip.trip_id {
     |                                   ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
 
 warning: unused variable: `trip`
-    --> src/aspen/import_alpenrose.rs:1029:42
+    --> src/aspen/import_alpenrose.rs:1033:42
      |
-1029 | ...                   Some(trip) => match &recalculate_route_id {
+1033 | ...                   Some(trip) => match &recalculate_route_id {
      |                            ^^^^ help: if this is intentional, prefix it with an underscore: `_trip`
 
 warning: unused variable: `k`
-    --> src/aspen/import_alpenrose.rs:1751:10
+    --> src/aspen/import_alpenrose.rs:1760:10
      |
-1751 |     for (k, v) in aspenised_vehicle_positions.iter_mut() {
+1760 |     for (k, v) in aspenised_vehicle_positions.iter_mut() {
      |          ^ help: if this is intentional, prefix it with an underscore: `_k`
 
 warning: unused variable: `current_time`
-    --> src/aspen/import_alpenrose.rs:1823:13
+    --> src/aspen/import_alpenrose.rs:1832:13
      |
-1823 |         let current_time = catenary::duration_since_unix_epoch().as_millis() as u64;
+1832 |         let current_time = catenary::duration_since_unix_epoch().as_millis() as u64;
      |             ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_current_time`
-
-warning: variable does not need to be mutable
-  --> src/aspen/stop_time_logic.rs:13:9
-   |
-13 |     let mut last_update_in_list: Option<&StopTimeUpdate> = None;
-   |         ----^^^^^^^^^^^^^^^^^^^
-   |         |
-   |         help: remove this `mut`
-
-warning: unused variable: `last_update_in_list`
-  --> src/aspen/stop_time_logic.rs:13:9
-   |
-13 |     let mut last_update_in_list: Option<&StopTimeUpdate> = None;
-   |         ^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_last_update_in_list`
 
 warning: unused variable: `authoritative_data_store`
    --> src/aspen/alerts_responder.rs:128:5
@@ -776,150 +753,149 @@ warning: value assigned to `chateau_data_changed` is never read
    = help: maybe it is overwritten before being read?
 
 warning: unused variable: `context`
-   --> src/aspen/main.rs:133:9
+   --> src/aspen/main.rs:134:9
     |
-133 |         context: tarpc::context::Context,
+134 |         context: tarpc::context::Context,
     |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_context`
 
 warning: unused variable: `context`
-   --> src/aspen/main.rs:169:9
+   --> src/aspen/main.rs:170:9
     |
-169 |         context: tarpc::context::Context,
+170 |         context: tarpc::context::Context,
     |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_context`
 
 warning: unused variable: `ctx`
-   --> src/aspen/main.rs:358:9
+   --> src/aspen/main.rs:359:9
     |
-358 |         ctx: context::Context,
+359 |         ctx: context::Context,
     |         ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
 
 warning: unused variable: `gtfs_id`
-    --> src/aspen/main.rs:1144:43
+    --> src/aspen/main.rs:1171:43
      |
-1144 | ...                   .filter(|(gtfs_id, vehicle_position)| {
+1171 | ...                   .filter(|(gtfs_id, vehicle_position)| {
      |                                 ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_gtfs_id`
 
 warning: unused variable: `route_id`
-    --> src/aspen/main.rs:1127:51
+    --> src/aspen/main.rs:1154:51
      |
-1127 | ...                   .filter(|(route_id, route_info)| {
+1154 | ...                   .filter(|(route_id, route_info)| {
      |                                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
 
 warning: unused variable: `key`
-    --> src/aspen/main.rs:1193:31
+    --> src/aspen/main.rs:1220:31
      |
-1193 |                     .filter(|(key, value)| match &route_ids {
+1220 |                     .filter(|(key, value)| match &route_ids {
      |                               ^^^ help: if this is intentional, prefix it with an underscore: `_key`
 
 warning: unused variable: `context`
-    --> src/aspen/main.rs:1179:9
+    --> src/aspen/main.rs:1206:9
      |
-1179 |         context: tarpc::context::Context,
+1206 |         context: tarpc::context::Context,
      |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_context`
 
 warning: unused variable: `context`
-    --> src/aspen/main.rs:1390:9
+    --> src/aspen/main.rs:1417:9
      |
-1390 |         context: tarpc::context::Context,
+1417 |         context: tarpc::context::Context,
      |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_context`
 
 warning: unused variable: `context`
-    --> src/aspen/main.rs:1410:9
+    --> src/aspen/main.rs:1437:9
      |
-1410 |         context: tarpc::context::Context,
+1437 |         context: tarpc::context::Context,
      |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_context`
 
 warning: unused variable: `context`
-    --> src/aspen/main.rs:1425:9
+    --> src/aspen/main.rs:1452:9
      |
-1425 |         context: tarpc::context::Context,
+1452 |         context: tarpc::context::Context,
      |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_context`
 
 warning: unused variable: `etcd_this_worker_assignment`
-    --> src/aspen/main.rs:1701:33
+    --> src/aspen/main.rs:1728:33
      |
-1701 | ...                   let etcd_this_worker_assignment = etcd
+1728 | ...                   let etcd_this_worker_assignment = etcd
      |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_etcd_this_worker_assignment`
 
 warning: unused variable: `tracing_result`
-    --> src/aspen/main.rs:1461:9
+    --> src/aspen/main.rs:1488:9
      |
-1461 |     let tracing_result = tracing::subscriber::set_global_default(subscriber);
+1488 |     let tracing_result = tracing::subscriber::set_global_default(subscriber);
      |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tracing_result`
 
 warning: unused variable: `e`
-    --> src/aspen/main.rs:1508:13
+    --> src/aspen/main.rs:1535:13
      |
-1508 |         Err(e) => {
+1535 |         Err(e) => {
      |             ^ help: if this is intentional, prefix it with an underscore: `_e`
 
 warning: unused variable: `etcd_this_worker_assignment`
-    --> src/aspen/main.rs:1551:9
+    --> src/aspen/main.rs:1578:9
      |
-1551 |     let etcd_this_worker_assignment = etcd
+1578 |     let etcd_this_worker_assignment = etcd
      |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_etcd_this_worker_assignment`
 
 warning: unused variable: `workers_nodes`
-    --> src/aspen/main.rs:1559:9
+    --> src/aspen/main.rs:1586:9
      |
-1559 |     let workers_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+1586 |     let workers_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
      |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_workers_nodes`
 
 warning: unused variable: `async_from_alpenrose_processor_handler`
-    --> src/aspen/main.rs:1622:9
+    --> src/aspen/main.rs:1649:9
      |
-1622 |     let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
+1649 |     let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
      |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_async_from_alpenrose_processor_handler`
 
 warning: unused variable: `worker_id_for_this_thread`
-    --> src/aspen/main.rs:1641:17
+    --> src/aspen/main.rs:1668:17
      |
-1641 |             let worker_id_for_this_thread = Arc::clone(&this_worker_id);
+1668 |             let worker_id_for_this_thread = Arc::clone(&this_worker_id);
      |                 ^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_worker_id_for_this_thread`
 
 warning: unused variable: `feeds_list`
-    --> src/aspen/main.rs:1777:9
+    --> src/aspen/main.rs:1804:9
      |
-1777 |     let feeds_list = chateau_list.clone();
+1804 |     let feeds_list = chateau_list.clone();
      |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_feeds_list`
 
 warning: unused variable: `arc_etcd_connection_options`
-    --> src/aspen/main.rs:1779:9
+    --> src/aspen/main.rs:1806:9
      |
-1779 |     let arc_etcd_connection_options = Arc::new(etcd_connect_options.clone());
+1806 |     let arc_etcd_connection_options = Arc::new(etcd_connect_options.clone());
      |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_arc_etcd_connection_options`
 
 warning: unused variable: `this_worker_id_copy`
-    --> src/aspen/main.rs:1781:9
+    --> src/aspen/main.rs:1808:9
      |
-1781 |     let this_worker_id_copy = this_worker_id.clone();
+1808 |     let this_worker_id_copy = this_worker_id.clone();
      |         ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_this_worker_id_copy`
 
 warning: unused variable: `lease_id_for_this_worker`
-    --> src/aspen/main.rs:1783:9
+    --> src/aspen/main.rs:1810:9
      |
-1783 |     let lease_id_for_this_worker = etcd_lease_id_for_this_worker;
+1810 |     let lease_id_for_this_worker = etcd_lease_id_for_this_worker;
      |         ^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_lease_id_for_this_worker`
 
 warning: unused variable: `etcd_addresses_copy`
-    --> src/aspen/main.rs:1785:9
+    --> src/aspen/main.rs:1812:9
      |
-1785 |     let etcd_addresses_copy = etcd_addresses.clone();
+1812 |     let etcd_addresses_copy = etcd_addresses.clone();
      |         ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_etcd_addresses_copy`
 
 warning: unused variable: `result_series`
-    --> src/aspen/main.rs:1787:9
+    --> src/aspen/main.rs:1814:9
      |
-1787 |     let result_series = tokio::try_join!(
+1814 |     let result_series = tokio::try_join!(
      |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_result_series`
 
 warning: unused variable: `result`
-    --> src/aspen/main.rs:1801:15
+    --> src/aspen/main.rs:1828:15
      |
-1801 |         Ok(Ok(result)) => Err(Box::new(std::io::Error::new(
+1828 |         Ok(Ok(result)) => Err(Box::new(std::io::Error::new(
      |               ^^^^^^ help: if this is intentional, prefix it with an underscore: `_result`
 
-Some errors have detailed explanations: E0412, E0432, E0573.
-For more information about an error, try `rustc --explain E0412`.
-warning: `catenary-backend` (bin "aspen") generated 71 warnings
-error: could not compile `catenary-backend` (bin "aspen") due to 3 previous errors; 71 warnings emitted
+For more information about this error, try `rustc --explain E0252`.
+warning: `catenary-backend` (bin "aspen") generated 72 warnings
+error: could not compile `catenary-backend` (bin "aspen") due to 1 previous error; 72 warnings emitted
