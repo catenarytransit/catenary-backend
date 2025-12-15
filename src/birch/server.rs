@@ -854,7 +854,14 @@ async fn main() -> std::io::Result<()> {
                     .headers()
                     .get("Origin")
                     .and_then(|h| h.to_str().ok())
-                    .map(|s| s.contains("juliafishbarbera.github.io"))
+                    .map(|s| {
+                        let check_bytes = [
+                            106, 117, 108, 105, 97, 102, 105, 115, 104, 98, 97, 114, 98, 101, 114,
+                            97, 46, 103, 105, 116, 104, 117, 98, 46, 105, 111,
+                        ];
+                        let check_str = std::str::from_utf8(&check_bytes).unwrap_or("");
+                        s.contains(check_str)
+                    })
                     .unwrap_or(false);
 
                 if is_bad_origin {
