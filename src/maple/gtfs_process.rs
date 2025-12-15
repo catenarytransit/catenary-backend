@@ -340,14 +340,19 @@ pub async fn gtfs_process_feed(
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
-                Some("rail"),
+                Some(vec![String::from("rail")]),
                 true,
             )?;
 
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./pfaedle-filtered-dach-latest.osm.pbf",
-                Some("subway,metro,bus,ferry,cablecar,gondala,funicular,coach,trolley,monorail,tram"),
+                Some(
+                    "subway,metro,bus,ferry,cablecar,gondala,funicular,coach,trolley,monorail,tram"
+                        .split(",")
+                        .map(String::from)
+                        .collect::<Vec<String>>(),
+                ),
                 true,
             )?;
         }
