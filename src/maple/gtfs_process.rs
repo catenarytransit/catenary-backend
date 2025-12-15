@@ -335,6 +335,22 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
+        "f-u0-switzerland" => {
+            // 2 passes requried
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                Some("rail"),
+                true,
+            )?;
+
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./pfaedle-filtered-dach-latest.osm.pbf",
+                Some("subway,metro,bus,ferry,cablecar,gondala,funicular,coach,trolley,monorail,tram"),
+                true,
+            )?;
+        }
         _ => {
             //no pfaedle needed
         }
