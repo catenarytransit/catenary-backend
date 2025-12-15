@@ -2,12 +2,19 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlatformInfo {
+    pub stop_id: String,
+    pub sequence: u32,
+    pub platform: String,
+}
+
 #[derive(Clone, Debug)]
 pub enum TrackData {
     //output Option<MetrolinkOutputTrackData> instead
     Metrolink(Option<MetrolinkOutputTrackData>),
     Amtrak(AmtrakTrackDataMultisource),
-    NationalRail(HashMap<String, HashMap<String, String>>),
+    NationalRail(HashMap<String, Vec<PlatformInfo>>),
     None,
 }
 
@@ -225,9 +232,9 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
             TrackData::Amtrak(multisource)
         }
         "nationalrailuk" => {
-            let url = "http://localhost:26993/platforms";
+            let url = "http://localhost:26993/platforms-v2";
             match reqwest::get(url).await {
-                Ok(r) => match r.json::<HashMap<String, HashMap<String, String>>>().await {
+                Ok(r) => match r.json::<HashMap<String, Vec<PlatformInfo>>>().await {
                     Ok(response) => TrackData::NationalRail(response),
                     Err(e) => {
                         println!("Error decoding National Rail data: {}", e);
