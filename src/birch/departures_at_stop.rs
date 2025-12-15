@@ -153,6 +153,8 @@ struct NearbyFromStopsResponse {
     // alerts - chateau_id -> alert_id -> alert
     //chateau_id -> alert_id -> alert
     pub alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>>,
+    // chateau_id -> agency_id -> Agency info
+    pub agencies: BTreeMap<String, BTreeMap<String, catenary::models::Agency>>,
 }
 
 struct AlertIndex {
@@ -519,6 +521,7 @@ pub async fn departures_at_stop(
     let mut routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>> = BTreeMap::new();
 
     let mut shapes: BTreeMap<EcoString, BTreeMap<EcoString, String>> = BTreeMap::new();
+    let mut agencies: BTreeMap<String, BTreeMap<String, catenary::models::Agency>> = BTreeMap::new();
 
     let mut calender_responses: Vec<_> = vec![];
     let mut calendar_dates_responses: Vec<_> = vec![];
@@ -684,12 +687,33 @@ pub async fn departures_at_stop(
                     routes_btreemap.insert(route.route_id.clone().into(), route.clone());
                 }
 
+                let agency_ids: Vec<String> = routes_ret
+                    .iter()
+                    .filter_map(|x| x.agency_id.clone())
+                    .collect();
+
+                let agencies_ret = catenary::schema::gtfs::agencies::dsl::agencies
+                    .filter(catenary::schema::gtfs::agencies::chateau.eq(
+                        chateau_id_clone.clone(),
+                    ))
+                    .filter(catenary::schema::gtfs::agencies::agency_id.eq_any(&agency_ids))
+                    .select(catenary::models::Agency::as_select())
+                    .load::<catenary::models::Agency>(&mut conn1)
+                    .await
+                    .unwrap_or_default();
+
+                let mut agencies_btreemap = BTreeMap::<String, catenary::models::Agency>::new();
+                for agency in &agencies_ret {
+                    agencies_btreemap.insert(agency.agency_id.clone(), agency.clone());
+                }
+
                 (
                     itin_meta_btreemap,
                     direction_meta_btreemap,
                     shape_polyline_for_chateau,
                     direction_rows_for_chateau,
                     routes_btreemap,
+                    agencies_btreemap,
                 )
             };
 
@@ -798,6 +822,7 @@ pub async fn departures_at_stop(
                     shape_polyline_for_chateau,
                     direction_rows_for_chateau,
                     routes_btreemap,
+                    agencies_btreemap,
                 ),
                 (trip_compressed_btreemap, calendar, calendar_dates),
             ) = tokio::join!(meta_task, schedule_task);
@@ -810,6 +835,7 @@ pub async fn departures_at_stop(
                 trip_compressed_btreemap,
                 direction_rows_for_chateau,
                 routes_btreemap,
+                agencies_btreemap,
                 shape_polyline_for_chateau,
                 calendar,
                 calendar_dates,
@@ -827,6 +853,7 @@ pub async fn departures_at_stop(
         trip_compressed_btreemap,
         direction_rows_for_chateau,
         routes_btreemap,
+        agencies_btreemap,
         shape_polyline_for_chateau,
         calendar,
         calendar_dates,
@@ -838,6 +865,7 @@ pub async fn departures_at_stop(
         trip_compressed_btreemap_by_chateau.insert(chateau_id.clone(), trip_compressed_btreemap);
         direction_to_rows_by_chateau.insert(chateau_id.clone(), direction_rows_for_chateau);
         routes.insert(chateau_id.clone(), routes_btreemap);
+        agencies.insert(chateau_id.clone(), agencies_btreemap);
         shapes.insert(chateau_id.clone().into(), shape_polyline_for_chateau);
         calender_responses.push(calendar);
         calendar_dates_responses.push(calendar_dates);
@@ -2120,6 +2148,7 @@ pub async fn departures_at_stop(
         routes: routes,
         shapes: shapes,
         alerts: alerts,
+        agencies: agencies,
     };
 
     HttpResponse::Ok().json(response)
