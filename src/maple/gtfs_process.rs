@@ -83,6 +83,7 @@ fn execute_pfaedle_rs(
         run = run.arg("--wipe-shapes");
     }
 
+    run = run.arg("--skip-small-roads");
     run = run.arg("--low-priority");
 
     run = run.arg("--write-colours");
