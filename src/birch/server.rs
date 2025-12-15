@@ -846,6 +846,25 @@ async fn main() -> std::io::Result<()> {
                         "https://maps.catenarymaps.org",
                     )),
             )
+            .wrap_fn(|req, srv| {
+                use actix_web::dev::Service;
+                use futures::future::Either;
+
+                let is_bad_origin = req
+                    .headers()
+                    .get("Origin")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|s| s.contains("juliafishbarbera.github.io"))
+                    .unwrap_or(false);
+
+                if is_bad_origin {
+                    Either::Left(Box::pin(async {
+                        Ok(req.into_response(actix_web::HttpResponse::Forbidden().finish()))
+                    }))
+                } else {
+                    Either::Right(srv.call(req))
+                }
+            })
             .wrap(
                 actix_cors::Cors::default()
                     .allow_any_origin()

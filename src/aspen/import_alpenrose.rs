@@ -1302,10 +1302,12 @@ pub async fn new_rt_data(
                                                 if let Some(trip_platforms) =
                                                     nr_data.get(trip_id.as_str())
                                                 {
-                                                    if let Some(platform) =
-                                                        trip_platforms.get(stop_id.as_str())
+                                                    // Find the platform info for the current stop_id
+                                                    if let Some(platform_info) = trip_platforms
+                                                        .iter()
+                                                        .find(|p| p.stop_id == *stop_id)
                                                     {
-                                                        Some(platform.clone().into())
+                                                        Some(platform_info.platform.clone().into())
                                                     } else {
                                                         None
                                                     }
