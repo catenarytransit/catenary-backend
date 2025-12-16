@@ -136,6 +136,17 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .build()
         .unwrap();
 
+    // Spawn Genentech authentication task
+    let auth_client = client.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = catenary::genentech_auth::authenticate_genentech(&auth_client).await {
+                eprintln!("Failed to authenticate with Genentech: {}", e);
+            }
+            tokio::time::sleep(Duration::from_secs(600)).await;
+        }
+    });
+
     let etcd_urls_original =
         std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
     let etcd_urls = etcd_urls_original
