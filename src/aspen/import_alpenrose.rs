@@ -767,8 +767,7 @@ pub async fn new_rt_data(
             }
         }
         for (_, rows) in accumulated_itinerary_patterns.values_mut() {
-            rows.1
-                .sort_by(|a, b| a.stop_sequence.cmp(&b.stop_sequence));
+            rows.sort_by(|a, b| a.stop_sequence.cmp(&b.stop_sequence));
         }
 
         let mut itinerary_pattern_id_to_scheduled_stop_ids: AHashMap<
@@ -1139,7 +1138,7 @@ pub async fn new_rt_data(
 
                         let itinerary_rows = compressed_trip
                             .map(|compressed_trip| {
-                                itinerary_patterns
+                                accumulated_itinerary_patterns
                                     .get(&compressed_trip.itinerary_pattern_id)
                                     .map(|x| &x.1)
                             })
@@ -1147,7 +1146,7 @@ pub async fn new_rt_data(
 
                         let itinerary_meta = compressed_trip
                             .map(|compressed_trip| {
-                                itinerary_patterns
+                                accumulated_itinerary_patterns
                                     .get(&compressed_trip.itinerary_pattern_id)
                                     .map(|x| &x.0)
                             })
