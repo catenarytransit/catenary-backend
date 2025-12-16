@@ -1,3 +1,4 @@
+use compact_str::CompactString;
 use gtfs_realtime::trip_update::stop_time_update::StopTimeProperties;
 use gtfs_realtime::trip_update::{StopTimeEvent, StopTimeUpdate, TripProperties};
 use gtfs_realtime::{
@@ -252,4 +253,16 @@ impl CompactStopTimeEvent {
             scheduled_time,
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompactItineraryPatternRow {
+    pub stop_sequence: i32,
+    pub arrival_time_since_start: Option<i32>,
+    pub departure_time_since_start: Option<i32>,
+    pub interpolated_time_since_start: Option<i32>,
+    pub stop_id: CompactString,
+    pub gtfs_stop_sequence: u32,
+    pub timepoint: Option<bool>,
+    pub stop_headsign_idx: Option<i16>,
 }

@@ -71,8 +71,8 @@ use std::error::Error;
 mod async_threads_alpenrose;
 mod metrolink_california_additions;
 use crate::id_cleanup::gtfs_rt_correct_route_id_string;
+use catenary::compact_formats::CompactFeedMessage;
 use catenary::parse_gtfs_rt_message;
-use compact_formats::CompactFeedMessage;
 use rand::Rng;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -91,7 +91,6 @@ use std::io::Read;
 use std::io::Write;
 use std::time::Instant;
 
-mod compact_formats;
 mod persistence;
 mod track_number;
 

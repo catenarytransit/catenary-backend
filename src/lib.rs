@@ -95,6 +95,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::{fs::File, io::BufReader, io::BufWriter};
 pub mod aspen_dataset;
+pub mod compact_formats;
 
 lazy_static! {
     static ref CLOCK_AM_PM_REGEX: Regex =
