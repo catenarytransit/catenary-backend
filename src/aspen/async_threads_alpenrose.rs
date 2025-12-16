@@ -1,6 +1,6 @@
-use crate::compact_formats::CompactFeedMessage;
 use catenary::aspen::lib::*;
 use catenary::aspen_dataset::GtfsRtType;
+use catenary::compact_formats::CompactFeedMessage;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 

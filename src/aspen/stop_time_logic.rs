@@ -1,4 +1,5 @@
-use crate::compact_formats::CompactStopTimeUpdate;
+use catenary::compact_formats::CompactStopTimeEvent;
+use catenary::compact_formats::CompactStopTimeUpdate;
 
 pub fn find_closest_stop_time_update(
     stop_time_updates: &[CompactStopTimeUpdate],
