@@ -7,18 +7,24 @@ use gtfs_realtime::FeedEntity;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::compact_formats::CompactItineraryPatternRow;
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ItineraryPatternInternalCache {
-    pub itinerary_pattern_meta: AHashMap<String, crate::models::ItineraryPatternMeta>,
-    pub itinerary_pattern_rows: AHashMap<String, Vec<crate::models::ItineraryPatternRow>>,
+    pub itinerary_patterns: AHashMap<
+        String,
+        (
+            crate::models::ItineraryPatternMeta,
+            Vec<CompactItineraryPatternRow>,
+        ),
+    >,
     pub last_time_full_refreshed: chrono::DateTime<chrono::Utc>,
 }
 
 impl ItineraryPatternInternalCache {
     pub fn new() -> Self {
         ItineraryPatternInternalCache {
-            itinerary_pattern_meta: AHashMap::new(),
-            itinerary_pattern_rows: AHashMap::new(),
+            itinerary_patterns: AHashMap::new(),
             last_time_full_refreshed: chrono::Utc::now(),
         }
     }
