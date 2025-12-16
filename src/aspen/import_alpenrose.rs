@@ -668,7 +668,7 @@ pub async fn new_rt_data(
         };
 
         let join_start = std::time::Instant::now();
-        let (calendar, calendar_dates, stops, itinerary_patterns, itinerary_pattern_rows) = tokio::try_join!(
+        let (calendar, calendar_dates, stops, itinerary_pattern_meta_list, itinerary_pattern_rows) = tokio::try_join!(
             calendar_future,
             calendar_dates_future,
             stops_future,
@@ -692,11 +692,9 @@ pub async fn new_rt_data(
             catenary::models::ItineraryPatternMeta,
         > = AHashMap::new();
 
-        for itinerary_pattern in itinerary_patterns {
-            itinerary_pattern_id_to_itinerary_pattern_meta.insert(
-                itinerary_pattern.itinerary_pattern_id.clone(),
-                itinerary_pattern,
-            );
+        for meta in itinerary_pattern_meta_list {
+            itinerary_pattern_id_to_itinerary_pattern_meta
+                .insert(meta.itinerary_pattern_id.clone(), meta);
         }
 
         let itinerary_pattern_id_to_itinerary_pattern_meta =
@@ -898,14 +896,14 @@ pub async fn new_rt_data(
                         let trip_headsign = vehicle_pos.trip.as_ref().and_then(|trip| {
                             trip.trip_id.as_ref().and_then(|trip_id| {
                                 trip_id_to_trip.get(trip_id).and_then(|trip| {
-                                    itinerary_patterns
+                                    accumulated_itinerary_patterns
                                         .get(&trip.itinerary_pattern_id)
                                         .map(|x| &x.0)
                                         .and_then(|itinerary_pattern| {
                                             itinerary_pattern
                                                 .direction_pattern_id
                                                 .as_ref()
-                                                .and_then(|direction_pattern_id| {
+                                                .and_then(|direction_pattern_id: &String| {
                                                     direction_pattern_id_to_direction_pattern_meta
                                                         .get(direction_pattern_id.as_str())
                                                         .map(|direction_pattern| {
@@ -926,7 +924,7 @@ pub async fn new_rt_data(
                                                                     current_stop_event
                                                                 {
                                                                     if let Some(itinerary_pattern_rows) =
-                                                                        itinerary_patterns
+                                                                        accumulated_itinerary_patterns
                                                                             .get(&trip.itinerary_pattern_id)
                                                                             .map(|x| &x.1)
                                                                     {
