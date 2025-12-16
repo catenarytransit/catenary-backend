@@ -26,6 +26,32 @@ use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex;
 use url::{ParseError, Url};
 
+#[derive(Serialize)]
+struct GenentechLogin {
+    passphrase: String,
+}
+
+async fn authenticate_genentech(client: &reqwest::Client) -> Result<reqwest::Response, Box<dyn std::error::Error + Send + Sync>> {
+    let login_url = "https://genentech.tripshot.com/v1/publicAppPassphraseLogin";
+    let body = GenentechLogin {
+        passphrase: "transportation".to_string(),
+    };
+
+    println!("Authenticating with Genentech...");
+
+    let response = client.post(login_url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:146.0) Gecko/20100101 Firefox/146.0")
+        .header("Origin", "https://genentech.tripshot.com")
+        .header("Referer", "https://genentech.tripshot.com/g/tms/Public.html")
+        .json(&body)
+        .send()
+        .await?;
+
+    println!("Genentech auth status: {}", response.status());
+
+    Ok(response)
+}
+
 #[derive(Clone)]
 struct StaticFeedToDownload {
     pub feed_id: String,
@@ -175,7 +201,7 @@ async fn try_to_download(
     }
 
     let client = match feed_id {
-        "f-9q5b-torrancetransit" | "f-west~hollywood" => reqwest::ClientBuilder::new()
+        "f-9q5b-torrancetransit" | "f-west~hollywood" | "f-genentech" => reqwest::ClientBuilder::new()
             .use_rustls_tls()
             .user_agent(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) Gecko/20100101 Firefox/138.0",
@@ -189,6 +215,10 @@ async fn try_to_download(
             .unwrap(),
         _ => client.clone(),
     };
+
+    if feed_id == "f-genentech" {
+        let _ = authenticate_genentech(&client).await;
+    }
 
     //the wordpress backup thing
     let client = match url.contains("showpublisheddocument")
@@ -785,4 +815,33 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
     }
 
     request.headers(headers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_genentech_download() {
+        let client = make_reqwest_client();
+        let url = "https://genentech.tripshot.com/v1/gtfs.zip";
+        let parsed_url = Url::parse(url).unwrap();
+
+        let response = try_to_download("f-genentech", &client, url, &parsed_url).await;
+        
+        match response {
+            Ok(resp) => {
+                println!("Response status: {}", resp.status());
+                assert!(resp.status().is_success());
+                let bytes = resp.bytes().await;
+                assert!(bytes.is_ok());
+                let len = bytes.unwrap().len();
+                println!("Downloaded {} bytes", len);
+                assert!(len > 1000); 
+            }
+            Err(e) => {
+                panic!("Download failed: {:?}", e);
+            }
+        }
+    }
 }
