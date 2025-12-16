@@ -893,6 +893,10 @@ pub async fn gtfs_process_feed(
         route_ids_to_shape_ids,
     } = shape_to_colour(feed_id, &gtfs);
 
+    let conn_pool = arc_conn_pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre?;
+
     //insert agencies
     let mut agency_id_already_done: HashSet<Option<&String>> = HashSet::new();
 
