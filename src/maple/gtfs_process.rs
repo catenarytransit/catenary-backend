@@ -347,7 +347,7 @@ pub async fn gtfs_process_feed(
 
             let _ = execute_pfaedle_rs(
                 path.as_str(),
-                "./pfaedle-filtered-dach-latest.osm.pbf",
+                "./switzerland-gtfs-pfaedle.osm.pbf",
                 Some(
                     "subway,metro,bus,ferry,cablecar,funicular,coach,trolley,monorail,tram"
                         .split(",")
