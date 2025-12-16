@@ -265,6 +265,14 @@ pub async fn new_rt_data(
     let mut stop_id_to_non_scheduled_trip_ids: AHashMap<CompactString, Vec<EcoString>> =
         AHashMap::new();
 
+    let mut accumulated_itinerary_patterns: AHashMap<
+        String,
+        (
+            catenary::models::ItineraryPatternMeta,
+            Vec<CompactItineraryPatternRow>,
+        ),
+    > = AHashMap::new();
+
     use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
 
@@ -732,36 +740,35 @@ pub async fn new_rt_data(
 
         //split into hashmap by itinerary pattern id, sort by stop sequence
 
-        let mut itinerary_patterns: AHashMap<
-            String,
-            (
-                catenary::models::ItineraryPatternMeta,
-                Vec<CompactItineraryPatternRow>,
-            ),
-        > = AHashMap::new();
+        let mut newly_added_patterns = AHashSet::new();
 
         for (id, meta) in itinerary_pattern_id_to_itinerary_pattern_meta {
-            itinerary_patterns.insert(id, (meta, vec![]));
+            if !accumulated_itinerary_patterns.contains_key(&id) {
+                accumulated_itinerary_patterns.insert(id.clone(), (meta, vec![]));
+                newly_added_patterns.insert(id);
+            }
         }
 
         for itinerary_pattern_row in itinerary_pattern_rows {
-            if let Some(entry) =
-                itinerary_patterns.get_mut(&itinerary_pattern_row.itinerary_pattern_id)
-            {
-                entry.1.push(CompactItineraryPatternRow {
-                    stop_sequence: itinerary_pattern_row.stop_sequence,
-                    arrival_time_since_start: itinerary_pattern_row.arrival_time_since_start,
-                    departure_time_since_start: itinerary_pattern_row.departure_time_since_start,
-                    interpolated_time_since_start: itinerary_pattern_row
-                        .interpolated_time_since_start,
-                    stop_id: itinerary_pattern_row.stop_id,
-                    gtfs_stop_sequence: itinerary_pattern_row.gtfs_stop_sequence,
-                    timepoint: itinerary_pattern_row.timepoint,
-                    stop_headsign_idx: itinerary_pattern_row.stop_headsign_idx,
-                });
+            if newly_added_patterns.contains(&itinerary_pattern_row.itinerary_pattern_id) {
+                if let Some(entry) =
+                    accumulated_itinerary_patterns.get_mut(&itinerary_pattern_row.itinerary_pattern_id)
+                {
+                    entry.1.push(CompactItineraryPatternRow {
+                        stop_sequence: itinerary_pattern_row.stop_sequence,
+                        arrival_time_since_start: itinerary_pattern_row.arrival_time_since_start,
+                        departure_time_since_start: itinerary_pattern_row.departure_time_since_start,
+                        interpolated_time_since_start: itinerary_pattern_row
+                            .interpolated_time_since_start,
+                        stop_id: itinerary_pattern_row.stop_id,
+                        gtfs_stop_sequence: itinerary_pattern_row.gtfs_stop_sequence,
+                        timepoint: itinerary_pattern_row.timepoint,
+                        stop_headsign_idx: itinerary_pattern_row.stop_headsign_idx,
+                    });
+                }
             }
         }
-        for (_, rows) in itinerary_patterns.values_mut() {
+        for (_, rows) in accumulated_itinerary_patterns.values_mut() {
             rows.1
                 .sort_by(|a, b| a.stop_sequence.cmp(&b.stop_sequence));
         }
@@ -770,7 +777,7 @@ pub async fn new_rt_data(
             String,
             Option<AHashSet<String>>,
         > = AHashMap::new();
-        for (id, (_, rows)) in &itinerary_patterns {
+        for (id, (_, rows)) in &accumulated_itinerary_patterns {
             let set: AHashSet<String> = rows.iter().map(|x| x.stop_id.to_string()).collect();
             itinerary_pattern_id_to_scheduled_stop_ids.insert(id.clone(), Some(set));
         }
@@ -1937,7 +1944,7 @@ pub async fn new_rt_data(
         impacted_trips_alerts: impact_trip_id_to_alert_ids,
         compressed_trip_internal_cache,
         itinerary_pattern_internal_cache: ItineraryPatternInternalCache {
-            itinerary_patterns,
+            itinerary_patterns: accumulated_itinerary_patterns,
             last_time_full_refreshed: chrono::Utc::now(),
         },
         last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
