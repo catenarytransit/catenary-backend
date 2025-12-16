@@ -1,7 +1,8 @@
 use ahash::AHashSet;
 use catenary::CalendarUnified;
 use catenary::aspen_dataset::AspenisedStopTimeUpdate;
-use catenary::models::{CompressedTrip, ItineraryPatternMeta, ItineraryPatternRow};
+use catenary::compact_formats::CompactItineraryPatternRow;
+use catenary::models::{CompressedTrip, ItineraryPatternMeta};
 use chrono::{Datelike, TimeZone, Utc};
 use chrono_tz::Tz;
 use std::collections::BTreeMap;
@@ -10,7 +11,7 @@ pub fn calculate_delay(
     trip_update_delay: Option<i32>,
     trip_start_date: &Option<String>,
     scheduled_stop_ids_hashset: &Option<AHashSet<String>>,
-    itinerary_rows: Option<&Vec<ItineraryPatternRow>>,
+    itinerary_rows: Option<&Vec<CompactItineraryPatternRow>>,
     itinerary_meta: Option<&ItineraryPatternMeta>,
     stop_time_update: &Vec<AspenisedStopTimeUpdate>,
     current_time_unix_timestamp: u64,
