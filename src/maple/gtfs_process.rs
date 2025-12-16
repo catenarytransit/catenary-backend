@@ -656,6 +656,23 @@ pub async fn gtfs_process_feed(
 
     let mut gtfs = gtfs;
 
+    if feed_id == "f-genentech" {
+        let allowed_routes = [
+            "1glenparki",
+            "1glenparko",
+            "2SSFI",
+            "2SSFO",
+            "3oysterpointferryo",
+            "3OysterPointFerryi",
+        ];
+
+        gtfs.routes
+            .retain(|route_id, _| allowed_routes.contains(&route_id.as_str()));
+
+        gtfs.trips
+            .retain(|_, trip| allowed_routes.contains(&trip.route_id.as_str()));
+    }
+
     if feed_id == "f-u0-sncf~tgv" || feed_id == "f-u0-sncf~ter" || feed_id == "f-u0-sncf~intercites"
     {
         gtfs.trips = gtfs
