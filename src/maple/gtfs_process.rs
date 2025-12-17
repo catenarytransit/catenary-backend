@@ -140,7 +140,10 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
-        "f-hauts~de~france~du~nord~1" | "f-dunkerque~fr" | "f-hauts~de~france~du~nord~2" | "f-rhdf62com~seau~interurbain~fr" => {
+        "f-hauts~de~france~du~nord~1"
+        | "f-dunkerque~fr"
+        | "f-hauts~de~france~du~nord~2"
+        | "f-rhdf62com~seau~interurbain~fr" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./pfaedle-filtered-france-latest.osm.pbf",
@@ -1355,7 +1358,7 @@ pub async fn gtfs_process_feed(
                 })
                 .collect::<Vec<_>>();
 
-            for trip_chunk in trip_pg.chunks(1000) {
+            for trip_chunk in trip_pg.chunks(2000) {
                 t_final.push(trip_chunk.to_vec());
             }
         }
