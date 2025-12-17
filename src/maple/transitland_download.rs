@@ -614,7 +614,7 @@ pub async fn download_return_eligible_feeds(
                                         
                                         let mut download_progress  = download_progress.lock().unwrap();
                                         *download_progress += 1;
-            
+
                                         println!("Finished writing {}/{} [{:.2}%]: {}, took {:.3}s",download_progress, total_feeds_to_download, (*download_progress as f32/total_feeds_to_download as f32) * 100.0,  &staticfeed.clone().feed_id, duration_ms as f32 / 1000.0);
                                     }
                                     } else {
@@ -636,7 +636,6 @@ pub async fn download_return_eligible_feeds(
                                 }
                             }
 
-                            
                             answer
                             }
                             Err(e) => {
