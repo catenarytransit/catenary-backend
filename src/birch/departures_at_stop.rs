@@ -521,7 +521,8 @@ pub async fn departures_at_stop(
     let mut routes: BTreeMap<String, BTreeMap<String, catenary::models::Route>> = BTreeMap::new();
 
     let mut shapes: BTreeMap<EcoString, BTreeMap<EcoString, String>> = BTreeMap::new();
-    let mut agencies: BTreeMap<String, BTreeMap<String, catenary::models::Agency>> = BTreeMap::new();
+    let mut agencies: BTreeMap<String, BTreeMap<String, catenary::models::Agency>> =
+        BTreeMap::new();
 
     let mut calender_responses: Vec<_> = vec![];
     let mut calendar_dates_responses: Vec<_> = vec![];
@@ -693,9 +694,7 @@ pub async fn departures_at_stop(
                     .collect();
 
                 let agencies_ret = catenary::schema::gtfs::agencies::dsl::agencies
-                    .filter(catenary::schema::gtfs::agencies::chateau.eq(
-                        chateau_id_clone.clone(),
-                    ))
+                    .filter(catenary::schema::gtfs::agencies::chateau.eq(chateau_id_clone.clone()))
                     .filter(catenary::schema::gtfs::agencies::agency_id.eq_any(&agency_ids))
                     .select(catenary::models::Agency::as_select())
                     .load::<catenary::models::Agency>(&mut conn1)
@@ -871,14 +870,17 @@ pub async fn departures_at_stop(
         calendar_dates_responses.push(calendar_dates);
     }
 
-    let calendar_structure = make_calendar_structure_from_pg(calender_responses, calendar_dates_responses)
-        .unwrap_or_default();
+    let calendar_structure =
+        make_calendar_structure_from_pg(calender_responses, calendar_dates_responses)
+            .unwrap_or_default();
 
     let stop_tz_txt = match &stop.timezone {
         Some(tz) => tz.clone(),
         None => {
             if let Some(point_raw) = &stop.point {
-                match (-90.0..=90.0).contains(&point_raw.y) && (-180.0..=180.0).contains(&point_raw.x) {
+                match (-90.0..=90.0).contains(&point_raw.y)
+                    && (-180.0..=180.0).contains(&point_raw.x)
+                {
                     true => tz_search::lookup(point_raw.y, point_raw.x)
                         .unwrap_or_else(|| String::from("Etc/GMT")),
                     false => String::from("Etc/GMT"),
@@ -911,7 +913,8 @@ pub async fn departures_at_stop(
 
     //seek back a minimum of 8 days
 
-    let less_than_time_utc = chrono::DateTime::from_timestamp(less_than_time as i64, 0).unwrap_or_default();
+    let less_than_time_utc =
+        chrono::DateTime::from_timestamp(less_than_time as i64, 0).unwrap_or_default();
     let less_than_date_time = less_than_time_utc.with_timezone(&stop_tz);
 
     let greater_than_naive_date = greater_than_date_time.naive_local();

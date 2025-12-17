@@ -22,7 +22,9 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use ecow::EcoString;
 
-use catenary::compact_formats::{CompactFeedMessage, CompactStopTimeUpdate, CompactItineraryPatternRow};
+use catenary::compact_formats::{
+    CompactFeedMessage, CompactItineraryPatternRow, CompactStopTimeUpdate,
+};
 use lazy_static::lazy_static;
 use redis::RedisResult;
 use regex::Regex;
@@ -668,13 +670,14 @@ pub async fn new_rt_data(
         };
 
         let join_start = std::time::Instant::now();
-        let (calendar, calendar_dates, stops, itinerary_pattern_meta_list, itinerary_pattern_rows) = tokio::try_join!(
-            calendar_future,
-            calendar_dates_future,
-            stops_future,
-            itinerary_patterns_future,
-            itinerary_pattern_rows_future
-        )?;
+        let (calendar, calendar_dates, stops, itinerary_pattern_meta_list, itinerary_pattern_rows) =
+            tokio::try_join!(
+                calendar_future,
+                calendar_dates_future,
+                stops_future,
+                itinerary_patterns_future,
+                itinerary_pattern_rows_future
+            )?;
 
         let itin_lookup_duration = join_start.elapsed();
         let itinerary_pattern_row_duration = join_start.elapsed();
@@ -749,13 +752,14 @@ pub async fn new_rt_data(
 
         for itinerary_pattern_row in itinerary_pattern_rows {
             if newly_added_patterns.contains(&itinerary_pattern_row.itinerary_pattern_id) {
-                if let Some(entry) =
-                    accumulated_itinerary_patterns.get_mut(&itinerary_pattern_row.itinerary_pattern_id)
+                if let Some(entry) = accumulated_itinerary_patterns
+                    .get_mut(&itinerary_pattern_row.itinerary_pattern_id)
                 {
                     entry.1.push(CompactItineraryPatternRow {
                         stop_sequence: itinerary_pattern_row.stop_sequence,
                         arrival_time_since_start: itinerary_pattern_row.arrival_time_since_start,
-                        departure_time_since_start: itinerary_pattern_row.departure_time_since_start,
+                        departure_time_since_start: itinerary_pattern_row
+                            .departure_time_since_start,
                         interpolated_time_since_start: itinerary_pattern_row
                             .interpolated_time_since_start,
                         stop_id: itinerary_pattern_row.stop_id,
@@ -1223,9 +1227,10 @@ pub async fn new_rt_data(
                                     delay: None,
                                     time: match arrival.time {
                                         Some(diff) => {
-                                           let time = (ref_epoch as i64) + (i32::from(diff) as i64);
-                                           if time <= 0 { None } else { Some(time) }
-                                        },
+                                            let time =
+                                                (ref_epoch as i64) + (i32::from(diff) as i64);
+                                            if time <= 0 { None } else { Some(time) }
+                                        }
                                         None => None,
                                     },
                                     uncertainty: arrival.uncertainty,
@@ -1235,9 +1240,10 @@ pub async fn new_rt_data(
                                         delay: None,
                                         time: match departure.time {
                                             Some(diff) => {
-                                               let time = (ref_epoch as i64) + (i32::from(diff) as i64);
-                                               if time <= 0 { None } else { Some(time) }
-                                            },
+                                                let time =
+                                                    (ref_epoch as i64) + (i32::from(diff) as i64);
+                                                if time <= 0 { None } else { Some(time) }
+                                            }
                                             None => None,
                                         },
                                         uncertainty: departure.uncertainty,
