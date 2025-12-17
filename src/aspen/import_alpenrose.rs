@@ -45,6 +45,8 @@ lazy_static! {
 }
 
 const SAVE_INTERVAL: Duration = Duration::from_secs(60);
+// Used to prevent data flickering when a feed momentarily drops a trip that was present
+// in the previous fetch cycle.
 const DROP_OLD_TRIPS_GRACE_PERIOD: Duration = Duration::from_secs(60);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -72,6 +74,7 @@ lazy_static! {
     static ref TRANSIT_APP_REGEX: Regex = Regex::new(r"(?i)(the )?transit app").unwrap();
 }
 
+// Feeds where the vehicle label is more reliable/stable than the vehicle ID.
 const REALTIME_FEEDS_TO_USE_VEHICLE_IDS: [&str; 1] = ["f-ezzx-tbc~rt"];
 
 fn mph_to_mps(mph: &CompactString) -> Option<f32> {
@@ -84,7 +87,7 @@ fn mph_to_mps(mph: &CompactString) -> Option<f32> {
 }
 
 fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
-    //Split into 3 parts based on :
+    // Split into 3 parts based on : (degrees:minutes:seconds)
     let parts: Vec<&str> = coord.split(':').collect();
 
     if parts.len() != 3 {
@@ -111,7 +114,6 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
     };
 
     let mut decimal = degrees + minutes / 60.0 + seconds / 3600.0;
-
     decimal = decimal * sign;
 
     Some(decimal)
@@ -142,25 +144,20 @@ pub async fn new_rt_data(
         .await
         .or_insert(Instant::now());
 
-    //either fetch the mutable reference to trip compressed cache or make an empty one
-
     let mut compressed_trip_internal_cache: CompressedTripInternalCache =
         match authoritative_data_store.get_async(chateau_id).await {
             Some(data) => data.compressed_trip_internal_cache.clone(),
             None => CompressedTripInternalCache::new(),
         };
 
-    // let mut redis_con: redis::Connection = redis_client.get_connection()?;
-
     let previous_authoritative_data_store =
         match authoritative_data_store.get_async(chateau_id).await {
             Some(data) => Some(data.clone()),
-            None => {
-                //    let data_bytes = (format!("authoritative-{}", chateau_id));
-                None
-            }
+            None => None,
         };
 
+    // Metrolink provides a separate JSON endpoint with higher fidelity data (PTC status, exact speed)
+    // than their standard GTFS-RT feed. We fetch this to supplement the standard feed.
     let fetch_supplemental_data_positions_metrolink: Option<AHashMap<CompactString, MetrolinkPos>> =
         match realtime_feed_id {
             "f-metrolinktrains~rt" => {
@@ -195,7 +192,6 @@ pub async fn new_rt_data(
                                 }
 
                                 println!("Got {} metrolink positions", metrolink_positions.len());
-
                                 Some(metrolink_positions)
                             }
                             Err(e) => {
@@ -218,7 +214,6 @@ pub async fn new_rt_data(
 
     let fetched_track_data: TrackData = fetch_track_data(&chateau_id).await;
 
-    //println!("Forming pg connection");
     let mut conn = conn_pre;
 
     if let Err(e) = &conn {
@@ -228,9 +223,6 @@ pub async fn new_rt_data(
     }
 
     let conn = &mut conn.unwrap();
-    //println!("Connected to postges");
-
-    // take all the gtfs rt data and merge it together
 
     let mut aspenised_vehicle_positions: AHashMap<String, AspenisedVehiclePosition> =
         AHashMap::new();
@@ -248,7 +240,6 @@ pub async fn new_rt_data(
         Vec<CompactString>,
     > = AHashMap::new();
 
-    //let alerts hashmap
     let mut alerts: AHashMap<String, AspenisedAlert> = AHashMap::new();
 
     let mut impacted_route_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
@@ -278,16 +269,12 @@ pub async fn new_rt_data(
     use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
 
-    //get this chateau
     let start_chateau_query = Instant::now();
     let this_chateau = chateaus_pg_schema::dsl::chateaus
         .filter(chateaus_pg_schema::dsl::chateau.eq(&chateau_id))
         .first::<catenary::models::Chateau>(conn)
         .await?;
     let chateau_elapsed = start_chateau_query.elapsed();
-
-    //get all routes inside chateau from postgres db
-    //: Vec<catenary::models::Route>
 
     let start_routes_query = Instant::now();
     let routes: Vec<catenary::models::Route> = routes_pg_schema::dsl::routes
@@ -296,8 +283,6 @@ pub async fn new_rt_data(
         .load::<catenary::models::Route>(conn)
         .await?;
     let routes_query_elapsed = start_routes_query.elapsed();
-
-    //let (this_chateau, routes) = tokio::try_join!(this_chateau, routes)?;
 
     if routes.is_empty() {
         println!("No routes found for chateau {}", chateau_id);
@@ -311,6 +296,7 @@ pub async fn new_rt_data(
 
     let route_id_to_route = route_id_to_route;
 
+    // Santa Cruz Metro requires supplemental data for better vehicle tracking accuracy
     let santa_cruz_supp_data = match chateau_id {
         "santacruzmetro" => {
             let route_ids = &route_id_to_route
@@ -340,15 +326,8 @@ pub async fn new_rt_data(
         _ => None,
     };
 
-    //combine them together and insert them with the vehicles positions
-
-    // trips can be left fairly raw for now, with a lot of data references
-
-    // ignore alerts for now, as well as trip modifications
-
-    //collect all trip ids that must be looked up
-    //collect all common itinerary patterns and look those up
-
+    // Collect all Trip IDs referenced in the RT feeds (Vehicles, TripUpdates, Alerts)
+    // to perform a single batch lookup against the cache/DB.
     let mut trip_ids_to_lookup: AHashSet<String> = AHashSet::new();
 
     for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
@@ -369,7 +348,6 @@ pub async fn new_rt_data(
             }
         }
 
-        //trips updates trip id lookup
         if let Some(trip_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
             .get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
             .await
@@ -391,7 +369,6 @@ pub async fn new_rt_data(
             }
         }
 
-        //now do the same for alerts updates
         if let Some(alert_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
             .get_async(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
             .await
@@ -411,8 +388,6 @@ pub async fn new_rt_data(
             }
         }
 
-        //now look up all the trips
-
         let trips_to_remove_from_cache = compressed_trip_internal_cache
             .compressed_trips
             .keys()
@@ -428,6 +403,7 @@ pub async fn new_rt_data(
 
         let trip_start = std::time::Instant::now();
 
+        // Optimize DB load by only fetching trips that aren't already in the internal cache
         let trip_ids_to_lookup_to_hit = trip_ids_to_lookup
             .iter()
             .filter(|x| {
@@ -455,7 +431,6 @@ pub async fn new_rt_data(
             trip_id_to_trip.insert(trip.trip_id.clone(), trip);
         }
 
-        //fill in the data from the cache
         for (trip_id, trips_in_cache) in compressed_trip_internal_cache.compressed_trips {
             trip_id_to_trip.insert(trip_id.clone(), trips_in_cache.clone());
         }
@@ -525,7 +500,6 @@ pub async fn new_rt_data(
         // Used for cache fallback
         let empty_scheduled_stops_option: Option<AHashSet<String>> = None;
 
-        //pass through all the trip ids and get the last stop id that isnt skipped
         if let Some(trip_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
             .get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
             .await
@@ -551,12 +525,11 @@ pub async fn new_rt_data(
                             }
                         }
 
-                        //this algorithm finds the current stop time update
-                        //if there is a stop time update in which the current time is greater than the arrival time but less than the departure time, use it
-
-                        //otherwise, we pick the one with the next next arrival / departure time, by sorting it by time
-                        //if every departure time is already in the past, just pick the last one
-
+                        // Determine the "active" stop time update for interpolation.
+                        // Logic:
+                        // 1. If a stop time update brackets the current time (arrival < now < departure), use it.
+                        // 2. Otherwise, sort by time and select the next chronological arrival/departure.
+                        // 3. Fallback: If all departures are past, use the final stop.
                         let closest_stop_time_update = find_closest_stop_time_update(
                             &trip_update.stop_time_update,
                             current_time_unix_timestamp,
@@ -586,14 +559,13 @@ pub async fn new_rt_data(
             }
         }
 
-        // Move calculation of list_of_itinerary_patterns_to_lookup here
         let mut list_of_itinerary_patterns_to_lookup: AHashSet<String> = AHashSet::new();
         for trip in trip_id_to_trip.values() {
             list_of_itinerary_patterns_to_lookup.insert(trip.itinerary_pattern_id.clone());
         }
         compressed_trip_internal_cache.compressed_trips = trip_id_to_trip.clone();
 
-        // Stops Future
+        // Execute all heavy DB lookups in parallel via tokio join
         let pool_stops = pool.clone();
         let stop_ids_stops = stop_ids_to_lookup.iter().cloned().collect::<Vec<_>>();
         let chateau_stops = chateau_id.to_string();
@@ -621,7 +593,6 @@ pub async fn new_rt_data(
             }
         };
 
-        // Itinerary Patterns Future
         let pool_ip = pool.clone();
         let list_ip = list_of_itinerary_patterns_to_lookup
             .iter()
@@ -649,7 +620,6 @@ pub async fn new_rt_data(
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
         };
 
-        // Itinerary Pattern Rows Future
         let pool_ipr = pool.clone();
         let chateau_ipr = chateau_id.to_string();
         let itinerary_pattern_rows_future = async move {
@@ -739,8 +709,8 @@ pub async fn new_rt_data(
         let direction_pattern_id_to_direction_pattern_meta =
             direction_pattern_id_to_direction_pattern_meta;
 
-        //split into hashmap by itinerary pattern id, sort by stop sequence
-
+        // Group itinerary rows by pattern ID to allow efficient lookups,
+        // and enforce strict sorting by stop_sequence for linear interpolation.
         let mut newly_added_patterns = AHashSet::new();
 
         for (id, meta) in itinerary_pattern_id_to_itinerary_pattern_meta {
@@ -869,8 +839,7 @@ pub async fn new_rt_data(
                             }
                         }
 
-                        // get the next stop based on the realtime data
-
+                        // Determine the next stop event to calculate delays relative to the schedule.
                         let current_stop_event = match &vehicle_pos.vehicle {
                             None => None,
                             Some(vehicle) => match &vehicle.id {
@@ -879,8 +848,6 @@ pub async fn new_rt_data(
                                 None => None,
                             },
                         };
-
-                        //some debugging
 
                         if chateau_id == "santacruzmetro" {
                             if let Some(current_stop_event) = current_stop_event {
@@ -1096,14 +1063,10 @@ pub async fn new_rt_data(
                         aspenised_vehicle_positions
                             .insert(vehicle_entity.id.clone(), pos_aspenised);
 
-                        // insert the trip id to vehicle id mapping
-
                         trip_id_to_vehicle_gtfs_rt_id
                             .entry(vehicle_entity.id.clone())
                             .and_modify(|x| x.push(vehicle_entity.id.clone()))
                             .or_insert(vec![vehicle_entity.id.clone()]);
-
-                        //insert the route cache
 
                         if let Some(trip) = &vehicle_pos.trip {
                             if let Some(route_id) = &trip.route_id {
@@ -1121,15 +1084,12 @@ pub async fn new_rt_data(
                 }
             }
 
-            //process trip updates
             if let Some(trip_updates_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
                 .get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
                 .await
             {
                 let trip_updates_gtfs_rt_for_feed_id = trip_updates_gtfs_rt_for_feed_id.get();
                 let ref_epoch = trip_updates_gtfs_rt_for_feed_id.reference_epoch;
-
-                //let make_supplimental_db = get_supplemental_data
 
                 for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
                     if let Some(trip_update) = &trip_update_entity.trip_update {
@@ -1380,35 +1340,33 @@ pub async fn new_rt_data(
                             .flatten()
                             .collect::<BTreeSet<EcoString>>();
 
-                        //merge with old data
-
                         let old_data_to_add_to_start: Option<Vec<AspenisedStopTimeUpdate>> =
                             match &trip_id {
                                 Some(trip_id) => {
                                     match &previous_authoritative_data_store {
                                         Some(previous_authoritative_data_store) => {
                                             let previous_trip_update_id = match previous_authoritative_data_store.trip_updates_lookup_by_trip_id_to_trip_update_ids.get(trip_id.as_str()) {
-                                        Some(trip_updates_lookup_by_trip_id_to_trip_update_ids) => {
-                                            let mut matching_ids = trip_updates_lookup_by_trip_id_to_trip_update_ids.iter().filter(
-                                                |possible_match_trip_id| {
-                                                    previous_authoritative_data_store
-                                                        .trip_updates
-                                                        .get(possible_match_trip_id.as_str())
-                                                        .map_or(false, |possible_old_trip| {
-                                                            possible_old_trip.trip == trip_descriptor
-                                                        })
-                                                },
-                                            );
-                                    
-                                            let first_match = matching_ids.next();
-                                            if first_match.is_some() && matching_ids.next().is_none() {
-                                                first_match.cloned()
-                                            } else {
-                                                None
+                                            Some(trip_updates_lookup_by_trip_id_to_trip_update_ids) => {
+                                                let mut matching_ids = trip_updates_lookup_by_trip_id_to_trip_update_ids.iter().filter(
+                                                    |possible_match_trip_id| {
+                                                        previous_authoritative_data_store
+                                                            .trip_updates
+                                                            .get(possible_match_trip_id.as_str())
+                                                            .map_or(false, |possible_old_trip| {
+                                                                possible_old_trip.trip == trip_descriptor
+                                                            })
+                                                    },
+                                                );
+                                                
+                                                let first_match = matching_ids.next();
+                                                if first_match.is_some() && matching_ids.next().is_none() {
+                                                    first_match.cloned()
+                                                } else {
+                                                    None
+                                                }
                                             }
-                                        }
-                                        None => None,
-                                    };
+                                            None => None,
+                                        };
 
                                             match previous_trip_update_id {
                                                 Some(previous_trip_update_id) => {
@@ -1573,11 +1531,10 @@ pub async fn new_rt_data(
                         trip_updates
                             .insert(CompactString::new(&trip_update_entity.id), trip_update);
 
-                        //if missing trip
+                        // If a trip is missing from the static schedule, attempt to recover headsign
+                        // information from the realtime update and propagate it to vehicle entities.
                         if let Some(trip_id) = &trip_id {
                             if missing_trip_ids.contains(trip_id) {
-                                //update vehicles with correct headsign
-
                                 let vehicle_entity_ids = trip_id_to_vehicle_gtfs_rt_id.get(trip_id);
 
                                 if let Some(vehicle_entity_ids) = vehicle_entity_ids {
@@ -1596,8 +1553,6 @@ pub async fn new_rt_data(
                         }
                     }
 
-                    //shapes are also grouped in the feed
-
                     if let Some(shape) = &trip_update_entity.shape {
                         if let Some(shape_id) = &shape.shape_id {
                             shape_id_to_shape.insert(
@@ -1606,8 +1561,6 @@ pub async fn new_rt_data(
                             );
                         }
                     }
-
-                    //trip mod
 
                     if let Some(trip_modification) = &trip_update_entity.trip_modifications {
                         trip_modifications.insert(
@@ -1675,7 +1628,7 @@ pub async fn new_rt_data(
 
                         let mut alert: AspenisedAlert = alert.clone().into();
 
-                        //if the alert yaps the same thing twice, delete the description
+                        // Deduplicate alert content: some agencies repeat the header in the description.
                         if alert.header_text.is_some() {
                             if alert.header_text == alert.description_text {
                                 alert.description_text = None;
@@ -1740,8 +1693,6 @@ pub async fn new_rt_data(
             }
         }
 
-        //insert the route cache
-
         for route_id in route_ids_to_insert.iter() {
             let route = route_id_to_route.get(&route_id.clone());
             if let Some(route) = route {
@@ -1759,8 +1710,6 @@ pub async fn new_rt_data(
                 );
             }
         }
-
-        //vehicle labels to gtfs ids
 
         for (key, vehicle_gtfs) in aspenised_vehicle_positions.iter() {
             if let Some(vehicle_data) = &vehicle_gtfs.vehicle {
@@ -1784,14 +1733,13 @@ pub async fn new_rt_data(
         );
     }
 
-    //go back after and relookup all the trip delays
+    // Resolve trip delays after all initial processing is complete.
+    // This allows us to link trip updates that were processed separately from the vehicle positions.
     for (k, v) in aspenised_vehicle_positions.iter_mut() {
         {
             let trip = v.trip.as_mut();
 
             if let Some(trip) = trip {
-                //lookup trip update now
-
                 if let Some(trip_id) = &trip.trip_id {
                     let trip_update_ids =
                         trip_updates_lookup_by_trip_id_to_trip_update_ids.get(trip_id.as_str());
@@ -1829,8 +1777,9 @@ pub async fn new_rt_data(
             }
         }
     }
-    //shrink the hashmaps
 
+    // Explicitly shrink hashmaps to release memory back to the allocator,
+    // critical for long-running processes handling high-volume RT feeds.
     aspenised_vehicle_positions.shrink_to_fit();
     vehicle_routes_cache.shrink_to_fit();
     trip_updates.shrink_to_fit();
@@ -1855,29 +1804,20 @@ pub async fn new_rt_data(
         .compressed_trips
         .shrink_to_fit();
 
-    // Grace period logic for trip updates
     if let Some(previous_data) = &previous_authoritative_data_store {
         let current_time = catenary::duration_since_unix_epoch().as_millis() as u64;
         let start_time = START_TIME.get_async(chateau_id).await.map(|t| *t.get());
 
         if let Some(start_time) = start_time {
             if start_time.elapsed() > DROP_OLD_TRIPS_GRACE_PERIOD {
-                // If we are past the grace period, we don't need to do anything special
-                // The new data is authoritative
+                // If we are past the grace period, rely solely on the new authoritative data.
             } else {
-                // We are within the grace period, so we should preserve old trip updates
-                // that are not in the new data
+                // Within the grace period, preserve old trip updates not present in the new feed
+                // to prevent UI flickering during transient data drops.
                 for (trip_update_id, old_trip_update) in &previous_data.trip_updates {
                     if !trip_updates.contains_key(trip_update_id) {
-                        // Check if the old trip update is still valid based on its own last_seen
-                        // (This is a secondary check, the primary one is the chateau start time)
-                        // Actually, if we are in the grace period, we should keep everything that hasn't expired naturally
-                        // But for now, let's just keep everything that was there before
-
-                        // Insert the old trip update
                         trip_updates.insert(trip_update_id.clone(), old_trip_update.clone());
 
-                        // Update lookups
                         if let Some(trip_id) = &old_trip_update.trip.trip_id {
                             trip_updates_lookup_by_trip_id_to_trip_update_ids
                                 .entry(trip_id.clone().into())
@@ -1928,8 +1868,6 @@ pub async fn new_rt_data(
         }
     }
 
-    //Insert data back into process-wide authoritative_data_store
-
     let fast_hash_of_routes =
         catenary::fast_hash(&vehicle_routes_cache.iter().collect::<BTreeMap<_, _>>());
 
@@ -1968,7 +1906,6 @@ pub async fn new_rt_data(
         .and_modify(|d| *d = aspenised_data.clone())
         .or_insert(aspenised_data.clone());
 
-    // Persistence Logic
     let should_save = match LAST_SAVE_TIME.get_async(chateau_id).await {
         Some(last_save) => Instant::now().duration_since(*last_save.get()) > SAVE_INTERVAL,
         None => true,
