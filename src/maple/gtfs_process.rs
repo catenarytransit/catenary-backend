@@ -1358,7 +1358,7 @@ pub async fn gtfs_process_feed(
                 })
                 .collect::<Vec<_>>();
 
-            for trip_chunk in trip_pg.chunks(1000) {
+            for trip_chunk in trip_pg.chunks(2000) {
                 t_final.push(trip_chunk.to_vec());
             }
         }
