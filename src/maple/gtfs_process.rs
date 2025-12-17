@@ -140,7 +140,7 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
-        "f-hauts~de~france~du~nord~2" => {
+        "f-hauts~de~france~du~nord~1" | "f-hauts~de~france~du~nord~2" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./pfaedle-filtered-france-latest.osm.pbf",

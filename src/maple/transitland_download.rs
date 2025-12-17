@@ -804,7 +804,7 @@ mod tests {
         let parsed_url = Url::parse(url).unwrap();
 
         let response = try_to_download("f-genentech", &client, url, &parsed_url).await;
-        
+
         match response {
             Ok(resp) => {
                 println!("Response status: {}", resp.status());
@@ -813,7 +813,7 @@ mod tests {
                 assert!(bytes.is_ok());
                 let len = bytes.unwrap().len();
                 println!("Downloaded {} bytes", len);
-                assert!(len > 1000); 
+                assert!(len > 1000);
             }
             Err(e) => {
                 panic!("Download failed: {:?}", e);
