@@ -653,243 +653,260 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                     .send();
             }
 
-            futures::stream::iter(
-                feeds_to_process
-                .into_iter()
-                .map(|(feed_id, attempt_id, chateau_id)| {
-                            let gtfs_uncompressed_temp_storage = gtfs_uncompressed_temp_storage.clone();
-                            //clone the smart reference to the connection pool
-                            let arc_conn_pool = Arc::clone(&arc_conn_pool);
-                            let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
-                            let ingest_progress = Arc::clone(&ingest_progress);
-                            let elasticclient = elasticclient.clone();
+            // Use true tokio multithreading with spawn_blocking and semaphore for concurrency control
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(get_threads_gtfs()));
+            let mut handles = Vec::new();
 
-                            let discord_log_env = discord_log_env.clone();
+            for (feed_id, attempt_id, chateau_id) in feeds_to_process {
+                let sem = Arc::clone(&semaphore);
+                let gtfs_uncompressed_temp_storage = gtfs_uncompressed_temp_storage.clone();
+                let arc_conn_pool = Arc::clone(&arc_conn_pool);
+                let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
+                let ingest_progress = Arc::clone(&ingest_progress);
+                let elasticclient = elasticclient.clone();
+                let discord_log_env = discord_log_env.clone();
 
-                            async move {
-                                //connect to postgres
-                                let conn_pool = arc_conn_pool.as_ref();
-                                let conn_pre = conn_pool.get().await;
-                                let conn = &mut conn_pre.unwrap();
-        
-                                 let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
+                let handle = tokio::spawn(async move {
+                    // Acquire semaphore permit for concurrency control
+                    let _permit = sem.acquire().await.unwrap();
 
-                                let get_hash_of_file_contents = catenary::hashfolder::hash_folder_sip_zero(
-                                    std::path::Path::new(format!("{}/{}", gtfs_uncompressed_temp_storage, &feed_id).as_str())
-                                ).await;
+                    // Spawn blocking task for true multithreading
+                    tokio::task::spawn_blocking(move || {
+                        // Create a new tokio runtime for this blocking thread
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .unwrap();
 
-                                let get_hash_of_file_contents = match get_hash_of_file_contents {
-                                
-                                    Ok(hash) => Some(hash),
-                                    Err(_) => None,
-                                
-                                };
-
-                                let hash_of_file_contents_string = get_hash_of_file_contents.map(|hash| hash.to_string());
-
-                                use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
-                                
-                                use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
-                                //search for matching hash in the database
-
-                                let matching_hash_rows = ingested_static
-                                    .filter(catenary::schema::gtfs::ingested_static::dsl::hash_of_file_contents.eq(hash_of_file_contents_string.clone()))
-                                    .filter(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(false))
-                                    .filter(catenary::schema::gtfs::ingested_static::dsl::ingestion_version.eq(MAPLE_INGESTION_VERSION))
-                                    .select(catenary::models::IngestedStatic::as_select())
-                                    .load::<catenary::models::IngestedStatic>(conn)
-                                    .await
-                                    .unwrap();
-
-                                let file_contents_exists = matching_hash_rows.len() > 0;
-
-                                if !file_contents_exists || std::env::var("FORCE_INGEST_ALL").is_ok() {
-                                    if delete_everything_in_feed_before_ingest {
-                                        let wipe_whole_feed_result = wipe_whole_feed(
-                                            &feed_id,
-                                            Arc::clone(&arc_conn_pool)
-                                        ).await;
-
-                                        if wipe_whole_feed_result.is_ok() {
-                                            println!("Wiped whole feed of {} prior to ingestion", feed_id);
-                                        } else {
-                                            eprintln!("Failed to wipe whole feed of {} prior to ingestion", feed_id);
-                                        }
-                                    }
-
-                                    let start_time = chrono::Utc::now().timestamp_millis();
-                                
-                                    // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
-                                    let gtfs_process_result = gtfs_process_feed(
-                                        &gtfs_uncompressed_temp_storage,
-                                        &feed_id,
-                                        Arc::clone(&arc_conn_pool),
-                                        &chateau_id,
-                                        &attempt_id,
-                                        this_download_data,
-                                        elasticclient.as_deref()
-                                    )
-                                    .await;
-
-                                    let mut ingest_progress = ingest_progress.lock().unwrap();
-                                    *ingest_progress += 1;
-            
-                                    println!(
-                                        "Completion progress: {}/{} [{:.2}%]",
-                                        ingest_progress,
-                                        total_feeds_to_process,
-                                        (*ingest_progress as f32/total_feeds_to_process as f32) * 100.0
-                                    );
-
-                                    std::mem::drop(ingest_progress);
-        
-                                    if gtfs_process_result.is_ok() {
-                                        // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
-        
-                                        let _ = diesel::update(static_download_attempts)
-                                            .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
-                                            .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
-                                            .set(catenary::schema::gtfs::static_download_attempts::dsl::ingested.eq(true))
-                                            .execute(conn)
-                                            .await;
-
-
-                                        let ingested_static_pq = catenary::models::IngestedStatic {
-                                            onestop_feed_id: feed_id.clone(),
-                                            attempt_id: attempt_id.clone(),
-                                            languages_avaliable: vec![],
-                                            file_hash: format!("{}",download_feed_info_hashmap.get(&feed_id).unwrap().hash.unwrap()),
-                                            ingest_start_unix_time_ms: start_time,
-                                            ingest_end_unix_time_ms: chrono::Utc::now().timestamp_millis(),
-                                            ingest_duration_ms: (chrono::Utc::now().timestamp_millis() - start_time) as i32,
-                                            ingesting_in_progress: false,
-                                            ingestion_errored: false,
-                                            ingestion_successfully_finished: true,
-                                            deleted: false,
-                                            default_lang: gtfs_process_result.as_ref().unwrap().default_lang.clone(),
-                                            production: false,
-                                            feed_expiration_date: None,
-                                            feed_start_date: None,
-                                            ingestion_version: MAPLE_INGESTION_VERSION,
-                                            hash_of_file_contents: hash_of_file_contents_string.clone(),
-                                        };
-
-                                        let ingested_static_result = diesel::insert_into(ingested_static)
-                                            .values(&ingested_static_pq)
-                                            .on_conflict_do_nothing()
-                                            .execute(conn)
-                                            .await;
-
-                                        if ingested_static_result.is_ok() {
-                                            
-                                            println!("Assigning production tables for {} / {}", feed_id, attempt_id);
-                                        let assign_prod_tables = assign_production_tables::assign_production_tables(
-                                            &feed_id,
-                                            &attempt_id,
-                                            Arc::clone(&arc_conn_pool),
-                                            gtfs_process_result.as_ref().unwrap().bbox
-                                        ).await;
-
-                                        
-                                            println!("{} No longer in progress. Drop in progress lock", feed_id);
-                                    use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
-
-                                    let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
-                                    .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
-                                .execute(conn).await;
-                                        }
-
-                                    } else {
-                                        //print output
-                                        eprintln!("GTFS process failed for feed {},\n {:?}", feed_id, gtfs_process_result.as_ref().unwrap_err());
+                        rt.block_on(async {
+                            //connect to postgres
+                            let conn_pool = arc_conn_pool.as_ref();
+                            let conn_pre = conn_pool.get().await;
+                            let conn = &mut conn_pre.unwrap();
     
-                                        if let Ok(discord_log_env) = &discord_log_env {
-                                            let hook_result = Webhook::new(discord_log_env.as_str())
-                                        .username("Catenary Maple")
-                                        .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
-                                        .content("")
-                                        .add_embed(
-                                            Embed::new()
-                                                .title("GTFS error")
-                                                .description(format!("feed import failed for `{}`,\n {:?}", feed_id, gtfs_process_result.as_ref().unwrap_err())),
-                                        )
-                                        .send();
-                                        }
-                                        
+                             let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
 
-                                        //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
-                                        use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
-                                        
-                                        let update_as_failed = diesel::update(static_download_attempts
+                            let get_hash_of_file_contents = catenary::hashfolder::hash_folder_sip_zero(
+                                std::path::Path::new(format!("{}/{}", gtfs_uncompressed_temp_storage, &feed_id).as_str())
+                            ).await;
+
+                            let get_hash_of_file_contents = match get_hash_of_file_contents {
+                            
+                                Ok(hash) => Some(hash),
+                                Err(_) => None,
+                            
+                            };
+
+                            let hash_of_file_contents_string = get_hash_of_file_contents.map(|hash| hash.to_string());
+
+                            use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
+                            
+                            use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
+                            //search for matching hash in the database
+
+                            let matching_hash_rows = ingested_static
+                                .filter(catenary::schema::gtfs::ingested_static::dsl::hash_of_file_contents.eq(hash_of_file_contents_string.clone()))
+                                .filter(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(false))
+                                .filter(catenary::schema::gtfs::ingested_static::dsl::ingestion_version.eq(MAPLE_INGESTION_VERSION))
+                                .select(catenary::models::IngestedStatic::as_select())
+                                .load::<catenary::models::IngestedStatic>(conn)
+                                .await
+                                .unwrap();
+
+                            let file_contents_exists = matching_hash_rows.len() > 0;
+
+                            if !file_contents_exists || std::env::var("FORCE_INGEST_ALL").is_ok() {
+                                if delete_everything_in_feed_before_ingest {
+                                    let wipe_whole_feed_result = wipe_whole_feed(
+                                        &feed_id,
+                                        Arc::clone(&arc_conn_pool)
+                                    ).await;
+
+                                    if wipe_whole_feed_result.is_ok() {
+                                        println!("Wiped whole feed of {} prior to ingestion", feed_id);
+                                    } else {
+                                        eprintln!("Failed to wipe whole feed of {} prior to ingestion", feed_id);
+                                    }
+                                }
+
+                                let start_time = chrono::Utc::now().timestamp_millis();
+                            
+                                // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
+                                let gtfs_process_result = gtfs_process_feed(
+                                    &gtfs_uncompressed_temp_storage,
+                                    &feed_id,
+                                    Arc::clone(&arc_conn_pool),
+                                    &chateau_id,
+                                    &attempt_id,
+                                    this_download_data,
+                                    elasticclient.as_deref()
+                                )
+                                .await;
+
+                                let mut ingest_progress = ingest_progress.lock().unwrap();
+                                *ingest_progress += 1;
+        
+                                println!(
+                                    "Completion progress: {}/{} [{:.2}%]",
+                                    ingest_progress,
+                                    total_feeds_to_process,
+                                    (*ingest_progress as f32/total_feeds_to_process as f32) * 100.0
+                                );
+
+                                std::mem::drop(ingest_progress);
+    
+                                if gtfs_process_result.is_ok() {
+                                    // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
+    
+                                    let _ = diesel::update(static_download_attempts)
                                         .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
                                         .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
-                                        ).set(catenary::schema::gtfs::static_download_attempts::dsl::failed.eq(true))
+                                        .set(catenary::schema::gtfs::static_download_attempts::dsl::ingested.eq(true))
                                         .execute(conn)
                                         .await;
 
-                                        if update_as_failed.is_err() {
 
-                                        } else {
-                                        //Delete objects from the attempt
-                                        let delete_attempt = delete_attempt_objects(&feed_id, &attempt_id, Arc::clone(&arc_conn_pool)).await;
+                                    let ingested_static_pq = catenary::models::IngestedStatic {
+                                        onestop_feed_id: feed_id.clone(),
+                                        attempt_id: attempt_id.clone(),
+                                        languages_avaliable: vec![],
+                                        file_hash: format!("{}",download_feed_info_hashmap.get(&feed_id).unwrap().hash.unwrap()),
+                                        ingest_start_unix_time_ms: start_time,
+                                        ingest_end_unix_time_ms: chrono::Utc::now().timestamp_millis(),
+                                        ingest_duration_ms: (chrono::Utc::now().timestamp_millis() - start_time) as i32,
+                                        ingesting_in_progress: false,
+                                        ingestion_errored: false,
+                                        ingestion_successfully_finished: true,
+                                        deleted: false,
+                                        default_lang: gtfs_process_result.as_ref().unwrap().default_lang.clone(),
+                                        production: false,
+                                        feed_expiration_date: None,
+                                        feed_start_date: None,
+                                        ingestion_version: MAPLE_INGESTION_VERSION,
+                                        hash_of_file_contents: hash_of_file_contents_string.clone(),
+                                    };
 
-                                        if delete_attempt.is_ok() {
-                                            use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
+                                    let ingested_static_result = diesel::insert_into(ingested_static)
+                                        .values(&ingested_static_pq)
+                                        .on_conflict_do_nothing()
+                                        .execute(conn)
+                                        .await;
 
-                                            let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
-                                            .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
-                                        .execute(conn).await;
-                                        }
+                                    if ingested_static_result.is_ok() {
+                                        
+                                        println!("Assigning production tables for {} / {}", feed_id, attempt_id);
+                                    let assign_prod_tables = assign_production_tables::assign_production_tables(
+                                        &feed_id,
+                                        &attempt_id,
+                                        Arc::clone(&arc_conn_pool),
+                                        gtfs_process_result.as_ref().unwrap().bbox
+                                    ).await;
 
-                                        let delete_from_elastic_search = if let Some(elasticclient) = &elasticclient {
-                                            delete_attempt_objects_elasticsearch(&feed_id, &attempt_id, elasticclient).await
-                                        } else {
-                                            Ok(())
-                                        };
-
-                                        if let Err(delete_from_elastic_search) = delete_from_elastic_search.as_ref() {
-                                            eprintln!("delete from elastic failed {:?}", delete_from_elastic_search);
-                                        }
-
-                                        if delete_attempt.is_ok() && delete_from_elastic_search.is_ok() {
-                                            use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
-
-                                            let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
-                                            .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
-                                        .execute(conn).await;
-                                        }
-                                        }
-                                    }
-                                } else {
-                                    println!("Feed {} already exists in database, skipping ingestion", feed_id);
-
-                                    let _ = diesel::update(static_download_attempts)
-                                            .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
-                                            .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
-                                            .set(catenary::schema::gtfs::static_download_attempts::dsl::ingested.eq(true))
-                                            .execute(conn)
-                                            .await;
                                     
-                                    let mut ingest_progress = ingest_progress.lock().unwrap();
-                                    *ingest_progress += 1;
-            
-                                    println!(
-                                        "Completion progress: {}/{} [{:.2}%]",
-                                        ingest_progress,
-                                        total_feeds_to_process,
-                                        (*ingest_progress as f32/total_feeds_to_process as f32) * 100.0
-                                    );
+                                        println!("{} No longer in progress. Drop in progress lock", feed_id);
+                                use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
 
-                                    std::mem::drop(ingest_progress);
+                                let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
+                                .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
+                            .execute(conn).await;
+                                    }
+
+                                } else {
+                                    //print output
+                                    eprintln!("GTFS process failed for feed {},\n {:?}", feed_id, gtfs_process_result.as_ref().unwrap_err());
+
+                                    if let Ok(discord_log_env) = &discord_log_env {
+                                        let hook_result = Webhook::new(discord_log_env.as_str())
+                                    .username("Catenary Maple")
+                                    .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
+                                    .content("")
+                                    .add_embed(
+                                        Embed::new()
+                                            .title("GTFS error")
+                                            .description(format!("feed import failed for `{}`,\n {:?}", feed_id, gtfs_process_result.as_ref().unwrap_err())),
+                                    )
+                                    .send();
+                                    }
+                                    
+
+                                    //UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as failure
+                                    use catenary::schema::gtfs::static_download_attempts::dsl::static_download_attempts;
+                                    
+                                    let update_as_failed = diesel::update(static_download_attempts
+                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
+                                    .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
+                                    ).set(catenary::schema::gtfs::static_download_attempts::dsl::failed.eq(true))
+                                    .execute(conn)
+                                    .await;
+
+                                    if update_as_failed.is_err() {
+
+                                    } else {
+                                    //Delete objects from the attempt
+                                    let delete_attempt = delete_attempt_objects(&feed_id, &attempt_id, Arc::clone(&arc_conn_pool)).await;
+
+                                    if delete_attempt.is_ok() {
+                                        use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
+
+                                        let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
+                                        .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
+                                    .execute(conn).await;
+                                    }
+
+                                    let delete_from_elastic_search = if let Some(elasticclient) = &elasticclient {
+                                        delete_attempt_objects_elasticsearch(&feed_id, &attempt_id, elasticclient).await
+                                    } else {
+                                        Ok(())
+                                    };
+
+                                    if let Err(delete_from_elastic_search) = delete_from_elastic_search.as_ref() {
+                                        eprintln!("delete from elastic failed {:?}", delete_from_elastic_search);
+                                    }
+
+                                    if delete_attempt.is_ok() && delete_from_elastic_search.is_ok() {
+                                        use catenary::schema::gtfs::in_progress_static_ingests::dsl::in_progress_static_ingests;
+
+                                        let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
+                                        .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
+                                    .execute(conn).await;
+                                    }
+                                    }
                                 }
+                            } else {
+                                println!("Feed {} already exists in database, skipping ingestion", feed_id);
+
+                                let _ = diesel::update(static_download_attempts)
+                                        .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
+                                        .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
+                                        .set(catenary::schema::gtfs::static_download_attempts::dsl::ingested.eq(true))
+                                        .execute(conn)
+                                        .await;
                                 
-                                   
+                                let mut ingest_progress = ingest_progress.lock().unwrap();
+                                *ingest_progress += 1;
+        
+                                println!(
+                                    "Completion progress: {}/{} [{:.2}%]",
+                                    ingest_progress,
+                                    total_feeds_to_process,
+                                    (*ingest_progress as f32/total_feeds_to_process as f32) * 100.0
+                                );
+
+                                std::mem::drop(ingest_progress);
                             }
-                    }
-            ))
-            .buffer_unordered(get_threads_gtfs())
-            .collect::<Vec<()>>()
-            .await;
+                        })
+                    })
+                    .await
+                    .unwrap()
+                });
+
+                handles.push(handle);
+            }
+
+            // Wait for all tasks to complete
+            for handle in handles {
+                let _ = handle.await;
+            }
 
             // delete static feeds that no longer exist
 
