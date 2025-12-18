@@ -143,7 +143,10 @@ pub async fn gtfs_process_feed(
         "f-hauts~de~france~du~nord~1"
         | "f-dunkerque~fr"
         | "f-hauts~de~france~du~nord~2"
-        | "f-rhdf62com~seau~interurbain~fr" => {
+        | "f-rhdf62com~seau~interurbain~fr"
+        | "f-rhdf80com~seau~interurbain~fr"
+        | "f-rhdf80sco~seau~scolaire~fr"
+        | "f-hauts~de~france~loise~1" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./pfaedle-filtered-france-latest.osm.pbf",
