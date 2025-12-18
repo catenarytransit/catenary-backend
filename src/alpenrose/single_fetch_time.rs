@@ -9,6 +9,7 @@ use dashmap::DashMap;
 use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
+use flixbus_gtfs_realtime::aggregator::Aggregator;
 use futures::StreamExt;
 use gtfs_realtime::alert;
 use lazy_static::lazy_static;
@@ -42,6 +43,8 @@ lazy_static! {
         "f-northern~indiana~commuter~transportation~district~catenary~alerts~rt",
         "f-9vff-fortworthtransportationauthority~rt~catenary~unwire",
         "f-9vg-dart~rt~catenary~unwire",
+        "f-flixbus~eu~rt",
+        "f-flixbus~us~rt",
     ]);
 }
 
@@ -103,6 +106,8 @@ pub async fn single_fetch_time(
     chicago_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
     rtcquebec_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
     mnr_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
+    flixbus_us_aggregator: Arc<Option<Aggregator>>,
+    flixbus_eu_aggregator: Arc<Option<Aggregator>>,
     etcd_urls: Arc<Vec<String>>,
     etcd_connection_options: Option<etcd_client::ConnectOptions>,
     lease_id: i64,
@@ -137,6 +142,8 @@ pub async fn single_fetch_time(
                 let chicago_text_str = chicago_text_str.clone();
                 let chicago_gtfs = chicago_gtfs.clone();
                 let mnr_gtfs = mnr_gtfs.clone();
+                let flixbus_us_aggregator = flixbus_us_aggregator.clone();
+                let flixbus_eu_aggregator = flixbus_eu_aggregator.clone();
 
                 let mut kv_client = etcd.kv_client();
                 let mut lease_client = etcd.lease_client();
@@ -616,6 +623,28 @@ pub async fn single_fetch_time(
                                     &client,
                                 )
                                 .await;
+                            }
+                            "f-flixbus~us~rt" => {
+                                if let Some(aggregator) = flixbus_us_aggregator.as_ref() {
+                                    if let Err(e) = custom_rt_feeds::flixbus::fetch_flixbus_data(
+                                        &mut kv_client,
+                                        &feed_id,
+                                        aggregator,
+                                    ).await {
+                                        eprintln!("Error fetching flixbus us: {}", e);
+                                    }
+                                }
+                            }
+                            "f-flixbus~eu~rt" => {
+                                if let Some(aggregator) = flixbus_eu_aggregator.as_ref() {
+                                    if let Err(e) = custom_rt_feeds::flixbus::fetch_flixbus_data(
+                                        &mut kv_client,
+                                        &feed_id,
+                                        aggregator,
+                                    ).await {
+                                        eprintln!("Error fetching flixbus eu: {}", e);
+                                    }
+                                }
                             }
                             _ => {}
                         }

@@ -56,6 +56,8 @@ use crate::single_fetch_time::UrlType;
 use bytes::Buf;
 use catenary::bincode_deserialize;
 use catenary::bincode_serialize;
+use flixbus_gtfs_realtime::aggregator::Aggregator;
+use flixbus_gtfs_realtime::client::FlixbusClient;
 use get_feed_metadata::RealtimeFeedFetch;
 use scc::HashMap as SccHashMap;
 use std::io::prelude::*;
@@ -210,6 +212,14 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         eprintln!("mnr fetch failed {:#?}", e);
     }
 
+    println!("Downloading Flixbus US gtfs...");
+    let flixbus_us_gtfs_url = "http://gtfs.gis.flix.tech/gtfs_generic_us.zip";
+    let flixbus_us_resp = client.get(flixbus_us_gtfs_url).send().await;
+
+    println!("Downloading Flixbus EU gtfs...");
+    let flixbus_eu_gtfs_url = "http://gtfs.gis.flix.tech/gtfs_generic_eu.zip";
+    let flixbus_eu_resp = client.get(flixbus_eu_gtfs_url).send().await;
+
     //renew the etcd lease
 
     let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
@@ -245,6 +255,44 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .map(|mnr_bytes| gtfs_structures::Gtfs::from_reader(io::Cursor::new(mnr_bytes)).unwrap());
 
     let mnr_gtfs = Arc::new(mnr_gtfs);
+
+    // Parse Flixbus US
+    let flixbus_us_bytes: Option<bytes::Bytes> = match flixbus_us_resp {
+        Ok(resp) => Some(resp.bytes().await?),
+        Err(e) => {
+            eprintln!("Failed to download Flixbus US: {:#?}", e);
+            None
+        }
+    };
+    let flixbus_us_aggregator = flixbus_us_bytes.as_ref().map(|b| {
+        let gtfs = gtfs_structures::Gtfs::from_reader(io::Cursor::new(b))
+            .expect("Failed to parse Flixbus US GTFS");
+        let client = FlixbusClient::new();
+        Aggregator::new(client, gtfs)
+    });
+    let flixbus_us_aggregator = Arc::new(flixbus_us_aggregator);
+    if flixbus_us_aggregator.is_some() {
+        println!("Flixbus US Aggregator initialized.");
+    }
+
+    // Parse Flixbus EU
+    let flixbus_eu_bytes: Option<bytes::Bytes> = match flixbus_eu_resp {
+        Ok(resp) => Some(resp.bytes().await?),
+        Err(e) => {
+            eprintln!("Failed to download Flixbus EU: {:#?}", e);
+            None
+        }
+    };
+    let flixbus_eu_aggregator = flixbus_eu_bytes.as_ref().map(|b| {
+        let gtfs = gtfs_structures::Gtfs::from_reader(io::Cursor::new(b))
+            .expect("Failed to parse Flixbus EU GTFS");
+        let client = FlixbusClient::new();
+        Aggregator::new(client, gtfs)
+    });
+    let flixbus_eu_aggregator = Arc::new(flixbus_eu_aggregator);
+    if flixbus_eu_aggregator.is_some() {
+        println!("Flixbus EU Aggregator initialized.");
+    }
 
     let chicago_trips_str = Arc::new(match chicago_bytes.as_ref() {
         Some(schedule_bytes) => {
@@ -472,6 +520,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&chicago_gtfs),
                 Arc::clone(&rtc_quebec_gtfs),
                 Arc::clone(&mnr_gtfs),
+                Arc::clone(&flixbus_us_aggregator),
+                Arc::clone(&flixbus_eu_aggregator),
                 etcd_urls.clone(),
                 etcd_connection_options.clone(),
                 etcd_lease_id,
