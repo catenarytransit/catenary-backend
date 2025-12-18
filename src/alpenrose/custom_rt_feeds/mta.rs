@@ -49,7 +49,7 @@ pub async fn fetch_mta_metronorth_data(
     etcd: &mut etcd_client::KvClient,
     feed_id: &str,
     client: &reqwest::Client,
-    mnr_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
+    mnr_gtfs: &gtfs_structures::Gtfs,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let fetch_url = "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=MNR";
 
@@ -63,30 +63,28 @@ pub async fn fetch_mta_metronorth_data(
 
     if let Ok(request) = request {
         if let Ok(gtfs_rt_trips) = gtfs_rt_trips {
-            if let Some(mnr_gtfs) = mnr_gtfs.as_ref() {
-                let mnr_trip_id_fixed = mnr_trip_id_fixer(mnr_gtfs, gtfs_rt_trips);
+            let mnr_trip_id_fixed = mnr_trip_id_fixer(mnr_gtfs, gtfs_rt_trips);
 
-                let body = request.text().await.unwrap();
+            let body = request.text().await.unwrap();
 
-                let import_data = serde_json::from_str::<Vec<MtaTrain>>(body.as_str());
+            let import_data = serde_json::from_str::<Vec<MtaTrain>>(body.as_str());
 
-                if let Ok(import_data) = import_data {
-                    let converted = convert(&import_data, MtaRailroad::MNR, &mnr_trip_id_fixed);
+            if let Ok(import_data) = import_data {
+                let converted = convert(&import_data, MtaRailroad::MNR, &mnr_trip_id_fixed);
 
-                    let mnr_vehicle_position = catenary::make_feed_from_entity_vec(converted);
+                let mnr_vehicle_position = catenary::make_feed_from_entity_vec(converted);
 
-                    let mnr_vehicle_position_bytes = mnr_vehicle_position.encode_to_vec();
-                    let mnr_trip_updates_bytes = mnr_trip_id_fixed.encode_to_vec();
+                let mnr_vehicle_position_bytes = mnr_vehicle_position.encode_to_vec();
+                let mnr_trip_updates_bytes = mnr_trip_id_fixed.encode_to_vec();
 
-                    send_mta_rail_to_aspen(
-                        etcd,
-                        MtaRailroad::MNR,
-                        mnr_vehicle_position_bytes,
-                        mnr_trip_updates_bytes,
-                        feed_id,
-                    )
-                    .await;
-                }
+                send_mta_rail_to_aspen(
+                    etcd,
+                    MtaRailroad::MNR,
+                    mnr_vehicle_position_bytes,
+                    mnr_trip_updates_bytes,
+                    feed_id,
+                )
+                .await;
             }
         }
     }
