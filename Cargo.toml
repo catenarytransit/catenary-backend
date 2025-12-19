@@ -196,7 +196,7 @@ i24 = { version = "2.2.6", features = [
     "num-cast",
     "std",
 ] }
-flixbus-gtfs-realtime = "0.1.2"
+flixbus-gtfs-realtime = "0.1.3"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
