@@ -140,6 +140,14 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
+        "f-bus~dft~gov~uk~england" | "f-bus~dft~gov~uk~scotland" | "f-bus~dft~gov~uk~wales" => {
+        let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./pfaedle-filtered-great-britain-latest.osm.pbf",
+                None,
+                false,
+            )?;
+        }
         "f-hauts~de~france~du~nord~1"
         | "f-dunkerque~fr"
         | "f-hauts~de~france~du~nord~2"
