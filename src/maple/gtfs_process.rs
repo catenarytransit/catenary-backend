@@ -1,12 +1,12 @@
 // Copyright Kyler Chin <kyler@catenarymaps.org>
 // Catenary Transit Initiatives
-// Attribution cannot be removed
+// Removal of the attribution is not allowed, as covered under the AGPL license
 
+
+// Initial version 3 of ingest written by Kyler Chin
 use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 use anyhow::Context;
-// Initial version 3 of ingest written by Kyler Chin
-// Removal of the attribution is not allowed, as covered under the AGPL license
 use crate::DownloadedFeedsInformation;
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::shape_colour_calculator::ShapeToColourResponse;
