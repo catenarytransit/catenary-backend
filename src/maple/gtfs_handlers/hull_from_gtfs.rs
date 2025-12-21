@@ -107,7 +107,23 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
 
     let hull = if longest_side > 500_000.0 && !gtfs.shapes.is_empty() {
         let longest_side_geom = longest_side_length_metres(&convex_hull);
-        chi_shape(&multi_point.0, 0.5 * longest_side_geom.length).unwrap_or(convex_hull)
+        println!(
+            "Computing chi shape with {} points and {} maximum side length",
+            multi_point.0.len(),
+            longest_side_geom.length
+        );
+        let chi_shape_output = chi_shape(&multi_point.0, 0.5 * longest_side_geom.length);
+
+        if let Some(chi_shape_output) = &chi_shape_output {
+            println!(
+                "Chi shape computed successfully, {} points",
+                chi_shape_output.0.len()
+            );
+        } else {
+            println!("Chi shape failed");
+        }
+
+        chi_shape_output.unwrap_or(convex_hull)
     } else {
         convex_hull
     };
@@ -131,6 +147,11 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
     let buffer_distance_degrees = buffer_distance_metres / lat_conversion;
 
     let buffered_hull = buffer_polygon(&hull, buffer_distance_degrees);
+
+    println!(
+        "Buffered hull computed successfully, {} polygons",
+        buffered_hull.len()
+    );
 
     // buffer_polygon returns a MultiPolygon.
     // We want a single Polygon.
