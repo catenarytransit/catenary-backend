@@ -2,10 +2,12 @@ use catenary::is_null_island;
 use geo::algorithm::convex_hull::ConvexHull;
 use geo::coord;
 use geo::prelude::*;
-use geo::{BoundingRect, Coord, MultiPoint, Point, Polygon};
-use geo_buffer::buffer_polygon;
+use geo::{
+    Area, BooleanOps, BoundingRect, Coord, LineString, MultiPoint, MultiPolygon, Point, Polygon,
+};
 use gtfs_structures::RouteType;
 use lazy_static::lazy_static;
+use std::f64::consts::PI;
 
 use catenary::hull::chi_shape;
 
@@ -141,25 +143,75 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
         },
     };
 
-    // Convert metres to degrees (approximate)
-    // 1 degree latitude is ~111km
-    let lat_conversion = 111_000.0;
-    let buffer_distance_degrees = buffer_distance_metres / lat_conversion;
+    // 1. Setup Projection
+    // We center the projection on the first point (arbitrary, but sufficient for local area)
+    let center_point = hull
+        .exterior()
+        .points()
+        .next()
+        .unwrap_or(Point::new(0.0, 0.0));
+    let projection = LocalProjection::new(center_point);
+    let smoothness = 12; // Points per semi-circle
 
-    let buffered_hull = buffer_polygon(&hull, buffer_distance_degrees);
+    let mut buffered_polygons: Vec<Polygon<f64>> = Vec::new();
 
-    println!(
-        "Buffered hull computed successfully, {} polygons",
-        buffered_hull.0.len()
-    );
+    // 2. Project and Buffer each segment
+    for line in hull.exterior().lines() {
+        if line.start == line.end {
+            continue;
+        }
+        let p_start = projection.forward(Point::from(line.start));
+        let p_end = projection.forward(Point::from(line.end));
 
-    // buffer_polygon returns a MultiPolygon.
-    // We want a single Polygon.
-    // Since we are buffering a single connected polygon (the hull), the result should usually be a single polygon.
-    // If it's not, we'll take the one with the largest area or just the first one.
-    // For now, let's take the first one.
+        let stadium = create_stadium(p_start, p_end, buffer_distance_metres, smoothness);
+        buffered_polygons.push(stadium);
+    }
 
-    buffered_hull.into_iter().next()
+    // 3. Include the original polygon (projected)
+    let projected_exterior_coords: Vec<Coord<f64>> = hull
+        .exterior()
+        .coords()
+        .map(|c| {
+            let p = projection.forward(Point::from(*c));
+            Coord { x: p.x(), y: p.y() }
+        })
+        .collect();
+    let projected_poly = Polygon::new(LineString::new(projected_exterior_coords), vec![]);
+    buffered_polygons.push(projected_poly);
+
+    // 4. Compute Union (Merge the stadiums into one shape)
+    // We use the pure-rust 'BooleanOps' trait here.
+    let mut result_poly = MultiPolygon::new(vec![buffered_polygons[0].clone()]);
+
+    for poly in &buffered_polygons[1..] {
+        let current_mp = MultiPolygon::new(vec![poly.clone()]);
+        result_poly = result_poly.union(&current_mp);
+    }
+
+    // 5. Reproject back to WGS84
+    // We take the largest polygon from the result.
+    let largest_poly = result_poly.0.into_iter().max_by(|a, b| {
+        a.unsigned_area()
+            .partial_cmp(&b.unsigned_area())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    if let Some(poly) = largest_poly {
+        let final_wgs84_coords: Vec<Coord<f64>> = poly
+            .exterior()
+            .coords()
+            .map(|c| {
+                let p = projection.inverse(Point::new(c.x, c.y));
+                Coord { x: p.x(), y: p.y() }
+            })
+            .collect();
+
+        let final_polygon = Polygon::new(LineString::new(final_wgs84_coords), vec![]);
+        println!("Buffered hull computed successfully via stadium method, 1 polygon");
+        Some(final_polygon)
+    } else {
+        None
+    }
 }
 
 struct PolygonSide {
@@ -199,4 +251,102 @@ pub fn longest_side_length_metres(polygon: &geo::Polygon<f64>) -> PolygonSide {
     }
 
     longest_side
+}
+
+/// Constants for WGS84 approximation
+const EARTH_RADIUS: f64 = 6_378_137.0; // in metres
+
+/// A struct to handle the projection between WGS84 and a Local Metric Plane
+struct LocalProjection {
+    center_lat: f64,
+    center_lon: f64,
+}
+
+impl LocalProjection {
+    fn new(center: Point<f64>) -> Self {
+        Self {
+            center_lat: center.y(),
+            center_lon: center.x(),
+        }
+    }
+
+    /// Converts WGS84 (lon, lat) to Local (x, y) in metres
+    fn forward(&self, point: Point<f64>) -> Point<f64> {
+        let d_lat = (point.y() - self.center_lat).to_radians();
+        let d_lon = (point.x() - self.center_lon).to_radians();
+
+        let lat_rad = self.center_lat.to_radians();
+
+        // precise local approximation
+        let x = d_lon * lat_rad.cos() * EARTH_RADIUS;
+        let y = d_lat * EARTH_RADIUS;
+
+        Point::new(x, y)
+    }
+
+    /// Converts Local (x, y) back to WGS84 (lon, lat)
+    fn inverse(&self, point: Point<f64>) -> Point<f64> {
+        let lat_rad = self.center_lat.to_radians();
+
+        let d_lon = point.x() / (lat_rad.cos() * EARTH_RADIUS);
+        let d_lat = point.y() / EARTH_RADIUS;
+
+        let lon = self.center_lon + d_lon.to_degrees();
+        let lat = self.center_lat + d_lat.to_degrees();
+
+        Point::new(lon, lat)
+    }
+}
+
+/// Generates a "Stadium" polygon (buffered line segment) with rounded caps
+fn create_stadium(
+    start: Point<f64>,
+    end: Point<f64>,
+    radius: f64,
+    num_points: usize,
+) -> Polygon<f64> {
+    let dx = end.x() - start.x();
+    let dy = end.y() - start.y();
+    let len = (dx * dx + dy * dy).sqrt();
+
+    // Normal vector (perpendicular to the line)
+    // Avoid division by zero
+    let (_nx, _ny) = if len == 0.0 {
+        (0.0, 0.0)
+    } else {
+        (-dy / len, dx / len)
+    };
+
+    let mut points = Vec::new();
+
+    // 1. Generate the right-side semi-circle (around the 'end' point)
+    // Angle of the line
+    let angle = dy.atan2(dx);
+    // Start angle for the cap (line angle - 90 degrees)
+    let start_angle = angle - PI / 2.0;
+
+    for i in 0..=num_points {
+        let theta = start_angle + (PI * i as f64 / num_points as f64);
+        let px = end.x() + radius * theta.cos();
+        let py = end.y() + radius * theta.sin();
+        points.push((px, py));
+    }
+
+    // 2. Generate the left-side semi-circle (around the 'start' point)
+    // Start angle for the cap (line angle + 90 degrees)
+    let start_angle_2 = angle + PI / 2.0;
+
+    for i in 0..=num_points {
+        let theta = start_angle_2 + (PI * i as f64 / num_points as f64);
+        let px = start.x() + radius * theta.cos();
+        let py = start.y() + radius * theta.sin();
+        points.push((px, py));
+    }
+
+    // Close the ring
+    if !points.is_empty() {
+        points.push(points[0]);
+    }
+
+    Polygon::new(LineString::from(points), vec![])
 }
