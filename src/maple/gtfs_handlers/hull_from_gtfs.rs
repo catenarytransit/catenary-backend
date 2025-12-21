@@ -117,7 +117,7 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
         if let Some(chi_shape_output) = &chi_shape_output {
             println!(
                 "Chi shape computed successfully, {} points",
-                chi_shape_output.0.len()
+                chi_shape_output.exterior().0.len()
             );
         } else {
             println!("Chi shape failed");
@@ -150,7 +150,7 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
 
     println!(
         "Buffered hull computed successfully, {} polygons",
-        buffered_hull.len()
+        buffered_hull.0.len()
     );
 
     // buffer_polygon returns a MultiPolygon.
