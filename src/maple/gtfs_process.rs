@@ -480,8 +480,8 @@ pub async fn gtfs_process_feed(
             }
 
             if let Some(main_gold_runner) = gtfs.routes.get_mut("SJ2") {
-                main_gold_runner.route_short_name = None;
-                main_gold_runner.route_long_name = Some("Gold Runner".to_string());
+                main_gold_runner.short_name = None;
+                main_gold_runner.long_name = Some("Gold Runner".to_string());
             }
 
             gtfs
