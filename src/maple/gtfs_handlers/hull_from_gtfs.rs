@@ -2,12 +2,12 @@ use catenary::is_null_island;
 use geo::algorithm::convex_hull::ConvexHull;
 use geo::coord;
 use geo::prelude::*;
-use geo::{Coord, MultiPoint, Point, Polygon};
+use geo::{BoundingRect, Coord, MultiPoint, Point, Polygon};
 use geo_buffer::buffer_polygon;
 use gtfs_structures::RouteType;
 use lazy_static::lazy_static;
 
-use crate::hull::chi_shape;
+use catenary::hull::chi_shape;
 
 lazy_static! {
     static ref BANNED_OCEAN_GEO: geo::MultiPolygon<f64> = geo::MultiPolygon::new(vec![
@@ -132,7 +132,13 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
 
     let buffered_hull = buffer_polygon(&hull, buffer_distance_degrees);
 
-    Some(buffered_hull)
+    // buffer_polygon returns a MultiPolygon.
+    // We want a single Polygon.
+    // Since we are buffering a single connected polygon (the hull), the result should usually be a single polygon.
+    // If it's not, we'll take the one with the largest area or just the first one.
+    // For now, let's take the first one.
+
+    buffered_hull.into_iter().next()
 }
 
 struct PolygonSide {
