@@ -97,7 +97,7 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
 
     let convex_hull = multi_point.convex_hull();
 
-    let bbox = multi_point.bounding_box().unwrap();
+    let bbox = multi_point.bounding_rect().unwrap();
     let width = Point::new(bbox.min().x, bbox.min().y)
         .haversine_distance(&Point::new(bbox.max().x, bbox.min().y));
     let height = Point::new(bbox.min().x, bbox.min().y)
