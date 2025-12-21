@@ -1,19 +1,13 @@
-use actix_web::Route;
 use catenary::is_null_island;
-use geo::BooleanOps;
-use geo::Centroid;
-use geo::Distance;
-use geo::HaversineDistance;
-use geo::RhumbBearing;
-use geo::RhumbDestination;
-use geo::algorithm::concave_hull::ConcaveHull;
 use geo::algorithm::convex_hull::ConvexHull;
 use geo::coord;
 use geo::prelude::*;
-use geo::{Coord, MultiPoint, Point, Polygon, convex_hull};
+use geo::{Coord, MultiPoint, Point, Polygon};
 use geo_buffer::buffer_polygon;
 use gtfs_structures::RouteType;
 use lazy_static::lazy_static;
+
+use crate::hull::chi_shape;
 
 lazy_static! {
     static ref BANNED_OCEAN_GEO: geo::MultiPolygon<f64> = geo::MultiPolygon::new(vec![
@@ -101,14 +95,26 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
 
     let multi_point = MultiPoint(new_point_collection);
 
-    let concave_hull = multi_point.concave_hull(1.0);
     let convex_hull = multi_point.convex_hull();
 
-    let centroid = convex_hull.centroid().unwrap();
+    let bbox = multi_point.bounding_box().unwrap();
+    let width = Point::new(bbox.min().x, bbox.min().y)
+        .haversine_distance(&Point::new(bbox.max().x, bbox.min().y));
+    let height = Point::new(bbox.min().x, bbox.min().y)
+        .haversine_distance(&Point::new(bbox.min().x, bbox.max().y));
 
-    //buffer the convex hull by 5km if bus only, 10km for metros, but 50km if contains rail or other modes
+    let longest_side = width.max(height);
 
-    let buffer_distance = match extremely_large_shape_file {
+    let hull = if longest_side > 500_000.0 && !gtfs.shapes.is_empty() {
+        let longest_side_geom = longest_side_length_metres(&convex_hull);
+        chi_shape(&multi_point.0, 0.5 * longest_side_geom.length).unwrap_or(convex_hull)
+    } else {
+        convex_hull
+    };
+
+    //buffer the hull by 5km if bus only, 10km for metros, but 50km if contains rail or other modes
+
+    let buffer_distance_metres = match extremely_large_shape_file {
         true => 20000.0,
         false => match bus_only {
             true => 5000.0,
@@ -119,14 +125,14 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
         },
     };
 
-    let mut buffered_convex_hull =
-        buffer_geo_polygon_internal(convex_hull, buffer_distance).unwrap();
+    // Convert metres to degrees (approximate)
+    // 1 degree latitude is ~111km
+    let lat_conversion = 111_000.0;
+    let buffer_distance_degrees = buffer_distance_metres / lat_conversion;
 
-    //convert concave hull back into multipoint
+    let buffered_hull = buffer_polygon(&hull, buffer_distance_degrees);
 
-    let concave_hull_points = concave_hull.exterior().points().collect::<MultiPoint<_>>();
-
-    Some(buffered_convex_hull)
+    Some(buffered_hull)
 }
 
 struct PolygonSide {
@@ -166,43 +172,4 @@ pub fn longest_side_length_metres(polygon: &geo::Polygon<f64>) -> PolygonSide {
     }
 
     longest_side
-}
-
-pub fn buffer_geo_polygon_internal(
-    polygon: geo::Polygon<f64>,
-    distance_metres: f64,
-) -> Option<geo::Polygon<f64>> {
-    let centre = polygon.centroid();
-
-    match centre {
-        Some(centre) => {
-            let mut points = Vec::new();
-
-            let points_of_polygon = polygon.exterior().points().collect::<Vec<_>>();
-
-            for original_point in points_of_polygon {
-                //calculate bearing between the centre and the point
-
-                let bearing = centre.rhumb_bearing(original_point);
-
-                // calculate the distance_metres between the centre and the point
-
-                let distance = centre.haversine_distance(&original_point);
-
-                // calculate the new point
-
-                let new_point = centre.rhumb_destination(bearing, distance + distance_metres);
-
-                points.push(new_point);
-            }
-
-            let new_polygon = geo::Polygon::new(
-                geo::LineString::new(points.into_iter().map(|x| Coord::from(x)).collect()),
-                vec![],
-            );
-
-            Some(new_polygon)
-        }
-        None => None,
-    }
 }

@@ -11,9 +11,6 @@ struct ScoredEdge {
     index: usize,
     /// The calculated length (Haversine for geo)
     length: f64,
-    /// The indices of the start and end points
-    start: usize,
-    end: usize,
 }
 
 // Implement ordering for the max-heap (longest edges first)
@@ -56,11 +53,9 @@ fn haversine_distance(p1: Point, p2: Point) -> f64 {
 ///
 /// # Arguments
 /// * `points` - A vector of geo_types::Point (lon, lat).
-/// * `chi_factor` - A normalized parameter [0.0, 1.0].
-///     * 1.0 results in the Convex Hull.
-///     * Lower values result in more concave shapes.
-///     * 0.0 attempts to erode as much as topologically possible.
-pub fn chi_shape(points: &[Point], chi_factor: f64) -> Option<Polygon<f64>> {
+/// * `length_threshold` - The absolute length threshold for edge erosion (in metres).
+///     Edges longer than this will be eroded if topology allows.
+pub fn chi_shape(points: &[Point], length_threshold: f64) -> Option<Polygon<f64>> {
     if points.len() < 3 {
         return None;
     }
@@ -104,38 +99,11 @@ pub fn chi_shape(points: &[Point], chi_factor: f64) -> Option<Polygon<f64>> {
             heap.push(ScoredEdge {
                 index: e,
                 length: len,
-                start,
-                end,
             });
         }
     }
 
-    // 3. Determine Length Threshold
-    // The paper defines P (chi) as a normalized percentage of the range of lengths.
-    // However, exact min/max edge length of the *Delaunay* graph is required.
-    // We compute global min/max edge lengths from the triangulation for normalization.
-    let mut min_len = f64::MAX;
-    let mut max_len = f64::MIN;
-
-    // We must check all edges in the triangulation to set the scale correctly
-    for t in 0..num_triangles {
-        for offset in 0..3 {
-            let e = 3 * t + offset;
-            let start = triangulation.triangles[e];
-            let end = triangulation.triangles[delaunator::next_halfedge(e)];
-            let len = get_length(start, end);
-            if len < min_len {
-                min_len = len;
-            }
-            if len > max_len {
-                max_len = len;
-            }
-        }
-    }
-
-    let length_threshold = min_len + (max_len - min_len) * chi_factor;
-
-    // 4. Erosion Process
+    // 3. Erosion Process
     // We track removed triangles to avoid processing them.
     let mut removed_triangles = vec![false; num_triangles];
 
@@ -227,8 +195,6 @@ pub fn chi_shape(points: &[Point], chi_factor: f64) -> Option<Polygon<f64>> {
             heap.push(ScoredEdge {
                 index: opp_next,
                 length: get_length(start, end),
-                start,
-                end,
             });
         }
 
@@ -239,8 +205,6 @@ pub fn chi_shape(points: &[Point], chi_factor: f64) -> Option<Polygon<f64>> {
             heap.push(ScoredEdge {
                 index: opp_prev,
                 length: get_length(start, end),
-                start,
-                end,
             });
         }
 
