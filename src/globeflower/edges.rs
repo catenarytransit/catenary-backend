@@ -1,4 +1,4 @@
-use crate::geometry_utils::{average_polylines, is_contained};
+use crate::geometry_utils::{average_polylines, average_polylines_weighted, is_contained};
 use crate::clustering::StopCluster;
 use anyhow::Result;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -158,7 +158,19 @@ pub async fn generate_edges(
     let zippered_edges = snap_clusters_to_edges(split_edges, clusters, 50.0); // 50m threshold
     println!("Zippering resulted in {} edges.", zippered_edges.len());
     
-    Ok(merge_edges(zippered_edges))
+    let merged = merge_edges(zippered_edges);
+    
+    // Apply post-processing pipeline as in loom:
+    // smoothenOutliers(50) → simplify(1) → densify(5) → chaikin(1) → simplify(1)
+    let processed: Vec<GraphEdge> = merged.into_iter().map(|mut edge| {
+        let geom = convert_to_geo(&edge.geometry);
+        let processed = post_process_line(&geom);
+        edge.geometry = convert_from_geo(&processed);
+        edge
+    }).collect();
+    
+    println!("Post-processed {} edges.", processed.len());
+    Ok(processed)
 }
 
 fn merge_edges(raw_edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
@@ -229,6 +241,109 @@ fn chaikin_smoothing(line: &GeoLineString<f64>, iterations: usize) -> GeoLineStr
     }
     current
 }
+
+/// Post-processing pipeline matching loom's approach:
+/// smoothenOutliers(50) → simplify(1) → densify(5) → chaikin(1) → simplify(1)
+fn post_process_line(line: &GeoLineString<f64>) -> GeoLineString<f64> {
+    // Convert distances from metres to approximate degrees
+    // 50m ≈ 0.00045 degrees, 5m ≈ 0.000045, 1m ≈ 0.000009
+    let smoothed = smoothen_outliers(line, 0.00045);
+    let simplified1 = simplify_line(&smoothed, 0.000009);
+    let densified = densify_line(&simplified1, 0.000045);
+    let chaikin = chaikin_smoothing(&densified, 1);
+    simplify_line(&chaikin, 0.000009)
+}
+
+/// Remove outlier points that create sharp angles (matching loom's smoothenOutliers).
+fn smoothen_outliers(line: &GeoLineString<f64>, threshold: f64) -> GeoLineString<f64> {
+    if line.0.len() < 4 {
+        return line.clone();
+    }
+    
+    let mut result = Vec::new();
+    result.push(line.0[0]);
+    
+    for i in 1..line.0.len().saturating_sub(2) {
+        let prev = line.0[i - 1];
+        let curr = line.0[i];
+        let next = line.0[i + 1];
+        
+        // Calculate inner angle using dot product
+        let v1 = (prev.x - curr.x, prev.y - curr.y);
+        let v2 = (next.x - curr.x, next.y - curr.y);
+        
+        let len1 = (v1.0 * v1.0 + v1.1 * v1.1).sqrt();
+        let len2 = (v2.0 * v2.0 + v2.1 * v2.1).sqrt();
+        
+        if len1 < 1e-10 || len2 < 1e-10 {
+            result.push(curr);
+            continue;
+        }
+        
+        let dot = v1.0 * v2.0 + v1.1 * v2.1;
+        let cos_angle = dot / (len1 * len2);
+        let angle_deg = cos_angle.clamp(-1.0, 1.0).acos().to_degrees();
+        
+        // If angle < 35 degrees and point is close to neighbours, remove it
+        let dist_prev = ((curr.x - prev.x).powi(2) + (curr.y - prev.y).powi(2)).sqrt();
+        let dist_next = ((curr.x - next.x).powi(2) + (curr.y - next.y).powi(2)).sqrt();
+        
+        if angle_deg < 35.0 && (dist_prev < threshold || dist_next < threshold) {
+            continue;
+        }
+        
+        result.push(curr);
+    }
+    
+    // Add last two points
+    if line.0.len() >= 2 {
+        result.push(line.0[line.0.len() - 2]);
+    }
+    result.push(line.0[line.0.len() - 1]);
+    
+    GeoLineString::new(result)
+}
+
+/// Simplify a line using Douglas-Peucker algorithm.
+fn simplify_line(line: &GeoLineString<f64>, epsilon: f64) -> GeoLineString<f64> {
+    use geo::Simplify;
+    line.simplify(epsilon)
+}
+
+/// Densify a line by adding points so no segment is longer than max_dist.
+fn densify_line(line: &GeoLineString<f64>, max_dist: f64) -> GeoLineString<f64> {
+    if line.0.len() < 2 {
+        return line.clone();
+    }
+    
+    let mut result = Vec::new();
+    result.push(line.0[0]);
+    
+    for i in 1..line.0.len() {
+        let start = line.0[i - 1];
+        let end = line.0[i];
+        
+        let dx = end.x - start.x;
+        let dy = end.y - start.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        
+        if dist > max_dist {
+            let num_segments = (dist / max_dist).ceil() as usize;
+            for j in 1..num_segments {
+                let t = j as f64 / num_segments as f64;
+                result.push(Coord {
+                    x: start.x + dx * t,
+                    y: start.y + dy * t,
+                });
+            }
+        }
+        
+        result.push(end);
+    }
+    
+    GeoLineString::new(result)
+}
+
 // Basic implementation of line substring
 fn get_line_substring(line: &GeoLineString<f64>, start_frac: f64, end_frac: f64) -> Option<GeoLineString<f64>> {
     let mut coords = Vec::new();
@@ -395,7 +510,9 @@ fn detect_intersections(edges: &[GraphEdge]) -> Vec<GeoPoint<f64>> {
         for i in 1..points.len() {
             let p = points[i];
             let prev = unique_points.last().unwrap();
-            if (p.x() - prev.x()).abs() > 1e-6 || (p.y() - prev.y()).abs() > 1e-6 {
+            // Loom uses MAX_EQ_DISTANCE = 15m for point equality
+            // In degrees: 15 / 111111 ≈ 0.000135
+            if (p.x() - prev.x()).abs() > 0.000135 || (p.y() - prev.y()).abs() > 0.000135 {
                 unique_points.push(p);
             }
         }
@@ -691,13 +808,9 @@ fn bundle_edges(edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
     let mut edge_groups: std::collections::HashMap<(NodeId, NodeId), Vec<GraphEdge>> = std::collections::HashMap::new();
 
     for edge in edges {
-        // Canonical key (undirected) to merge parallel tracks
-        let key = if edge.from < edge.to {
-            (edge.from.clone(), edge.to.clone())
-        } else {
-            (edge.to.clone(), edge.from.clone())
-        };
-        edge_groups.entry(key).or_default().push(edge);
+        // Preserve edge direction - don't use undirected keys
+        // This matches loom's behaviour where A→B and B→A are distinct edges
+        edge_groups.entry((edge.from, edge.to)).or_default().push(edge);
     }
 
     let mut final_edges = Vec::new();
@@ -741,10 +854,15 @@ fn bundle_edges(edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
             }
         }
         
-        // 2. Average Combine (Loom-style)
+        // 2. Average Combine (Loom-style) with weighted averaging
         if group.len() > 1 {
            let geoms: Vec<geo::LineString<f64>> = group.iter().map(|e| convert_to_geo(&e.geometry)).collect();
-           let avg_geom = average_polylines(&geoms);
+           
+           // Weight by route count squared (as in loom's geomAvg)
+           let weights: Vec<f64> = group.iter()
+               .map(|e| (e.route_ids.len() as f64).powi(2))
+               .collect();
+           let avg_geom = average_polylines_weighted(&geoms, Some(&weights));
            
            let mut all_routes = Vec::new();
            let mut total_weight = 0.0;

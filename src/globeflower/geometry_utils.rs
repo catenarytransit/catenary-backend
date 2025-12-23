@@ -1,7 +1,11 @@
 use geo::{LineString, Point, CoordsIter, EuclideanLength, EuclideanDistance};
 use geo::prelude::*;
 
-// Helper to get a point at a normalized distance (0.0 to 1.0) along a LineString
+/// Loom's AVERAGING_STEP constant (20 metres in WebMercator).
+/// For lat/lon, we approximate 1 degree ≈ 111,111 metres at the equator.
+const AVERAGING_STEP_DEGREES: f64 = 20.0 / 111_111.0;
+
+/// Get a point at a normalised distance (0.0 to 1.0) along a LineString.
 pub fn get_point_at_ratio(line: &LineString<f64>, ratio: f64) -> Option<Point<f64>> {
     let total_len = line.euclidean_length();
     if total_len == 0.0 {
@@ -25,18 +29,31 @@ pub fn get_point_at_ratio(line: &LineString<f64>, ratio: f64) -> Option<Point<f6
         current_dist += seg_len;
     }
     
-    // Fallback to last point
     line.points().last()
 }
 
-// Check if `inner` is "contained" within `outer` with some tolerance.
-// In loom: checking if every point of inner is within distance of outer.
+/// Check if `inner` is "contained" within `outer` with some tolerance.
+/// Matches loom's behaviour: every point of inner within threshold distance of outer.
 pub fn is_contained(inner: &LineString<f64>, outer: &LineString<f64>, threshold: f64) -> bool {
     inner.points().all(|p| outer.euclidean_distance(&p) <= threshold)
 }
 
-// Average multiple LineStrings into one
+/// Average multiple LineStrings into one.
+/// 
+/// Implements loom's PolyLine::average algorithm:
+/// - Uses distance-based step size (AVERAGING_STEP / longestLength)
 pub fn average_polylines(lines: &[LineString<f64>]) -> LineString<f64> {
+    average_polylines_weighted(lines, None)
+}
+
+/// Weighted averaging of polylines.
+/// 
+/// If weights provided, each line's contribution is scaled by its weight.
+/// Weights should correspond 1:1 with lines (e.g. route_count² per edge as in loom).
+pub fn average_polylines_weighted(
+    lines: &[LineString<f64>], 
+    weights: Option<&[f64]>
+) -> LineString<f64> {
     if lines.is_empty() {
         return LineString::new(vec![]);
     }
@@ -44,36 +61,79 @@ pub fn average_polylines(lines: &[LineString<f64>]) -> LineString<f64> {
         return lines[0].clone();
     }
 
-    let max_len = lines.iter().map(|l| l.euclidean_length()).fold(0.0, f64::max);
-    // Step size from Loom: AVERAGING_STEP / longestLength. 
-    // Loom's AVERAGING_STEP not shown, but likely small constant. 
-    // Let's pick a reasonable step size for meters. If coords are lat/lon, they are approx meters?
-    // Wait, Loom projects to WebMercator (meters). My coords are LatLon (degrees).
-    // Using simple Euclidean on LatLon is bad for length, but for averaging ratio it's inconsistent.
-    // Ideally we project, average, unproject. 
-    // But for simplicity, we'll assume locally flat for ratio calculation.
+    // Fast path for simple two-line averaging (as in loom)
+    let weighted = weights.is_some() && weights.unwrap().len() == lines.len();
+    if !weighted && lines.len() == 2 && lines[0].0.len() == 2 && lines[1].0.len() == 2 {
+        let a = &lines[0].0;
+        let b = &lines[1].0;
+        return LineString::from(vec![
+            ((a[0].x + b[0].x) / 2.0, (a[0].y + b[0].y) / 2.0),
+            ((a[1].x + b[1].x) / 2.0, (a[1].y + b[1].y) / 2.0),
+        ]);
+    }
+
+    // Find longest line length for step size calculation
+    let max_len = lines.iter()
+        .map(|l| l.euclidean_length())
+        .fold(0.0_f64, f64::max);
     
-    // Dynamic step count: e.g. 100 steps, or 1 step per "unit".
-    // Let's use 100 steps for now for smoothness.
-    let steps = 100; 
+    if max_len == 0.0 {
+        return lines[0].clone();
+    }
+
+    // Distance-based step size matching loom's AVERAGING_STEP
+    let step_size = (AVERAGING_STEP_DEGREES / max_len).min(0.1); // Cap at 10 steps minimum
+    
+    // Calculate total weight
+    let total_weight: f64 = if let Some(w) = weights {
+        w.iter().sum()
+    } else {
+        lines.len() as f64
+    };
     
     let mut points = Vec::new();
-    for i in 0..=steps {
-        let ratio = i as f64 / steps as f64;
+    let mut ratio = 0.0;
+    
+    while ratio <= 1.0 {
         let mut sum_x = 0.0;
         let mut sum_y = 0.0;
-        let mut count = 0;
            
-        for line in lines {
-             if let Some(p) = get_point_at_ratio(line, ratio) {
-                 sum_x += p.x();
-                 sum_y += p.y();
-                 count += 1;
-             }
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(p) = get_point_at_ratio(line, ratio) {
+                let w = if let Some(weights) = weights {
+                    weights.get(i).copied().unwrap_or(1.0)
+                } else {
+                    1.0
+                };
+                sum_x += p.x() * w;
+                sum_y += p.y() * w;
+            }
         }
         
-        if count > 0 {
-            points.push((sum_x / count as f64, sum_y / count as f64));
+        if total_weight > 0.0 {
+            points.push((sum_x / total_weight, sum_y / total_weight));
+        }
+        
+        ratio += step_size;
+    }
+    
+    // Ensure we include the final point at ratio=1.0
+    if ratio - step_size < 1.0 {
+        let mut sum_x = 0.0;
+        let mut sum_y = 0.0;
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(p) = get_point_at_ratio(line, 1.0) {
+                let w = if let Some(weights) = weights {
+                    weights.get(i).copied().unwrap_or(1.0)
+                } else {
+                    1.0
+                };
+                sum_x += p.x() * w;
+                sum_y += p.y() * w;
+            }
+        }
+        if total_weight > 0.0 {
+            points.push((sum_x / total_weight, sum_y / total_weight));
         }
     }
     
