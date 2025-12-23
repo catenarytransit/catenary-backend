@@ -118,5 +118,4 @@ The following `cargo clippy` rules are enforced.
 ### Future potential submodule names
 
 - **Truffle** reachability analysis
-- **Cypress**
 - **Chinese plum** (needs to pick better syonym for it)
