@@ -22,7 +22,7 @@ pub struct GraphEdge {
     pub from: NodeId,
     pub to: NodeId,
     pub geometry: LineString<Point>,
-    pub route_ids: Vec<String>,
+    pub route_ids: Vec<(String, String)>, // (chateau, route_id) - chateau ensures uniqueness across agencies
     pub weight: f64, // length in meters
     pub original_edge_index: Option<usize>, // For debugging/zippering traceability
 }
@@ -66,7 +66,7 @@ pub async fn generate_edges(
         .await?;
 
     let mut pattern_to_shape: HashMap<String, String> = HashMap::new();
-    let mut pattern_to_route: HashMap<String, String> = HashMap::new();
+    let mut pattern_to_route: HashMap<String, (String, String)> = HashMap::new(); // (chateau, route_id)
     let mut relevant_shape_ids = HashSet::new();
 
     for m in metas {
@@ -75,7 +75,10 @@ pub async fn generate_edges(
             relevant_shape_ids.insert(sid);
         }
         if let Some(rid) = m.route_id {
-            pattern_to_route.insert(m.direction_pattern_id.clone(), rid.to_string());
+            pattern_to_route.insert(
+                m.direction_pattern_id.clone(), 
+                (m.chateau.clone(), rid.to_string())
+            );
         }
     }
 
@@ -134,7 +137,7 @@ pub async fn generate_edges(
                         from: NodeId::Cluster(fc),
                         to: NodeId::Cluster(tc),
                         geometry: convert_from_geo(&segment),
-                        route_ids: vec![pattern_to_route.get(&pat_id).cloned().unwrap_or_default()],
+                        route_ids: pattern_to_route.get(&pat_id).cloned().into_iter().collect(),
                         weight,
                         original_edge_index: None,
                     });
@@ -183,14 +186,14 @@ fn merge_edges(raw_edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
     for ((from, to), mut group) in groups {
         if group.is_empty() { continue; }
         
-        // Collect all route IDs
-        let mut all_routes = HashSet::new();
+        // Collect all route IDs as (chateau, route_id) tuples
+        let mut all_routes: HashSet<(String, String)> = HashSet::new();
         for e in &group {
             for r in &e.route_ids {
                 all_routes.insert(r.clone());
             }
         }
-        let merged_routes: Vec<String> = all_routes.into_iter().collect();
+        let merged_routes: Vec<(String, String)> = all_routes.into_iter().collect();
         
         // Pick representative geometry: Median length
         group.sort_by(|a, b| a.weight.partial_cmp(&b.weight).unwrap_or(std::cmp::Ordering::Equal));
@@ -982,7 +985,7 @@ mod tests {
             from: NodeId::Cluster(0),
             to: NodeId::Cluster(1),
             geometry: LineString { points: coords, srid: Some(4326) },
-            route_ids: vec!["R1".to_string()],
+            route_ids: vec![("test_chateau".to_string(), "R1".to_string())],
             weight: 10.0,
             original_edge_index: None,
         };
