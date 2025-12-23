@@ -1,6 +1,7 @@
 mod clustering;
 mod edges;
 mod export;
+mod geometry_utils;
 
 use anyhow::Result;
 use catenary::postgres_tools::make_async_pool;

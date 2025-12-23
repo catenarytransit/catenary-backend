@@ -107,7 +107,7 @@ async-std = { version = "1.5.3" }
 geo-repair-polygon = "0.1.2"
 gtfs-translations = "0.1.0"
 geojson = { version = "0.24", features = ["geo-types"] }
-rstar = "0.12.2"
+rstar = "0.12"
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "macros"] }
 tilejson = "0.4.1"
 tile-grid = "0.6"
