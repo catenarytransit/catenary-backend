@@ -1275,14 +1275,19 @@ fn collapse_shared_segments(
                 };
 
                 // Record imgNds mapping for first/last points (like loom's imgNds)
-                // This preserves Cluster identity through the collapse process
+                // This preserves Cluster identity through the collapse process.
+                // CRITICAL FIX: Do NOT preserve Intersection IDs, as they are transient and
+                // the ID space resets every iteration. Mixing old and new Intersection IDs
+                // causes topology corruption ("wormholes").
                 if i == 0 {
-                    // First point maps to edge.from
-                    img_nds.entry(node_id).or_insert(edge.from);
+                    if let NodeId::Cluster(_) = edge.from {
+                        img_nds.entry(node_id).or_insert(edge.from);
+                    }
                 }
                 if i == last_pt_idx {
-                    // Last point maps to edge.to
-                    img_nds.entry(node_id).or_insert(edge.to);
+                    if let NodeId::Cluster(_) = edge.to {
+                        img_nds.entry(node_id).or_insert(edge.to);
+                    }
                 }
 
                 path_nodes.push((node_id, node_pt));
