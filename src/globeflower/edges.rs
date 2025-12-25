@@ -1094,24 +1094,74 @@ fn collapse_shared_segments(
     seg_len: f64,
     max_iters: usize,
 ) -> Vec<GraphEdge> {
+    #[derive(Debug, Clone, Copy, PartialEq)]
     struct SnappedNode {
         id: usize,
         point: [f64; 2],
-        heading: f64,
     }
 
-    impl RTreeObject for SnappedNode {
-        type Envelope = AABB<[f64; 2]>;
-        fn envelope(&self) -> Self::Envelope {
-            AABB::from_point(self.point)
+    struct SimpleGrid {
+        cell_size: f64,
+        cells: HashMap<(i32, i32), Vec<usize>>,
+        nodes: HashMap<usize, SnappedNode>,
+    }
+
+    impl SimpleGrid {
+        fn new(cell_size: f64) -> Self {
+            Self {
+                cell_size,
+                cells: HashMap::new(),
+                nodes: HashMap::new(),
+            }
         }
-    }
 
-    impl RPointDistance for SnappedNode {
-        fn distance_2(&self, point: &[f64; 2]) -> f64 {
-            let dx = self.point[0] - point[0];
-            let dy = self.point[1] - point[1];
-            dx * dx + dy * dy
+        fn get_cell_coords(&self, x: f64, y: f64) -> (i32, i32) {
+            (
+                (x / self.cell_size).floor() as i32,
+                (y / self.cell_size).floor() as i32,
+            )
+        }
+
+        fn insert(&mut self, node: SnappedNode) {
+            let coords = self.get_cell_coords(node.point[0], node.point[1]);
+            self.cells.entry(coords).or_default().push(node.id);
+            self.nodes.insert(node.id, node);
+        }
+
+        fn remove(&mut self, id: usize) {
+            if let Some(node) = self.nodes.remove(&id) {
+                let coords = self.get_cell_coords(node.point[0], node.point[1]);
+                if let Some(indices) = self.cells.get_mut(&coords) {
+                    if let Some(pos) = indices.iter().position(|&x| x == id) {
+                        indices.swap_remove(pos);
+                    }
+                }
+            }
+        }
+
+        fn query(&self, x: f64, y: f64, radius: f64) -> Vec<SnappedNode> {
+            let mut results = Vec::new();
+            let r_sq = radius * radius;
+
+            let min_c = self.get_cell_coords(x - radius, y - radius);
+            let max_c = self.get_cell_coords(x + radius, y + radius);
+
+            for cx in min_c.0..=max_c.0 {
+                for cy in min_c.1..=max_c.1 {
+                    if let Some(indices) = self.cells.get(&(cx, cy)) {
+                        for &id in indices {
+                            if let Some(node) = self.nodes.get(&id) {
+                                let dx = node.point[0] - x;
+                                let dy = node.point[1] - y;
+                                if dx * dx + dy * dy <= r_sq {
+                                    results.push(*node);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            results
         }
     }
 
@@ -1124,7 +1174,7 @@ fn collapse_shared_segments(
 
         let mut node_positions: HashMap<usize, (f64, f64, usize)> = HashMap::new();
         let mut new_edges = Vec::new();
-        let mut node_tree: RTree<SnappedNode> = RTree::new();
+        let mut node_grid = SimpleGrid::new(d_cut);
         let mut next_node_id = 0;
 
         // imgNds: Map from internal node ID → original NodeId (preserves Cluster identity)
@@ -1148,69 +1198,55 @@ fn collapse_shared_segments(
             } else {
                 GeoPoint::new(0.0, 0.0)
             };
+            let front_geom_pt = if !densified.is_empty() {
+                densified[0]
+            } else {
+                GeoPoint::new(0.0, 0.0)
+            };
 
             for i in 0..densified.len() {
                 let p = densified[i];
                 let pt_arr = [p.x(), p.y()];
 
-                // Calculate local heading
-                let heading = if i < densified.len() - 1 {
-                    let next = densified[i + 1];
-                    (next.y() - p.y()).atan2(next.x() - p.x())
-                } else if i > 0 {
-                    let prev = densified[i - 1];
-                    (p.y() - prev.y()).atan2(p.x() - prev.x())
-                } else {
-                    0.0
-                };
-
                 // ITERATE CANDIDATES logic
                 let d_cut_sq = d_cut * d_cut;
-                let candidates = node_tree.locate_within_distance(pt_arr, d_cut_sq);
+                let candidates = node_grid.query(pt_arr[0], pt_arr[1], d_cut);
 
-                let mut best_match: Option<(usize, GeoPoint<f64>)> = None;
+                let mut best_match: Option<(usize, GeoPoint<f64>, SnappedNode)> = None;
                 let mut min_dist_sq = d_cut_sq; // Start with max allowed
 
                 for n in candidates {
-                    let dist_sq = n.distance_2(&pt_arr);
+                    let dist_sq =
+                        (n.point[0] - pt_arr[0]).powi(2) + (n.point[1] - pt_arr[1]).powi(2);
                     if dist_sq >= min_dist_sq {
                         continue;
                     }
 
                     let dist = dist_sq.sqrt();
 
-                    // dSpan Check
-                    let d_span_allowed = if i == last_pt_idx {
-                        f64::INFINITY
-                    } else {
-                        let dist_to_back = ((p.x() - back_geom_pt.x()).powi(2)
-                            + (p.y() - back_geom_pt.y()).powi(2))
-                        .sqrt();
-                        dist_to_back / 1.414
-                    };
+                    let dist_to_back = ((p.x() - back_geom_pt.x()).powi(2)
+                        + (p.y() - back_geom_pt.y()).powi(2))
+                    .sqrt();
+                    let dist_to_front = ((p.x() - front_geom_pt.x()).powi(2)
+                        + (p.y() - front_geom_pt.y()).powi(2))
+                    .sqrt();
 
-                    if dist > d_span_allowed {
+                    let d_span_allowed = (dist_to_back / 1.414);
+                    let d_span_allowed_front = (dist_to_front / 1.414);
+
+                    if dist > d_span_allowed || dist > d_span_allowed_front {
                         continue;
                     }
 
-                    // ANGLE CHECK
-                    let angle_diff = (n.heading - heading).abs();
-                    let angle_diff = if angle_diff > std::f64::consts::PI {
-                        2.0 * std::f64::consts::PI - angle_diff
-                    } else {
-                        angle_diff
-                    };
-                    let is_aligned = angle_diff < 1.047;
-                    let is_anti_aligned = angle_diff > (std::f64::consts::PI - 1.047);
+                    // Loom does not use an angle check here.
+                    // It relies on dSpan and iterative process.
 
-                    if is_aligned || is_anti_aligned {
-                        // Valid candidate, update best
-                        min_dist_sq = dist_sq;
-                        best_match = Some((n.id, GeoPoint::new(n.point[0], n.point[1])));
-                    }
+                    // Valid candidate, update best
+                    min_dist_sq = dist_sq;
+                    best_match = Some((n.id, GeoPoint::new(n.point[0], n.point[1]), n));
                 }
 
-                let (node_id, node_pt) = if let Some((bid, bpt)) = best_match {
+                let (node_id, node_pt) = if let Some((bid, bpt, old_node)) = best_match {
                     let entry = node_positions.entry(bid).or_insert((bpt.x(), bpt.y(), 0));
 
                     entry.0 += pt_arr[0];
@@ -1220,15 +1256,20 @@ fn collapse_shared_segments(
                     let avg_x = entry.0 / entry.2 as f64;
                     let avg_y = entry.1 / entry.2 as f64;
 
+                    // Loom-style: Update the node in the tree to the new average
+                    // Loom-style: Update the node in the grid to the new average
+                    // This ensures subsequent points snap to the MOVING average
+                    node_grid.remove(old_node.id);
+                    node_grid.insert(SnappedNode {
+                        id: bid,
+                        point: [avg_x, avg_y],
+                    });
+
                     (bid, GeoPoint::new(avg_x, avg_y))
                 } else {
                     let id = next_node_id;
                     next_node_id += 1;
-                    node_tree.insert(SnappedNode {
-                        id,
-                        point: pt_arr,
-                        heading,
-                    });
+                    node_grid.insert(SnappedNode { id, point: pt_arr });
                     node_positions.insert(id, (pt_arr[0], pt_arr[1], 1));
                     (id, p)
                 };
