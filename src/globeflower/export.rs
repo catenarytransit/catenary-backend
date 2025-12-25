@@ -148,9 +148,36 @@ fn export_to_geopackage(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result
 
     let mut conn = Connection::open(path)?;
 
-    // Initialize GeoPackage metadata tables
+    // Set GeoPackage application_id (required by spec)
+    conn.execute("PRAGMA application_id = 0x47504B47", [])?; // 'GPKG' in hex
+    conn.execute("PRAGMA user_version = 10300", [])?; // GeoPackage version 1.3.0
+
+    // Initialize GeoPackage metadata tables (order matters for foreign keys)
     conn.execute_batch("
-        -- GeoPackage required tables
+        -- Spatial reference systems table (must be first)
+        CREATE TABLE gpkg_spatial_ref_sys (
+            srs_name TEXT NOT NULL,
+            srs_id INTEGER NOT NULL PRIMARY KEY,
+            organization TEXT NOT NULL,
+            organization_coordsys_id INTEGER NOT NULL,
+            definition TEXT NOT NULL,
+            description TEXT
+        );
+        
+        -- Required SRS entries per GeoPackage spec
+        INSERT INTO gpkg_spatial_ref_sys VALUES(
+            'Undefined cartesian SRS', -1, 'NONE', -1, 'undefined', 'undefined cartesian coordinate reference system'
+        );
+        INSERT INTO gpkg_spatial_ref_sys VALUES(
+            'Undefined geographic SRS', 0, 'NONE', 0, 'undefined', 'undefined geographic coordinate reference system'
+        );
+        INSERT INTO gpkg_spatial_ref_sys VALUES(
+            'WGS 84 geodetic', 4326, 'EPSG', 4326,
+            'GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"4326\"]]',
+            'longitude/latitude coordinates in decimal degrees on the WGS 84 spheroid'
+        );
+        
+        -- Contents table
         CREATE TABLE gpkg_contents (
             table_name TEXT NOT NULL PRIMARY KEY,
             data_type TEXT NOT NULL,
@@ -165,15 +192,7 @@ fn export_to_geopackage(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result
             CONSTRAINT fk_gc_r_srs_id FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys(srs_id)
         );
         
-        CREATE TABLE gpkg_spatial_ref_sys (
-            srs_name TEXT NOT NULL,
-            srs_id INTEGER NOT NULL PRIMARY KEY,
-            organization TEXT NOT NULL,
-            organization_coordsys_id INTEGER NOT NULL,
-            definition TEXT NOT NULL,
-            description TEXT
-        );
-        
+        -- Geometry columns table
         CREATE TABLE gpkg_geometry_columns (
             table_name TEXT NOT NULL,
             column_name TEXT NOT NULL,
@@ -184,13 +203,6 @@ fn export_to_geopackage(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result
             CONSTRAINT pk_geom_cols PRIMARY KEY (table_name, column_name),
             CONSTRAINT fk_gc_tn FOREIGN KEY (table_name) REFERENCES gpkg_contents(table_name),
             CONSTRAINT fk_gc_srs FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys(srs_id)
-        );
-        
-        -- Add WGS84 spatial reference
-        INSERT INTO gpkg_spatial_ref_sys VALUES(
-            'WGS 84', 4326, 'EPSG', 4326,
-            'GEOGCS[''WGS 84'',DATUM[''WGS_1984'',SPHEROID[''WGS 84'',6378137,298.257223563]],PRIMEM[''Greenwich'',0],UNIT[''degree'',0.0174532925199433]]',
-            'WGS 84 geographic coordinate system'
         );
     ")?;
 
