@@ -305,30 +305,41 @@ fn export_to_geopackage(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result
     Ok(())
 }
 
-/// Convert a LineString to GeoPackage WKB format
+/// Convert a LineString to GeoPackage Binary (GPB) format
 fn linestring_to_gpkg_wkb(
     geom: &postgis_diesel::types::LineString<postgis_diesel::types::Point>,
 ) -> Vec<u8> {
-    let mut wkb = Vec::new();
+    let mut gpb = Vec::new();
 
-    // GeoPackage header (8 bytes)
-    wkb.push(0x47); // 'G'
-    wkb.push(0x50); // 'P'
-    wkb.push(0x00); // version
-    wkb.push(0x01); // flags: little endian, no envelope
-    wkb.extend_from_slice(&4326i32.to_le_bytes()); // SRID
+    // GeoPackage Binary header (8 bytes minimum)
+    // Magic: 0x47 0x50 ("GP")
+    gpb.push(0x47); // 'G'
+    gpb.push(0x50); // 'P'
 
-    // Standard WKB
-    wkb.push(0x01); // little endian
-    wkb.extend_from_slice(&2u32.to_le_bytes()); // LineString type
-    wkb.extend_from_slice(&(geom.points.len() as u32).to_le_bytes());
+    // Version: 0 for GeoPackage 1.0+
+    gpb.push(0x00);
+
+    // Flags byte:
+    // bits 0-2: envelope type (0 = no envelope)
+    // bit 3: endianness (0 = big endian, 1 = little endian)
+    // bit 4: empty geometry flag
+    // bits 5-7: reserved
+    gpb.push(0b00001000); // bit 3 = little endian, bits 0-2 = 0 = no envelope
+
+    // SRS ID (4 bytes, little endian since flag bit 3 = 1)
+    gpb.extend_from_slice(&4326i32.to_le_bytes());
+
+    // Standard WKB follows
+    gpb.push(0x01); // WKB little endian byte order
+    gpb.extend_from_slice(&2u32.to_le_bytes()); // wkbLineString = 2
+    gpb.extend_from_slice(&(geom.points.len() as u32).to_le_bytes());
 
     for pt in &geom.points {
-        wkb.extend_from_slice(&pt.x.to_le_bytes());
-        wkb.extend_from_slice(&pt.y.to_le_bytes());
+        gpb.extend_from_slice(&pt.x.to_le_bytes());
+        gpb.extend_from_slice(&pt.y.to_le_bytes());
     }
 
-    wkb
+    gpb
 }
 
 /// Convert a Point to GeoPackage WKB format
@@ -339,7 +350,7 @@ fn point_to_gpkg_wkb(x: f64, y: f64) -> Vec<u8> {
     wkb.push(0x47); // 'G'
     wkb.push(0x50); // 'P'
     wkb.push(0x00); // version  
-    wkb.push(0x01); // flags: little endian, no envelope
+    wkb.push(0b00001000); // bit 3 = little endian, bits 0-2 = 0 = no envelope
     wkb.extend_from_slice(&4326i32.to_le_bytes()); // SRID
 
     // Standard WKB
