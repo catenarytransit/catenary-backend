@@ -93,6 +93,7 @@ pub async fn generate_edges(
     let loaded_shapes = user_shapes_dsl::shapes
         .filter(user_shapes_dsl::shape_id.eq_any(&relevant_shape_ids))
         .filter(user_shapes_dsl::stop_to_stop_generated.eq(false))
+        .filter(user_shapes_dsl::route_type.eq_any(vec![0, 1, 2]))
         .load::<catenary::models::Shape>(&mut conn)
         .await?;
 
@@ -170,7 +171,7 @@ pub async fn generate_edges(
             group.len()
         );
 
-        // Collapse shared segments within this chateau
+        // Collapse shared segments within this chateau using Loom-style algorithm
         let collapsed = collapse_shared_segments(group, 0.0005, 0.0001, 10);
         let bundled = bundle_edges(collapsed);
         all_bundled.extend(bundled);
@@ -1286,6 +1287,10 @@ fn collapse_shared_segments(
 
         edges = simplify_graph_serial(new_edges);
 
+        // Artifact removal: Remove very short edges (like Loom's removeEdgeArtifacts)
+        // This contracts edges shorter than d_cut by merging their endpoints
+        edges = remove_short_edge_artifacts(edges, d_cut);
+
         let len_new: f64 = edges.iter().map(|e| e.weight).sum();
 
         // Convergence/divergence check
@@ -1433,7 +1438,7 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         GraphEdge {
             from: first.from,
             to: last.to,
-            geometry: convert_from_geo(&GeoLineString::new(coords)),
+            geometry: convert_from_geo(&post_process_line(&GeoLineString::new(coords))),
             route_ids: route_vec,
             weight: total_weight,
             original_edge_index: first.original_edge_index,
@@ -1532,6 +1537,111 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
     }
 
     simplified
+}
+
+/// Remove short edge artifacts by merging their endpoints (Loom's removeEdgeArtifacts).
+/// This contracts edges shorter than d_cut by replacing both endpoints with their midpoint.
+fn remove_short_edge_artifacts(edges: Vec<GraphEdge>, d_cut: f64) -> Vec<GraphEdge> {
+    let mut result = edges;
+    let mut changed = true;
+
+    while changed {
+        changed = false;
+
+        // Find edges shorter than d_cut (in degrees)
+        let mut short_edges: Vec<(usize, f64)> = Vec::new();
+        for (i, edge) in result.iter().enumerate() {
+            let geom = convert_to_geo(&edge.geometry);
+            let len = geom.euclidean_length();
+            if len < d_cut {
+                short_edges.push((i, len));
+            }
+        }
+
+        if short_edges.is_empty() {
+            break;
+        }
+
+        // Sort by length (shortest first)
+        short_edges.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Take the shortest edge and contract it
+        let (short_idx, _) = short_edges[0];
+        let short_edge = &result[short_idx];
+
+        // Don't contract if both endpoints are clusters (preserve station identity)
+        if matches!(short_edge.from, NodeId::Cluster(_))
+            && matches!(short_edge.to, NodeId::Cluster(_))
+        {
+            // Remove this edge but don't merge nodes
+            result.remove(short_idx);
+            changed = true;
+            continue;
+        }
+
+        // Calculate midpoint
+        let geom = convert_to_geo(&short_edge.geometry);
+        let mid = if geom.0.len() >= 2 {
+            let first = geom.0[0];
+            let last = geom.0[geom.0.len() - 1];
+            Coord {
+                x: (first.x + last.x) / 2.0,
+                y: (first.y + last.y) / 2.0,
+            }
+        } else if !geom.0.is_empty() {
+            geom.0[0]
+        } else {
+            Coord { x: 0.0, y: 0.0 }
+        };
+
+        // Decide which node to keep (prefer Cluster over Intersection)
+        let (keep_node, replace_node) = match (short_edge.from, short_edge.to) {
+            (NodeId::Cluster(_), _) => (short_edge.from, short_edge.to),
+            (_, NodeId::Cluster(_)) => (short_edge.to, short_edge.from),
+            _ => (short_edge.from, short_edge.to),
+        };
+
+        // Remove the short edge and update all other edges
+        let mut new_edges = Vec::new();
+        for (i, edge) in result.into_iter().enumerate() {
+            if i == short_idx {
+                continue; // Skip the contracted edge
+            }
+
+            let mut e = edge;
+
+            // Replace references to replace_node with keep_node
+            if e.from == replace_node {
+                e.from = keep_node;
+                // Update geometry start point
+                let mut geom = convert_to_geo(&e.geometry);
+                if !geom.0.is_empty() {
+                    geom.0[0] = mid;
+                }
+                e.geometry = convert_from_geo(&geom);
+            }
+            if e.to == replace_node {
+                e.to = keep_node;
+                // Update geometry end point
+                let mut geom = convert_to_geo(&e.geometry);
+                if !geom.0.is_empty() {
+                    let last_idx = geom.0.len() - 1;
+                    geom.0[last_idx] = mid;
+                }
+                e.geometry = convert_from_geo(&geom);
+            }
+
+            // Skip self-loops
+            if e.from != e.to {
+                new_edges.push(e);
+            }
+        }
+
+        result = new_edges;
+        changed = true;
+    }
+
+    result
 }
 
 #[cfg(test)]

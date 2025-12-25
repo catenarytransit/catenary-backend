@@ -319,14 +319,15 @@ fn linestring_to_gpkg_wkb(
     // Version: 0 for GeoPackage 1.0+
     gpb.push(0x00);
 
-    // Flags byte:
-    // bits 0-2: envelope type (0 = no envelope)
-    // bit 3: endianness (0 = big endian, 1 = little endian)
+    // Flags byte (per OGC GeoPackage spec):
+    // bit 0: endianness (0 = big endian, 1 = little endian)
+    // bits 1-3: envelope type (0 = no envelope)
     // bit 4: empty geometry flag
-    // bits 5-7: reserved
-    gpb.push(0b00001000); // bit 3 = little endian, bits 0-2 = 0 = no envelope
+    // bit 5: extended flag
+    // bits 6-7: reserved
+    gpb.push(0b00000001); // bit 0 = 1 = little endian, bits 1-3 = 0 = no envelope
 
-    // SRS ID (4 bytes, little endian since flag bit 3 = 1)
+    // SRS ID (4 bytes, little endian since flag bit 0 = 1)
     gpb.extend_from_slice(&4326i32.to_le_bytes());
 
     // Standard WKB follows
@@ -350,7 +351,7 @@ fn point_to_gpkg_wkb(x: f64, y: f64) -> Vec<u8> {
     wkb.push(0x47); // 'G'
     wkb.push(0x50); // 'P'
     wkb.push(0x00); // version  
-    wkb.push(0b00001000); // bit 3 = little endian, bits 0-2 = 0 = no envelope
+    wkb.push(0b00000001); // bit 0 = 1 = little endian, bits 1-3 = 0 = no envelope
     wkb.extend_from_slice(&4326i32.to_le_bytes()); // SRID
 
     // Standard WKB
