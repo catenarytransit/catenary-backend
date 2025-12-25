@@ -92,6 +92,7 @@ pub async fn generate_edges(
 
     let loaded_shapes = user_shapes_dsl::shapes
         .filter(user_shapes_dsl::shape_id.eq_any(&relevant_shape_ids))
+        .filter(user_shapes_dsl::stop_to_stop_generated.eq(false))
         .load::<catenary::models::Shape>(&mut conn)
         .await?;
 
