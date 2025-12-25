@@ -1083,6 +1083,10 @@ fn collapse_shared_segments(
         let mut node_tree: RTree<SnappedNode> = RTree::new();
         let mut next_node_id = 0;
 
+        // imgNds: Map from internal node ID → original NodeId (preserves Cluster identity)
+        // This is critical for maintaining station identity through the collapse process
+        let mut img_nds: HashMap<usize, NodeId> = HashMap::new();
+
         // Calculate len_old BEFORE edges are consumed by the for loop
         let len_old: f64 = edges.iter().map(|e| e.weight).sum();
 
@@ -1164,14 +1168,10 @@ fn collapse_shared_segments(
 
                 let (node_id, node_pt) = if let Some((bid, bpt)) = best_match {
                     let entry = node_positions.entry(bid).or_insert((bpt.x(), bpt.y(), 0));
-                    // Note: bpt is n.point (initial).
-                    // Better to use entry values from map?
-                    // actually 'best_match' stores node initial pos.
-                    // We must update the running average.
 
                     entry.0 += pt_arr[0];
                     entry.1 += pt_arr[1];
-                    entry.2 += 1; // Count
+                    entry.2 += 1;
 
                     let avg_x = entry.0 / entry.2 as f64;
                     let avg_y = entry.1 / entry.2 as f64;
@@ -1180,7 +1180,6 @@ fn collapse_shared_segments(
                 } else {
                     let id = next_node_id;
                     next_node_id += 1;
-                    // Init count 1
                     node_tree.insert(SnappedNode {
                         id,
                         point: pt_arr,
@@ -1189,6 +1188,18 @@ fn collapse_shared_segments(
                     node_positions.insert(id, (pt_arr[0], pt_arr[1], 1));
                     (id, p)
                 };
+
+                // Record imgNds mapping for first/last points (like loom's imgNds)
+                // This preserves Cluster identity through the collapse process
+                if i == 0 {
+                    // First point maps to edge.from
+                    img_nds.entry(node_id).or_insert(edge.from);
+                }
+                if i == last_pt_idx {
+                    // Last point maps to edge.to
+                    img_nds.entry(node_id).or_insert(edge.to);
+                }
+
                 path_nodes.push((node_id, node_pt));
             }
 
@@ -1199,10 +1210,20 @@ fn collapse_shared_segments(
                     continue;
                 }
 
+                // Use the imgNds mapping to preserve original NodeId (especially Cluster)
+                let from_node = img_nds
+                    .get(&u_id)
+                    .copied()
+                    .unwrap_or(NodeId::Intersection(u_id));
+                let to_node = img_nds
+                    .get(&v_id)
+                    .copied()
+                    .unwrap_or(NodeId::Intersection(v_id));
+
                 let segment_len = u_pt.haversine_distance(&v_pt);
                 new_edges.push(GraphEdge {
-                    from: NodeId::Intersection(u_id),
-                    to: NodeId::Intersection(v_id),
+                    from: from_node,
+                    to: to_node,
                     geometry: convert_from_geo(&GeoLineString::new(vec![
                         Coord {
                             x: u_pt.x(),
