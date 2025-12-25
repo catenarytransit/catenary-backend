@@ -1,11 +1,11 @@
 use super::clustering::StopCluster;
 use super::edges::{GraphEdge, NodeId};
 use anyhow::Result;
-use std::collections::{HashMap, HashSet};
+use geojson::{Feature, FeatureCollection, Geometry, JsonObject, JsonValue, Value};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::BufWriter;
-use geojson::{Feature, FeatureCollection, Geometry, Value, JsonObject, JsonValue};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LandMass {
@@ -16,14 +16,11 @@ pub struct LandMass {
     pub route_count: usize,
 }
 
-pub fn extract_and_export(
-    clusters: &[StopCluster],
-    edges: &[GraphEdge],
-) -> Result<()> {
+pub fn extract_and_export(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()> {
     let land_masses = extract_land_masses(clusters, edges);
-    
+
     println!("Identified {} distinct land masses.", land_masses.len());
-    
+
     // Legacy JSON export
     let file = File::create("globeflower_graph.json")?;
     let writer = BufWriter::new(file);
@@ -32,7 +29,7 @@ pub fn extract_and_export(
 
     // GeoJSON Export
     export_to_geojson(clusters, edges)?;
-    
+
     Ok(())
 }
 
@@ -42,33 +39,45 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
     // 1. Export Edges as LineStrings
     for edge in edges {
         let geometry = Geometry::new(Value::LineString(
-            edge.geometry.points.iter().map(|p| vec![p.x, p.y]).collect()
+            edge.geometry
+                .points
+                .iter()
+                .map(|p| {
+                    vec![
+                        (p.x * 100_000_000.0).round() / 100_000_000.0,
+                        (p.y * 100_000_000.0).round() / 100_000_000.0,
+                    ]
+                })
+                .collect(),
         ));
 
         let mut properties = JsonObject::new();
         match edge.from {
             NodeId::Cluster(id) => {
-                 properties.insert("from_cluster".to_string(), JsonValue::from(id as u64));
-                 properties.insert("from_type".to_string(), JsonValue::from("cluster"));
-            },
+                properties.insert("from_cluster".to_string(), JsonValue::from(id as u64));
+                properties.insert("from_type".to_string(), JsonValue::from("cluster"));
+            }
             NodeId::Intersection(id) => {
-                 properties.insert("from_intersection".to_string(), JsonValue::from(id as u64));
-                 properties.insert("from_type".to_string(), JsonValue::from("intersection"));
+                properties.insert("from_intersection".to_string(), JsonValue::from(id as u64));
+                properties.insert("from_type".to_string(), JsonValue::from("intersection"));
             }
         }
         match edge.to {
-             NodeId::Cluster(id) => {
-                 properties.insert("to_cluster".to_string(), JsonValue::from(id as u64));
-                 properties.insert("to_type".to_string(), JsonValue::from("cluster"));
-             },
-             NodeId::Intersection(id) => {
-                 properties.insert("to_intersection".to_string(), JsonValue::from(id as u64));
-                 properties.insert("to_type".to_string(), JsonValue::from("intersection"));
-             }
+            NodeId::Cluster(id) => {
+                properties.insert("to_cluster".to_string(), JsonValue::from(id as u64));
+                properties.insert("to_type".to_string(), JsonValue::from("cluster"));
+            }
+            NodeId::Intersection(id) => {
+                properties.insert("to_intersection".to_string(), JsonValue::from(id as u64));
+                properties.insert("to_type".to_string(), JsonValue::from("intersection"));
+            }
         }
-        
+
         properties.insert("weight".to_string(), JsonValue::from(edge.weight));
-        properties.insert("route_ids".to_string(), serde_json::to_value(&edge.route_ids)?);
+        properties.insert(
+            "route_ids".to_string(),
+            serde_json::to_value(&edge.route_ids)?,
+        );
         properties.insert("type".to_string(), JsonValue::from("edge"));
 
         features.push(Feature {
@@ -82,13 +91,26 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
 
     // 2. Export Clusters as Points
     for cluster in clusters {
-        let geometry = Geometry::new(Value::Point(vec![cluster.centroid.x, cluster.centroid.y]));
+        let geometry = Geometry::new(Value::Point(vec![
+            (cluster.centroid.x * 100_000_000.0).round() / 100_000_000.0,
+            (cluster.centroid.y * 100_000_000.0).round() / 100_000_000.0,
+        ]));
 
         let mut properties = JsonObject::new();
-        properties.insert("cluster_id".to_string(), JsonValue::from(cluster.cluster_id as u64));
-        properties.insert("stop_count".to_string(), JsonValue::from(cluster.stops.len() as u64));
-        
-        let stop_names: Vec<String> = cluster.stops.iter().map(|s| s.name.clone().unwrap_or_default()).collect();
+        properties.insert(
+            "cluster_id".to_string(),
+            JsonValue::from(cluster.cluster_id as u64),
+        );
+        properties.insert(
+            "stop_count".to_string(),
+            JsonValue::from(cluster.stops.len() as u64),
+        );
+
+        let stop_names: Vec<String> = cluster
+            .stops
+            .iter()
+            .map(|s| s.name.clone().unwrap_or_default())
+            .collect();
         properties.insert("stop_names".to_string(), serde_json::to_value(stop_names)?);
         properties.insert("type".to_string(), JsonValue::from("node"));
         properties.insert("node_type".to_string(), JsonValue::from("cluster"));
@@ -112,21 +134,18 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
     let writer = BufWriter::new(file);
     serde_json::to_writer_pretty(writer, &collection)?;
     println!("Exported graph to globeflower_graph.geojson");
-    
+
     Ok(())
 }
 
-fn extract_land_masses(
-    clusters: &[StopCluster],
-    edges: &[GraphEdge],
-) -> Vec<LandMass> {
+fn extract_land_masses(clusters: &[StopCluster], edges: &[GraphEdge]) -> Vec<LandMass> {
     let mut adj: Vec<Vec<usize>> = vec![vec![]; clusters.len()];
     for (i, edge) in edges.iter().enumerate() {
         if let NodeId::Cluster(u) = edge.from {
-             if let NodeId::Cluster(v) = edge.to {
-                 adj[u].push(i);
-                 adj[v].push(i);
-             }
+            if let NodeId::Cluster(v) = edge.to {
+                adj[u].push(i);
+                adj[v].push(i);
+            }
         }
     }
 
@@ -143,16 +162,22 @@ fn extract_land_masses(
 
             while let Some(u) = stack.pop() {
                 component_clusters.push(u);
-                
+
                 for &edge_idx in &adj[u] {
                     component_edges.insert(edge_idx);
                     let edge = &edges[edge_idx];
-                    
+
                     let v_opt = match (edge.from, edge.to) {
                         (NodeId::Cluster(c1), NodeId::Cluster(c2)) => {
-                            if c1 == u { Some(c2) } else if c2 == u { Some(c1) } else { None }
+                            if c1 == u {
+                                Some(c2)
+                            } else if c2 == u {
+                                Some(c1)
+                            } else {
+                                None
+                            }
                         }
-                        _ => None
+                        _ => None,
                     };
 
                     if let Some(v) = v_opt {
@@ -164,7 +189,10 @@ fn extract_land_masses(
                 }
             }
 
-            let stop_count: usize = component_clusters.iter().map(|&c| clusters[c].stops.len()).sum();
+            let stop_count: usize = component_clusters
+                .iter()
+                .map(|&c| clusters[c].stops.len())
+                .sum();
             let mut unique_routes = HashSet::new();
             for &e_idx in &component_edges {
                 for r in &edges[e_idx].route_ids {
@@ -182,7 +210,7 @@ fn extract_land_masses(
             mass_id_counter += 1;
         }
     }
-    
+
     land_masses.sort_by(|a, b| b.stop_count.cmp(&a.stop_count));
     land_masses
 }
