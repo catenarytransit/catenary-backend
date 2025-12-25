@@ -12,6 +12,13 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+/// Maximum length of a merged edge segment (approximately 500m in degrees at mid-latitudes).
+/// Prevents excessive edge merging that causes "line creep" artifacts.
+const MAX_COLLAPSED_SEG_LENGTH_DEGREES: f64 = 0.0045;
+
+/// Convergence threshold for iterative segment collapsing.
+const CONVERGENCE_THRESHOLD: f64 = 0.002;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum NodeId {
     Cluster(usize),
@@ -1063,32 +1070,26 @@ fn collapse_shared_segments(
         }
     }
 
-    // Track total edge length for convergence check
-    let calc_total_length = |edges: &[GraphEdge]| -> f64 { edges.iter().map(|e| e.weight).sum() };
-
-    const CONVERGENCE_THRESHOLD: f64 = 0.002;
-
     for iter in 0..max_iters {
-        let len_before = calc_total_length(&edges);
-
-        // Sort edges by weight (longest first) - matching loom's approach
         edges.sort_by(|a, b| {
             b.weight
                 .partial_cmp(&a.weight)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Track node positions: (sum_x, sum_y, count) for proper averaging
         let mut node_positions: HashMap<usize, (f64, f64, usize)> = HashMap::new();
         let mut new_edges = Vec::new();
         let mut node_tree: RTree<SnappedNode> = RTree::new();
         let mut next_node_id = 0;
 
-        for edge in &edges {
+        // Calculate len_old BEFORE edges are consumed by the for loop
+        let len_old: f64 = edges.iter().map(|e| e.weight).sum();
+
+        for edge in edges {
             let geom = convert_to_geo(&edge.geometry);
             let mut path_nodes: Vec<(usize, GeoPoint<f64>)> = Vec::new();
 
-            // Simplify geometry (approx 0.5m) then densify to segment length
+            // Simplify geometry (approx 0.5m) to reduce noise
             let simplified_geom = geom.simplify(0.000005);
             let densified = densify_geometry(&simplified_geom, seg_len);
 
@@ -1103,7 +1104,7 @@ fn collapse_shared_segments(
                 let p = densified[i];
                 let pt_arr = [p.x(), p.y()];
 
-                // Calculate local heading from this point to the next
+                // Calculate local heading
                 let heading = if i < densified.len() - 1 {
                     let next = densified[i + 1];
                     (next.y() - p.y()).atan2(next.x() - p.x())
@@ -1114,12 +1115,12 @@ fn collapse_shared_segments(
                     0.0
                 };
 
-                // Find candidate nodes within d_cut distance
+                // ITERATE CANDIDATES logic
                 let d_cut_sq = d_cut * d_cut;
                 let candidates = node_tree.locate_within_distance(pt_arr, d_cut_sq);
 
-                let mut best_match: Option<usize> = None;
-                let mut min_dist_sq = d_cut_sq;
+                let mut best_match: Option<(usize, GeoPoint<f64>)> = None;
+                let mut min_dist_sq = d_cut_sq; // Start with max allowed
 
                 for n in candidates {
                     let dist_sq = n.distance_2(&pt_arr);
@@ -1129,23 +1130,21 @@ fn collapse_shared_segments(
 
                     let dist = dist_sq.sqrt();
 
-                    // dSpan check: distance must be less than distance to back / sqrt(2)
-                    // This prevents "jumping" to far-away nodes
+                    // dSpan Check
                     let d_span_allowed = if i == last_pt_idx {
                         f64::INFINITY
                     } else {
                         let dist_to_back = ((p.x() - back_geom_pt.x()).powi(2)
                             + (p.y() - back_geom_pt.y()).powi(2))
                         .sqrt();
-                        dist_to_back / std::f64::consts::SQRT_2
+                        dist_to_back / 1.414
                     };
 
                     if dist > d_span_allowed {
                         continue;
                     }
 
-                    // Angle check: ~60 degrees tolerance (1.047 radians)
-                    // Accept if headings are aligned OR anti-aligned (opposite directions)
+                    // ANGLE CHECK
                     let angle_diff = (n.heading - heading).abs();
                     let angle_diff = if angle_diff > std::f64::consts::PI {
                         2.0 * std::f64::consts::PI - angle_diff
@@ -1156,51 +1155,47 @@ fn collapse_shared_segments(
                     let is_anti_aligned = angle_diff > (std::f64::consts::PI - 1.047);
 
                     if is_aligned || is_anti_aligned {
+                        // Valid candidate, update best
                         min_dist_sq = dist_sq;
-                        best_match = Some(n.id);
+                        best_match = Some((n.id, GeoPoint::new(n.point[0], n.point[1])));
                     }
                 }
 
-                let (node_id, node_pt) = if let Some(bid) = best_match {
-                    // Update running average using loom's centroid approach:
-                    // new_pos = centroid(old_pos, new_point) = midpoint
-                    let entry = node_positions.get_mut(&bid).unwrap();
-                    let old_x = entry.0 / entry.2 as f64;
-                    let old_y = entry.1 / entry.2 as f64;
+                let (node_id, node_pt) = if let Some((bid, bpt)) = best_match {
+                    let entry = node_positions.entry(bid).or_insert((bpt.x(), bpt.y(), 0));
+                    // Note: bpt is n.point (initial).
+                    // Better to use entry values from map?
+                    // actually 'best_match' stores node initial pos.
+                    // We must update the running average.
 
-                    // Add new point to running sum
                     entry.0 += pt_arr[0];
                     entry.1 += pt_arr[1];
-                    entry.2 += 1;
+                    entry.2 += 1; // Count
 
-                    // Calculate new average position
                     let avg_x = entry.0 / entry.2 as f64;
                     let avg_y = entry.1 / entry.2 as f64;
 
                     (bid, GeoPoint::new(avg_x, avg_y))
                 } else {
-                    // Create new node
                     let id = next_node_id;
                     next_node_id += 1;
-
+                    // Init count 1
                     node_tree.insert(SnappedNode {
                         id,
                         point: pt_arr,
                         heading,
                     });
-                    // Initialise with count=1, sum = point coords
                     node_positions.insert(id, (pt_arr[0], pt_arr[1], 1));
                     (id, p)
                 };
                 path_nodes.push((node_id, node_pt));
             }
 
-            // Create edges between consecutive nodes in the path
             for w in path_nodes.windows(2) {
                 let (u_id, u_pt) = w[0];
                 let (v_id, v_pt) = w[1];
                 if u_id == v_id {
-                    continue; // Skip self-edges
+                    continue;
                 }
 
                 let segment_len = u_pt.haversine_distance(&v_pt);
@@ -1226,22 +1221,22 @@ fn collapse_shared_segments(
 
         edges = simplify_graph_serial(new_edges);
 
-        // Check for convergence (loom's early exit criterion)
-        let len_after = calc_total_length(&edges);
-        let distance_gap = if len_before > 0.0 {
-            (1.0 - len_after / len_before).abs()
-        } else {
-            0.0
-        };
+        let len_new: f64 = edges.iter().map(|e| e.weight).sum();
 
-        println!(
-            "collapse_shared_segments iter {}: distance gap = {:.6}",
-            iter, distance_gap
-        );
-
-        if distance_gap < CONVERGENCE_THRESHOLD {
-            println!("Converged after {} iterations", iter + 1);
-            break;
+        // Convergence check (matching loom's approach)
+        if len_old > 0.0 {
+            let convergence_ratio = (1.0 - len_new / len_old).abs();
+            if convergence_ratio < CONVERGENCE_THRESHOLD {
+                println!(
+                    "Converged at iteration {} (ratio: {:.6})",
+                    iter, convergence_ratio
+                );
+                break;
+            }
+            println!(
+                "Iteration {}: length ratio change {:.6}",
+                iter, convergence_ratio
+            );
         }
     }
     edges
@@ -1273,6 +1268,28 @@ fn densify_geometry(line: &GeoLineString<f64>, max_seg_len: f64) -> Vec<GeoPoint
         points.push(p2);
     }
     points
+}
+
+/// Check if two edges have identical route sets (matching loom's lineEq concept).
+/// This ensures we only merge degree-2 chains when the lines are actually the same.
+fn routes_equal(a: &GraphEdge, b: &GraphEdge) -> bool {
+    if a.route_ids.len() != b.route_ids.len() {
+        return false;
+    }
+    let set_a: HashSet<_> = a.route_ids.iter().collect();
+    let set_b: HashSet<_> = b.route_ids.iter().collect();
+    set_a == set_b
+}
+
+/// Calculate the combined geometry length of a chain of edges (in degrees).
+fn chain_geometry_length(edges: &[GraphEdge], indices: &[usize]) -> f64 {
+    indices
+        .iter()
+        .map(|&i| {
+            let geom = convert_to_geo(&edges[i].geometry);
+            geom.euclidean_length()
+        })
+        .sum()
 }
 
 fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
@@ -1367,6 +1384,18 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                                     if visited[next] {
                                         break;
                                     }
+                                    // Check route equality before merging (loom's lineEq)
+                                    if !routes_equal(&edges[curr], &edges[next]) {
+                                        break;
+                                    }
+                                    // Check max segment length constraint
+                                    let mut test_chain = chain.clone();
+                                    test_chain.push(next);
+                                    if chain_geometry_length(&edges, &test_chain)
+                                        > MAX_COLLAPSED_SEG_LENGTH_DEGREES
+                                    {
+                                        break;
+                                    }
                                     visited[next] = true;
                                     chain.push(next);
                                     curr = next;
@@ -1394,6 +1423,18 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                         if !v_out.is_empty() {
                             let next = v_out[0];
                             if visited[next] {
+                                break;
+                            }
+                            // Check route equality before merging (loom's lineEq)
+                            if !routes_equal(&edges[curr], &edges[next]) {
+                                break;
+                            }
+                            // Check max segment length constraint
+                            let mut test_chain = chain.clone();
+                            test_chain.push(next);
+                            if chain_geometry_length(&edges, &test_chain)
+                                > MAX_COLLAPSED_SEG_LENGTH_DEGREES
+                            {
                                 break;
                             }
                             visited[next] = true;
