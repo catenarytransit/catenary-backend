@@ -150,9 +150,7 @@ pub async fn generate_edges(
     let merged_once = merge_edges(raw_edges);
     println!("Initial edge merge count: {}", merged_once.len());
 
-    // Loom-style bundling
-    // First, iteratively collapse shared segments (geometric snapping)
-    // d_cut=0.0005 (~50m), seg_len=0.0001 (~10m), 10 iterations
+    // Loom-style bundling (Standard Parameters)
     println!("Collapsing shared segments (Loom-style geometric bundling)...");
     let collapsed = collapse_shared_segments(merged_once, 0.0005, 0.0001, 10);
 
@@ -1047,6 +1045,7 @@ fn collapse_shared_segments(
     struct SnappedNode {
         id: usize,
         point: [f64; 2],
+        heading: f64,
     }
 
     impl RTreeObject for SnappedNode {
@@ -1064,66 +1063,147 @@ fn collapse_shared_segments(
         }
     }
 
+    // Track total edge length for convergence check
+    let calc_total_length = |edges: &[GraphEdge]| -> f64 { edges.iter().map(|e| e.weight).sum() };
+
+    const CONVERGENCE_THRESHOLD: f64 = 0.002;
+
     for iter in 0..max_iters {
-        // Sort edges by weight (length) descending to prioritize main trunks
+        let len_before = calc_total_length(&edges);
+
+        // Sort edges by weight (longest first) - matching loom's approach
         edges.sort_by(|a, b| {
             b.weight
                 .partial_cmp(&a.weight)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        // Track node positions: (sum_x, sum_y, count) for proper averaging
+        let mut node_positions: HashMap<usize, (f64, f64, usize)> = HashMap::new();
         let mut new_edges = Vec::new();
         let mut node_tree: RTree<SnappedNode> = RTree::new();
         let mut next_node_id = 0;
 
-        // Track changes to check convergence (optional, skipping for now)
-
-        for edge in edges {
+        for edge in &edges {
             let geom = convert_to_geo(&edge.geometry);
             let mut path_nodes: Vec<(usize, GeoPoint<f64>)> = Vec::new();
 
-            // Densify geometry
-            let densified = densify_geometry(&geom, seg_len);
+            // Simplify geometry (approx 0.5m) then densify to segment length
+            let simplified_geom = geom.simplify(0.000005);
+            let densified = densify_geometry(&simplified_geom, seg_len);
 
-            // Snap points
-            for p in densified {
+            let last_pt_idx = densified.len().saturating_sub(1);
+            let back_geom_pt = if !densified.is_empty() {
+                densified[last_pt_idx]
+            } else {
+                GeoPoint::new(0.0, 0.0)
+            };
+
+            for i in 0..densified.len() {
+                let p = densified[i];
                 let pt_arr = [p.x(), p.y()];
-                // Query tree for nearest neighbor within d_cut
-                let nearest = node_tree.nearest_neighbor(&pt_arr);
 
-                let (node_id, node_pt) = if let Some(n) = nearest {
-                    let dist = n.distance_2(&pt_arr).sqrt();
-                    if dist < d_cut {
-                        // Found close node, snap to it
-                        (n.id, GeoPoint::new(n.point[0], n.point[1]))
-                    } else {
-                        // Create new node
-                        let id = next_node_id;
-                        next_node_id += 1;
-                        node_tree.insert(SnappedNode { id, point: pt_arr });
-                        (id, p)
+                // Calculate local heading from this point to the next
+                let heading = if i < densified.len() - 1 {
+                    let next = densified[i + 1];
+                    (next.y() - p.y()).atan2(next.x() - p.x())
+                } else if i > 0 {
+                    let prev = densified[i - 1];
+                    (p.y() - prev.y()).atan2(p.x() - prev.x())
+                } else {
+                    0.0
+                };
+
+                // Find candidate nodes within d_cut distance
+                let d_cut_sq = d_cut * d_cut;
+                let candidates = node_tree.locate_within_distance(pt_arr, d_cut_sq);
+
+                let mut best_match: Option<usize> = None;
+                let mut min_dist_sq = d_cut_sq;
+
+                for n in candidates {
+                    let dist_sq = n.distance_2(&pt_arr);
+                    if dist_sq >= min_dist_sq {
+                        continue;
                     }
+
+                    let dist = dist_sq.sqrt();
+
+                    // dSpan check: distance must be less than distance to back / sqrt(2)
+                    // This prevents "jumping" to far-away nodes
+                    let d_span_allowed = if i == last_pt_idx {
+                        f64::INFINITY
+                    } else {
+                        let dist_to_back = ((p.x() - back_geom_pt.x()).powi(2)
+                            + (p.y() - back_geom_pt.y()).powi(2))
+                        .sqrt();
+                        dist_to_back / std::f64::consts::SQRT_2
+                    };
+
+                    if dist > d_span_allowed {
+                        continue;
+                    }
+
+                    // Angle check: ~60 degrees tolerance (1.047 radians)
+                    // Accept if headings are aligned OR anti-aligned (opposite directions)
+                    let angle_diff = (n.heading - heading).abs();
+                    let angle_diff = if angle_diff > std::f64::consts::PI {
+                        2.0 * std::f64::consts::PI - angle_diff
+                    } else {
+                        angle_diff
+                    };
+                    let is_aligned = angle_diff < 1.047;
+                    let is_anti_aligned = angle_diff > (std::f64::consts::PI - 1.047);
+
+                    if is_aligned || is_anti_aligned {
+                        min_dist_sq = dist_sq;
+                        best_match = Some(n.id);
+                    }
+                }
+
+                let (node_id, node_pt) = if let Some(bid) = best_match {
+                    // Update running average using loom's centroid approach:
+                    // new_pos = centroid(old_pos, new_point) = midpoint
+                    let entry = node_positions.get_mut(&bid).unwrap();
+                    let old_x = entry.0 / entry.2 as f64;
+                    let old_y = entry.1 / entry.2 as f64;
+
+                    // Add new point to running sum
+                    entry.0 += pt_arr[0];
+                    entry.1 += pt_arr[1];
+                    entry.2 += 1;
+
+                    // Calculate new average position
+                    let avg_x = entry.0 / entry.2 as f64;
+                    let avg_y = entry.1 / entry.2 as f64;
+
+                    (bid, GeoPoint::new(avg_x, avg_y))
                 } else {
                     // Create new node
                     let id = next_node_id;
                     next_node_id += 1;
-                    node_tree.insert(SnappedNode { id, point: pt_arr });
+
+                    node_tree.insert(SnappedNode {
+                        id,
+                        point: pt_arr,
+                        heading,
+                    });
+                    // Initialise with count=1, sum = point coords
+                    node_positions.insert(id, (pt_arr[0], pt_arr[1], 1));
                     (id, p)
                 };
                 path_nodes.push((node_id, node_pt));
             }
 
-            // Reconstruct edge segments
+            // Create edges between consecutive nodes in the path
             for w in path_nodes.windows(2) {
                 let (u_id, u_pt) = w[0];
                 let (v_id, v_pt) = w[1];
                 if u_id == v_id {
-                    continue;
-                } // Skip self-nodes
+                    continue; // Skip self-edges
+                }
 
-                // Calculate segment weight
                 let segment_len = u_pt.haversine_distance(&v_pt);
-
                 new_edges.push(GraphEdge {
                     from: NodeId::Intersection(u_id),
                     to: NodeId::Intersection(v_id),
@@ -1144,10 +1224,26 @@ fn collapse_shared_segments(
             }
         }
 
-        // Simplify the graph (merge degree-2 nodes) to reduce fragmentation
         edges = simplify_graph_serial(new_edges);
-    }
 
+        // Check for convergence (loom's early exit criterion)
+        let len_after = calc_total_length(&edges);
+        let distance_gap = if len_before > 0.0 {
+            (1.0 - len_after / len_before).abs()
+        } else {
+            0.0
+        };
+
+        println!(
+            "collapse_shared_segments iter {}: distance gap = {:.6}",
+            iter, distance_gap
+        );
+
+        if distance_gap < CONVERGENCE_THRESHOLD {
+            println!("Converged after {} iterations", iter + 1);
+            break;
+        }
+    }
     edges
 }
 
@@ -1179,20 +1275,141 @@ fn densify_geometry(line: &GeoLineString<f64>, max_seg_len: f64) -> Vec<GeoPoint
     points
 }
 
-fn simplify_graph_serial(edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
-    // Basic simplification: merge u->v and v->w if v has degree 2 (1 in, 1 out)
-    // and direction/routes match. For now, we just return edges as is to be safe,
-    // relying on bundle_edges to do the heavy lifting of merging parallel segments.
-    // Implementing a full topological simplifier is complex and bundle_edges handles
-    // the geometry averaging of the resulting shared segments.
+fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
+    // Step 0: Consolidate parallel edges (identical u->v) to ensure true graph merging
+    let mut edge_map: HashMap<(NodeId, NodeId), GraphEdge> = HashMap::new();
+    for e in edges {
+        let key = (e.from, e.to);
+        if let Some(existing) = edge_map.get_mut(&key) {
+            // Merge routes (avoid duplicates)
+            for r in e.route_ids {
+                if !existing.route_ids.contains(&r) {
+                    existing.route_ids.push(r);
+                }
+            }
+        } else {
+            edge_map.insert(key, e);
+        }
+    }
+    let edges: Vec<GraphEdge> = edge_map.into_values().collect();
 
-    // Actually, we must at least group segments to avoid explosion of edges?
-    // bundle_edges merges based on (from, to).
-    // If we have u -> v -> w, bundle_edges won't merge.
-    // But Loom's 'contractEdges' does serial merge.
-    // For this implementation, we'll rely on the fact that 'snap_clusters' and post-proc
-    // will clean up. The most important thing is that parallel tracks now share nodes.
-    edges
+    // Merge consecutive edges (degree-2 nodes)
+    let mut adj: HashMap<usize, (Vec<usize>, Vec<usize>)> = HashMap::new();
+    for (i, edge) in edges.iter().enumerate() {
+        if let NodeId::Intersection(u) = edge.from {
+            if let NodeId::Intersection(v) = edge.to {
+                adj.entry(u).or_default().1.push(i);
+                adj.entry(v).or_default().0.push(i);
+            }
+        }
+    }
+
+    let mut visited = vec![false; edges.len()];
+    let mut simplified = Vec::new();
+
+    let merge_chain = |indices: &[usize]| -> GraphEdge {
+        let first = &edges[indices[0]];
+        let last = &edges[indices[indices.len() - 1]];
+        let mut coords = Vec::new();
+        for (i, &idx) in indices.iter().enumerate() {
+            let geom = &edges[idx].geometry;
+            let pts = &geom.points;
+            if i == 0 {
+                for p in pts {
+                    coords.push(Coord { x: p.x, y: p.y });
+                }
+            } else {
+                for p in pts.iter().skip(1) {
+                    coords.push(Coord { x: p.x, y: p.y });
+                }
+            }
+        }
+        let total_weight: f64 = indices.iter().map(|&i| edges[i].weight).sum();
+        let mut routes = std::collections::HashSet::new();
+        for &idx in indices {
+            for r in &edges[idx].route_ids {
+                routes.insert(r.clone());
+            }
+        }
+        let route_vec = routes.into_iter().collect();
+        GraphEdge {
+            from: first.from,
+            to: last.to,
+            geometry: convert_from_geo(&GeoLineString::new(coords)),
+            route_ids: route_vec,
+            weight: total_weight,
+            original_edge_index: first.original_edge_index,
+        }
+    };
+
+    let mut node_ids: Vec<usize> = adj.keys().cloned().collect();
+    node_ids.sort();
+
+    for u in node_ids {
+        if let Some((in_list, out_list)) = adj.get(&u) {
+            // Check if this node is a START of one or more chains
+            if in_list.len() != 1 || out_list.len() != 1 {
+                for &start_idx in out_list {
+                    if visited[start_idx] {
+                        continue;
+                    }
+
+                    let mut chain = vec![start_idx];
+                    visited[start_idx] = true;
+
+                    let mut curr = start_idx;
+                    loop {
+                        let curr_edge = &edges[curr];
+                        if let NodeId::Intersection(v) = curr_edge.to {
+                            if let Some((v_in, v_out)) = adj.get(&v) {
+                                if v_in.len() == 1 && v_out.len() == 1 {
+                                    let next = v_out[0];
+                                    if visited[next] {
+                                        break;
+                                    }
+                                    visited[next] = true;
+                                    chain.push(next);
+                                    curr = next;
+                                    continue;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    simplified.push(merge_chain(&chain));
+                }
+            }
+        }
+    }
+
+    for i in 0..edges.len() {
+        if !visited[i] {
+            let mut chain = vec![i];
+            visited[i] = true;
+            let mut curr = i;
+            loop {
+                let curr_edge = &edges[curr];
+                if let NodeId::Intersection(v) = curr_edge.to {
+                    if let Some((_, v_out)) = adj.get(&v) {
+                        if !v_out.is_empty() {
+                            let next = v_out[0];
+                            if visited[next] {
+                                break;
+                            }
+                            visited[next] = true;
+                            chain.push(next);
+                            curr = next;
+                            continue;
+                        }
+                    }
+                }
+                break;
+            }
+            simplified.push(merge_chain(&chain));
+        }
+    }
+
+    simplified
 }
 
 #[cfg(test)]
