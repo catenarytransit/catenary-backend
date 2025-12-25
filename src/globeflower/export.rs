@@ -2,6 +2,7 @@ use super::clustering::StopCluster;
 use super::edges::{GraphEdge, NodeId};
 use anyhow::Result;
 use geojson::{Feature, FeatureCollection, Geometry, JsonObject, JsonValue, Value};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -27,8 +28,8 @@ pub fn extract_and_export(clusters: &[StopCluster], edges: &[GraphEdge]) -> Resu
     serde_json::to_writer_pretty(writer, &land_masses)?;
     println!("Exported internal graph to globeflower_graph.json");
 
-    // GeoJSON Export
-    export_to_geojson(clusters, edges)?;
+    // GeoPackage Export (primary format)
+    export_to_geopackage(clusters, edges)?;
 
     Ok(())
 }
@@ -136,6 +137,206 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
     println!("Exported graph to globeflower_graph.geojson");
 
     Ok(())
+}
+
+/// Export to GeoPackage format (SQLite-based spatial database)
+fn export_to_geopackage(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()> {
+    let path = "globeflower_graph.gpkg";
+
+    // Remove existing file if present
+    let _ = std::fs::remove_file(path);
+
+    let mut conn = Connection::open(path)?;
+
+    // Initialize GeoPackage metadata tables
+    conn.execute_batch("
+        -- GeoPackage required tables
+        CREATE TABLE gpkg_contents (
+            table_name TEXT NOT NULL PRIMARY KEY,
+            data_type TEXT NOT NULL,
+            identifier TEXT UNIQUE,
+            description TEXT DEFAULT '',
+            last_change DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            min_x DOUBLE,
+            min_y DOUBLE,
+            max_x DOUBLE,
+            max_y DOUBLE,
+            srs_id INTEGER,
+            CONSTRAINT fk_gc_r_srs_id FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys(srs_id)
+        );
+        
+        CREATE TABLE gpkg_spatial_ref_sys (
+            srs_name TEXT NOT NULL,
+            srs_id INTEGER NOT NULL PRIMARY KEY,
+            organization TEXT NOT NULL,
+            organization_coordsys_id INTEGER NOT NULL,
+            definition TEXT NOT NULL,
+            description TEXT
+        );
+        
+        CREATE TABLE gpkg_geometry_columns (
+            table_name TEXT NOT NULL,
+            column_name TEXT NOT NULL,
+            geometry_type_name TEXT NOT NULL,
+            srs_id INTEGER NOT NULL,
+            z TINYINT NOT NULL,
+            m TINYINT NOT NULL,
+            CONSTRAINT pk_geom_cols PRIMARY KEY (table_name, column_name),
+            CONSTRAINT fk_gc_tn FOREIGN KEY (table_name) REFERENCES gpkg_contents(table_name),
+            CONSTRAINT fk_gc_srs FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys(srs_id)
+        );
+        
+        -- Add WGS84 spatial reference
+        INSERT INTO gpkg_spatial_ref_sys VALUES(
+            'WGS 84', 4326, 'EPSG', 4326,
+            'GEOGCS[''WGS 84'',DATUM[''WGS_1984'',SPHEROID[''WGS 84'',6378137,298.257223563]],PRIMEM[''Greenwich'',0],UNIT[''degree'',0.0174532925199433]]',
+            'WGS 84 geographic coordinate system'
+        );
+    ")?;
+
+    // Create edges table
+    conn.execute_batch(
+        "
+        CREATE TABLE edges (
+            fid INTEGER PRIMARY KEY AUTOINCREMENT,
+            geom BLOB,
+            from_type TEXT,
+            from_id INTEGER,
+            to_type TEXT,
+            to_id INTEGER,
+            weight REAL,
+            route_ids TEXT
+        );
+        
+        INSERT INTO gpkg_contents VALUES('edges', 'features', 'edges', 'Transit edges', 
+            strftime('%Y-%m-%dT%H:%M:%fZ','now'), -180, -90, 180, 90, 4326);
+        INSERT INTO gpkg_geometry_columns VALUES('edges', 'geom', 'LINESTRING', 4326, 0, 0);
+    ",
+    )?;
+
+    // Create clusters table
+    conn.execute_batch(
+        "
+        CREATE TABLE clusters (
+            fid INTEGER PRIMARY KEY AUTOINCREMENT,
+            geom BLOB,
+            cluster_id INTEGER,
+            stop_count INTEGER,
+            stop_names TEXT
+        );
+        
+        INSERT INTO gpkg_contents VALUES('clusters', 'features', 'clusters', 'Stop clusters',
+            strftime('%Y-%m-%dT%H:%M:%fZ','now'), -180, -90, 180, 90, 4326);
+        INSERT INTO gpkg_geometry_columns VALUES('clusters', 'geom', 'POINT', 4326, 0, 0);
+    ",
+    )?;
+    // Use transaction for bulk inserts - massive performance improvement
+    let tx = conn.transaction()?;
+
+    // Insert edges
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO edges (geom, from_type, from_id, to_type, to_id, weight, route_ids) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )?;
+
+        for edge in edges {
+            let wkb = linestring_to_gpkg_wkb(&edge.geometry);
+            let (from_type, from_id) = match edge.from {
+                NodeId::Cluster(id) => ("cluster", id),
+                NodeId::Intersection(id) => ("intersection", id),
+            };
+            let (to_type, to_id) = match edge.to {
+                NodeId::Cluster(id) => ("cluster", id),
+                NodeId::Intersection(id) => ("intersection", id),
+            };
+            let routes_json = serde_json::to_string(&edge.route_ids)?;
+
+            stmt.execute(rusqlite::params![
+                wkb,
+                from_type,
+                from_id,
+                to_type,
+                to_id,
+                edge.weight,
+                routes_json
+            ])?;
+        }
+    }
+
+    // Insert clusters
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO clusters (geom, cluster_id, stop_count, stop_names) VALUES (?, ?, ?, ?)",
+        )?;
+
+        for cluster in clusters {
+            let wkb = point_to_gpkg_wkb(cluster.centroid.x, cluster.centroid.y);
+            let stop_names: Vec<String> = cluster
+                .stops
+                .iter()
+                .map(|s| s.name.clone().unwrap_or_default())
+                .collect();
+            let names_json = serde_json::to_string(&stop_names)?;
+
+            stmt.execute(rusqlite::params![
+                wkb,
+                cluster.cluster_id,
+                cluster.stops.len(),
+                names_json
+            ])?;
+        }
+    }
+
+    tx.commit()?;
+
+    println!("Exported graph to {}", path);
+    Ok(())
+}
+
+/// Convert a LineString to GeoPackage WKB format
+fn linestring_to_gpkg_wkb(
+    geom: &postgis_diesel::types::LineString<postgis_diesel::types::Point>,
+) -> Vec<u8> {
+    let mut wkb = Vec::new();
+
+    // GeoPackage header (8 bytes)
+    wkb.push(0x47); // 'G'
+    wkb.push(0x50); // 'P'
+    wkb.push(0x00); // version
+    wkb.push(0x01); // flags: little endian, no envelope
+    wkb.extend_from_slice(&4326i32.to_le_bytes()); // SRID
+
+    // Standard WKB
+    wkb.push(0x01); // little endian
+    wkb.extend_from_slice(&2u32.to_le_bytes()); // LineString type
+    wkb.extend_from_slice(&(geom.points.len() as u32).to_le_bytes());
+
+    for pt in &geom.points {
+        wkb.extend_from_slice(&pt.x.to_le_bytes());
+        wkb.extend_from_slice(&pt.y.to_le_bytes());
+    }
+
+    wkb
+}
+
+/// Convert a Point to GeoPackage WKB format
+fn point_to_gpkg_wkb(x: f64, y: f64) -> Vec<u8> {
+    let mut wkb = Vec::new();
+
+    // GeoPackage header
+    wkb.push(0x47); // 'G'
+    wkb.push(0x50); // 'P'
+    wkb.push(0x00); // version  
+    wkb.push(0x01); // flags: little endian, no envelope
+    wkb.extend_from_slice(&4326i32.to_le_bytes()); // SRID
+
+    // Standard WKB
+    wkb.push(0x01); // little endian
+    wkb.extend_from_slice(&1u32.to_le_bytes()); // Point type
+    wkb.extend_from_slice(&x.to_le_bytes());
+    wkb.extend_from_slice(&y.to_le_bytes());
+
+    wkb
 }
 
 fn extract_land_masses(clusters: &[StopCluster], edges: &[GraphEdge]) -> Vec<LandMass> {

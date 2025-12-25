@@ -158,15 +158,30 @@ pub async fn generate_edges(
     let merged_once = merge_edges(raw_edges);
     println!("Initial edge merge count: {}", merged_once.len());
 
-    // Loom-style bundling (Standard Parameters)
-    println!("Collapsing shared segments (Loom-style geometric bundling)...");
-    let collapsed = collapse_shared_segments(merged_once, 0.0005, 0.0001, 10);
+    // Per-chateau processing: group edges by primary chateau and process each group separately
+    let chateau_groups = partition_by_chateau(merged_once);
+    println!("Partitioned into {} chateau groups", chateau_groups.len());
 
-    let bundled = bundle_edges(collapsed);
-    let intersections = detect_intersections(&bundled);
+    let mut all_bundled: Vec<GraphEdge> = Vec::new();
+    for (chateau_name, group) in chateau_groups {
+        println!(
+            "Processing chateau '{}' with {} edges...",
+            chateau_name,
+            group.len()
+        );
+
+        // Collapse shared segments within this chateau
+        let collapsed = collapse_shared_segments(group, 0.0005, 0.0001, 10);
+        let bundled = bundle_edges(collapsed);
+        all_bundled.extend(bundled);
+    }
+    println!("Total bundled edges: {}", all_bundled.len());
+
+    // Global intersection detection across all chateaus
+    let intersections = detect_intersections(&all_bundled);
     println!("Detected {} intersection points.", intersections.len());
 
-    let split_edges = split_edges_at_points(bundled, &intersections);
+    let split_edges = split_edges_at_points(all_bundled, &intersections);
     println!("Split into {} segment edges.", split_edges.len());
 
     // Zippering: Snap clusters to passing edges
@@ -239,6 +254,34 @@ fn merge_edges(raw_edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         });
     }
     merged
+}
+
+/// Partition edges by their primary chateau for per-chateau processing.
+/// Each edge is assigned to the chateau that appears most frequently in its route_ids.
+/// Edges with no routes are grouped under "_unknown_".
+fn partition_by_chateau(edges: Vec<GraphEdge>) -> HashMap<String, Vec<GraphEdge>> {
+    let mut groups: HashMap<String, Vec<GraphEdge>> = HashMap::new();
+
+    for edge in edges {
+        // Determine primary chateau by counting occurrences
+        let primary_chateau = if edge.route_ids.is_empty() {
+            "_unknown_".to_string()
+        } else {
+            let mut chateau_counts: HashMap<&str, usize> = HashMap::new();
+            for (chateau, _) in &edge.route_ids {
+                *chateau_counts.entry(chateau.as_str()).or_default() += 1;
+            }
+            chateau_counts
+                .into_iter()
+                .max_by_key(|(_, count)| *count)
+                .map(|(ch, _)| ch.to_string())
+                .unwrap_or_else(|| "_unknown_".to_string())
+        };
+
+        groups.entry(primary_chateau).or_default().push(edge);
+    }
+
+    groups
 }
 
 fn chaikin_smoothing(line: &GeoLineString<f64>, iterations: usize) -> GeoLineString<f64> {
@@ -1275,12 +1318,6 @@ fn collapse_shared_segments(
                 convergence_ratio,
                 edges.len()
             );
-
-            // Safety: stop if edge count is getting too large
-            if edges.len() > 50000 {
-                println!("Edge count exceeded 50000, stopping to prevent memory exhaustion");
-                break;
-            }
         }
     }
     edges
