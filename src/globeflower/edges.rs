@@ -208,53 +208,167 @@ pub async fn generate_edges(
 }
 
 fn merge_edges(raw_edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
-    let mut groups: HashMap<(NodeId, NodeId), Vec<GraphEdge>> = HashMap::new();
+    let mut groups: HashMap<(NodeId, NodeId), Vec<Vec<GraphEdge>>> = HashMap::new();
+
+    // Group by endpoints first
     for edge in raw_edges {
-        groups.entry((edge.from, edge.to)).or_default().push(edge);
+        groups
+            .entry((edge.from, edge.to))
+            .or_default()
+            .push(vec![edge]); // Start each as its own group
     }
 
     let mut merged = Vec::new();
-    for ((from, to), group) in groups {
-        if group.is_empty() {
-            continue;
-        }
 
-        // Collect all route IDs as (chateau, route_id) tuples
-        let mut all_routes: HashSet<(String, String)> = HashSet::new();
-        for e in &group {
-            for r in &e.route_ids {
-                all_routes.insert(r.clone());
+    // Then refine groups based on geometric similarity
+    for ((from, to), mut potential_groups) in groups {
+        // We need to consolidate 'potential_groups'.
+        // This is effectively a clustering problem.
+        // We'll use a simple greedy approach:
+        // Iterate through existing clusters. If edge fits, add it. Else start new cluster.
+        // Since we pushed `vec![edge]`, we flatten and re-cluster.
+
+        let all_edges: Vec<GraphEdge> = potential_groups.into_iter().flatten().collect();
+        let mut visual_groups: Vec<Vec<GraphEdge>> = Vec::new();
+
+        // Threshold for visual merging: ~200m (0.002 degrees approx)
+        // If lines are further than this apart, they are visually distinct.
+        // User complained about "hundreds of metres", so 200m is a safe upper bound.
+        // For trams/metros (user mentioned 10-20m), we might want tighter,
+        // but `bundle_edges` handles the tight stuff.
+        // `merge_edges` is for DEDUPLICATION of identical shapes.
+        // So we should be fairly strict. Let's say 50m (0.0005).
+        let merge_threshold = 0.0005;
+
+        for edge in all_edges {
+            let edge_geom = convert_to_geo(&edge.geometry);
+            let mut found_group = false;
+
+            for group in &mut visual_groups {
+                // Check similarity with the first edge of the group (representative)
+                let rep = &group[0];
+                let rep_geom = convert_to_geo(&rep.geometry);
+
+                // Fast checks: Length difference
+                #[allow(deprecated)]
+                let len_diff = (edge_geom.euclidean_length() - rep_geom.euclidean_length()).abs();
+                if len_diff > 0.01 {
+                    // > ~1km difference, definitely different
+                    continue;
+                }
+
+                // Check geometric distance (Hausdorff-ish / Fréchet-ish)
+                // We check if midpoints and quarter-points are close.
+                // This is cheaper than full Fréchet.
+                if are_lines_close(&edge_geom, &rep_geom, merge_threshold) {
+                    group.push(edge.clone());
+                    found_group = true;
+                    break;
+                }
+            }
+
+            if !found_group {
+                visual_groups.push(vec![edge]);
             }
         }
-        let merged_routes: Vec<(String, String)> = all_routes.into_iter().collect();
 
-        // Actually average the geometries instead of just picking one
-        // Weight by route count squared (matching loom's geomAvg approach)
-        let avg_geom = if group.len() == 1 {
-            convert_to_geo(&group[0].geometry)
-        } else {
-            let geoms: Vec<GeoLineString<f64>> =
-                group.iter().map(|e| convert_to_geo(&e.geometry)).collect();
-            let weights: Vec<f64> = group
-                .iter()
-                .map(|e| (e.route_ids.len().max(1) as f64).powi(2))
-                .collect();
-            average_polylines_weighted(&geoms, Some(&weights))
-        };
+        // Now process each visual group
+        for group in visual_groups {
+            if group.is_empty() {
+                continue;
+            }
 
-        // Calculate average weight
-        let avg_weight = group.iter().map(|e| e.weight).sum::<f64>() / group.len() as f64;
+            // Collect all route IDs
+            let mut all_routes: HashSet<(String, String)> = HashSet::new();
+            for e in &group {
+                for r in &e.route_ids {
+                    all_routes.insert(r.clone());
+                }
+            }
+            let merged_routes: Vec<(String, String)> = all_routes.into_iter().collect();
 
-        merged.push(GraphEdge {
-            from,
-            to,
-            geometry: convert_from_geo(&chaikin_smoothing(&avg_geom, 1)),
-            route_ids: merged_routes,
-            weight: avg_weight,
-            original_edge_index: None,
-        });
+            // Average geometries
+            let avg_geom = if group.len() == 1 {
+                convert_to_geo(&group[0].geometry)
+            } else {
+                let geoms: Vec<GeoLineString<f64>> =
+                    group.iter().map(|e| convert_to_geo(&e.geometry)).collect();
+                let weights: Vec<f64> = group
+                    .iter()
+                    .map(|e| (e.route_ids.len().max(1) as f64).powi(2))
+                    .collect();
+                average_polylines_weighted(&geoms, Some(&weights))
+            };
+
+            // Calculate average weight
+            let avg_weight = group.iter().map(|e| e.weight).sum::<f64>() / group.len() as f64;
+
+            merged.push(GraphEdge {
+                from,
+                to,
+                geometry: convert_from_geo(&chaikin_smoothing(&avg_geom, 1)),
+                route_ids: merged_routes,
+                weight: avg_weight,
+                original_edge_index: None,
+            });
+        }
     }
     merged
+}
+
+/// Check if two lines are geometrically close (within threshold)
+fn are_lines_close(l1: &GeoLineString<f64>, l2: &GeoLineString<f64>, threshold: f64) -> bool {
+    // Check endpoints (should be close since they share nodes, but geometry might drift)
+    // Actually from/to NodeIds are same, so endpoints defined by clusters/intersections are same.
+    // But the Geometry points might start far away if the shape was rough.
+
+    // Check middle point
+    #[allow(deprecated)]
+    let len1 = l1.euclidean_length();
+    #[allow(deprecated)]
+    let len2 = l2.euclidean_length();
+
+    // Sample 5 points along lines
+    let steps = 5;
+    for i in 1..steps {
+        let frac = i as f64 / steps as f64;
+        let p1 = get_point_at_frac(l1, frac, len1);
+        let p2 = get_point_at_frac(l2, frac, len2);
+
+        let dist = ((p1.x - p2.x).powi(2) + (p1.y - p2.y).powi(2)).sqrt();
+        if dist > threshold {
+            return false;
+        }
+    }
+    true
+}
+
+fn get_point_at_frac(line: &GeoLineString<f64>, frac: f64, total_len: f64) -> Coord {
+    if total_len == 0.0 {
+        return if !line.0.is_empty() {
+            line.0[0]
+        } else {
+            Coord { x: 0.0, y: 0.0 }
+        };
+    }
+    let target = frac * total_len;
+    let mut current = 0.0;
+
+    for segment in line.lines() {
+        #[allow(deprecated)]
+        let seg_len = segment.euclidean_length();
+        if current + seg_len >= target {
+            // Interpolate
+            let t = (target - current) / seg_len;
+            return Coord {
+                x: segment.start.x + (segment.end.x - segment.start.x) * t,
+                y: segment.start.y + (segment.end.y - segment.start.y) * t,
+            };
+        }
+        current += seg_len;
+    }
+    // Return last point
+    line.0[line.0.len() - 1]
 }
 
 /// Partition edges by their primary chateau for per-chateau processing.
