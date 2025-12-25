@@ -1245,9 +1245,12 @@ fn collapse_shared_segments(
 
         let len_new: f64 = edges.iter().map(|e| e.weight).sum();
 
-        // Convergence check (matching loom's approach)
+        // Convergence/divergence check
         if len_old > 0.0 {
-            let convergence_ratio = (1.0 - len_new / len_old).abs();
+            let ratio = len_new / len_old;
+            let convergence_ratio = (1.0 - ratio).abs();
+
+            // Stop if converged
             if convergence_ratio < CONVERGENCE_THRESHOLD {
                 println!(
                     "Converged at iteration {} (ratio: {:.6})",
@@ -1255,10 +1258,29 @@ fn collapse_shared_segments(
                 );
                 break;
             }
+
+            // Stop if diverging (edges growing instead of shrinking)
+            // ratio > 1.0 means total length increased, which shouldn't happen
+            if ratio > 1.5 {
+                println!(
+                    "Divergence detected at iteration {} (length grew by {:.1}x), stopping early",
+                    iter, ratio
+                );
+                break;
+            }
+
             println!(
-                "Iteration {}: length ratio change {:.6}",
-                iter, convergence_ratio
+                "Iteration {}: length ratio {:.6} ({} edges)",
+                iter,
+                convergence_ratio,
+                edges.len()
             );
+
+            // Safety: stop if edge count is getting too large
+            if edges.len() > 50000 {
+                println!("Edge count exceeded 50000, stopping to prevent memory exhaustion");
+                break;
+            }
         }
     }
     edges
