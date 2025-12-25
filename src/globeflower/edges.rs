@@ -1348,16 +1348,6 @@ fn collapse_shared_segments(
                 break;
             }
 
-            // Stop if diverging (edges growing instead of shrinking)
-            // ratio > 1.0 means total length increased, which shouldn't happen
-            if ratio > 1.5 {
-                println!(
-                    "Divergence detected at iteration {} (length grew by {:.1}x), stopping early",
-                    iter, ratio
-                );
-                break;
-            }
-
             println!(
                 "Iteration {}: length ratio {:.6} ({} edges)",
                 iter,
@@ -1399,24 +1389,9 @@ fn densify_geometry(line: &GeoLineString<f64>, max_seg_len: f64) -> Vec<GeoPoint
 
 /// Check if two edges have identical route sets (matching loom's lineEq concept).
 /// This ensures we only merge degree-2 chains when the lines are actually the same.
+/// Assumes route_ids are sorted.
 fn routes_equal(a: &GraphEdge, b: &GraphEdge) -> bool {
-    if a.route_ids.len() != b.route_ids.len() {
-        return false;
-    }
-    let set_a: HashSet<_> = a.route_ids.iter().collect();
-    let set_b: HashSet<_> = b.route_ids.iter().collect();
-    set_a == set_b
-}
-
-/// Calculate the combined geometry length of a chain of edges (in degrees).
-fn chain_geometry_length(edges: &[GraphEdge], indices: &[usize]) -> f64 {
-    indices
-        .iter()
-        .map(|&i| {
-            let geom = convert_to_geo(&edges[i].geometry);
-            geom.euclidean_length()
-        })
-        .sum()
+    a.route_ids == b.route_ids
 }
 
 fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
@@ -1427,18 +1402,31 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         if let Some(existing) = edge_map.get_mut(&key) {
             // Merge routes (avoid duplicates)
             for r in e.route_ids {
-                if !existing.route_ids.contains(&r) {
-                    existing.route_ids.push(r);
-                }
+                // Determine if we need to insert - expensive check if not sorted, but we will sort later
+                // Just push and we'll sort/dedup for ALL edges once.
+                existing.route_ids.push(r);
             }
+            // Also add weight? Parallel edges usually imply redundant geometry?
+            // Original generic code didn't average weight here, just kept 'existing'.
+            // If we merge routes, we technically should re-evaluate weight or geometry.
+            // But usually parallel edges in this context come from previous split operations.
         } else {
             edge_map.insert(key, e);
         }
     }
-    let edges: Vec<GraphEdge> = edge_map.into_values().collect();
+
+    // Convert to Vec and sort routes for fast comparison
+    let mut edges: Vec<GraphEdge> = edge_map.into_values().collect();
+    for e in &mut edges {
+        e.route_ids.sort_unstable();
+        e.route_ids.dedup();
+    }
 
     // Merge consecutive edges (degree-2 nodes)
     let mut adj: HashMap<usize, (Vec<usize>, Vec<usize>)> = HashMap::new();
+    // Cache euclidean lengths in degrees for fast lookup
+    let mut edge_lengths_deg: Vec<f64> = Vec::with_capacity(edges.len());
+
     for (i, edge) in edges.iter().enumerate() {
         if let NodeId::Intersection(u) = edge.from {
             if let NodeId::Intersection(v) = edge.to {
@@ -1446,6 +1434,11 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                 adj.entry(v).or_default().0.push(i);
             }
         }
+
+        // Calculate length roughly in degrees (Euclidean on lat/lon)
+        let geom = convert_to_geo(&edge.geometry);
+        #[allow(deprecated)]
+        edge_lengths_deg.push(geom.euclidean_length());
     }
 
     let mut visited = vec![false; edges.len()];
@@ -1469,13 +1462,11 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
             }
         }
         let total_weight: f64 = indices.iter().map(|&i| edges[i].weight).sum();
-        let mut routes = std::collections::HashSet::new();
-        for &idx in indices {
-            for r in &edges[idx].route_ids {
-                routes.insert(r.clone());
-            }
-        }
-        let route_vec = routes.into_iter().collect();
+
+        // With sorted routes and `routes_equal` check, all edges in chain have identical routes.
+        // So we can just take the first one's routes.
+        let route_vec = first.route_ids.clone();
+
         GraphEdge {
             from: first.from,
             to: last.to,
@@ -1489,9 +1480,12 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
     let mut node_ids: Vec<usize> = adj.keys().cloned().collect();
     node_ids.sort();
 
+    // Process nodes that are Start of chains
     for u in node_ids {
         if let Some((in_list, out_list)) = adj.get(&u) {
             // Check if this node is a START of one or more chains
+            // A start of a chain is a node where in-degree != 1 OR out-degree != 1
+            // OR (degree 2 but routes change) - handled by loop break
             if in_list.len() != 1 || out_list.len() != 1 {
                 for &start_idx in out_list {
                     if visited[start_idx] {
@@ -1500,6 +1494,7 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
 
                     let mut chain = vec![start_idx];
                     visited[start_idx] = true;
+                    let mut current_chain_len = edge_lengths_deg[start_idx];
 
                     let mut curr = start_idx;
                     loop {
@@ -1512,19 +1507,22 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                                         break;
                                     }
                                     // Check route equality before merging (loom's lineEq)
+                                    // Routes are sorted, simple equality check
                                     if !routes_equal(&edges[curr], &edges[next]) {
                                         break;
                                     }
-                                    // Check max segment length constraint
-                                    let mut test_chain = chain.clone();
-                                    test_chain.push(next);
-                                    if chain_geometry_length(&edges, &test_chain)
+
+                                    // Check max segment length constraint (incremental update)
+                                    let next_len = edge_lengths_deg[next];
+                                    if current_chain_len + next_len
                                         > MAX_COLLAPSED_SEG_LENGTH_DEGREES
                                     {
                                         break;
                                     }
+
                                     visited[next] = true;
                                     chain.push(next);
+                                    current_chain_len += next_len;
                                     curr = next;
                                     continue;
                                 }
@@ -1538,10 +1536,13 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         }
     }
 
+    // Process remaining cycles or unvisited components
     for i in 0..edges.len() {
         if !visited[i] {
             let mut chain = vec![i];
             visited[i] = true;
+            let mut current_chain_len = edge_lengths_deg[i];
+
             let mut curr = i;
             loop {
                 let curr_edge = &edges[curr];
@@ -1556,16 +1557,15 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                             if !routes_equal(&edges[curr], &edges[next]) {
                                 break;
                             }
-                            // Check max segment length constraint
-                            let mut test_chain = chain.clone();
-                            test_chain.push(next);
-                            if chain_geometry_length(&edges, &test_chain)
-                                > MAX_COLLAPSED_SEG_LENGTH_DEGREES
-                            {
+
+                            let next_len = edge_lengths_deg[next];
+                            if current_chain_len + next_len > MAX_COLLAPSED_SEG_LENGTH_DEGREES {
                                 break;
                             }
+
                             visited[next] = true;
                             chain.push(next);
+                            current_chain_len += next_len;
                             curr = next;
                             continue;
                         }
@@ -1582,46 +1582,100 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
 
 /// Remove short edge artifacts by merging their endpoints (Loom's removeEdgeArtifacts).
 /// This contracts edges shorter than d_cut by replacing both endpoints with their midpoint.
+/// Optimized to use adjacency list and heap to avoid O(N^2) scans.
 fn remove_short_edge_artifacts(edges: Vec<GraphEdge>, d_cut: f64) -> Vec<GraphEdge> {
-    let mut result = edges;
-    let mut changed = true;
+    use std::cmp::Ordering;
+    use std::collections::BinaryHeap;
 
-    while changed {
-        changed = false;
+    // Wrapper to allow floating point in Heap
+    #[derive(Copy, Clone, PartialEq)]
+    struct HeapItem {
+        idx: usize,
+        len: f64,
+    }
 
-        // Find edges shorter than d_cut (in degrees)
-        let mut short_edges: Vec<(usize, f64)> = Vec::new();
-        for (i, edge) in result.iter().enumerate() {
+    impl Eq for HeapItem {}
+
+    impl Ord for HeapItem {
+        fn cmp(&self, other: &Self) -> Ordering {
+            // Min-heap based on length (reverse partial_cmp)
+            other.len.partial_cmp(&self.len).unwrap_or(Ordering::Equal)
+        }
+    }
+
+    impl PartialOrd for HeapItem {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    let mut pool: Vec<Option<GraphEdge>> = edges.into_iter().map(Some).collect();
+    let mut adj: HashMap<NodeId, HashSet<usize>> = HashMap::new();
+    let mut heap = BinaryHeap::new();
+
+    // 1. Build Adjacency and Heap
+    for (i, edge_opt) in pool.iter().enumerate() {
+        if let Some(edge) = edge_opt {
+            adj.entry(edge.from).or_default().insert(i);
+            adj.entry(edge.to).or_default().insert(i);
+
             let geom = convert_to_geo(&edge.geometry);
+            #[allow(deprecated)]
             let len = geom.euclidean_length();
             if len < d_cut {
-                short_edges.push((i, len));
+                heap.push(HeapItem { idx: i, len });
             }
         }
+    }
 
-        if short_edges.is_empty() {
-            break;
+    while let Some(item) = heap.pop() {
+        // Check if edge still exists (lazy deletion)
+        if pool[item.idx].is_none() {
+            continue;
         }
 
-        // Sort by length (shortest first)
-        short_edges.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Re-check length if needed (though we push updates, old entries might remain)
+        // We access pool via index
+        let short_edge_ref = pool[item.idx].as_ref().unwrap();
+        let geom = convert_to_geo(&short_edge_ref.geometry);
+        #[allow(deprecated)]
+        let current_len = geom.euclidean_length();
 
-        // Take the shortest edge and contract it
-        let (short_idx, _) = short_edges[0];
-        let short_edge = &result[short_idx];
+        // If length changed and is no longer short (unlikely in this process but safe to check)
+        // Or if we have a stale heap entry with wrong length (we prioritize strictly smallest)
+        // If the popped length is significantly different from current, ignore (stale)
+        if (current_len - item.len).abs() > 1e-9 {
+            // If current is still short, push it back with correct len
+            if current_len < d_cut {
+                heap.push(HeapItem {
+                    idx: item.idx,
+                    len: current_len,
+                });
+            }
+            continue;
+        }
+
+        // If actually no longer short
+        if current_len >= d_cut {
+            continue;
+        }
+
+        let short_idx = item.idx;
+        // Need to clone to avoid borrow conflict
+        let short_edge = short_edge_ref.clone();
 
         // Don't contract if both endpoints are clusters (preserve station identity)
         if matches!(short_edge.from, NodeId::Cluster(_))
             && matches!(short_edge.to, NodeId::Cluster(_))
         {
             // Remove this edge but don't merge nodes
-            result.remove(short_idx);
-            changed = true;
+            pool[short_idx] = None;
+            adj.entry(short_edge.from).or_default().remove(&short_idx);
+            adj.entry(short_edge.to).or_default().remove(&short_idx);
             continue;
         }
 
         // Calculate midpoint
-        let geom = convert_to_geo(&short_edge.geometry);
         let mid = if geom.0.len() >= 2 {
             let first = geom.0[0];
             let last = geom.0[geom.0.len() - 1];
@@ -1642,47 +1696,68 @@ fn remove_short_edge_artifacts(edges: Vec<GraphEdge>, d_cut: f64) -> Vec<GraphEd
             _ => (short_edge.from, short_edge.to),
         };
 
-        // Remove the short edge and update all other edges
-        let mut new_edges = Vec::new();
-        for (i, edge) in result.into_iter().enumerate() {
-            if i == short_idx {
-                continue; // Skip the contracted edge
-            }
+        // Remove the short edge itself
+        pool[short_idx] = None;
+        adj.entry(short_edge.from).or_default().remove(&short_idx);
+        adj.entry(short_edge.to).or_default().remove(&short_idx);
 
-            let mut e = edge;
-
-            // Replace references to replace_node with keep_node
-            if e.from == replace_node {
-                e.from = keep_node;
-                // Update geometry start point
-                let mut geom = convert_to_geo(&e.geometry);
-                if !geom.0.is_empty() {
-                    geom.0[0] = mid;
+        // Move edges from replace_node to keep_node
+        if let Some(repl_edges) = adj.remove(&replace_node) {
+            for e_idx in repl_edges {
+                // Skip if it's the edge we just removed (already handled but good safety)
+                if e_idx == short_idx {
+                    continue;
                 }
-                e.geometry = convert_from_geo(&geom);
-            }
-            if e.to == replace_node {
-                e.to = keep_node;
-                // Update geometry end point
-                let mut geom = convert_to_geo(&e.geometry);
-                if !geom.0.is_empty() {
-                    let last_idx = geom.0.len() - 1;
-                    geom.0[last_idx] = mid;
-                }
-                e.geometry = convert_from_geo(&geom);
-            }
 
-            // Skip self-loops
-            if e.from != e.to {
-                new_edges.push(e);
+                let mut remove_self_loop = false;
+                if let Some(edge) = pool[e_idx].as_mut() {
+                    // Update endpoint
+                    let mut geom = convert_to_geo(&edge.geometry);
+
+                    if edge.from == replace_node {
+                        edge.from = keep_node;
+                        if !geom.0.is_empty() {
+                            geom.0[0] = mid;
+                        }
+                    } else if edge.to == replace_node {
+                        edge.to = keep_node;
+                        if !geom.0.is_empty() {
+                            let last_idx = geom.0.len() - 1;
+                            geom.0[last_idx] = mid;
+                        }
+                    }
+
+                    edge.geometry = convert_from_geo(&geom);
+
+                    // Re-calculate length as geometry changed
+                    #[allow(deprecated)]
+                    let new_len = geom.euclidean_length();
+
+                    // Update Heap if this edge is now short (or changed length)
+                    if new_len < d_cut {
+                        heap.push(HeapItem {
+                            idx: e_idx,
+                            len: new_len,
+                        });
+                    }
+
+                    // Avoid self-loops?
+                    if edge.from == edge.to {
+                        remove_self_loop = true;
+                    } else {
+                        // Add to keep_node adjacency
+                        adj.entry(keep_node).or_default().insert(e_idx);
+                    }
+                }
+
+                if remove_self_loop {
+                    pool[e_idx] = None;
+                }
             }
         }
-
-        result = new_edges;
-        changed = true;
     }
 
-    result
+    pool.into_iter().flatten().collect()
 }
 
 #[cfg(test)]
