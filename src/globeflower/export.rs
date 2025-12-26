@@ -1,43 +1,99 @@
-use super::clustering::StopCluster;
-use super::edges::{GraphEdge, NodeId};
+use crate::clustering::StopCluster;
+use crate::edges::{GraphEdge, NodeId};
 use anyhow::Result;
+use catenary::graph_formats::{
+    LandMass, NodeId as SerialNodeId, SerializableExportGraph, SerializableGraphEdge,
+    SerializableStop, SerializableStopCluster, TurnRestriction,
+};
+use catenary::models::Stop;
 use geojson::{Feature, FeatureCollection, Geometry, JsonObject, JsonValue, Value};
-use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::BufWriter;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct LandMass {
-    pub id: usize,
-    pub clusters: Vec<usize>,
-    pub edges: Vec<usize>, // Indicies into the edges vector
-    pub stop_count: usize,
-    pub route_count: usize,
-}
-
-pub fn extract_and_export(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()> {
+pub fn extract_and_export(
+    clusters: &[StopCluster],
+    edges: &[GraphEdge],
+    restrictions: Vec<TurnRestriction>,
+    export_geojson: bool,
+) -> Result<()> {
+    // 1. Calculate Land Masses (using internal types)
     let land_masses = extract_land_masses(clusters, edges);
 
     println!("Identified {} distinct land masses.", land_masses.len());
 
-    // Legacy JSON export
-    let file = File::create("globeflower_graph.json")?;
-    let writer = BufWriter::new(file);
-    serde_json::to_writer_pretty(writer, &land_masses)?;
-    println!("Exported internal graph to globeflower_graph.json");
+    // 2. Export GeoJSON (Debug) - Optional
+    if export_geojson {
+        export_to_geojson(clusters, edges)?;
+    }
 
-    // GeoPackage Export (primary format)
-    export_to_geopackage(clusters, edges)?;
+    // 3. Convert to Serializable Models
+    let serial_clusters: Vec<SerializableStopCluster> = clusters
+        .iter()
+        .map(|c| SerializableStopCluster {
+            cluster_id: c.cluster_id,
+            centroid: [c.centroid.x, c.centroid.y],
+            stops: c.stops.iter().map(convert_stop).collect(),
+        })
+        .collect();
+
+    let serial_edges: Vec<SerializableGraphEdge> = edges
+        .iter()
+        .map(|e| SerializableGraphEdge {
+            from: convert_node_id(e.from),
+            to: convert_node_id(e.to),
+            geometry: e.geometry.points.iter().map(|p| [p.x, p.y]).collect(),
+            route_ids: e.route_ids.clone(),
+            weight: e.weight,
+            original_edge_index: e.original_edge_index,
+        })
+        .collect();
+
+    let export_graph = SerializableExportGraph {
+        land_masses, // LandMass is shared now
+        edges: serial_edges,
+        clusters: serial_clusters,
+        restrictions,
+    };
+
+    let file = File::create("globeflower_graph.bin")?;
+    let mut writer = BufWriter::new(file);
+    bincode::serde::encode_into_std_write(&export_graph, &mut writer, bincode::config::legacy())
+        .map_err(|e| anyhow::anyhow!("Bincode serialization failed: {}", e))?;
+    println!("Exported binary graph to globeflower_graph.bin");
 
     Ok(())
+}
+
+fn convert_node_id(id: NodeId) -> SerialNodeId {
+    match id {
+        NodeId::Cluster(i) => SerialNodeId::Cluster(i),
+        NodeId::Intersection(i) => SerialNodeId::Intersection(i),
+    }
+}
+
+fn convert_stop(s: &Stop) -> SerializableStop {
+    SerializableStop {
+        id: s.gtfs_id.clone(),
+        code: s.code.clone(),
+        name: s.name.clone(),
+        description: s.gtfs_desc.clone(),
+        location_type: s.location_type,
+        parent_station: s.parent_station.clone(),
+        zone_id: s.zone_id.clone(),
+        longitude: s.point.as_ref().map(|p| p.x),
+        latitude: s.point.as_ref().map(|p| p.y),
+        timezone: s.timezone.clone(),
+        platform_code: s.platform_code.clone(),
+        level_id: s.level_id.clone(),
+        routes: s.routes.iter().flatten().cloned().collect(),
+    }
 }
 
 fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()> {
     let mut features = Vec::new();
 
-    // 1. Export Edges as LineStrings
+    // Export Edges
     for edge in edges {
         let geometry = Geometry::new(Value::LineString(
             edge.geometry
@@ -53,33 +109,8 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
         ));
 
         let mut properties = JsonObject::new();
-        match edge.from {
-            NodeId::Cluster(id) => {
-                properties.insert("from_cluster".to_string(), JsonValue::from(id as u64));
-                properties.insert("from_type".to_string(), JsonValue::from("cluster"));
-            }
-            NodeId::Intersection(id) => {
-                properties.insert("from_intersection".to_string(), JsonValue::from(id as u64));
-                properties.insert("from_type".to_string(), JsonValue::from("intersection"));
-            }
-        }
-        match edge.to {
-            NodeId::Cluster(id) => {
-                properties.insert("to_cluster".to_string(), JsonValue::from(id as u64));
-                properties.insert("to_type".to_string(), JsonValue::from("cluster"));
-            }
-            NodeId::Intersection(id) => {
-                properties.insert("to_intersection".to_string(), JsonValue::from(id as u64));
-                properties.insert("to_type".to_string(), JsonValue::from("intersection"));
-            }
-        }
-
+        // Minimal metadata for visual debugging
         properties.insert("weight".to_string(), JsonValue::from(edge.weight));
-        properties.insert(
-            "route_ids".to_string(),
-            serde_json::to_value(&edge.route_ids)?,
-        );
-        properties.insert("type".to_string(), JsonValue::from("edge"));
 
         features.push(Feature {
             bbox: None,
@@ -90,7 +121,7 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
         });
     }
 
-    // 2. Export Clusters as Points
+    // Export Clusters
     for cluster in clusters {
         let geometry = Geometry::new(Value::Point(vec![
             (cluster.centroid.x * 100_000_000.0).round() / 100_000_000.0,
@@ -102,19 +133,6 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
             "cluster_id".to_string(),
             JsonValue::from(cluster.cluster_id as u64),
         );
-        properties.insert(
-            "stop_count".to_string(),
-            JsonValue::from(cluster.stops.len() as u64),
-        );
-
-        let stop_names: Vec<String> = cluster
-            .stops
-            .iter()
-            .map(|s| s.name.clone().unwrap_or_default())
-            .collect();
-        properties.insert("stop_names".to_string(), serde_json::to_value(stop_names)?);
-        properties.insert("type".to_string(), JsonValue::from("node"));
-        properties.insert("node_type".to_string(), JsonValue::from("cluster"));
 
         features.push(Feature {
             bbox: None,
@@ -135,232 +153,7 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
     let writer = BufWriter::new(file);
     serde_json::to_writer_pretty(writer, &collection)?;
     println!("Exported graph to globeflower_graph.geojson");
-
     Ok(())
-}
-
-/// Export to GeoPackage format (SQLite-based spatial database)
-fn export_to_geopackage(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()> {
-    let path = "globeflower_graph.gpkg";
-
-    // Remove existing file if present
-    let _ = std::fs::remove_file(path);
-
-    let mut conn = Connection::open(path)?;
-
-    // Set GeoPackage application_id (required by spec)
-    conn.execute("PRAGMA application_id = 0x47504B47", [])?; // 'GPKG' in hex
-    conn.execute("PRAGMA user_version = 10300", [])?; // GeoPackage version 1.3.0
-
-    // Initialize GeoPackage metadata tables (order matters for foreign keys)
-    conn.execute_batch("
-        -- Spatial reference systems table (must be first)
-        CREATE TABLE gpkg_spatial_ref_sys (
-            srs_name TEXT NOT NULL,
-            srs_id INTEGER NOT NULL PRIMARY KEY,
-            organization TEXT NOT NULL,
-            organization_coordsys_id INTEGER NOT NULL,
-            definition TEXT NOT NULL,
-            description TEXT
-        );
-        
-        -- Required SRS entries per GeoPackage spec
-        INSERT INTO gpkg_spatial_ref_sys VALUES(
-            'Undefined cartesian SRS', -1, 'NONE', -1, 'undefined', 'undefined cartesian coordinate reference system'
-        );
-        INSERT INTO gpkg_spatial_ref_sys VALUES(
-            'Undefined geographic SRS', 0, 'NONE', 0, 'undefined', 'undefined geographic coordinate reference system'
-        );
-        INSERT INTO gpkg_spatial_ref_sys VALUES(
-            'WGS 84 geodetic', 4326, 'EPSG', 4326,
-            'GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"4326\"]]',
-            'longitude/latitude coordinates in decimal degrees on the WGS 84 spheroid'
-        );
-        
-        -- Contents table
-        CREATE TABLE gpkg_contents (
-            table_name TEXT NOT NULL PRIMARY KEY,
-            data_type TEXT NOT NULL,
-            identifier TEXT UNIQUE,
-            description TEXT DEFAULT '',
-            last_change DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-            min_x DOUBLE,
-            min_y DOUBLE,
-            max_x DOUBLE,
-            max_y DOUBLE,
-            srs_id INTEGER,
-            CONSTRAINT fk_gc_r_srs_id FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys(srs_id)
-        );
-        
-        -- Geometry columns table
-        CREATE TABLE gpkg_geometry_columns (
-            table_name TEXT NOT NULL,
-            column_name TEXT NOT NULL,
-            geometry_type_name TEXT NOT NULL,
-            srs_id INTEGER NOT NULL,
-            z TINYINT NOT NULL,
-            m TINYINT NOT NULL,
-            CONSTRAINT pk_geom_cols PRIMARY KEY (table_name, column_name),
-            CONSTRAINT fk_gc_tn FOREIGN KEY (table_name) REFERENCES gpkg_contents(table_name),
-            CONSTRAINT fk_gc_srs FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys(srs_id)
-        );
-    ")?;
-
-    // Create edges table
-    conn.execute_batch(
-        "
-        CREATE TABLE edges (
-            fid INTEGER PRIMARY KEY AUTOINCREMENT,
-            geom BLOB,
-            from_type TEXT,
-            from_id INTEGER,
-            to_type TEXT,
-            to_id INTEGER,
-            weight REAL,
-            route_ids TEXT
-        );
-        
-        INSERT INTO gpkg_contents VALUES('edges', 'features', 'edges', 'Transit edges', 
-            strftime('%Y-%m-%dT%H:%M:%fZ','now'), -180, -90, 180, 90, 4326);
-        INSERT INTO gpkg_geometry_columns VALUES('edges', 'geom', 'LINESTRING', 4326, 0, 0);
-    ",
-    )?;
-
-    // Create clusters table
-    conn.execute_batch(
-        "
-        CREATE TABLE clusters (
-            fid INTEGER PRIMARY KEY AUTOINCREMENT,
-            geom BLOB,
-            cluster_id INTEGER,
-            stop_count INTEGER,
-            stop_names TEXT
-        );
-        
-        INSERT INTO gpkg_contents VALUES('clusters', 'features', 'clusters', 'Stop clusters',
-            strftime('%Y-%m-%dT%H:%M:%fZ','now'), -180, -90, 180, 90, 4326);
-        INSERT INTO gpkg_geometry_columns VALUES('clusters', 'geom', 'POINT', 4326, 0, 0);
-    ",
-    )?;
-    // Use transaction for bulk inserts - massive performance improvement
-    let tx = conn.transaction()?;
-
-    // Insert edges
-    {
-        let mut stmt = tx.prepare(
-            "INSERT INTO edges (geom, from_type, from_id, to_type, to_id, weight, route_ids) VALUES (?, ?, ?, ?, ?, ?, ?)"
-        )?;
-
-        for edge in edges {
-            let wkb = linestring_to_gpkg_wkb(&edge.geometry);
-            let (from_type, from_id) = match edge.from {
-                NodeId::Cluster(id) => ("cluster", id),
-                NodeId::Intersection(id) => ("intersection", id),
-            };
-            let (to_type, to_id) = match edge.to {
-                NodeId::Cluster(id) => ("cluster", id),
-                NodeId::Intersection(id) => ("intersection", id),
-            };
-            let routes_json = serde_json::to_string(&edge.route_ids)?;
-
-            stmt.execute(rusqlite::params![
-                wkb,
-                from_type,
-                from_id,
-                to_type,
-                to_id,
-                edge.weight,
-                routes_json
-            ])?;
-        }
-    }
-
-    // Insert clusters
-    {
-        let mut stmt = tx.prepare(
-            "INSERT INTO clusters (geom, cluster_id, stop_count, stop_names) VALUES (?, ?, ?, ?)",
-        )?;
-
-        for cluster in clusters {
-            let wkb = point_to_gpkg_wkb(cluster.centroid.x, cluster.centroid.y);
-            let stop_names: Vec<String> = cluster
-                .stops
-                .iter()
-                .map(|s| s.name.clone().unwrap_or_default())
-                .collect();
-            let names_json = serde_json::to_string(&stop_names)?;
-
-            stmt.execute(rusqlite::params![
-                wkb,
-                cluster.cluster_id,
-                cluster.stops.len(),
-                names_json
-            ])?;
-        }
-    }
-
-    tx.commit()?;
-
-    println!("Exported graph to {}", path);
-    Ok(())
-}
-
-/// Convert a LineString to GeoPackage Binary (GPB) format
-fn linestring_to_gpkg_wkb(
-    geom: &postgis_diesel::types::LineString<postgis_diesel::types::Point>,
-) -> Vec<u8> {
-    let mut gpb = Vec::new();
-
-    // GeoPackage Binary header (8 bytes minimum)
-    // Magic: 0x47 0x50 ("GP")
-    gpb.push(0x47); // 'G'
-    gpb.push(0x50); // 'P'
-
-    // Version: 0 for GeoPackage 1.0+
-    gpb.push(0x00);
-
-    // Flags byte (per OGC GeoPackage spec):
-    // bit 0: endianness (0 = big endian, 1 = little endian)
-    // bits 1-3: envelope type (0 = no envelope)
-    // bit 4: empty geometry flag
-    // bit 5: extended flag
-    // bits 6-7: reserved
-    gpb.push(0b00000001); // bit 0 = 1 = little endian, bits 1-3 = 0 = no envelope
-
-    // SRS ID (4 bytes, little endian since flag bit 0 = 1)
-    gpb.extend_from_slice(&4326i32.to_le_bytes());
-
-    // Standard WKB follows
-    gpb.push(0x01); // WKB little endian byte order
-    gpb.extend_from_slice(&2u32.to_le_bytes()); // wkbLineString = 2
-    gpb.extend_from_slice(&(geom.points.len() as u32).to_le_bytes());
-
-    for pt in &geom.points {
-        gpb.extend_from_slice(&pt.x.to_le_bytes());
-        gpb.extend_from_slice(&pt.y.to_le_bytes());
-    }
-
-    gpb
-}
-
-/// Convert a Point to GeoPackage WKB format
-fn point_to_gpkg_wkb(x: f64, y: f64) -> Vec<u8> {
-    let mut wkb = Vec::new();
-
-    // GeoPackage header
-    wkb.push(0x47); // 'G'
-    wkb.push(0x50); // 'P'
-    wkb.push(0x00); // version  
-    wkb.push(0b00000001); // bit 0 = 1 = little endian, bits 1-3 = 0 = no envelope
-    wkb.extend_from_slice(&4326i32.to_le_bytes()); // SRID
-
-    // Standard WKB
-    wkb.push(0x01); // little endian
-    wkb.extend_from_slice(&1u32.to_le_bytes()); // Point type
-    wkb.extend_from_slice(&x.to_le_bytes());
-    wkb.extend_from_slice(&y.to_le_bytes());
-
-    wkb
 }
 
 fn extract_land_masses(clusters: &[StopCluster], edges: &[GraphEdge]) -> Vec<LandMass> {

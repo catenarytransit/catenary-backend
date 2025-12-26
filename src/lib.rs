@@ -97,6 +97,7 @@ use std::{fs::File, io::BufReader, io::BufWriter};
 pub mod aspen_dataset;
 pub mod compact_formats;
 pub mod genentech_auth;
+pub mod graph_formats;
 
 lazy_static! {
     static ref CLOCK_AM_PM_REGEX: Regex =

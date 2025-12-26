@@ -7,7 +7,7 @@ use geo::prelude::*;
 use postgis_diesel::types::Point;
 use rstar::{AABB, RTree, RTreeObject};
 use std::collections::{HashMap, HashSet};
-use strsim::normalized_levenshtein;
+// use strsim::normalized_levenshtein; // Removed: replaced by Jaccard similarity
 
 // Constants
 const BASE_DIST_RAIL: f64 = 100.0;
@@ -28,7 +28,7 @@ struct SpatialStop(Stop);
 // Implementing PartialEq manually for SpatialStop since Stop doesn't implement it
 impl PartialEq for SpatialStop {
     fn eq(&self, other: &Self) -> bool {
-        self.0.gtfs_id == other.0.gtfs_id 
+        self.0.gtfs_id == other.0.gtfs_id
         // Note: strictly this should compare all fields but for our purpose ID uniqueness is enough
         // or effectively pointer equality if we had that.
     }
@@ -65,10 +65,16 @@ pub async fn cluster_stops(pool: &CatenaryPostgresPool) -> Result<Vec<StopCluste
         .await?;
 
     // Filter to only stops that have rail/tram route types
-    let valid_stops: Vec<Stop> = all_stops.into_iter().filter(|s| {
-         s.point.is_some() &&
-         s.route_types.iter().flatten().any(|&t| t == 0 || t == 1 || t == 2 || (900..=1200).contains(&t))
-    }).collect();
+    let valid_stops: Vec<Stop> = all_stops
+        .into_iter()
+        .filter(|s| {
+            s.point.is_some()
+                && s.route_types
+                    .iter()
+                    .flatten()
+                    .any(|&t| t == 0 || t == 1 || t == 2 || (900..=1200).contains(&t))
+        })
+        .collect();
 
     Ok(greedy_clustering(valid_stops))
 }
@@ -88,7 +94,7 @@ fn greedy_clustering(stops: Vec<Stop>) -> Vec<StopCluster> {
 
     // Since we need to iterate and access neighbors, but RTree doesn't support easy "remove"
     // we use a visited set ensuring each node is processed exactly once.
-    
+
     // Sort stops to ensure deterministic order (optional but good for consistency)
     let mut stop_ids: Vec<String> = stop_map.keys().cloned().collect();
     stop_ids.sort();
@@ -107,10 +113,10 @@ fn greedy_clustering(stops: Vec<Stop>) -> Vec<StopCluster> {
                 cluster_component.push(current_stop.clone());
 
                 let p = current_stop.point.as_ref().unwrap();
-                
+
                 // Query candidates within conservative max range (approx 0.01 degrees)
                 // 0.005 is approx 500m. Let's use 0.01 to be safe and filter later.
-                let candidates = tree.locate_within_distance([p.x, p.y], 0.01); 
+                let candidates = tree.locate_within_distance([p.x, p.y], 0.01);
 
                 for candidate_wrapper in candidates {
                     let candidate = &candidate_wrapper.0;
@@ -125,13 +131,13 @@ fn greedy_clustering(stops: Vec<Stop>) -> Vec<StopCluster> {
         }
 
         if !cluster_component.is_empty() {
-             let centroid = calculate_centroid(&cluster_component);
-             clusters.push(StopCluster {
-                 cluster_id: cluster_id_counter,
-                 centroid,
-                 stops: cluster_component
-             });
-             cluster_id_counter += 1;
+            let centroid = calculate_centroid(&cluster_component);
+            clusters.push(StopCluster {
+                cluster_id: cluster_id_counter,
+                centroid,
+                stops: cluster_component,
+            });
+            cluster_id_counter += 1;
         }
     }
 
@@ -144,7 +150,7 @@ fn calculate_centroid(stops: &[Stop]) -> Point {
         let p = s.point.as_ref().unwrap();
         (acc.0 + p.x, acc.1 + p.y)
     });
-    
+
     Point {
         x: sum_x / count,
         y: sum_y / count,
@@ -166,8 +172,6 @@ fn should_merge(a: &Stop, b: &Stop) -> bool {
     let name_a = a.name.as_deref().unwrap_or("").to_lowercase();
     let name_b = b.name.as_deref().unwrap_or("").to_lowercase();
 
-    let similarity = normalized_levenshtein(&name_a, &name_b);
-
     // Determine strictness based on route type (0 = Tram)
     let is_tram = is_tram_stop(a) || is_tram_stop(b);
     let base_dist = if is_tram {
@@ -175,6 +179,13 @@ fn should_merge(a: &Stop, b: &Stop) -> bool {
     } else {
         BASE_DIST_RAIL
     };
+
+    // Thesis Section 3.4: Use Jaccard Similarity on word sets
+    let jaccard = jaccard_similarity(&name_a, &name_b);
+    let prefix = prefix_similarity(&name_a, &name_b);
+
+    // Combined similarity score (favoring Jaccard but boosting if prefix match is strong)
+    let similarity = jaccard.max(prefix * 0.9);
 
     if similarity > SIMILARITY_HIGH {
         distance < base_dist * 2.5
@@ -190,6 +201,46 @@ fn is_tram_stop(stop: &Stop) -> bool {
         .iter()
         .flatten()
         .any(|&t| t == 0 || t == 900)
+}
+
+/// Jaccard Similarity between two strings (treated as sets of words)
+fn jaccard_similarity(s1: &str, s2: &str) -> f64 {
+    let set1: HashSet<&str> = s1.split_whitespace().collect();
+    let set2: HashSet<&str> = s2.split_whitespace().collect();
+
+    let intersection_count = set1.intersection(&set2).count();
+    let union_count = set1.union(&set2).count();
+
+    if union_count == 0 {
+        return 0.0;
+    }
+
+    intersection_count as f64 / union_count as f64
+}
+
+/// Prefix similarity: Check if one name is a prefix of the other (or very close)
+/// Helpful for cases like "London St Pancras" vs "London St Pancras International"
+fn prefix_similarity(s1: &str, s2: &str) -> f64 {
+    let len1 = s1.len();
+    let len2 = s2.len();
+    if len1 == 0 || len2 == 0 {
+        return 0.0;
+    }
+
+    let min_len = len1.min(len2);
+    let chars1: Vec<char> = s1.chars().collect();
+    let chars2: Vec<char> = s2.chars().collect();
+
+    let mut common_prefix = 0;
+    for i in 0..min_len {
+        if chars1[i] == chars2[i] {
+            common_prefix += 1;
+        } else {
+            break;
+        }
+    }
+
+    common_prefix as f64 / len1.max(len2) as f64
 }
 
 /// Distance in meters between two lat/lon points
@@ -215,7 +266,7 @@ mod tests {
         let lat2 = 40.7128;
         let lon2 = -74.0060;
         let dist = haversine_distance(lat1, lon1, lat2, lon2);
-        
+
         // Expected approx 3935 km
         assert!(dist > 3_930_000.0 && dist < 3_950_000.0);
 

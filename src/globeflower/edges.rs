@@ -19,11 +19,7 @@ const MAX_COLLAPSED_SEG_LENGTH_DEGREES: f64 = 0.0045;
 /// Convergence threshold for iterative segment collapsing.
 const CONVERGENCE_THRESHOLD: f64 = 0.002;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum NodeId {
-    Cluster(usize),
-    Intersection(usize),
-}
+pub use catenary::graph_formats::NodeId;
 
 #[derive(Debug, Clone)]
 pub struct GraphEdge {
@@ -163,6 +159,8 @@ pub async fn generate_edges(
     let chateau_groups = partition_by_chateau(merged_once);
     println!("Partitioned into {} chateau groups", chateau_groups.len());
 
+    let mut intersection_id_counter = 0;
+
     let mut all_bundled: Vec<GraphEdge> = Vec::new();
     for (chateau_name, group) in chateau_groups {
         println!(
@@ -172,7 +170,8 @@ pub async fn generate_edges(
         );
 
         // Collapse shared segments within this chateau using Loom-style algorithm
-        let collapsed = collapse_shared_segments(group, 0.0005, 0.0001, 10);
+        let collapsed =
+            collapse_shared_segments(group, 0.0005, 0.0001, 10, &mut intersection_id_counter);
         let bundled = bundle_edges(collapsed);
         all_bundled.extend(bundled);
     }
@@ -182,7 +181,8 @@ pub async fn generate_edges(
     let intersections = detect_intersections(&all_bundled);
     println!("Detected {} intersection points.", intersections.len());
 
-    let split_edges = split_edges_at_points(all_bundled, &intersections);
+    let split_edges =
+        split_edges_at_points(all_bundled, &intersections, &mut intersection_id_counter);
     println!("Split into {} segment edges.", split_edges.len());
 
     // Zippering: Snap clusters to passing edges
@@ -191,9 +191,13 @@ pub async fn generate_edges(
 
     let merged = merge_edges(zippered_edges);
 
+    // Contract graph to remove redundant degree-2 nodes (fixes dashed lines)
+    let contracted = simplify_graph_serial(merged);
+    println!("Contracted to {} edges.", contracted.len());
+
     // Apply post-processing pipeline as in loom:
     // smoothenOutliers(50) → simplify(1) → densify(5) → chaikin(1) → simplify(1)
-    let processed: Vec<GraphEdge> = merged
+    let processed: Vec<GraphEdge> = contracted
         .into_iter()
         .map(|mut edge| {
             let geom = convert_to_geo(&edge.geometry);
@@ -537,7 +541,7 @@ fn densify_line(line: &GeoLineString<f64>, max_dist: f64) -> GeoLineString<f64> 
 }
 
 // Basic implementation of line substring
-fn get_line_substring(
+pub fn get_line_substring(
     line: &GeoLineString<f64>,
     start_frac: f64,
     end_frac: f64,
@@ -612,11 +616,11 @@ fn get_line_substring(
     Some(GeoLineString::new(coords))
 }
 
-fn convert_to_geo(ls: &LineString<Point>) -> GeoLineString<f64> {
+pub fn convert_to_geo(ls: &LineString<Point>) -> GeoLineString<f64> {
     ls.points.iter().map(|p| Coord { x: p.x, y: p.y }).collect()
 }
 
-fn convert_from_geo(ls: &GeoLineString<f64>) -> LineString<Point> {
+pub fn convert_from_geo(ls: &GeoLineString<f64>) -> LineString<Point> {
     let points =
         ls.0.iter()
             .map(|c| Point {
@@ -969,9 +973,18 @@ impl RTreeObject for IndexedPoint {
     }
 }
 
-fn split_edges_at_points(edges: Vec<GraphEdge>, points: &[GeoPoint<f64>]) -> Vec<GraphEdge> {
+fn split_edges_at_points(
+    edges: Vec<GraphEdge>,
+    points: &[GeoPoint<f64>],
+    next_intersection_id: &mut usize,
+) -> Vec<GraphEdge> {
     println!("Splitting edges at {} intersection points...", points.len());
     let mut new_edges = Vec::new();
+
+    // Map each point index to a new unique global Intersection ID
+    // We reserve a block of IDs for these points
+    let start_id = *next_intersection_id;
+    *next_intersection_id += points.len();
 
     // Bulk load points into R-Tree
     let indexed_points: Vec<IndexedPoint> = points
@@ -1044,19 +1057,22 @@ fn split_edges_at_points(edges: Vec<GraphEdge>, points: &[GeoPoint<f64>]) -> Vec
                 continue;
             }
 
+            // Assign the globally unique ID
+            let new_node_id = NodeId::Intersection(start_id + p_idx);
+
             if let Some(geom) = get_line_substring(&geo_line, current_frac, frac) {
                 #[allow(deprecated)]
                 let weight = geom.haversine_length();
                 new_edges.push(GraphEdge {
                     from: current_node,
-                    to: NodeId::Intersection(p_idx),
+                    to: new_node_id,
                     geometry: convert_from_geo(&geom),
                     route_ids: edge.route_ids.clone(),
                     weight,
                     original_edge_index: edge.original_edge_index,
                 });
             }
-            current_node = NodeId::Intersection(p_idx);
+            current_node = new_node_id;
             current_frac = frac;
         }
 
@@ -1207,6 +1223,7 @@ fn collapse_shared_segments(
     d_cut: f64,
     seg_len: f64,
     max_iters: usize,
+    next_node_id_counter: &mut usize,
 ) -> Vec<GraphEdge> {
     #[derive(Debug, Clone, Copy, PartialEq)]
     struct SnappedNode {
@@ -1381,8 +1398,9 @@ fn collapse_shared_segments(
 
                     (bid, GeoPoint::new(avg_x, avg_y))
                 } else {
-                    let id = next_node_id;
-                    next_node_id += 1;
+                    let id = *next_node_id_counter; // Use global counter
+                    *next_node_id_counter += 1;
+
                     node_grid.insert(SnappedNode { id, point: pt_arr });
                     node_positions.insert(id, (pt_arr[0], pt_arr[1], 1));
                     (id, p)
@@ -1521,14 +1539,8 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         if let Some(existing) = edge_map.get_mut(&key) {
             // Merge routes (avoid duplicates)
             for r in e.route_ids {
-                // Determine if we need to insert - expensive check if not sorted, but we will sort later
-                // Just push and we'll sort/dedup for ALL edges once.
                 existing.route_ids.push(r);
             }
-            // Also add weight? Parallel edges usually imply redundant geometry?
-            // Original generic code didn't average weight here, just kept 'existing'.
-            // If we merge routes, we technically should re-evaluate weight or geometry.
-            // But usually parallel edges in this context come from previous split operations.
         } else {
             edge_map.insert(key, e);
         }
@@ -1541,17 +1553,18 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         e.route_ids.dedup();
     }
 
-    // Merge consecutive edges (degree-2 nodes)
+    // Step 1: Build Adjacency Lists for Intersections
+    // Key: NodeId (as usize), Value: (Incoming Edge Indices, Outgoing Edge Indices)
     let mut adj: HashMap<usize, (Vec<usize>, Vec<usize>)> = HashMap::new();
     // Cache euclidean lengths in degrees for fast lookup
     let mut edge_lengths_deg: Vec<f64> = Vec::with_capacity(edges.len());
 
     for (i, edge) in edges.iter().enumerate() {
         if let NodeId::Intersection(u) = edge.from {
-            if let NodeId::Intersection(v) = edge.to {
-                adj.entry(u).or_default().1.push(i);
-                adj.entry(v).or_default().0.push(i);
-            }
+            adj.entry(u).or_default().1.push(i);
+        }
+        if let NodeId::Intersection(v) = edge.to {
+            adj.entry(v).or_default().0.push(i);
         }
 
         // Calculate length roughly in degrees (Euclidean on lat/lon)
@@ -1559,6 +1572,16 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         #[allow(deprecated)]
         edge_lengths_deg.push(geom.euclidean_length());
     }
+
+    let mut start_nodes_count = 0;
+    let mut chains_merged = 0;
+    let mut total_reduction = 0;
+
+    // Debug break reasons
+    let mut break_visited = 0;
+    let mut break_route_mismatch = 0;
+    let mut break_len_limit = 0;
+    let mut break_structure = 0; // Not 1-in-1-out
 
     let mut visited = vec![false; edges.len()];
     let mut simplified = Vec::new();
@@ -1581,9 +1604,6 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
             }
         }
         let total_weight: f64 = indices.iter().map(|&i| edges[i].weight).sum();
-
-        // With sorted routes and `routes_equal` check, all edges in chain have identical routes.
-        // So we can just take the first one's routes.
         let route_vec = first.route_ids.clone();
 
         GraphEdge {
@@ -1596,66 +1616,94 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         }
     };
 
-    let mut node_ids: Vec<usize> = adj.keys().cloned().collect();
-    node_ids.sort();
+    // Helper to count route matches
+    let count_route_matches = |indices: &[usize], target_edge: &GraphEdge| -> usize {
+        indices
+            .iter()
+            .filter(|&&idx| routes_equal(&edges[idx], target_edge))
+            .count()
+    };
 
-    // Process nodes that are Start of chains
-    for u in node_ids {
-        if let Some((in_list, out_list)) = adj.get(&u) {
-            // Check if this node is a START of one or more chains
-            // A start of a chain is a node where in-degree != 1 OR out-degree != 1
-            // OR (degree 2 but routes change) - handled by loop break
-            if in_list.len() != 1 || out_list.len() != 1 {
-                for &start_idx in out_list {
-                    if visited[start_idx] {
-                        continue;
-                    }
+    // Helper to find single route match
+    let find_route_match = |indices: &[usize], target_edge: &GraphEdge| -> Option<usize> {
+        let matches: Vec<usize> = indices
+            .iter()
+            .filter(|&&idx| routes_equal(&edges[idx], target_edge))
+            .cloned()
+            .collect();
+        if matches.len() == 1 {
+            Some(matches[0])
+        } else {
+            None
+        }
+    };
 
-                    let mut chain = vec![start_idx];
-                    visited[start_idx] = true;
-                    let mut current_chain_len = edge_lengths_deg[start_idx];
+    // Step 2: Traverse from valid start nodes
+    for i in 0..edges.len() {
+        if visited[i] {
+            continue;
+        }
 
-                    let mut curr = start_idx;
-                    loop {
-                        let curr_edge = &edges[curr];
-                        if let NodeId::Intersection(v) = curr_edge.to {
-                            if let Some((v_in, v_out)) = adj.get(&v) {
-                                if v_in.len() == 1 && v_out.len() == 1 {
-                                    let next = v_out[0];
-                                    if visited[next] {
-                                        break;
-                                    }
-                                    // Check route equality before merging (loom's lineEq)
-                                    // Routes are sorted, simple equality check
-                                    if !routes_equal(&edges[curr], &edges[next]) {
-                                        break;
-                                    }
-
-                                    // Check max segment length constraint (incremental update)
-                                    let next_len = edge_lengths_deg[next];
-                                    if current_chain_len + next_len
-                                        > MAX_COLLAPSED_SEG_LENGTH_DEGREES
-                                    {
-                                        break;
-                                    }
-
-                                    visited[next] = true;
-                                    chain.push(next);
-                                    current_chain_len += next_len;
-                                    curr = next;
-                                    continue;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                    simplified.push(merge_chain(&chain));
+        let start_node = edges[i].from;
+        let is_start = match start_node {
+            NodeId::Cluster(_) => true,
+            NodeId::Intersection(u_id) => {
+                if let Some((in_list, out_list)) = adj.get(&u_id) {
+                    let in_count = count_route_matches(in_list, &edges[i]);
+                    let out_count = count_route_matches(out_list, &edges[i]);
+                    in_count != 1 || out_count != 1
+                } else {
+                    true
                 }
             }
+        };
+
+        if is_start {
+            let mut chain = vec![i];
+            visited[i] = true;
+            let mut current_chain_len = edge_lengths_deg[i];
+
+            let mut curr = i;
+            loop {
+                let curr_edge = &edges[curr];
+                if let NodeId::Intersection(v) = curr_edge.to {
+                    // Check if we can traverse THROUGH v
+                    if let Some((v_in, v_out)) = adj.get(&v) {
+                        let in_count = count_route_matches(v_in, &edges[curr]);
+                        let next_match = find_route_match(v_out, &edges[curr]);
+
+                        if in_count == 1 {
+                            if let Some(next) = next_match {
+                                if !visited[next] {
+                                    // COMMENTED OUT LEN LIMIT to maximize smoothing
+                                    visited[next] = true;
+                                    chain.push(next);
+                                    current_chain_len += edge_lengths_deg[next];
+                                    curr = next;
+                                    continue;
+                                } else {
+                                    break_visited += 1;
+                                }
+                            } else {
+                                break_structure += 1;
+                            }
+                        } else {
+                            break_structure += 1;
+                        }
+                    }
+                }
+                break;
+            }
+            start_nodes_count += 1;
+            if chain.len() > 1 {
+                chains_merged += 1;
+                total_reduction += chain.len() - 1;
+            }
+            simplified.push(merge_chain(&chain));
         }
     }
 
-    // Process remaining cycles or unvisited components
+    // Step 3: Process remaining cycles or unvisited components
     for i in 0..edges.len() {
         if !visited[i] {
             let mut chain = vec![i];
@@ -1666,27 +1714,20 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
             loop {
                 let curr_edge = &edges[curr];
                 if let NodeId::Intersection(v) = curr_edge.to {
-                    if let Some((_, v_out)) = adj.get(&v) {
-                        if !v_out.is_empty() {
-                            let next = v_out[0];
-                            if visited[next] {
-                                break;
-                            }
-                            // Check route equality before merging (loom's lineEq)
-                            if !routes_equal(&edges[curr], &edges[next]) {
-                                break;
-                            }
+                    if let Some((v_in, v_out)) = adj.get(&v) {
+                        let in_count = count_route_matches(v_in, &edges[curr]);
+                        let next_match = find_route_match(v_out, &edges[curr]);
 
-                            let next_len = edge_lengths_deg[next];
-                            if current_chain_len + next_len > MAX_COLLAPSED_SEG_LENGTH_DEGREES {
-                                break;
+                        if in_count == 1 {
+                            if let Some(next) = next_match {
+                                if !visited[next] {
+                                    visited[next] = true;
+                                    chain.push(next);
+                                    current_chain_len += edge_lengths_deg[next];
+                                    curr = next;
+                                    continue;
+                                }
                             }
-
-                            visited[next] = true;
-                            chain.push(next);
-                            current_chain_len += next_len;
-                            curr = next;
-                            continue;
                         }
                     }
                 }
@@ -1696,12 +1737,20 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         }
     }
 
+    println!(
+        "Simplify Stats: Starts={}, Chains={}, Reduction={}. Breaks: Visited={}, Route={}, Len={}, Structure={}",
+        start_nodes_count,
+        chains_merged,
+        total_reduction,
+        break_visited,
+        break_route_mismatch,
+        break_len_limit,
+        break_structure
+    );
+
     simplified
 }
 
-/// Remove short edge artifacts by merging their endpoints (Loom's removeEdgeArtifacts).
-/// This contracts edges shorter than d_cut by replacing both endpoints with their midpoint.
-/// Optimized to use adjacency list and heap to avoid O(N^2) scans.
 fn remove_short_edge_artifacts(edges: Vec<GraphEdge>, d_cut: f64) -> Vec<GraphEdge> {
     use std::cmp::Ordering;
     use std::collections::BinaryHeap;
@@ -1985,7 +2034,8 @@ mod tests {
         // Point at 5,5 (too far, should not split)
         let p2 = GeoPoint::new(5.0, 5.0);
 
-        let result = split_edges_at_points(vec![edge], &[p1, p2]);
+        let mut next_id = 100;
+        let result = split_edges_at_points(vec![edge], &[p1, p2], &mut next_id);
 
         // Should be split into 2 edges
         assert_eq!(result.len(), 2);
