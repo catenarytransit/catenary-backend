@@ -1763,42 +1763,45 @@ impl Optimizer {
             let v_legs = &node_adj[&v];
 
             // Check u legs for stumpiness
-            for &leg in u_legs {
-                if leg == e_idx {
-                    continue;
-                }
-                if touched_edges.contains(&leg) || touched_legs.contains(&leg) {
-                    continue;
-                }
-                let leg_edge = &graph.edges[leg];
-                if leg_edge.lines.is_empty() {
-                    continue;
-                }
+            // Requirement from C++ Loom: n->getDeg() >= 3 && other->getDeg() >= 2
+            if u_legs.len() >= 3 && v_legs.len() >= 2 {
+                for &leg in u_legs {
+                    if leg == e_idx {
+                        continue;
+                    }
+                    if touched_edges.contains(&leg) || touched_legs.contains(&leg) {
+                        continue;
+                    }
+                    let leg_edge = &graph.edges[leg];
+                    if leg_edge.lines.is_empty() {
+                        continue;
+                    }
 
-                // 1. Subset of e?
-                let all_in_e = leg_edge
-                    .lines
-                    .iter()
-                    .all(|l| edge.lines.iter().any(|el| el.line_id == l.line_id));
+                    // 1. Subset of e?
+                    let all_in_e = leg_edge
+                        .lines
+                        .iter()
+                        .all(|l| edge.lines.iter().any(|el| el.line_id == l.line_id));
 
-                if all_in_e {
-                    // 2. Terminate at v?
-                    // i.e. None of these lines are present on any OTHER leg at v (excluding e)
-                    let terminates_at_v = leg_edge.lines.iter().all(|l| {
-                        !v_legs.iter().any(|&vl| {
-                            vl != e_idx
-                                && graph.edges[vl]
-                                    .lines
-                                    .iter()
-                                    .any(|vll| vll.line_id == l.line_id)
-                        })
-                    });
+                    if all_in_e {
+                        // 2. Terminate at v?
+                        // i.e. None of these lines are present on any OTHER leg at v (excluding e)
+                        let terminates_at_v = leg_edge.lines.iter().all(|l| {
+                            !v_legs.iter().any(|&vl| {
+                                vl != e_idx
+                                    && graph.edges[vl]
+                                        .lines
+                                        .iter()
+                                        .any(|vll| vll.line_id == l.line_id)
+                            })
+                        });
 
-                    if terminates_at_v {
-                        actions.push((e_idx, leg, true));
-                        touched_edges.insert(e_idx);
-                        touched_legs.insert(leg);
-                        break; // Only one split per edge per pass to avoid complexity
+                        if terminates_at_v {
+                            actions.push((e_idx, leg, true));
+                            touched_edges.insert(e_idx);
+                            touched_legs.insert(leg);
+                            break; // Only one split per edge per pass to avoid complexity
+                        }
                     }
                 }
             }
@@ -1808,41 +1811,44 @@ impl Optimizer {
             }
 
             // Check v legs for stumpiness
-            for &leg in v_legs {
-                if leg == e_idx {
-                    continue;
-                }
-                if touched_edges.contains(&leg) || touched_legs.contains(&leg) {
-                    continue;
-                }
-                let leg_edge = &graph.edges[leg];
-                if leg_edge.lines.is_empty() {
-                    continue;
-                }
+            // Requirement from C++ Loom: n->getDeg() >= 3 && other->getDeg() >= 2
+            if v_legs.len() >= 3 && u_legs.len() >= 2 {
+                for &leg in v_legs {
+                    if leg == e_idx {
+                        continue;
+                    }
+                    if touched_edges.contains(&leg) || touched_legs.contains(&leg) {
+                        continue;
+                    }
+                    let leg_edge = &graph.edges[leg];
+                    if leg_edge.lines.is_empty() {
+                        continue;
+                    }
 
-                // 1. Subset of e?
-                let all_in_e = leg_edge
-                    .lines
-                    .iter()
-                    .all(|l| edge.lines.iter().any(|el| el.line_id == l.line_id));
+                    // 1. Subset of e?
+                    let all_in_e = leg_edge
+                        .lines
+                        .iter()
+                        .all(|l| edge.lines.iter().any(|el| el.line_id == l.line_id));
 
-                if all_in_e {
-                    // 2. Terminate at u?
-                    let terminates_at_u = leg_edge.lines.iter().all(|l| {
-                        !u_legs.iter().any(|&ul| {
-                            ul != e_idx
-                                && graph.edges[ul]
-                                    .lines
-                                    .iter()
-                                    .any(|ull| ull.line_id == l.line_id)
-                        })
-                    });
+                    if all_in_e {
+                        // 2. Terminate at u?
+                        let terminates_at_u = leg_edge.lines.iter().all(|l| {
+                            !u_legs.iter().any(|&ul| {
+                                ul != e_idx
+                                    && graph.edges[ul]
+                                        .lines
+                                        .iter()
+                                        .any(|ull| ull.line_id == l.line_id)
+                            })
+                        });
 
-                    if terminates_at_u {
-                        actions.push((e_idx, leg, false));
-                        touched_edges.insert(e_idx);
-                        touched_legs.insert(leg);
-                        break;
+                        if terminates_at_u {
+                            actions.push((e_idx, leg, false));
+                            touched_edges.insert(e_idx);
+                            touched_legs.insert(leg);
+                            break;
+                        }
                     }
                 }
             }
