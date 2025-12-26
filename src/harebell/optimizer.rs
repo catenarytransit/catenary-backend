@@ -1,7 +1,6 @@
 use crate::graph::{Edge, LineOnEdge, Node, RenderGraph};
 use good_lp::{
-    Expression, IntoAffineExpression, ProblemVariables, Solution, SolverModel, Variable,
-    default_solver, variable,
+    Expression, IntoAffineExpression, ProblemVariables, Solution, SolverModel, Variable, variable,
 };
 use log::{debug, info, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -453,6 +452,13 @@ impl Optimizer {
 
                     if shared_lines.len() >= 2 {
                         // Add consistency constraints
+                        // Direction-aware constraint logic (matching C++ loom):
+                        // otherWayX = (edge.from != node) ^ edge.dir
+                        // If otherWayA != otherWayB, we need to adjust variable selection
+                        let other_way_e1 = (edge1.from != node_id) ^ edge1.dir;
+                        let other_way_e2 = (edge2.from != node_id) ^ edge2.dir;
+                        let same_direction = !(other_way_e1 ^ other_way_e2);
+
                         for a_idx in 0..shared_lines.len() {
                             for b_idx in (a_idx + 1)..shared_lines.len() {
                                 let la = &shared_lines[a_idx];
@@ -463,21 +469,35 @@ impl Optimizer {
                                 let a2 = get_line_idx(e2_idx, la).unwrap();
                                 let b2 = get_line_idx(e2_idx, lb).unwrap();
 
-                                let x_e1_ab = oracle_vars.get(&(e1_idx, a1, b1)).unwrap();
-                                let x_e2_ba = oracle_vars.get(&(e2_idx, b2, a2)).unwrap();
-
                                 let c_var = vars.add(variable().binary());
                                 // Weighted crossing cost
                                 let w_a = graph.edges[e1_idx].lines[a1].weight as f64;
                                 let w_b = graph.edges[e1_idx].lines[b1].weight as f64;
                                 objective += c_var * self.weight_cross * w_a * w_b;
-                                constraints
-                                    .push((x_e1_ab.into_expression() + *x_e2_ba - 1.0).leq(c_var));
 
-                                let x_e1_ba = oracle_vars.get(&(e1_idx, b1, a1)).unwrap();
-                                let x_e2_ab = oracle_vars.get(&(e2_idx, a2, b2)).unwrap();
-                                constraints
-                                    .push((x_e1_ba.into_expression() + *x_e2_ab - 1.0).leq(c_var));
+                                // C++ Logic: If edges have same effective direction relative to node,
+                                // a crossing occurs when A<B on e1 AND B<A on e2 (or vice versa).
+                                // If edges have different directions, a crossing occurs when
+                                // A<B on e1 AND A<B on e2 (or B<A on both).
+                                if same_direction {
+                                    // Same direction: crossing if orderings differ
+                                    let x_e1_ab = oracle_vars.get(&(e1_idx, a1, b1)).unwrap();
+                                    let x_e2_ba = oracle_vars.get(&(e2_idx, b2, a2)).unwrap();
+                                    constraints.push((x_e1_ab.into_expression() + *x_e2_ba - 1.0).leq(c_var));
+
+                                    let x_e1_ba = oracle_vars.get(&(e1_idx, b1, a1)).unwrap();
+                                    let x_e2_ab = oracle_vars.get(&(e2_idx, a2, b2)).unwrap();
+                                    constraints.push((x_e1_ba.into_expression() + *x_e2_ab - 1.0).leq(c_var));
+                                } else {
+                                    // Different direction: crossing if orderings are the same
+                                    let x_e1_ab = oracle_vars.get(&(e1_idx, a1, b1)).unwrap();
+                                    let x_e2_ab = oracle_vars.get(&(e2_idx, a2, b2)).unwrap();
+                                    constraints.push((x_e1_ab.into_expression() + *x_e2_ab - 1.0).leq(c_var));
+
+                                    let x_e1_ba = oracle_vars.get(&(e1_idx, b1, a1)).unwrap();
+                                    let x_e2_ba = oracle_vars.get(&(e2_idx, b2, a2)).unwrap();
+                                    constraints.push((x_e1_ba.into_expression() + *x_e2_ba - 1.0).leq(c_var));
+                                }
                             }
                         }
                     }
@@ -588,17 +608,16 @@ impl Optimizer {
         } // end loop edges
 
         // Solve
-        // Set a time limit (CBC uses "sec" or "seconds")
-        let mut model = vars.minimise(objective).using(default_solver);
-        // Note: good_lp 1.0 might not expose set_parameter directly on the builder in a standardized way
-        // but typically it might be .with_config or similar.
-        // For now, we will stick to the basic solve, but we really should add a timeout.
-        // Let's rely on the user instructions or previous knowledge.
-        // Assuming no parameter setting for now to avoid compilation error if method doesn't exist.
-        // We relying on Big-M fix to resolve the hang (infeasibility loop).
+        let mut model = vars
+            .minimise(objective)
+            .using(good_lp::solvers::coin_cbc::coin_cbc);
+        
+        model.set_parameter("seconds", "60");
+        model.set_parameter("threads", "16");
+        //model.set_parameter("ratio", "0.05");
 
         for c in constraints {
-            model = model.with(c);
+            model.add_constraint(c);
         }
 
         println!("  - Invoking solver...");
@@ -1007,6 +1026,7 @@ impl Optimizer {
                         to: v1,
                         lines: m1_lines_vec, // Use extracted vec
                         geometry: e_geom.clone(),
+                        dir: true,
                     });
 
                     graph.edges.push(Edge {
@@ -1015,6 +1035,7 @@ impl Optimizer {
                         to: v2,
                         lines: m2_lines_vec, // Use extracted vec
                         geometry: e_geom,
+                        dir: true,
                     });
 
                     graph.edges.swap_remove(e_idx);
@@ -2238,6 +2259,7 @@ impl Optimizer {
                     to: v_new1,
                     lines: edge.lines.clone(),
                     geometry: geom1,
+                    dir: edge.dir,
                 };
 
                 max_edge_id += 1;
@@ -2247,6 +2269,7 @@ impl Optimizer {
                     to: edge.to,
                     lines: edge.lines.clone(),
                     geometry: geom2,
+                    dir: edge.dir,
                 };
 
                 edges_to_add.push(e_prime);
@@ -2507,6 +2530,7 @@ impl Optimizer {
                         to: w,
                         lines: e1.lines.clone(),
                         geometry: new_geom,
+                        dir: e1.dir,
                     };
 
                     edges_to_add.push(new_edge);

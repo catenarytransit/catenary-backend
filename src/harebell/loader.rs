@@ -171,6 +171,7 @@ impl Loader {
                 to,
                 lines: lines_on_edge,
                 geometry: edge.geometry.clone(),
+                dir: true, // Default direction - will be updated during optimization as needed
             });
         }
 

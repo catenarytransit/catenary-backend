@@ -20,6 +20,9 @@ pub struct Edge {
     pub to: i64,
     pub lines: Vec<LineOnEdge>,
     pub geometry: Vec<[f64; 2]>,
+    /// Direction flag for line ordering (matches C++ lnEdgParts.front().dir)
+    /// Used to determine if positions should be inverted when checking crossings
+    pub dir: bool,
 }
 
 #[derive(Debug, Clone)]
