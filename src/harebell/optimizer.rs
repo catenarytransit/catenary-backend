@@ -1415,206 +1415,188 @@ impl Optimizer {
         graph: &mut RenderGraph,
         node_adj: &HashMap<i64, Vec<usize>>,
     ) -> bool {
-        // Partial Double Y:
-        // Similar to Rule 4, but we only split at 'v' (leave 'u' as is).
-        // Condition: Injective mapping from minor legs at u to minor legs at v.
-        // Actually, the paper says: "One of n < deg(v) edges f_1...f_n... and all l in L(f_i) union L(e) uniquely extend over u into e...
-        // AND Each l in L(e) uniquely extends over u into one of deg(u)-1 edges g_i...
-        // AND Injective mapping."
-        // Simplify: We look for a subset of lines L_sub <= L(e) that:
-        // 1. Corresponds exactly to ONE minor leg at u (or a set of minor legs unique to these lines).
-        // 2. Corresponds exactly to ONE minor leg at v.
-        // 3. At v, these lines are the ONLY lines on that minor leg? No, "uniquely extends over v".
+        // Untangling Rule 5: Partial Double Y
+        // Requirement:
+        // Edge e = {u, v}
+        // deg(u) >= 3, deg(v) >= 3
+        // Node u is "Full": All lines passing through u are carried by e. (u is a funnel into e).
+        // Node v is "Partial": The lines on e account for only a subset of legs at v.
+        // Action: Split v into v' and v'', isolating the flow from u.
 
-        let mut to_split: Option<(usize, i64, i64)> = None;
+        let mut actions: Vec<(usize, i64, i64, Vec<usize>, Vec<String>)> = Vec::new();
+        let mut touched_nodes: HashSet<i64> = HashSet::new();
 
-        'outer: for (e_idx, edge) in graph.edges.iter().enumerate() {
+        'edge_loop: for (e_idx, edge) in graph.edges.iter().enumerate() {
             if edge.lines.is_empty() {
                 continue;
             }
-            let u_candidates = [edge.from, edge.to];
+            if touched_nodes.contains(&edge.from) || touched_nodes.contains(&edge.to) {
+                continue;
+            }
 
-            // Try both directions: u -> v
-            for &u in &u_candidates {
-                let v = if edge.from == u { edge.to } else { edge.from };
+            let candidates = [(edge.from, edge.to), (edge.to, edge.from)];
+
+            for &(u, v) in &candidates {
+                // Direction: u (Full) -> v (Partial)
+
+                // 1. Degree Checks
+                // The rule applies to complex intersections.
+                if node_adj[&u].len() < 3 || node_adj[&v].len() < 3 {
+                    continue;
+                }
+
+                if touched_nodes.contains(&u) || touched_nodes.contains(&v) {
+                    continue;
+                }
+
+                // 2. Check strict "Full" condition at u
+                // Condition: Every line on every OTHER leg at u must go into e.
+                // Corollary: No lines from other legs terminate at u (they must extend to e).
+                // Corollary: e contains all lines present on other u-legs.
 
                 let u_legs = &node_adj[&u];
-                let v_legs = &node_adj[&v];
+                let mut u_lines_union: HashSet<&String> = HashSet::new();
+                let mut valid_u = true;
 
-                // We want to find a group of lines 'S' that:
-                // 1. Comes from ONE minor leg at 'v' (v_leg).
-                // 2. Goes to ONE minor leg at 'u' (u_leg). (Or subset of legs? "Injective mapping" implies 1-to-1 for the split part).
-                // Rule 5 says: "Split v in the same fashion... leave u as is."
-                // So we seek to isolate a flow at V.
-                // This implies at V, the flow is distinct (uniquely extends into f_i).
-
-                // Let's look for a single line-group (lines shared with one minor leg at v)
-                // that matches exactly a line-group at u.
-
-                // 1. Identify groups at v
-                let mut v_groups: HashMap<usize, Vec<String>> = HashMap::new();
-                for &leg in v_legs {
-                    if leg == e_idx {
+                for &u_leg_idx in u_legs {
+                    if u_leg_idx == e_idx {
                         continue;
                     }
-                    let leg_edge = &graph.edges[leg];
-                    // Intersection
-                    let common: Vec<String> = leg_edge
-                        .lines
-                        .iter()
-                        .filter(|l| edge.lines.iter().any(|el| el.line_id == l.line_id))
-                        .map(|l| l.line_id.clone())
-                        .collect();
-                    if !common.is_empty() {
-                        v_groups.insert(leg, common);
+                    let leg_edge = &graph.edges[u_leg_idx];
+                    if leg_edge.lines.is_empty() {
+                        continue;
+                    }
+                    for l in &leg_edge.lines {
+                        u_lines_union.insert(&l.line_id);
                     }
                 }
 
-                // 2. For each group at v, check if it maps cleanly to u
-                for (&v_leg_idx, lines) in &v_groups {
-                    // Check if these lines essentially form a distinct group at u too
-                    // They must belong to ONE minor leg at u? Or multiple?
-                    // "Injective mapping A: {g_i} -> {f_i}"
-                    // This means for every leg at u involved, it maps to a leg at v.
-                    // If we found a leg at v (v_leg_idx), does it correspond to exactly one leg at u?
-
-                    let mut u_matches = 0;
-                    let mut u_leg_match = 0;
-                    let mut exact_match = false;
-
-                    for &u_leg in u_legs {
-                        if u_leg == e_idx {
-                            continue;
+                // Check 2a: e must contain ALL lines found on u_legs
+                let e_lines_set: HashSet<&String> = edge.lines.iter().map(|l| &l.line_id).collect();
+                if e_lines_set.len() != u_lines_union.len() {
+                    // Mismatch implies termination or extra lines not accounted for.
+                    valid_u = false;
+                } else {
+                    for l in &u_lines_union {
+                        if !e_lines_set.contains(l) {
+                            valid_u = false;
+                            break;
                         }
-                        let leg_edge = &graph.edges[u_leg];
-                        // Check overlap
-                        let overlap_count = leg_edge
-                            .lines
-                            .iter()
-                            .filter(|l| lines.contains(&l.line_id))
-                            .count();
-                        if overlap_count > 0 {
-                            u_matches += 1;
-                            u_leg_match = u_leg;
-                            if overlap_count == lines.len() {
-                                // All lines in the v-group are present in this u-leg
-                                // Also check if u-leg has EXTRA lines?
-                                // "L(g_i) subset L(A(g_i))" -> Lines at u are subset of Lines at v.
-                                // If overlap == lines.len(), then Lines(v_leg) <= Lines(u_leg) is FALSE.
-                                // We checked if 'lines' (which is L(e) intersect L(v_leg)) are in L(u_leg).
-                                // So L(v_leg) intersect L(e) <= L(u_leg).
-                                exact_match = true;
+                    }
+                }
+
+                if !valid_u {
+                    continue; // Try other direction or next edge
+                }
+
+                // 3. Check "Partial" condition at v
+                // Condition: Lines on e must map to a SUBSET of legs at v.
+                // There must be at least one leg at v NOT involved in this flow.
+
+                let v_legs = &node_adj[&v];
+                let mut v_legs_involved: Vec<usize> = Vec::new();
+                let mut valid_v = true;
+
+                // We need to verify that each line on e extends to exactly one v-leg.
+                // And we track coverage.
+
+                let mut e_lines_covered: HashSet<&String> = HashSet::new();
+
+                for &v_leg_idx in v_legs {
+                    if v_leg_idx == e_idx {
+                        continue;
+                    }
+                    let leg_edge = &graph.edges[v_leg_idx];
+
+                    // Check intersection
+                    let common_count = leg_edge
+                        .lines
+                        .iter()
+                        .filter(|l| e_lines_set.contains(&l.line_id))
+                        .count();
+
+                    if common_count > 0 {
+                        v_legs_involved.push(v_leg_idx);
+                        for l in &leg_edge.lines {
+                            if e_lines_set.contains(&l.line_id) {
+                                e_lines_covered.insert(&l.line_id);
                             }
                         }
                     }
+                }
 
-                    if u_matches == 1 && exact_match {
-                        // Found a clean flow!
-                        // Lines 'lines' move from v_leg_idx -> e -> u_leg_match.
-                        // We can split 'v'.
-                        to_split = Some((e_idx, u, v));
-                        break 'outer;
-                    }
+                // Check 3a: All lines on e must be covered (no termination at v from e perspective)
+                if e_lines_covered.len() != e_lines_set.len() {
+                    valid_v = false;
+                }
+
+                // Check 3b: Strict subset of legs?
+                // The number of involved legs must be < deg(v) - 1.
+                // (deg(v) - 1 is total legs excluding e).
+                if v_legs_involved.len() >= v_legs.len() - 1 {
+                    // This would be a Full Double Y (Rule 4), or all legs involved.
+                    // Rule 5 specifically targets Partial matches.
+                    valid_v = false;
+                }
+
+                if valid_v {
+                    // Found a valid Partial Double Y!
+                    // Isolate flow u <-> v_legs_involved
+                    let target_lines: Vec<String> = e_lines_set.into_iter().cloned().collect();
+                    actions.push((e_idx, u, v, v_legs_involved, target_lines));
+
+                    touched_nodes.insert(u);
+                    touched_nodes.insert(v);
+
+                    continue 'edge_loop;
                 }
             }
         }
 
-        if let Some((e_idx, u, v)) = to_split {
-            // Split v (the 3rd element in tuple is the one to split)
-            // Wait, logic above: "Split v ... leave u as is".
-            // So we clone v -> v', create e' = {u, v'}.
+        if actions.is_empty() {
+            return false;
+        }
 
-            // Re-find the group
-            let edge_data = graph.edges[e_idx].clone();
-            let v_legs = &node_adj[&v];
+        let count = actions.len();
+        let mut next_node_id = graph.nodes.keys().max().cloned().unwrap_or(0);
 
-            let mut target_lines = Vec::new();
-            let mut v_leg_idx = 0;
-
-            for &leg in v_legs {
-                if leg == e_idx {
-                    continue;
-                }
-                let leg_edge = &graph.edges[leg];
-                let common: Vec<String> = leg_edge
-                    .lines
-                    .iter()
-                    .filter(|l| edge_data.lines.iter().any(|el| el.line_id == l.line_id))
-                    .map(|l| l.line_id.clone())
-                    .collect();
-
-                // Verify match at u again (sanity check or just proceed if confident)
-                // We assume first found is valid if we trust the loop above.
-                // Actually need to ensure it's the SAME group.
-                if !common.is_empty() {
-                    // Check u side uniqueness
-                    let u_legs = &node_adj[&u];
-                    let mut match_count = 0;
-                    for &ul in u_legs {
-                        if ul == e_idx {
-                            continue;
-                        }
-                        let u_edge = &graph.edges[ul];
-                        if u_edge.lines.iter().any(|l| common.contains(&l.line_id)) {
-                            match_count += 1;
-                        }
-                    }
-                    if match_count == 1 {
-                        target_lines = common;
-                        v_leg_idx = leg;
-                        break;
-                    }
-                }
-            }
+        for (e_idx, _u, v, v_legs_involved, _target_lines) in actions {
+            next_node_id += 1;
+            let v_prime_id = next_node_id;
 
             // Create v'
             let v_node = graph.nodes[&v].clone();
-            let max_id = graph.nodes.keys().max().cloned().unwrap_or(0);
-            let v_prime_id = max_id + 1;
             let mut v_prime = v_node.clone();
             v_prime.id = v_prime_id;
             graph.nodes.insert(v_prime_id, v_prime);
 
-            // Create e' = {u, v'}
-            let mut e_prime = edge_data.clone();
-            let max_edge_id = graph.edges.iter().map(|e| e.id).max().unwrap_or(0);
-            e_prime.id = max_edge_id + 1;
-
-            if e_prime.from == v {
-                e_prime.from = v_prime_id;
-            }
-            // e.from was v, so e'.from = v'
-            // e.to was u, stays u.
-            else if e_prime.to == v {
-                e_prime.to = v_prime_id;
-            }
-
-            e_prime.lines.retain(|l| target_lines.contains(&l.line_id));
-            graph.edges.push(e_prime);
-
-            // Fix original e
-            graph.edges[e_idx]
-                .lines
-                .retain(|l| !target_lines.contains(&l.line_id));
-
-            // Detach minor leg from v, attach to v'
+            // Move e: u -> v becomes u -> v'
+            // We modify the existing edge e to point to v' instead of v
             {
-                let v_leg = &mut graph.edges[v_leg_idx];
-                if v_leg.from == v {
-                    v_leg.from = v_prime_id;
-                } else if v_leg.to == v {
-                    v_leg.to = v_prime_id;
+                let edge = &mut graph.edges[e_idx];
+                if edge.from == v {
+                    edge.from = v_prime_id;
+                } else if edge.to == v {
+                    edge.to = v_prime_id;
                 }
             }
 
-            println!(
-                "Applied Untangling Rule 5 (Partial Double Y) on edge {}/node {}",
-                edge_data.id, v
-            );
-            return true;
+            // Move involved legs from v to v'
+            for leg_idx in v_legs_involved {
+                let leg = &mut graph.edges[leg_idx];
+                if leg.from == v {
+                    leg.from = v_prime_id;
+                } else if leg.to == v {
+                    leg.to = v_prime_id;
+                }
+            }
         }
 
-        false
+        println!(
+            "Applied Untangling Rule 5 (Partial Double Y) on {} edges",
+            count
+        );
+        true
     }
 
     fn untangle_stumps(
