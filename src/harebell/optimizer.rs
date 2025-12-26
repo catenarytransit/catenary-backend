@@ -2437,7 +2437,11 @@ impl Optimizer {
                 if nodes_to_remove.contains(&v) {
                     continue;
                 }
-                let adj = &node_adj[&v];
+                let adj = if let Some(a) = node_adj.get(&v) {
+                    a
+                } else {
+                    continue;
+                };
                 if adj.len() != 2 {
                     continue;
                 }
