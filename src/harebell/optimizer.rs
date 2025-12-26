@@ -687,10 +687,17 @@ impl Optimizer {
             }
 
             // Rule 6 & 8: Stumps
-            if self.untangle_stumps(graph, &node_adj) {
+            // Rule 8: Double Stump
+            if self.untangle_rule_8_double_stump(graph, &node_adj) {
                 changed = true;
                 any_changed = true;
-                // println!("Applied Stump Untangling (Rule 6/7/8)");
+                continue;
+            }
+
+            // Rule 6: Outer/Inner Stump
+            if self.untangle_rule_6_outer_stump(graph, &node_adj) {
+                changed = true;
+                any_changed = true;
                 continue;
             }
 
@@ -1599,19 +1606,20 @@ impl Optimizer {
         true
     }
 
-    fn untangle_stumps(
+    fn untangle_rule_8_double_stump(
         &self,
         graph: &mut RenderGraph,
         node_adj: &HashMap<i64, Vec<usize>>,
     ) -> bool {
-        // Apply Rule 8 (Double Stump) and Rule 6 (Outer Stump)
-        // Rule 8: Line terminates at u AND v. Remove it (it's isolated on e).
-        // Rule 6: Minor leg at u terminates at v (and no Lines(leg) continue past v). Split it.
+        // Rule 8: Double Stump
+        // Requirement: Edge e = {u, v}
+        // Lines L on e such that L are NOT present on any other leg at u AND NOT on any other leg at v.
+        // Action: These lines are "isolated" on e. They should be moved to a separate component (e', u', v').
+        // Unlike previous implementation which deleted them, we split them off to preserve data.
 
-        let mut to_split: Option<(usize, i64, i64)> = None;
-        let mut to_remove_lines: Option<(usize, Vec<String>)> = None;
+        let mut actions: Vec<(usize, Vec<String>)> = Vec::new();
 
-        'outer: for (e_idx, edge) in graph.edges.iter().enumerate() {
+        for (e_idx, edge) in graph.edges.iter().enumerate() {
             if edge.lines.is_empty() {
                 continue;
             }
@@ -1621,8 +1629,8 @@ impl Optimizer {
             let u_legs = &node_adj[&u];
             let v_legs = &node_adj[&v];
 
-            // Check for Rule 8 (Double Stump) lines
-            // Lines on e that are NOT in any other u_leg AND NOT in any other v_leg.
+            // Find lines that are isolated on this edge
+            // i.e. not present in any neighbor edge of u or v (excluding e itself)
             let double_stumps: Vec<String> = edge
                 .lines
                 .iter()
@@ -1647,15 +1655,119 @@ impl Optimizer {
                 .collect();
 
             if !double_stumps.is_empty() {
-                to_remove_lines = Some((e_idx, double_stumps));
-                break 'outer;
+                // Determine if we should split.
+                // If ALL lines are double stumps, the edge is already isolated (just a floating segment).
+                // No need to split unless we want to detach it from u/v physically?
+                // If the edge is physically connected to u and v, but logically carries isolated lines...
+                // If it carries ONLY isolated lines, then u and v are just terminals for this segment.
+                // But u and v might have other edges.
+                // If u has other edges, this edge is attached to the "station" u.
+                // If we split, we create u' and v'. u' is a new node at same loc.
+                // This detaches the visual line from the station node if the station node is 'u'.
+                // However, for line ordering, we want to separate flows.
+                // If we don't split, these trivial lines might interfere with sorting other complex lines?
+                // Actually Rule 8 specifically says to untangle them.
+                if double_stumps.len() < edge.lines.len() {
+                    // Only split if it's a subset. If it's all lines, it's already a separate component effectively
+                    // (though sharing nodes).
+                    // Actually, if we share nodes, we induce constraints. detaching removes constraints.
+                    actions.push((e_idx, double_stumps));
+                } else {
+                    // If all lines are isolated, we might still want to detach if u/v have other edges.
+                    // This reduces degree of u/v for other calculations.
+                    if u_legs.len() > 1 || v_legs.len() > 1 {
+                        actions.push((e_idx, double_stumps));
+                    }
+                }
+            }
+        }
+
+        if actions.is_empty() {
+            return false;
+        }
+
+        let count = actions.len();
+        let mut max_node_id = graph.nodes.keys().max().cloned().unwrap_or(0);
+        let mut max_edge_id = graph.edges.iter().map(|e| e.id).max().unwrap_or(0);
+
+        for (e_idx, stump_lines) in actions {
+            // Split off stump_lines into e' = {u', v'}
+            let edge_data = graph.edges[e_idx].clone();
+            let u = edge_data.from;
+            let v = edge_data.to;
+
+            max_node_id += 1;
+            let u_prime_id = max_node_id;
+            max_node_id += 1;
+            let v_prime_id = max_node_id;
+
+            // Clone nodes
+            let mut u_prime = graph.nodes[&u].clone();
+            u_prime.id = u_prime_id;
+            let mut v_prime = graph.nodes[&v].clone();
+            v_prime.id = v_prime_id;
+
+            graph.nodes.insert(u_prime_id, u_prime);
+            graph.nodes.insert(v_prime_id, v_prime);
+
+            // Create e'
+            max_edge_id += 1;
+            let mut e_prime = edge_data.clone();
+            e_prime.id = max_edge_id;
+            e_prime.from = u_prime_id;
+            e_prime.to = v_prime_id;
+
+            // Keep only stump lines on e'
+            e_prime.lines.retain(|l| stump_lines.contains(&l.line_id));
+            graph.edges.push(e_prime);
+
+            // Remove stump lines from original e
+            graph.edges[e_idx]
+                .lines
+                .retain(|l| !stump_lines.contains(&l.line_id));
+        }
+
+        println!(
+            "Applied Untangling Rule 8 (Double Stump) on {} edges",
+            count
+        );
+        true
+    }
+
+    fn untangle_rule_6_outer_stump(
+        &self,
+        graph: &mut RenderGraph,
+        node_adj: &HashMap<i64, Vec<usize>>,
+    ) -> bool {
+        // Rule 6: Outer/Inner Stump
+        // Requirement: Edge e = {u, v}
+        // A leg at u (L_u) has lines that are a subset of e, AND all those lines terminate at v.
+        // Action: Split u->u', v->v', e->e'. Move L_u to u'. e' connects u'-v'.
+        // Effectively peels off the terminating flow.
+
+        let mut actions: Vec<(usize, usize, bool)> = Vec::new(); // (e_idx, leg_idx, stump_at_u)
+        let mut touched_edges: HashSet<usize> = HashSet::new();
+        let mut touched_legs: HashSet<usize> = HashSet::new();
+
+        for (e_idx, edge) in graph.edges.iter().enumerate() {
+            if edge.lines.is_empty() {
+                continue;
+            }
+            if touched_edges.contains(&e_idx) {
+                continue;
             }
 
-            // Check for Rule 6 (Outer Stump)
-            // Check legs at u: Do their lines terminate at v?
-            // i.e. For a leg L_u, Lines(L_u) <= Lines(e). AND Lines(L_u) not in any OTHER v_leg.
+            let u = edge.from;
+            let v = edge.to;
+            let u_legs = &node_adj[&u];
+            let v_legs = &node_adj[&v];
+
+            // Check u legs for stumpiness
             for &leg in u_legs {
                 if leg == e_idx {
+                    continue;
+                }
+                if touched_edges.contains(&leg) || touched_legs.contains(&leg) {
                     continue;
                 }
                 let leg_edge = &graph.edges[leg];
@@ -1663,15 +1775,15 @@ impl Optimizer {
                     continue;
                 }
 
-                // Check subset of e
+                // 1. Subset of e?
                 let all_in_e = leg_edge
                     .lines
                     .iter()
                     .all(|l| edge.lines.iter().any(|el| el.line_id == l.line_id));
 
                 if all_in_e {
-                    // Check if they terminate at v
-                    // i.e., NONE of these lines appear in any OTHER leg at v (excluding e)
+                    // 2. Terminate at v?
+                    // i.e. None of these lines are present on any OTHER leg at v (excluding e)
                     let terminates_at_v = leg_edge.lines.iter().all(|l| {
                         !v_legs.iter().any(|&vl| {
                             vl != e_idx
@@ -1683,23 +1795,24 @@ impl Optimizer {
                     });
 
                     if terminates_at_v {
-                        // Candidate found!
-                        // Split off this leg and corresponding lines on e.
-                        // But wait, split HOW?
-                        // Rule 6: "Detach the stump... split u and v".
-                        // So we act like Rule 4/5: Clone u->u', v->v', e->e'.
-                        // Attach leg to u'.
-                        // Keep e' lines = Lines(leg).
-                        to_split = Some((e_idx, u, v));
-                        // Store specific leg to detach? We need to re-find it.
-                        break 'outer;
+                        actions.push((e_idx, leg, true));
+                        touched_edges.insert(e_idx);
+                        touched_legs.insert(leg);
+                        break; // Only one split per edge per pass to avoid complexity
                     }
                 }
             }
 
-            // Symmetrical check for legs at v terminating at u
+            if touched_edges.contains(&e_idx) {
+                continue;
+            }
+
+            // Check v legs for stumpiness
             for &leg in v_legs {
                 if leg == e_idx {
+                    continue;
+                }
+                if touched_edges.contains(&leg) || touched_legs.contains(&leg) {
                     continue;
                 }
                 let leg_edge = &graph.edges[leg];
@@ -1707,12 +1820,14 @@ impl Optimizer {
                     continue;
                 }
 
+                // 1. Subset of e?
                 let all_in_e = leg_edge
                     .lines
                     .iter()
                     .all(|l| edge.lines.iter().any(|el| el.line_id == l.line_id));
 
                 if all_in_e {
+                    // 2. Terminate at u?
                     let terminates_at_u = leg_edge.lines.iter().all(|l| {
                         !u_legs.iter().any(|&ul| {
                             ul != e_idx
@@ -1722,169 +1837,90 @@ impl Optimizer {
                                     .any(|ull| ull.line_id == l.line_id)
                         })
                     });
+
                     if terminates_at_u {
-                        to_split = Some((e_idx, u, v)); // We can swap u/v in handling
-                        break 'outer;
-                    }
-                }
-            }
-        }
-
-        if let Some((e_idx, lines)) = to_remove_lines {
-            println!(
-                "Applied Rule 8 (Double Stump): Removing isolated lines {:?} from edge {}",
-                lines, e_idx
-            );
-            let edge = &mut graph.edges[e_idx];
-            edge.lines.retain(|l| !lines.contains(&l.line_id));
-            return true;
-        }
-
-        if let Some((e_idx, u, v)) = to_split {
-            // Apply Stump Split
-            // Covers Rules 6 (Outer Stump), 7 (Inner Stump), and 8 (Double Stump) essentially by peeling off terminating flows.
-
-            // Clone edge data immediately to avoid holding borrow
-            let edge_data = graph.edges[e_idx].clone();
-            let u_legs = &node_adj[&u];
-            let v_legs = &node_adj[&v];
-
-            let mut stump_leg_idx = None;
-            let mut stump_lines = Vec::new();
-            let mut stump_at_u = true;
-
-            // Re-identify the stump leg
-            // Check u legs
-            for &leg in u_legs {
-                if leg == e_idx {
-                    continue;
-                }
-                let leg_edge = &graph.edges[leg];
-                if leg_edge.lines.is_empty() {
-                    continue;
-                }
-                let all_in_e = leg_edge
-                    .lines
-                    .iter()
-                    .all(|l| edge_data.lines.iter().any(|el| el.line_id == l.line_id));
-                if all_in_e {
-                    let terminates_at_v = leg_edge.lines.iter().all(|l| {
-                        !v_legs.iter().any(|&vl| {
-                            vl != e_idx
-                                && graph.edges[vl]
-                                    .lines
-                                    .iter()
-                                    .any(|vll| vll.line_id == l.line_id)
-                        })
-                    });
-                    if terminates_at_v {
-                        stump_leg_idx = Some(leg);
-                        stump_lines = leg_edge.lines.iter().map(|l| l.line_id.clone()).collect();
-                        stump_at_u = true;
+                        actions.push((e_idx, leg, false));
+                        touched_edges.insert(e_idx);
+                        touched_legs.insert(leg);
                         break;
                     }
                 }
             }
+        }
 
-            if stump_leg_idx.is_none() {
-                // Check v legs
-                for &leg in v_legs {
-                    if leg == e_idx {
-                        continue;
-                    }
-                    let leg_edge = &graph.edges[leg];
-                    if leg_edge.lines.is_empty() {
-                        continue;
-                    }
-                    let all_in_e = leg_edge
-                        .lines
-                        .iter()
-                        .all(|l| edge_data.lines.iter().any(|el| el.line_id == l.line_id));
-                    if all_in_e {
-                        let terminates_at_u = leg_edge.lines.iter().all(|l| {
-                            !u_legs.iter().any(|&ul| {
-                                ul != e_idx
-                                    && graph.edges[ul]
-                                        .lines
-                                        .iter()
-                                        .any(|ull| ull.line_id == l.line_id)
-                            })
-                        });
-                        if terminates_at_u {
-                            stump_leg_idx = Some(leg);
-                            stump_lines =
-                                leg_edge.lines.iter().map(|l| l.line_id.clone()).collect();
-                            stump_at_u = false;
-                            break;
-                        }
-                    }
+        if actions.is_empty() {
+            return false;
+        }
+
+        let count = actions.len();
+        let mut max_node_id = graph.nodes.keys().max().cloned().unwrap_or(0);
+        let mut max_edge_id = graph.edges.iter().map(|e| e.id).max().unwrap_or(0);
+
+        for (e_idx, leg_idx, stump_at_u) in actions {
+            let edge_data = graph.edges[e_idx].clone();
+            let u = edge_data.from;
+            let v = edge_data.to;
+
+            // Lines to peel off
+            let leg_lines: Vec<String> = graph.edges[leg_idx]
+                .lines
+                .iter()
+                .map(|l| l.line_id.clone())
+                .collect();
+
+            // Create new nodes u', v'
+            max_node_id += 1;
+            let u_prime_id = max_node_id;
+            max_node_id += 1;
+            let v_prime_id = max_node_id;
+
+            let mut u_prime = graph.nodes[&u].clone();
+            u_prime.id = u_prime_id;
+            let mut v_prime = graph.nodes[&v].clone();
+            v_prime.id = v_prime_id;
+
+            graph.nodes.insert(u_prime_id, u_prime);
+            graph.nodes.insert(v_prime_id, v_prime);
+
+            // Create e' = {u', v'}
+            max_edge_id += 1;
+            let mut e_prime = edge_data.clone();
+            e_prime.id = max_edge_id;
+            e_prime.from = u_prime_id;
+            e_prime.to = v_prime_id;
+            // e' gets ONLY the lines from the stump leg
+            e_prime.lines.retain(|l| leg_lines.contains(&l.line_id));
+            graph.edges.push(e_prime);
+
+            // Remove those lines from original e
+            graph.edges[e_idx]
+                .lines
+                .retain(|l| !leg_lines.contains(&l.line_id));
+
+            // Re-parent the stump leg
+            let leg = &mut graph.edges[leg_idx];
+            if stump_at_u {
+                // Leg was at u, move to u'
+                if leg.from == u {
+                    leg.from = u_prime_id;
+                } else if leg.to == u {
+                    leg.to = u_prime_id;
                 }
-            }
-
-            if let Some(leg_idx) = stump_leg_idx {
-                // Split!
-                let u_node = graph.nodes[&u].clone();
-                let v_node = graph.nodes[&v].clone();
-                // Just use max_id + random to avoid conflicts, or smarter ID gen.
-                let max_id = graph.nodes.keys().max().cloned().unwrap_or(0);
-                let u_prime_id = max_id + 1;
-                let v_prime_id = max_id + 2;
-                let mut u_prime = u_node.clone();
-                u_prime.id = u_prime_id;
-                let mut v_prime = v_node.clone();
-                v_prime.id = v_prime_id;
-                graph.nodes.insert(u_prime_id, u_prime);
-                graph.nodes.insert(v_prime_id, v_prime);
-
-                let mut e_prime = edge_data.clone();
-                let max_edge_id = graph.edges.iter().map(|e| e.id).max().unwrap_or(0);
-                e_prime.id = max_edge_id + 1;
-                if e_prime.from == u {
-                    e_prime.from = u_prime_id;
-                } else {
-                    e_prime.from = v_prime_id;
+            } else {
+                // Leg was at v, move to v'
+                if leg.from == v {
+                    leg.from = v_prime_id;
+                } else if leg.to == v {
+                    leg.to = v_prime_id;
                 }
-                if e_prime.to == v {
-                    e_prime.to = v_prime_id;
-                } else {
-                    e_prime.to = u_prime_id;
-                }
-                e_prime.lines.retain(|l| stump_lines.contains(&l.line_id));
-
-                graph.edges.push(e_prime);
-
-                // Now safe to mutate original
-                graph.edges[e_idx]
-                    .lines
-                    .retain(|l| !stump_lines.contains(&l.line_id));
-
-                // Move leg
-                {
-                    let leg = &mut graph.edges[leg_idx];
-                    if stump_at_u {
-                        if leg.from == u {
-                            leg.from = u_prime_id;
-                        } else if leg.to == u {
-                            leg.to = u_prime_id;
-                        }
-                    } else {
-                        if leg.from == v {
-                            leg.from = v_prime_id;
-                        } else if leg.to == v {
-                            leg.to = v_prime_id;
-                        }
-                    }
-                }
-
-                println!(
-                    "Applied Stump Rule (6/7) on edge {}/leg {}",
-                    edge_data.id, leg_idx
-                );
-                return true;
             }
         }
 
-        false
+        println!(
+            "Applied Untangling Rule 6 (Outer/Inner Stump) on {} edges",
+            count
+        );
+        true
     }
 
     fn split_by_articulation_points(

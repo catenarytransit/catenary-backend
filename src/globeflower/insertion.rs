@@ -1,6 +1,5 @@
 use crate::clustering::StopCluster;
 use crate::edges::{GraphEdge, NodeId, convert_from_geo, convert_to_geo};
-use crate::geometry_utils::is_contained;
 use anyhow::Result;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::prelude::*;
@@ -48,13 +47,9 @@ pub async fn insert_stations(
         .collect();
     let tree = RTree::bulk_load(edge_spatials);
 
-    // Prepare helper to find Q_A (original edges for a cluster)
-    // We need to know which route/shape serves which cluster.
-    // For now, we can approximate Q_A by checking route_ids on the support graph edges.
-    // But Support Graph edges just have 'shape' IDs right now.
-    // We need a mapping of Cluster -> Shapes that serve it.
-    // We can query GTFS for this: Stop -> Trips -> Shapes.
-
+    // Build mapping: Cluster ID -> Set of Shape IDs that serve that cluster
+    // This is derived from GTFS: Stop -> ItineraryPattern -> ItineraryPatternMeta -> Shape
+    // Filtered to only include rail routes (route_type 0, 1, 2)
     let cluster_shape_map = build_cluster_shape_map(pool, clusters).await?;
 
     // We will modify edges in place, but inserting nodes splits edges.
@@ -101,9 +96,7 @@ pub async fn insert_stations(
             let edge = &edges[candidate.index];
             let geom = &candidate.geom;
 
-            // Project centroid onto edge
-            // If we had endpoints as candidates too, we'd check them.
-            // For now, projection is the main one.
+            // Project cluster centroid onto edge geometry
             if let Some(frac) = geom.line_locate_point(&pt) {
                 let projected = get_point_on_line(geom, frac);
                 let dist_deg = projected.haversine_distance(&pt); // degrees? No, haversine is meters.
@@ -123,7 +116,10 @@ pub async fn insert_stations(
                 // Score o = (C / |Q_A|) * 100 - d
                 let score = (served_count / qa_len) * 100.0 - dist_meters;
 
-                if score > max_score {
+                // STRICT FILTER:
+                // Only snap if this edge actually serves the cluster (served_count > 0).
+                // This prevents bus-only stops (if any remain) from snapping to arbitrary rail lines.
+                if served_count > 0.0 && score > max_score {
                     max_score = score;
                     best_candidate = Some((candidate.index, frac, projected));
                 }
@@ -223,7 +219,7 @@ fn get_sub_poly(line: &GeoLineString<f64>, start: f64, end: f64) -> GeoLineStrin
     crate::edges::get_line_substring(line, start, end).unwrap_or(GeoLineString::new(vec![]))
 }
 
-// Helper to fetch shapes per cluster
+// Helper to fetch shapes per cluster using direction_pattern tables
 async fn build_cluster_shape_map(
     pool: &CatenaryPostgresPool,
     clusters: &[StopCluster],
@@ -231,13 +227,11 @@ async fn build_cluster_shape_map(
     let mut map: HashMap<usize, HashSet<String>> = HashMap::new();
     let mut conn = pool.get().await?;
 
-    // We need to link Stops -> ItineraryPattern -> ItineraryPatternMeta -> Shape
-    use catenary::schema::gtfs::itinerary_pattern::dsl as ip_dsl;
-    use catenary::schema::gtfs::itinerary_pattern_meta::dsl as ipm_dsl;
+    // Use direction_pattern tables
+    use catenary::schema::gtfs::direction_pattern::dsl as dp_dsl;
+    use catenary::schema::gtfs::direction_pattern_meta::dsl as dpm_dsl;
 
-    // 1. Collect all Stop IDs from all clusters to query in bulk?
-    // Doing it one by one is slow. Bulk is better.
-    // Map: StopID -> ClusterID
+    // 1. Map: StopID -> ClusterID
     let mut stop_to_cluster: HashMap<String, usize> = HashMap::new();
     let mut all_stop_ids: Vec<String> = Vec::new();
 
@@ -248,11 +242,10 @@ async fn build_cluster_shape_map(
         }
     }
 
-    // 2. Query ItineraryPattern to find pattern_ids for these stops
-    // Select (stop_id, itinerary_pattern_id)
-    let patterns: Vec<(String, String)> = ip_dsl::itinerary_pattern
-        .filter(ip_dsl::stop_id.eq_any(&all_stop_ids))
-        .select((ip_dsl::stop_id, ip_dsl::itinerary_pattern_id))
+    // 2. Query direction_pattern to find pattern_ids for these stops
+    let patterns: Vec<(String, String)> = dp_dsl::direction_pattern
+        .filter(dp_dsl::stop_id.eq_any(&all_stop_ids))
+        .select((dp_dsl::stop_id, dp_dsl::direction_pattern_id))
         .load::<(String, String)>(&mut conn)
         .await?;
 
@@ -272,12 +265,12 @@ async fn build_cluster_shape_map(
     all_pattern_ids.sort();
     all_pattern_ids.dedup();
 
-    // 3. Query ItineraryPatternMeta to get ShapeIDs for these patterns
-    // Select (itinerary_pattern_id, shape_id)
-    // Note: shape_id is Nullable
-    let shape_map: Vec<(String, Option<String>)> = ipm_dsl::itinerary_pattern_meta
-        .filter(ipm_dsl::itinerary_pattern_id.eq_any(&all_pattern_ids))
-        .select((ipm_dsl::itinerary_pattern_id, ipm_dsl::shape_id))
+    // 3. Query direction_pattern_meta to get ShapeIDs for rail patterns
+    // direction_pattern_meta has route_type directly, so we can filter in query
+    let shape_map: Vec<(String, Option<String>)> = dpm_dsl::direction_pattern_meta
+        .filter(dpm_dsl::direction_pattern_id.eq_any(&all_pattern_ids))
+        .filter(dpm_dsl::route_type.eq_any(vec![Some(0i16), Some(1i16), Some(2i16)])) // Rail only
+        .select((dpm_dsl::direction_pattern_id, dpm_dsl::gtfs_shape_id))
         .load::<(String, Option<String>)>(&mut conn)
         .await?;
 

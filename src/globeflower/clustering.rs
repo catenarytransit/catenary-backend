@@ -72,7 +72,7 @@ pub async fn cluster_stops(pool: &CatenaryPostgresPool) -> Result<Vec<StopCluste
                 && s.route_types
                     .iter()
                     .flatten()
-                    .any(|&t| t == 0 || t == 1 || t == 2 || (900..=1200).contains(&t))
+                    .any(|&t| t == 0 || t == 1 || t == 2)
         })
         .collect();
 
