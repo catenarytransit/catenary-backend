@@ -25,7 +25,7 @@ impl Loader {
     }
 
     pub async fn load_graph(&self) -> Result<RenderGraph> {
-        info!("Loading graph from {}", self.graph_path);
+        println!("Loading graph from {}", self.graph_path);
 
         // 1. Fetch Route Colors
         let mut conn = self.pg_pool.get()?;
@@ -45,12 +45,12 @@ impl Loader {
             })?;
 
         // Print some sample keys from DB
-        info!(
+        println!(
             "Sample DB keys: {:?}",
             routes_data.keys().take(5).collect::<Vec<_>>()
         );
 
-        info!("Loaded {} route colors", routes_data.len());
+        println!("Loaded {} route colors", routes_data.len());
 
         // 2. Load Bincode Graph
         let file = File::open(&self.graph_path)?;
@@ -58,7 +58,7 @@ impl Loader {
         let export_graph: SerializableExportGraph =
             bincode::serde::decode_from_std_read(&mut reader, bincode::config::legacy())?;
 
-        info!(
+        println!(
             "Loaded Bincode graph: {} clusters, {} edges",
             export_graph.clusters.len(),
             export_graph.edges.len()
@@ -135,7 +135,7 @@ impl Loader {
             }
         }
 
-        info!("Total nodes (clusters + intersections): {}", nodes.len());
+        println!("Total nodes (clusters + intersections): {}", nodes.len());
 
         let mut edges = Vec::new();
         for (i, edge) in export_graph.edges.iter().enumerate() {
@@ -218,6 +218,8 @@ impl Loader {
         }
         let node_tree = rstar::RTree::bulk_load(node_items);
 
+        println!("Node tree loaded");
+
         // 4. Load Restrictions
         let mut restriction_map: HashMap<(usize, usize), Vec<(String, String)>> = HashMap::new();
         for r in export_graph.restrictions {
@@ -238,6 +240,8 @@ impl Loader {
 
         let optimizer = crate::optimizer::Optimizer::new();
         optimizer.optimize(&mut render_graph);
+
+        println!("Optimisation complete");
 
         Ok(render_graph)
     }

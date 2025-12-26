@@ -18,7 +18,7 @@ impl Optimizer {
     }
 
     pub fn optimize(&self, graph: &mut RenderGraph) {
-        info!("Starting Decomposed ILP Line Ordering Optimization...");
+        println!("Starting Decomposed ILP Line Ordering Optimization...");
 
         // 1. Identify "Active" edges (those with >= 2 lines)
         // Only these edges need sorting variables.
@@ -31,40 +31,50 @@ impl Optimizer {
             .collect();
 
         if active_edges.is_empty() {
-            info!("No edges with multiple lines to optimize.");
+            println!("No edges with multiple lines to optimize.");
             return;
         }
 
         // Simplify Graph Iteratively
-        info!("Starting Iterative Simplification...");
+        println!("Starting Iterative Simplification...");
+
+        // Pruning Rule 2: Line Partner Collapse
+        // According to Algorithm 4.3, this is run ONCE before the loop.
+        self.prune_rule_2_line_partner_collapse(graph);
+
         let mut round = 0;
         loop {
             round += 1;
-            if round > 10 {
-                // Max rounds safety
+            if round > 50 {
+                // Max rounds safety (Paper says M rounds sufficient)
                 break;
             }
             let mut changed = false;
 
-            // Untangling Rules (Stumps, etc.)
-            if self.simplify_graph(graph) {
+            // 1. Complex Untangling Rules (Rules 2-8)
+            // Loop internally to exhaust opportunities (emulating "Full Round")
+            if self.untangle_complex_repeatedly(graph) {
                 changed = true;
             }
 
-            // Pruning Rule 1: Node Contraction
-            // (Note: function itself loops internally, but we call it here to catch new opportunities)
-            self.prune_rule_1_node_contraction(graph); // This doesn't return bool, but it logs. 
+            // 2. Simple Untangling Rule (Rule 1: Full X)
+            if self.untangle_simple_repeatedly(graph) {
+                changed = true;
+            }
 
-            // Pruning Rule 2: Line Partner Collapse
-            self.prune_rule_2_line_partner_collapse(graph); // Also exhaustive.
-
-            // Cutting Rule 1: Single Line Cut
+            // 3. Cutting Rule 1: Single Line Cut
             if self.cutting_rule_1_single_line_cut(graph) {
                 changed = true;
             }
 
-            // Cutting Rule 2: Terminus Detachment
-            if self.cutting_rule_2_terminus_detachment(graph) {
+            // 4. Cutting Rule 2: Terminus Detachment
+            // Loop to exhaust since implementation breaks early
+            while self.cutting_rule_2_terminus_detachment(graph) {
+                changed = true;
+            }
+
+            // 5. Pruning Rule 1: Node Contraction
+            if self.prune_rule_1_node_contraction(graph) {
                 changed = true;
             }
 
@@ -72,7 +82,7 @@ impl Optimizer {
                 break;
             }
         }
-        info!("Simplification Complete after {} rounds.", round);
+        println!("Simplification Complete after {} rounds.", round);
 
         // Re-calculate active edges after simplification
         let active_edges: Vec<usize> = graph
@@ -184,7 +194,7 @@ impl Optimizer {
             }
         }
 
-        info!(
+        println!(
             "Identified {} independent components for optimization.",
             components.len()
         );
@@ -264,7 +274,7 @@ impl Optimizer {
             graph.edges[edge_idx].lines = final_lines;
         }
 
-        info!("Decomposed ILP Optimization complete.");
+        println!("Decomposed ILP Optimization complete.");
     }
 
     fn solve_component(
@@ -638,50 +648,33 @@ impl Optimizer {
         Some(component_results)
     }
 
-    fn simplify_graph(&self, graph: &mut RenderGraph) -> bool {
-        info!("Starting graph simplification...");
+    fn untangle_complex_repeatedly(&self, graph: &mut RenderGraph) -> bool {
         let mut any_changed = false;
-        let mut loop_count = 0;
         loop {
-            loop_count += 1;
             let mut changed = false;
-
-            // Rebuild adjacency for safety at start of each pass
             let node_adj = self.build_node_adjacency(graph);
-
-            // Rule 1: Full X
-            if self.untangle_rule_1(graph, &node_adj) {
-                changed = true;
-                any_changed = true;
-                info!("Applied Untangling Rule 1 (Full X)");
-                continue;
-            }
 
             // Rule 2: Full Y
             if self.untangle_rule_2(graph, &node_adj) {
                 changed = true;
                 any_changed = true;
-                info!("Applied Untangling Rule 2 (Full Y)");
+                // println!("Applied Untangling Rule 2 (Full Y)");
                 continue;
             }
 
             // Rule 3: Partial Y
-            // "Given a node v adjacent to an edge e = {u, v} with deg(u) = 1...
-            // Each l in L(e) terminates at u.
-            // Each l in L(e) uniquely extends over v into one of n > 1 edges e_1...e_n..."
             if self.untangle_rule_3(graph, &node_adj) {
                 changed = true;
                 any_changed = true;
-                any_changed = true;
-                info!("Applied Untangling Rule 3 (Partial Y)");
+                // println!("Applied Untangling Rule 3 (Partial Y)");
                 continue;
             }
 
+            // Rule 4: Full Double Y
             if self.untangle_rule_4(graph, &node_adj) {
                 changed = true;
                 any_changed = true;
-                any_changed = true;
-                info!("Applied Untangling Rule 4 (Full Double Y)");
+                // println!("Applied Untangling Rule 4 (Full Double Y)");
                 continue;
             }
 
@@ -689,8 +682,7 @@ impl Optimizer {
             if self.untangle_rule_5(graph, &node_adj) {
                 changed = true;
                 any_changed = true;
-                any_changed = true;
-                info!("Applied Untangling Rule 5 (Partial Double Y)");
+                // println!("Applied Untangling Rule 5 (Partial Double Y)");
                 continue;
             }
 
@@ -698,20 +690,29 @@ impl Optimizer {
             if self.untangle_stumps(graph, &node_adj) {
                 changed = true;
                 any_changed = true;
-                any_changed = true;
-                info!("Applied Stump Untangling (Rule 6/7/8)");
+                // println!("Applied Stump Untangling (Rule 6/7/8)");
                 continue;
             }
 
             if !changed {
                 break;
             }
-            if loop_count > 500 {
-                warn!("Simplification loop hit max iterations. Stopping.");
-                break;
-            }
         }
-        info!("Graph simplification complete after {} rounds.", loop_count);
+        any_changed
+    }
+
+    fn untangle_simple_repeatedly(&self, graph: &mut RenderGraph) -> bool {
+        let mut any_changed = false;
+        loop {
+            let node_adj = self.build_node_adjacency(graph);
+            // Rule 1: Full X
+            if self.untangle_rule_1(graph, &node_adj) {
+                any_changed = true;
+                // println!("Applied Untangling Rule 1 (Full X)");
+                continue;
+            }
+            break;
+        }
         any_changed
     }
 
@@ -1399,7 +1400,7 @@ impl Optimizer {
                 }
             }
 
-            info!(
+            println!(
                 "Applied Untangling Rule 4 on edge {} (lines {:?})",
                 edge_data.id, target_lines
             );
@@ -1606,7 +1607,7 @@ impl Optimizer {
                 }
             }
 
-            info!(
+            println!(
                 "Applied Untangling Rule 5 (Partial Double Y) on edge {}/node {}",
                 edge_data.id, v
             );
@@ -1748,7 +1749,7 @@ impl Optimizer {
         }
 
         if let Some((e_idx, lines)) = to_remove_lines {
-            info!(
+            println!(
                 "Applied Rule 8 (Double Stump): Removing isolated lines {:?} from edge {}",
                 lines, e_idx
             );
@@ -1893,7 +1894,7 @@ impl Optimizer {
                     }
                 }
 
-                info!(
+                println!(
                     "Applied Stump Rule (6/7) on edge {}/leg {}",
                     edge_data.id, leg_idx
                 );
@@ -2113,7 +2114,7 @@ impl Optimizer {
             }
 
             // log the split
-            info!(
+            println!(
                 "Split component of size {} into {} parts at AP {}. Max part size: {}",
                 n,
                 results.len(),
@@ -2232,7 +2233,7 @@ impl Optimizer {
         }
 
         if changed {
-            info!(
+            println!(
                 "Cutting Rule 1: Cut {} single-line bridges.",
                 edges_to_remove.len()
             );
@@ -2342,7 +2343,7 @@ impl Optimizer {
         }
 
         if changed {
-            info!(
+            println!(
                 "Cutting Rule 2: Detached {} termini.",
                 edges_to_modify.len()
             );
@@ -2385,11 +2386,12 @@ impl Optimizer {
         changed
     }
 
-    fn prune_rule_1_node_contraction(&self, graph: &mut RenderGraph) {
+    fn prune_rule_1_node_contraction(&self, graph: &mut RenderGraph) -> bool {
         // Pruning Rule 1: Node Contraction
-        info!("Starting Pruning Rule 1 (Node Contraction)...");
-        let mut changed = true;
+        println!("Starting Pruning Rule 1 (Node Contraction)...");
+        let mut any_changed = false;
         let mut rounds = 0;
+        let mut changed = true;
         while changed {
             changed = false;
             rounds += 1;
@@ -2485,6 +2487,7 @@ impl Optimizer {
                     nodes_to_remove.insert(v);
 
                     changed = true;
+                    any_changed = true;
                 }
             }
 
@@ -2504,12 +2507,13 @@ impl Optimizer {
             });
             graph.nodes.retain(|k, _| !nodes_to_remove.contains(k));
         }
-        info!("Pruning Rule 1 Complete.");
+        println!("Pruning Rule 1 Complete.");
+        any_changed
     }
 
     fn prune_rule_2_line_partner_collapse(&self, graph: &mut RenderGraph) {
         // Pruning Rule 2: Line Partner Collapse
-        info!("Starting Pruning Rule 2 (Line Partner Collapse)...");
+        println!("Starting Pruning Rule 2 (Line Partner Collapse)...");
 
         let mut line_paths: HashMap<String, Vec<i64>> = HashMap::new();
         // Just iterate edges and build up the path
@@ -2615,7 +2619,7 @@ impl Optimizer {
             edge.lines = new_lines;
         }
 
-        info!(
+        println!(
             "Pruning Rule 2 Complete. Collapsed {} groups.",
             collapse_count
         );
