@@ -190,12 +190,7 @@ pub async fn insert_stations(
 }
 
 fn get_point_on_line(line: &GeoLineString<f64>, frac: f64) -> GeoPoint<f64> {
-    // Simplifying for brevity; in reality needs accurate interpolation
-    // But `line_locate_point` gives a fraction of total length.
-    // We can reuse logic from edges.rs if exposed, or simple interpolation.
-    // For now, let's assume we can map back.
-
-    // Quick implementation
+    // Interpolate a point at fraction `frac` along the line
     let target_len = line.euclidean_length() * frac;
     let mut cur = 0.0;
     for seg in line.lines() {

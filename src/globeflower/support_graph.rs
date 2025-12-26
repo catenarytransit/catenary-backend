@@ -298,21 +298,43 @@ fn collapse_shared_segments(
             // Densify
             let pl_dense = densify_coords(&coords, seg_len);
 
+            let num_lines = edge.route_ids.len();
             let mut i = 0;
             let pl_len = pl_dense.len();
             let mut front: Option<NodeRef> = None;
             let mut img_from_covered = false;
             let mut img_to_covered = false;
+            // Track span endpoints: back is initially edge.to image node (if exists)
+            let mut back: Option<NodeRef> = None;
 
             for point in &pl_dense {
-                // Find or create node (matches C++: ndCollapseCand)
-                let cur = nd_collapse_cand(&my_nds, d_cut, *point, &mut geo_idx, &mut tg_new);
+                // For span constraints: use front (first node of this edge's path)
+                // and back (initially the TO endpoint, cleared once reached)
+                // This matches C++: front and back are passed to ndCollapseCand
+                let span_a = front.as_ref();
+                let span_b = if i == pl_len - 1 { None } else { back.as_ref() };
+                
+                // Find or create node with span constraints (matches C++: ndCollapseCand)
+                let cur = nd_collapse_cand(
+                    &my_nds,
+                    num_lines,
+                    d_cut,
+                    *point,
+                    span_a,
+                    span_b,
+                    &mut geo_idx,
+                    &mut tg_new,
+                );
 
                 // Track image nodes for FROM/TO
                 if i == 0 {
                     if !img_nds.contains_key(&edge.from) {
                         img_nds.insert(edge.from.clone(), Rc::clone(&cur));
                         img_from_covered = true;
+                    }
+                    // Set back to the TO image node if it exists
+                    if let Some(to_node) = img_nds.get(&edge.to) {
+                        back = Some(Rc::clone(to_node));
                     }
                 }
                 if i == pl_len - 1 {
@@ -414,6 +436,9 @@ fn collapse_shared_segments(
         // Contract degree-2 nodes (matches C++ re-collapse phase)
         collapse_degree_2_nodes_serial(&mut tg_new);
 
+        // Apply polish fixes: fold parallel edges, edge artifact removal, intersection reconstruction
+        apply_polish_fixes(&mut tg_new, d_cut);
+
         println!("  Simplification complete.");
 
         // Convert back to Vec<GraphEdge>
@@ -429,24 +454,10 @@ fn collapse_shared_segments(
                     continue;
                 }
 
-                let from_pos = edge_borrow.from.borrow().pos;
-                let to_pos = edge_borrow.to.borrow().pos;
-
-                let geom = vec![
-                    Coord {
-                        x: from_pos[0],
-                        y: from_pos[1],
-                    },
-                    Coord {
-                        x: to_pos[0],
-                        y: to_pos[1],
-                    },
-                ];
-                let ls = GeoLineString::new(geom.clone());
-                let weight = haversine_dist(
-                    GeoPoint::new(from_pos[0], from_pos[1]),
-                    GeoPoint::new(to_pos[0], to_pos[1]),
-                );
+                // Use the stored geometry from degree-2 contractions, not just endpoints
+                let ls = GeoLineString::new(edge_borrow.geometry.clone());
+                #[allow(deprecated)]
+                let weight = ls.haversine_length();
 
                 let from_id = edge_borrow.from.borrow().id;
                 let to_id = edge_borrow.to.borrow().id;
@@ -485,24 +496,68 @@ fn collapse_shared_segments(
 }
 
 /// Find or create a node for collapsing (matches C++: ndCollapseCand)
+/// 
+/// Parameters:
+/// - blocking_set: nodes on the current edge that should not be reused
+/// - num_lines: number of routes on the current edge (used for line-aware distance)  
+/// - d_cut: base distance cutoff for merging
+/// - point: the point to find/create a node for
+/// - span_a: optional first endpoint of current edge span (nodes connected to this are excluded)
+/// - span_b: optional second endpoint of current edge span (nodes connected to this are excluded)
+/// - geo_idx: spatial index for nodes
+/// - graph: the line graph being built
 fn nd_collapse_cand(
     blocking_set: &HashSet<usize>,
+    num_lines: usize,
     d_cut: f64,
     point: [f64; 2],
+    span_a: Option<&NodeRef>,
+    span_b: Option<&NodeRef>,
     geo_idx: &mut NodeGeoIdx,
     graph: &mut LineGraph,
 ) -> NodeRef {
-    let neighbors = geo_idx.get(point, d_cut);
+    // Use line-aware distance cutoff
+    let effective_d_cut = max_d(num_lines, d_cut);
+    let neighbors = geo_idx.get(point, effective_d_cut);
 
     let mut best: Option<NodeRef> = None;
     let mut best_dist = f64::INFINITY;
 
     for nd_test in neighbors {
         let nd_id = nd_test.borrow().id;
+        
+        // Skip nodes in blocking set (already on this edge's path)
         if blocking_set.contains(&nd_id) {
             continue;
         }
+        
+        // Skip degree-0 nodes
         if nd_test.borrow().get_deg() == 0 {
+            continue;
+        }
+
+        // Span constraint: skip if this node is connected to span_a or span_b
+        // This prevents creating shortcuts through the current edge's span
+        let mut in_span = false;
+        {
+            let nd_borrow = nd_test.borrow();
+            for edge_ref in &nd_borrow.adj_list {
+                let edge = edge_ref.borrow();
+                if let Some(sa) = span_a {
+                    if Rc::ptr_eq(&edge.from, sa) || Rc::ptr_eq(&edge.to, sa) {
+                        in_span = true;
+                        break;
+                    }
+                }
+                if let Some(sb) = span_b {
+                    if Rc::ptr_eq(&edge.from, sb) || Rc::ptr_eq(&edge.to, sb) {
+                        in_span = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if in_span {
             continue;
         }
 
@@ -511,7 +566,7 @@ fn nd_collapse_cand(
         let dy = nd_pos[1] - point[1];
         let d = (dx * dx + dy * dy).sqrt();
 
-        if d < d_cut && d < best_dist {
+        if d < effective_d_cut && d < best_dist {
             best_dist = d;
             best = Some(nd_test);
         }
@@ -577,14 +632,19 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph) {
             continue;
         }
 
-        // C++: MAX_COLLAPSED_SEG_LENGTH check (500m)
-        // geom logic: A -> Node -> B or variations
-        // We need to construct the potential new geometry to check length
-        let len_a = edge_a.borrow().geometry.iter().fold(0.0, |acc, _| acc); // Approximation or skip?
-        // Actually, let's just use the Haversine length of the endpoints of the segments
-        // to approximate, or calculate properly.
-        // For now, to fix the hang, the most important part is removing the loop.
-        // We will skip the complex length checks for now unless strict parity is required.
+        // C++: MAX_COLLAPSED_SEG_LENGTH check (500m ~ 0.0045 degrees)
+        // Don't contract if the resulting edge would be too long
+        // Calculate distance between the two endpoints that would be connected
+        {
+            let pos_a = other_a.borrow().pos;
+            let pos_b = other_b.borrow().pos;
+            let dx = pos_a[0] - pos_b[0];
+            let dy = pos_a[1] - pos_b[1];
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > MAX_COLLAPSED_SEG_LENGTH {
+                continue;
+            }
+        }
 
         // Combine edges: create new edge from other_a to other_b
         let merged_routes: HashSet<(String, String)> = edge_a
@@ -667,6 +727,21 @@ fn routes_equal(a: &HashSet<(String, String)>, b: &HashSet<(String, String)>) ->
     a == b
 }
 
+/// Check if two route sets have any overlap (C++: used before merging)
+fn routes_overlap(a: &HashSet<(String, String)>, b: &HashSet<(String, String)>) -> bool {
+    !a.is_disjoint(b)
+}
+
+/// Line-aware distance cutoff (C++: maxD)
+/// More lines on an edge require larger separation to prevent merging
+fn max_d(num_lines: usize, d_cut: f64) -> f64 {
+    d_cut + d_cut * 0.2 * (num_lines as f64).max(1.0)
+}
+
+/// Maximum length for a collapsed segment (500m in degrees, ~0.0045)
+/// Prevents degree-2 contraction from creating excessively long edges
+const MAX_COLLAPSED_SEG_LENGTH: f64 = 0.0045;
+
 /// Densify coordinates to have points no further than max_seg_len apart
 fn densify_coords(coords: &[[f64; 2]], max_seg_len: f64) -> Vec<[f64; 2]> {
     if coords.is_empty() {
@@ -699,4 +774,705 @@ fn densify_coords(coords: &[[f64; 2]], max_seg_len: f64) -> Vec<[f64; 2]> {
 fn haversine_dist(p1: GeoPoint<f64>, p2: GeoPoint<f64>) -> f64 {
     use geo::HaversineDistance;
     p1.haversine_distance(&p2)
+}
+
+// ===========================================================================
+// Polish Fixes: geomAvg, fold_edges, intersection reconstruction
+// ===========================================================================
+
+/// Weighted geometry averaging (C++: geomAvg)
+/// Averages two polylines with weights based on number of lines (squared)
+fn geom_avg(
+    geom_a: &[Coord],
+    weight_a: usize,
+    geom_b: &[Coord],
+    weight_b: usize,
+) -> Vec<Coord> {
+    if geom_a.is_empty() {
+        return geom_b.to_vec();
+    }
+    if geom_b.is_empty() {
+        return geom_a.to_vec();
+    }
+
+    // Weights are squared (as in C++)
+    let wa = (weight_a * weight_a) as f64;
+    let wb = (weight_b * weight_b) as f64;
+    let total_weight = wa + wb;
+
+    if total_weight == 0.0 {
+        return geom_a.to_vec();
+    }
+
+    // Resample both geometries to same number of points
+    let num_points = geom_a.len().max(geom_b.len()).max(5);
+    let resampled_a = resample_polyline(geom_a, num_points);
+    let resampled_b = resample_polyline(geom_b, num_points);
+
+    // Weighted average of corresponding points
+    let mut result = Vec::with_capacity(num_points);
+    for i in 0..num_points {
+        let pa = resampled_a[i];
+        let pb = resampled_b[i];
+        result.push(Coord {
+            x: (pa.x * wa + pb.x * wb) / total_weight,
+            y: (pa.y * wa + pb.y * wb) / total_weight,
+        });
+    }
+
+    // Simplify the result
+    simplify_coords(&result, 0.5e-6)
+}
+
+/// Resample a polyline to have exactly n points
+fn resample_polyline(coords: &[Coord], n: usize) -> Vec<Coord> {
+    if coords.len() < 2 || n < 2 {
+        return coords.to_vec();
+    }
+
+    // Calculate total length
+    let mut total_len = 0.0;
+    for i in 0..coords.len() - 1 {
+        let dx = coords[i + 1].x - coords[i].x;
+        let dy = coords[i + 1].y - coords[i].y;
+        total_len += (dx * dx + dy * dy).sqrt();
+    }
+
+    if total_len == 0.0 {
+        return vec![coords[0]; n];
+    }
+
+    let mut result = Vec::with_capacity(n);
+    result.push(coords[0]);
+
+    let step = total_len / (n - 1) as f64;
+    let mut cur_len = 0.0;
+    let mut seg_idx = 0;
+    let mut seg_start_len = 0.0;
+
+    for i in 1..n - 1 {
+        let target_len = step * i as f64;
+
+        // Advance through segments until we find the one containing target_len
+        while seg_idx < coords.len() - 1 {
+            let dx = coords[seg_idx + 1].x - coords[seg_idx].x;
+            let dy = coords[seg_idx + 1].y - coords[seg_idx].y;
+            let seg_len = (dx * dx + dy * dy).sqrt();
+
+            if seg_start_len + seg_len >= target_len {
+                // Found the segment
+                let frac = (target_len - seg_start_len) / seg_len;
+                result.push(Coord {
+                    x: coords[seg_idx].x + dx * frac,
+                    y: coords[seg_idx].y + dy * frac,
+                });
+                break;
+            }
+
+            seg_start_len += seg_len;
+            seg_idx += 1;
+        }
+
+        // If we ran out of segments, use last point
+        if seg_idx >= coords.len() - 1 {
+            result.push(*coords.last().unwrap());
+        }
+    }
+
+    result.push(*coords.last().unwrap());
+    result
+}
+
+/// Simplify coordinates using Douglas-Peucker
+fn simplify_coords(coords: &[Coord], epsilon: f64) -> Vec<Coord> {
+    if coords.len() <= 2 {
+        return coords.to_vec();
+    }
+    let ls = GeoLineString::new(coords.to_vec());
+    use geo::algorithm::simplify::Simplify;
+    ls.simplify(epsilon).0
+}
+
+/// Average node positions based on incident edge endpoints (C++: averageNodePositions)
+fn average_node_positions(graph: &LineGraph) {
+    for node in &graph.nodes {
+        let deg = node.borrow().get_deg();
+        if deg == 0 {
+            continue;
+        }
+
+        let mut sum_x = 0.0;
+        let mut sum_y = 0.0;
+        let mut count = 0;
+
+        let adj_list = node.borrow().adj_list.clone();
+        for edge_ref in adj_list {
+            let edge = edge_ref.borrow();
+            let geom = &edge.geometry;
+            if geom.is_empty() {
+                continue;
+            }
+
+            // If this node is the "to" end, use the back of geometry
+            // If this node is the "from" end, use the front of geometry
+            let pt = if Rc::ptr_eq(&edge.to, node) {
+                &geom[geom.len() - 1]
+            } else {
+                &geom[0]
+            };
+            sum_x += pt.x;
+            sum_y += pt.y;
+            count += 1;
+        }
+
+        if count > 0 {
+            node.borrow_mut().pos = [sum_x / count as f64, sum_y / count as f64];
+        }
+    }
+}
+
+/// Reconstruct intersections by cutting back edge geometries (C++: reconstructIntersections)
+/// Cuts back edge geometry by max_aggr_distance from endpoints, then reconnects to node positions
+fn reconstruct_intersections(graph: &LineGraph, max_aggr_distance: f64) {
+    // First average node positions
+    average_node_positions(graph);
+
+    // Then cut back edge geometries
+    for node in &graph.nodes {
+        let adj_list = node.borrow().adj_list.clone();
+        for edge_ref in adj_list {
+            let edge_from_ptr = {
+                let edge = edge_ref.borrow();
+                Rc::clone(&edge.from)
+            };
+
+            // Only process edges where this node is 'from'
+            if !Rc::ptr_eq(&edge_from_ptr, node) {
+                continue;
+            }
+
+            // Get geometry and cut it back
+            let mut edge = edge_ref.borrow_mut();
+            let geom = &edge.geometry;
+            if geom.len() < 2 {
+                continue;
+            }
+
+            // Calculate total length
+            let total_len = calc_polyline_length(geom);
+            if total_len <= 2.0 * max_aggr_distance {
+                // Edge too short, just connect endpoints directly
+                let from_pos = edge.from.borrow().pos;
+                let to_pos = edge.to.borrow().pos;
+                edge.geometry = vec![
+                    Coord { x: from_pos[0], y: from_pos[1] },
+                    Coord { x: to_pos[0], y: to_pos[1] },
+                ];
+                continue;
+            }
+
+            // Cut back from both ends
+            let start_frac = max_aggr_distance / total_len;
+            let end_frac = 1.0 - max_aggr_distance / total_len;
+
+            let cut_geom = get_polyline_segment(geom, start_frac, end_frac);
+
+            // Prepend from node position, append to node position
+            let from_pos = edge.from.borrow().pos;
+            let to_pos = edge.to.borrow().pos;
+
+            let mut new_geom = Vec::with_capacity(cut_geom.len() + 2);
+            new_geom.push(Coord { x: from_pos[0], y: from_pos[1] });
+            new_geom.extend(cut_geom);
+            new_geom.push(Coord { x: to_pos[0], y: to_pos[1] });
+
+            edge.geometry = new_geom;
+        }
+    }
+}
+
+/// Calculate polyline length
+fn calc_polyline_length(coords: &[Coord]) -> f64 {
+    let mut len = 0.0;
+    for i in 0..coords.len().saturating_sub(1) {
+        let dx = coords[i + 1].x - coords[i].x;
+        let dy = coords[i + 1].y - coords[i].y;
+        len += (dx * dx + dy * dy).sqrt();
+    }
+    len
+}
+
+/// Get a segment of a polyline between two fractional positions
+fn get_polyline_segment(coords: &[Coord], start_frac: f64, end_frac: f64) -> Vec<Coord> {
+    if coords.len() < 2 || start_frac >= end_frac {
+        return coords.to_vec();
+    }
+
+    let total_len = calc_polyline_length(coords);
+    if total_len == 0.0 {
+        return coords.to_vec();
+    }
+
+    let start_dist = start_frac * total_len;
+    let end_dist = end_frac * total_len;
+
+    let mut result = Vec::new();
+    let mut cur_dist = 0.0;
+    let mut started = false;
+
+    for i in 0..coords.len() - 1 {
+        let p1 = coords[i];
+        let p2 = coords[i + 1];
+        let dx = p2.x - p1.x;
+        let dy = p2.y - p1.y;
+        let seg_len = (dx * dx + dy * dy).sqrt();
+
+        let seg_end_dist = cur_dist + seg_len;
+
+        // Check if start point is in this segment
+        if !started && start_dist >= cur_dist && start_dist <= seg_end_dist {
+            let frac = (start_dist - cur_dist) / seg_len;
+            result.push(Coord {
+                x: p1.x + dx * frac,
+                y: p1.y + dy * frac,
+            });
+            started = true;
+        }
+
+        // If we've started, add intermediate points
+        if started && cur_dist >= start_dist && seg_end_dist <= end_dist {
+            result.push(p2);
+        }
+
+        // Check if end point is in this segment
+        if started && end_dist >= cur_dist && end_dist <= seg_end_dist {
+            let frac = (end_dist - cur_dist) / seg_len;
+            result.push(Coord {
+                x: p1.x + dx * frac,
+                y: p1.y + dy * frac,
+            });
+            break;
+        }
+
+        cur_dist = seg_end_dist;
+    }
+
+    if result.is_empty() && !coords.is_empty() {
+        result.push(coords[0]);
+    }
+
+    result
+}
+
+/// Contract very short edges (edge artifact removal) (C++: contractNodes)
+/// Repeatedly merges nodes connected by edges shorter than max_aggr_distance
+fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
+    let mut total_contracted = 0;
+    let max_iterations = 100;
+
+    for _ in 0..max_iterations {
+        let mut contracted_this_iter = false;
+        let nodes: Vec<NodeRef> = graph.nodes.iter().map(Rc::clone).collect();
+
+        for node in nodes {
+            if node.borrow().get_deg() == 0 {
+                continue;
+            }
+
+            let adj_list = node.borrow().adj_list.clone();
+            for edge_ref in &adj_list {
+                let (to_node, edge_len, edge_dist) = {
+                    let edge = edge_ref.borrow();
+
+                    // Only process edges where this node is 'from'
+                    if !Rc::ptr_eq(&edge.from, &node) {
+                        continue;
+                    }
+
+                    // Check edge geometry length
+                    let geom = &edge.geometry;
+                    let len = calc_polyline_length(geom);
+
+                    // Check endpoint distance
+                    let from_pos = edge.from.borrow().pos;
+                    let to_pos = edge.to.borrow().pos;
+                    let dx = from_pos[0] - to_pos[0];
+                    let dy = from_pos[1] - to_pos[1];
+                    let dist = (dx * dx + dy * dy).sqrt();
+
+                    (Rc::clone(&edge.to), len, dist)
+                };
+
+                // Skip if too long
+                if edge_len >= max_aggr_distance || edge_dist >= max_aggr_distance {
+                    continue;
+                }
+
+                // Skip self-loops
+                if Rc::ptr_eq(&node, &to_node) {
+                    continue;
+                }
+
+                // COMBINE NODES: Move all edges from 'node' to 'to_node'
+                // The 'to_node' will be the surviving node
+                
+                // Calculate new position as centroid
+                let new_pos = {
+                    let from_pos = node.borrow().pos;
+                    let to_pos = to_node.borrow().pos;
+                    [(from_pos[0] + to_pos[0]) / 2.0, (from_pos[1] + to_pos[1]) / 2.0]
+                };
+                to_node.borrow_mut().pos = new_pos;
+
+                // Move edges from 'node' to 'to_node'
+                let node_adj = node.borrow().adj_list.clone();
+                for other_edge_ref in &node_adj {
+                    // Skip the connecting edge we're contracting
+                    if Rc::ptr_eq(other_edge_ref, edge_ref) {
+                        continue;
+                    }
+
+                    let other_node = other_edge_ref.borrow().get_other_nd(&node);
+                    
+                    // Skip if other_node is to_node (would create self-loop)
+                    if Rc::ptr_eq(&other_node, &to_node) {
+                        continue;
+                    }
+
+                    // Check if to_node already has an edge to other_node
+                    let existing = graph.get_edg(&to_node, &other_node);
+                    
+                    if let Some(existing_edge) = existing {
+                        // Fold edges: average geometries, merge routes
+                        let (geom_a, weight_a) = {
+                            let e = existing_edge.borrow();
+                            (e.geometry.clone(), e.routes.len())
+                        };
+                        let (geom_b, weight_b) = {
+                            let e = other_edge_ref.borrow();
+                            (e.geometry.clone(), e.routes.len())
+                        };
+                        let avg_geom = geom_avg(&geom_a, weight_a, &geom_b, weight_b);
+                        
+                        {
+                            let routes_b: HashSet<(String, String)> = other_edge_ref.borrow().routes.clone();
+                            let mut ee = existing_edge.borrow_mut();
+                            ee.geometry = avg_geom;
+                            for r in routes_b {
+                                ee.routes.insert(r);
+                            }
+                        }
+
+                        // Remove other_edge from other_node's adj list
+                        other_node.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, other_edge_ref));
+                    } else {
+                        // Create new edge from to_node to other_node
+                        let new_edge = Rc::new(RefCell::new(LineEdge {
+                            from: Rc::clone(&to_node),
+                            to: Rc::clone(&other_node),
+                            routes: other_edge_ref.borrow().routes.clone(),
+                            geometry: other_edge_ref.borrow().geometry.clone(),
+                        }));
+                        
+                        // Update the edge endpoints in geometry
+                        {
+                            let mut ne = new_edge.borrow_mut();
+                            if !ne.geometry.is_empty() {
+                                ne.geometry[0] = Coord { x: new_pos[0], y: new_pos[1] };
+                            }
+                        }
+                        
+                        // Add to adj lists
+                        to_node.borrow_mut().adj_list.push(Rc::clone(&new_edge));
+                        other_node.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, other_edge_ref));
+                        other_node.borrow_mut().adj_list.push(Rc::clone(&new_edge));
+                    }
+                }
+
+                // Remove the connecting edge from to_node's adj list
+                to_node.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, edge_ref));
+
+                // Clear the contracted node
+                node.borrow_mut().adj_list.clear();
+
+                total_contracted += 1;
+                contracted_this_iter = true;
+                break;
+            }
+
+            if contracted_this_iter {
+                break;
+            }
+        }
+
+        if !contracted_this_iter {
+            break;
+        }
+    }
+
+    if total_contracted > 0 {
+        println!("  Edge artifact removal: contracted {} short edges.", total_contracted);
+        graph.nodes.retain(|n| n.borrow().get_deg() > 0);
+    }
+}
+
+/// Get orthogonal line at a fraction along a polyline (for handle-based restrictions)
+/// Returns a line segment perpendicular to the polyline at the given position
+fn get_ortho_line_at(coords: &[Coord], frac: f64, length: f64) -> Option<(Coord, Coord)> {
+    if coords.len() < 2 {
+        return None;
+    }
+
+    let total_len = calc_polyline_length(coords);
+    if total_len == 0.0 {
+        return None;
+    }
+
+    let target_dist = frac * total_len;
+    let mut cur_dist = 0.0;
+
+    for i in 0..coords.len() - 1 {
+        let p1 = coords[i];
+        let p2 = coords[i + 1];
+        let dx = p2.x - p1.x;
+        let dy = p2.y - p1.y;
+        let seg_len = (dx * dx + dy * dy).sqrt();
+
+        if cur_dist + seg_len >= target_dist {
+            // Found the segment
+            let local_frac = (target_dist - cur_dist) / seg_len;
+            let pt = Coord {
+                x: p1.x + dx * local_frac,
+                y: p1.y + dy * local_frac,
+            };
+
+            // Calculate perpendicular direction
+            let perp_dx = -dy / seg_len;
+            let perp_dy = dx / seg_len;
+
+            let half_len = length / 2.0;
+            return Some((
+                Coord {
+                    x: pt.x - perp_dx * half_len,
+                    y: pt.y - perp_dy * half_len,
+                },
+                Coord {
+                    x: pt.x + perp_dx * half_len,
+                    y: pt.y + perp_dy * half_len,
+                },
+            ));
+        }
+
+        cur_dist += seg_len;
+    }
+
+    None
+}
+
+/// Fold parallel edges by averaging their geometries (C++: foldEdges)
+/// When two edges share a node and go to the same place, average their geometries
+fn fold_edges_for_node(graph: &mut LineGraph, node: &NodeRef) -> bool {
+    let adj_list = node.borrow().adj_list.clone();
+    if adj_list.len() < 2 {
+        return false;
+    }
+
+    // Check for pairs of edges going to the same node
+    for i in 0..adj_list.len() {
+        for j in i + 1..adj_list.len() {
+            let edge_a = &adj_list[i];
+            let edge_b = &adj_list[j];
+
+            let other_a = edge_a.borrow().get_other_nd(node);
+            let other_b = edge_b.borrow().get_other_nd(node);
+
+            // If they go to the same node, fold them
+            if Rc::ptr_eq(&other_a, &other_b) {
+                // Average geometries weighted by route count
+                let (geom_a, weight_a) = {
+                    let e = edge_a.borrow();
+                    (e.geometry.clone(), e.routes.len())
+                };
+                let (geom_b, weight_b) = {
+                    let e = edge_b.borrow();
+                    (e.geometry.clone(), e.routes.len())
+                };
+
+                let avg_geom = geom_avg(&geom_a, weight_a, &geom_b, weight_b);
+
+                // Merge routes from both edges into edge_a
+                {
+                    let routes_b: HashSet<(String, String)> = edge_b.borrow().routes.clone();
+                    let mut ea = edge_a.borrow_mut();
+                    ea.geometry = avg_geom;
+                    for r in routes_b {
+                        ea.routes.insert(r);
+                    }
+                }
+
+                // Remove edge_b from adjacency lists
+                node.borrow_mut()
+                    .adj_list
+                    .retain(|e| !Rc::ptr_eq(e, edge_b));
+                other_b
+                    .borrow_mut()
+                    .adj_list
+                    .retain(|e| !Rc::ptr_eq(e, edge_b));
+
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Apply all polish fixes to the graph
+/// Follows the order from TopoMain.cpp lines 128-186
+fn apply_polish_fixes(graph: &mut LineGraph, max_aggr_distance: f64) {
+    // 1. Average node positions first (C++: mc.averageNodePositions)
+    average_node_positions(graph);
+
+    // 2. Remove node artifacts - contract degree-2 nodes with matching routes
+    // This is already done by collapse_degree_2_nodes_serial, but we do another pass
+    // for any that were created during polish
+
+    // 3. Fold parallel edges (C++: foldEdges in combineNodes)
+    let mut fold_count = 0;
+    let nodes: Vec<NodeRef> = graph.nodes.iter().map(Rc::clone).collect();
+    for node in &nodes {
+        while fold_edges_for_node(graph, node) {
+            fold_count += 1;
+        }
+    }
+    if fold_count > 0 {
+        println!("  Folded {} parallel edge pairs.", fold_count);
+    }
+
+    // 4. Contract short edges (edge artifact removal) (C++: removeEdgeArtifacts)
+    contract_short_edges(graph, max_aggr_distance);
+
+    // 5. Reconstruct intersections (C++: mc.reconstructIntersections)
+    // This cuts back edge geometries and reconnects to averaged node positions
+    reconstruct_intersections(graph, max_aggr_distance);
+
+    // 6. Clean up orphaned nodes
+    graph.nodes.retain(|n| n.borrow().get_deg() > 0);
+}
+
+/// Remove orphan lines - lines that don't connect to anything meaningful
+/// (C++: mc.removeOrphanLines)
+fn remove_orphan_lines(graph: &mut LineGraph) {
+    // Remove edges where routes are empty
+    for node in &graph.nodes {
+        let edges_to_remove: Vec<EdgeRef> = node
+            .borrow()
+            .adj_list
+            .iter()
+            .filter(|e| {
+                let edge = e.borrow();
+                Rc::ptr_eq(&edge.from, node) && edge.routes.is_empty()
+            })
+            .cloned()
+            .collect();
+
+        for edge_ref in edges_to_remove {
+            let to_node = edge_ref.borrow().to.clone();
+            node.borrow_mut()
+                .adj_list
+                .retain(|e| !Rc::ptr_eq(e, &edge_ref));
+            to_node.borrow_mut()
+                .adj_list
+                .retain(|e| !Rc::ptr_eq(e, &edge_ref));
+        }
+    }
+}
+
+/// Clean up geometries to ensure they connect properly to nodes (C++: cleanUpGeoms)
+fn clean_up_geoms(graph: &LineGraph) {
+    for node in &graph.nodes {
+        let adj_list = node.borrow().adj_list.clone();
+        for edge_ref in adj_list {
+            // Only process edges where we're the 'from' node
+            let is_from = {
+                let edge = edge_ref.borrow();
+                Rc::ptr_eq(&edge.from, node)
+            };
+            if !is_from {
+                continue;
+            }
+
+            let mut edge = edge_ref.borrow_mut();
+            if edge.geometry.len() < 2 {
+                continue;
+            }
+
+            // Project from/to nodes onto the geometry
+            let from_pos = edge.from.borrow().pos;
+            let to_pos = edge.to.borrow().pos;
+
+            // Find closest points on geometry to the node positions
+            let from_coord = Coord { x: from_pos[0], y: from_pos[1] };
+            let to_coord = Coord { x: to_pos[0], y: to_pos[1] };
+
+            let start_frac = project_point_on_line(&edge.geometry, &from_coord);
+            let end_frac = project_point_on_line(&edge.geometry, &to_coord);
+
+            if start_frac < end_frac {
+                edge.geometry = get_polyline_segment(&edge.geometry, start_frac, end_frac);
+            }
+
+            // Ensure endpoints match node positions
+            if !edge.geometry.is_empty() {
+                edge.geometry[0] = from_coord;
+                *edge.geometry.last_mut().unwrap() = to_coord;
+            }
+        }
+    }
+}
+
+/// Project a point onto a polyline, returning the fraction along the line
+fn project_point_on_line(coords: &[Coord], point: &Coord) -> f64 {
+    if coords.len() < 2 {
+        return 0.0;
+    }
+
+    let total_len = calc_polyline_length(coords);
+    if total_len == 0.0 {
+        return 0.0;
+    }
+
+    let mut best_frac = 0.0;
+    let mut best_dist = f64::INFINITY;
+    let mut cur_dist = 0.0;
+
+    for i in 0..coords.len() - 1 {
+        let p1 = coords[i];
+        let p2 = coords[i + 1];
+        let dx = p2.x - p1.x;
+        let dy = p2.y - p1.y;
+        let seg_len = (dx * dx + dy * dy).sqrt();
+
+        if seg_len == 0.0 {
+            continue;
+        }
+
+        // Project point onto segment
+        let t = ((point.x - p1.x) * dx + (point.y - p1.y) * dy) / (seg_len * seg_len);
+        let t_clamped = t.clamp(0.0, 1.0);
+
+        let proj_x = p1.x + dx * t_clamped;
+        let proj_y = p1.y + dy * t_clamped;
+
+        let dist = ((point.x - proj_x).powi(2) + (point.y - proj_y).powi(2)).sqrt();
+
+        if dist < best_dist {
+            best_dist = dist;
+            best_frac = (cur_dist + seg_len * t_clamped) / total_len;
+        }
+
+        cur_dist += seg_len;
+    }
+
+    best_frac
 }
