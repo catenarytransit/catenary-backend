@@ -542,18 +542,12 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph) {
 
     // Collect all nodes to iterate over
     // We strictly iterate over the initial set of nodes once
-    let node_ids: Vec<usize> = graph.nodes.iter().map(|n| n.borrow().id).collect();
+    // We hold Rc references directly to avoid O(N) lookup by ID.
+    let nodes: Vec<NodeRef> = graph.nodes.iter().map(Rc::clone).collect();
 
-    for node_id in node_ids {
-        // Look up node by ID (it might have been deleted in a previous step of this loop)
-        // We can't hold Rc refs while mutating the graph structure, so we look up fresh
-        let node_opt = graph.nodes.iter().find(|n| n.borrow().id == node_id);
-        let node = match node_opt {
-            Some(n) => Rc::clone(n),
-            None => continue,
-        };
-
+    for node in nodes {
         // Check if node is degree 2
+        // If it was "removed" (adj list cleared) in a previous iteration, degree will be 0
         if node.borrow().get_deg() != 2 {
             continue;
         }
