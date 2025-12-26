@@ -129,6 +129,13 @@ impl LineGraph {
         }
         count
     }
+    fn clear(&mut self) {
+        // Break cycles manually
+        for node in &self.nodes {
+            node.borrow_mut().adj_list.clear();
+        }
+        self.nodes.clear();
+    }
 }
 
 // ===========================================================================
@@ -486,6 +493,13 @@ fn collapse_shared_segments(
         *next_node_id_counter = tg_new.next_node_id;
         edges = new_edges;
 
+        // CRITICAL: Break Reference Cycles
+        // The LineGraph uses Rc<RefCell<...>> which creates cycles (Node <-> Edge).
+        // If we don't clear it manually, the graph from this iteration will leak
+        // and stay in memory forever, eventually causing OOM.
+        tg_new.clear();
+
+
         if diff < 0.1 {
             println!("Converged.");
             break;
@@ -733,9 +747,9 @@ fn routes_overlap(a: &HashSet<(String, String)>, b: &HashSet<(String, String)>) 
 }
 
 /// Line-aware distance cutoff (C++: maxD)
-/// More lines on an edge require larger separation to prevent merging
-fn max_d(num_lines: usize, d_cut: f64) -> f64 {
-    d_cut + d_cut * 0.2 * (num_lines as f64).max(1.0)
+/// NOTE: In C++ this logic is commented out and just returns d.
+fn max_d(_num_lines: usize, d_cut: f64) -> f64 {
+    d_cut
 }
 
 /// Maximum length for a collapsed segment (500m in degrees, ~0.0045)
