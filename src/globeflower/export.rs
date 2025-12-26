@@ -6,7 +6,7 @@ use catenary::graph_formats::{
     SerializableStop, SerializableStopCluster, TurnRestriction,
 };
 use catenary::models::Stop;
-use geojson::{Feature, FeatureCollection, Geometry, JsonObject, JsonValue, Value};
+use geojson::{Feature, FeatureCollection, GeoJson, Geometry, JsonObject, JsonValue, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::BufWriter;
@@ -149,9 +149,11 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
         foreign_members: None,
     };
 
+    let geojson = GeoJson::FeatureCollection(collection);
     let file = File::create("globeflower_graph.geojson")?;
-    let writer = BufWriter::new(file);
-    serde_json::to_writer_pretty(writer, &collection)?;
+    let mut writer = BufWriter::new(file);
+    use std::io::Write;
+    writer.write_all(geojson.to_string().as_bytes())?;
     println!("Exported graph to globeflower_graph.geojson");
     Ok(())
 }
