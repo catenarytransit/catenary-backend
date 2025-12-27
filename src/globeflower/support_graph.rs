@@ -1,4 +1,5 @@
 use crate::edges::{GraphEdge, NodeId, convert_from_geo, convert_to_geo};
+use ahash::{AHashMap, AHashSet};
 use anyhow::Result;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use geo::prelude::*;
@@ -174,14 +175,14 @@ impl LineGraph {
 
 struct NodeGeoIdx {
     cell_size: f64,
-    cells: HashMap<(i32, i32), Vec<NodeRef>>,
+    cells: AHashMap<(i32, i32), Vec<NodeRef>>,
 }
 
 impl NodeGeoIdx {
     fn new(cell_size: f64) -> Self {
         Self {
             cell_size,
-            cells: HashMap::new(),
+            cells: AHashMap::new(),
         }
     }
 
@@ -201,7 +202,9 @@ impl NodeGeoIdx {
         let pos = node.borrow().pos;
         let coords = self.get_cell_coords(pos[0], pos[1]);
         if let Some(nodes) = self.cells.get_mut(&coords) {
-            nodes.retain(|n| !Rc::ptr_eq(n, node));
+            if let Some(pos) = nodes.iter().position(|n| Rc::ptr_eq(n, node)) {
+                nodes.swap_remove(pos);
+            }
         }
     }
 
@@ -350,7 +353,14 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     // Convert meters to degrees: 1 degree ≈ 111,111 meters
     let tight_d_cut = 0.00009; // 10 meters in degrees (C++: dCut=10)
     let normal_d_cut = 0.00045; // 50 meters in degrees (C++: maxAggrDistance=50)
-    let seg_len = 0.000045; // 5 meters in degrees (C++: segmentLength=5)
+
+    // CRITICAL OPTIMIZATION:
+    // C++ uses "segmentLength = 5". On Lat/Lng data, this is 5 DEGREES (~500km).
+    // This effectively disables densification for almost all segments in C++.
+    // Rust was using 0.000045 (5 meters), causing massive densification (millions of points).
+    // We relax this to 0.005 (~500 meters) to match C++ behavior of only processing
+    // exceptionally long segments.
+    let seg_len = 0.005;
 
     // Step 1: Build initial graph from raw edges
     println!(
@@ -524,9 +534,9 @@ fn collapse_shared_segments(
         let mut geo_idx = NodeGeoIdx::new(d_cut);
 
         // Map from old node IDs to new nodes (matches C++: `imgNds`)
-        let mut img_nds: HashMap<NodeId, NodeRef> = HashMap::new();
+        let mut img_nds: AHashMap<NodeId, NodeRef> = AHashMap::new();
         // Set of image nodes (for artifact removal check) - matches C++: `imgNdsSet`
-        let mut img_nds_set: HashSet<usize> = HashSet::new();
+        let mut img_nds_set: AHashSet<usize> = AHashSet::new();
 
         println!("Edge sorting by length...");
 
@@ -537,7 +547,7 @@ fn collapse_shared_segments(
 
         for edge in &edges {
             let mut last: Option<NodeRef> = None;
-            let mut my_nds: HashSet<usize> = HashSet::new(); // Blocking set (by node id)
+            let mut my_nds: AHashSet<usize> = AHashSet::new(); // Blocking set (by node id)
             let mut affected_nodes: Vec<NodeRef> = Vec::new(); // C++ line 230: affectedNodes
 
             // Build polyline including endpoints (C++ lines 237-245)
@@ -956,7 +966,7 @@ fn collapse_shared_segments(
 /// - geo_idx: spatial index for nodes
 /// - graph: the line graph being built
 fn nd_collapse_cand(
-    blocking_set: &HashSet<usize>,
+    blocking_set: &AHashSet<usize>,
     num_lines: usize,
     d_cut: f64,
     point: [f64; 2],
@@ -1011,9 +1021,18 @@ fn nd_collapse_cand(
         let old_pos = nd_min.borrow().pos;
         let new_pos = [(old_pos[0] + point[0]) / 2.0, (old_pos[1] + point[1]) / 2.0];
 
-        geo_idx.remove(&nd_min);
-        nd_min.borrow_mut().pos = new_pos;
-        geo_idx.add(new_pos, Rc::clone(&nd_min));
+        // OPTIMIZATION: Only update grid if cell changes
+        let old_cell = geo_idx.get_cell_coords(old_pos[0], old_pos[1]);
+        let new_cell = geo_idx.get_cell_coords(new_pos[0], new_pos[1]);
+
+        if old_cell != new_cell {
+            geo_idx.remove(&nd_min);
+            nd_min.borrow_mut().pos = new_pos;
+            geo_idx.add(new_pos, Rc::clone(&nd_min));
+        } else {
+            // Just update position, no need to touch the map/vec
+            nd_min.borrow_mut().pos = new_pos;
+        }
 
         nd_min
     } else {
