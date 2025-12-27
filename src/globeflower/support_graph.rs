@@ -1388,6 +1388,35 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                     }
                 }
 
+                // GEOMETRY CHECK: Prevent folding edges with vastly different lengths
+                // This matches C++ contractNodes lines 593-606
+                // If merging would create edges with very different lengths, these are lines
+                // crossing at angles - don't merge them!
+                let node_adj_check = node.borrow().adj_list.clone();
+                let mut dont_contract = false;
+                for other_edge_ref in &node_adj_check {
+                    if Rc::ptr_eq(other_edge_ref, edge_ref) { continue; }
+                    
+                    let other_neighbor = other_edge_ref.borrow().get_other_nd(&node);
+                    if Rc::ptr_eq(&other_neighbor, &to_node) { continue; }
+                    
+                    // Check if to_node already has connection to other_neighbor
+                    if let Some(existing_edge) = graph.get_edg(&to_node, &other_neighbor) {
+                        let len_old = calc_polyline_length(&other_edge_ref.borrow().geometry);
+                        let len_new = calc_polyline_length(&existing_edge.borrow().geometry);
+                        
+                        // If lengths differ significantly, these are lines at angles - don't merge!
+                        if (len_new - len_old).abs() > max_aggr_distance * 2.0 {
+                            dont_contract = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if dont_contract {
+                    continue;
+                }
+
                 // COMBINE NODES: Move all edges from 'node' to 'to_node'
                 // The 'to_node' will be the surviving node
                 
@@ -1689,6 +1718,11 @@ fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
     for node in nodes {
         // Skip if node is already effectively deleted (deg 0/isolated) although get_deg handles it.
         if node.borrow().get_deg() == 0 { continue; }
+        
+        // CRITICAL: Skip degree-2 nodes - they are part of linear tracks, not junctions
+        // This matches C++ lines 374: if ((from->getDeg() == 2 || to->getDeg() == 2)) continue;
+        // Merging degree-2 nodes causes curved tracks to be straightened incorrectly
+        if node.borrow().get_deg() == 2 { continue; }
 
         let adj_list = node.borrow().adj_list.clone();
         
@@ -1714,6 +1748,10 @@ fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
 
             let to_node = Rc::clone(&e.to);
             if Rc::ptr_eq(&to_node, &node) { continue; } // safe-guard
+            
+            // CRITICAL: Skip if target is degree-2 (would straighten curves)
+            // This matches C++ lines 374: if ((from->getDeg() == 2 || to->getDeg() == 2)) continue;
+            if to_node.borrow().get_deg() == 2 { continue; }
 
             // GEOMETRY CHECK (The "Angle Check"):
             // Check if we would fold edges with vastly different geoms.
