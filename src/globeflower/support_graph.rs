@@ -467,6 +467,8 @@ fn collapse_shared_segments(
         // Set of image nodes (for artifact removal check) - matches C++: `imgNdsSet`
         let mut img_nds_set: HashSet<usize> = HashSet::new();
 
+        println!("Edge sorting by length...");
+
         // Sort edges by length (longest first) - matches C++ sorting
         edges.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(Ordering::Equal));
 
@@ -725,6 +727,7 @@ fn collapse_shared_segments(
         // (which are already short from the collapse process)
         // We pass d_cut as the threshold (in degrees) to match C++ behavior
         // =====================================================================
+        println!("Soft cleanup...");
         soft_cleanup(&mut tg_new, d_cut);
 
         // =====================================================================
@@ -732,6 +735,7 @@ fn collapse_shared_segments(
         // SET ALL EDGES TO STRAIGHT LINES between their endpoints
         // This is critical - geometries are simplified to straight lines
         // =====================================================================
+        println!("Writing edge geoms...");
         for node in tg_new.get_nds() {
             let adj_list = node.borrow().adj_list.clone();
             for edge_ref in adj_list {
@@ -774,27 +778,34 @@ fn collapse_shared_segments(
         // Phase 5: Re-collapse again (C++: lines 483-502)
         // May have introduced new degree-2 nodes
         // =====================================================================
+        println!("  Re-collapse degree-2 nodes...");
         collapse_degree_2_nodes_serial(&mut tg_new, d_cut);
 
         // =====================================================================
         // Phase 6: Polish fixes (C++: lines 164-186)
         // Multiple passes to clean up all artifacts
         // =====================================================================
+        println!("  Polish fixes...");
         apply_polish_fixes(&mut tg_new, seg_len);
 
         // First reconstruction pass (C++: line 164)
+        println!("  First reconstruction pass...");
         reconstruct_intersections(&mut tg_new, seg_len);
 
         // Remove orphan lines (C++: line 178)
+        println!("  Remove orphan lines...");
         remove_orphan_lines(&mut tg_new);
 
         // C++: removeNodeArtifacts(true) - contract degree-2 nodes again (line 180)
+        println!("  Contract degree-2 nodes...");
         collapse_degree_2_nodes_serial(&mut tg_new, d_cut);
 
         // Second reconstruction pass (C++: line 182)
+        println!("  Second reconstruction pass...");
         reconstruct_intersections(&mut tg_new, seg_len);
 
         // Remove orphan lines again (C++: line 185)
+        println!("  Remove orphan lines again...");
         remove_orphan_lines(&mut tg_new);
 
         println!("  Simplification complete.");
