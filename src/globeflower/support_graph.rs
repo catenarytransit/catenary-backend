@@ -619,8 +619,8 @@ fn collapse_shared_segments_from_graph(
             }
 
             let ls = GeoLineString::new(edge_borrow.geometry.clone());
-            #[allow(deprecated)]
-            let weight = ls.haversine_length();
+            // Use Euclidean length since coordinates are in Web Mercator (meters)
+            let weight = ls.euclidean_length();
 
             let from_id = edge_borrow.from.borrow().id;
             let to_id = edge_borrow.to.borrow().id;
@@ -677,9 +677,22 @@ fn collapse_shared_segments(
         // Sort edges by length (longest first) - matches C++ sorting
         edges.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(Ordering::Equal));
 
-        println!("Edge sorting by length complete.");
+        println!(
+            "Edge sorting by length complete. Processing {} edges...",
+            edges.len()
+        );
 
+        let total_edges = edges.len();
         for (edge_idx, edge) in edges.iter().enumerate() {
+            // Progress logging every 100 edges
+            if edge_idx % 100 == 0 {
+                println!(
+                    "  Processing edge {}/{} ({:.1}%)...",
+                    edge_idx,
+                    total_edges,
+                    100.0 * edge_idx as f64 / total_edges as f64
+                );
+            }
             let mut last: Option<NodeRef> = None;
             let mut my_nds: AHashSet<usize> = AHashSet::new(); // Blocking set (by node id)
             let mut affected_nodes: Vec<NodeRef> = Vec::new(); // C++ line 230: affectedNodes
@@ -698,19 +711,73 @@ fn collapse_shared_segments(
             }
             pl.push(to_pos); // C++ line 242: pl.push_back(*e->getTo()->pl().getGeom())
 
-            // Simplify then densify (matches C++: simplify(pl, 0.5), densify(..., SEGL))
+            // Simplify AGGRESSIVELY first - our GTFS shapes have 17k+ points but C++
+            // expects sparse polylines from edge geometries
+            // Use seg_len as simplification threshold to match the expected output density
             use geo::algorithm::simplify::Simplify;
             let pl_geo =
                 GeoLineString::new(pl.iter().map(|p| Coord { x: p[0], y: p[1] }).collect());
-            let simplified = pl_geo.simplify(0.5e-5); // ~0.5 meters in degrees
+            let simplified = pl_geo.simplify(seg_len); // seg_len meters (typically 5m)
             let coords: Vec<[f64; 2]> = if simplified.0.is_empty() {
                 pl
             } else {
                 simplified.0.iter().map(|c| [c.x, c.y]).collect()
             };
 
-            // Densify
-            let pl_dense = densify_coords(&coords, seg_len);
+            // Only densify if the simplified result is still too sparse
+            // AND the line is short enough that merging makes sense
+            // For long straight lines (>2*d_cut), just use endpoints -
+            // densifying them is wasteful since internal points won't merge with anything
+            let coords_len = coords.len(); // Save before moving
+            let pl_dense = if coords.len() > 2 {
+                // Already have enough points from simplification
+                coords
+            } else if coords.len() == 2 {
+                // Straight line - only densify if short enough
+                let dx = coords[0][0] - coords[1][0];
+                let dy = coords[0][1] - coords[1][1];
+                let line_length = (dx * dx + dy * dy).sqrt();
+
+                // Only densify if line is short enough that internal points matter
+                // Use 2*d_cut as threshold - points further apart won't merge anyway
+                if line_length <= 2.0 * d_cut {
+                    densify_coords(&coords, seg_len)
+                } else {
+                    // Long line - just use endpoints
+                    coords
+                }
+            } else {
+                coords // Empty or single point - keep as is
+            };
+
+            // Safety cap: never process more than 10000 points per edge
+            // This prevents runaway complexity on extremely long shapes
+            let pl_dense: Vec<[f64; 2]> = if pl_dense.len() > 10000 {
+                // Subsample to 10000 points
+                let step = pl_dense.len() / 10000;
+                let mut subsampled: Vec<[f64; 2]> =
+                    pl_dense.iter().step_by(step).cloned().collect();
+                // Ensure we keep the last point
+                if subsampled.last() != pl_dense.last() {
+                    if let Some(last) = pl_dense.last() {
+                        subsampled.push(*last);
+                    }
+                }
+                subsampled
+            } else {
+                pl_dense
+            };
+
+            // Debug: Log point count for first few edges
+            if edge_idx < 5 {
+                println!(
+                    "    Edge {}: {} coords simplified to {} coords, final {} points",
+                    edge_idx,
+                    geom.0.len(),
+                    coords_len,
+                    pl_dense.len()
+                );
+            }
 
             let num_lines = edge.route_ids.len();
             let mut i = 0;
@@ -1042,8 +1109,8 @@ fn collapse_shared_segments(
 
                 // Use the stored geometry from degree-2 contractions, not just endpoints
                 let ls = GeoLineString::new(edge_borrow.geometry.clone());
-                #[allow(deprecated)]
-                let weight = ls.haversine_length();
+                // Use Euclidean length since coordinates are in Web Mercator (meters)
+                let weight = ls.euclidean_length();
 
                 let from_id = edge_borrow.from.borrow().id;
                 let to_id = edge_borrow.to.borrow().id;
@@ -1729,10 +1796,8 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph, d_cut: f64) {
     // Collect all nodes to iterate over
     let nodes: Vec<NodeRef> = graph.nodes.iter().map(Rc::clone).collect();
 
-    // Convert d_cut (degrees) to meters for threshold comparison
+    // Note: d_cut is already in meters (Web Mercator coordinates)
     // C++ uses: 2 * maxD(numLines, dCut) which is 2 * dCut
-    // 1 degree ≈ 111,111 meters at equator
-    let support_threshold_meters = 2.0 * d_cut * 111111.0;
 
     for node in nodes {
         // Check if node is degree 2
@@ -1765,16 +1830,14 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph, d_cut: f64) {
             // if (ex && ex->pl().longerThan(2 * maxD(...))) -> supportEdge(ex)
             // else -> continue (don't contract)
 
-            #[allow(deprecated)]
-            let ex_len = {
-                let geom = &ex.borrow().geometry;
-                let ls = GeoLineString::new(geom.clone());
-                ls.haversine_length()
-            };
+            // Use Euclidean length since coordinates are in Web Mercator (meters)
+            let ex_len = calc_polyline_length(&ex.borrow().geometry);
 
             // Threshold: if blocking edge is long (> 2 * d_cut in meters), split it.
-            if ex_len > support_threshold_meters {
-                println!("Splitting blocking edge to allow contraction...");
+            // Note: d_cut is already in meters (Web Mercator), no conversion needed
+            let support_threshold = 2.0 * d_cut; // Already in meters
+            if ex_len > support_threshold {
+                // println!("Splitting blocking edge to allow contraction...");
                 support_edge(&ex, graph);
                 // After splitting, 'ex' is effectively gone/replaced.
                 // We can proceed with contraction of node.
@@ -1815,9 +1878,9 @@ fn max_d(_num_lines: usize, d_cut: f64) -> f64 {
     d_cut
 }
 
-/// Maximum length for a collapsed segment (500m in degrees, ~0.0045)
+/// Maximum length for a collapsed segment (500 meters)
 /// Prevents degree-2 contraction from creating excessively long edges
-const MAX_COLLAPSED_SEG_LENGTH: f64 = 0.0045;
+const MAX_COLLAPSED_SEG_LENGTH: f64 = 500.0; // meters (Web Mercator)
 
 /// Densify coordinates to have points no further than max_seg_len apart
 fn densify_coords(coords: &[[f64; 2]], max_seg_len: f64) -> Vec<[f64; 2]> {
