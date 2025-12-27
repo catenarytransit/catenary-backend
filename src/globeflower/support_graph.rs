@@ -11,6 +11,48 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::{Rc, Weak};
 
 // ===========================================================================
+// Web Mercator Coordinate Conversion (matches C++ util::geo::latLngToWebMerc)
+// ===========================================================================
+
+const EARTH_RADIUS: f64 = 6378137.0;
+
+/// Convert lat/lng (EPSG:4326) to Web Mercator (EPSG:3857) - matches C++ latLngToWebMerc
+/// Input: (longitude, latitude) in degrees
+/// Output: (x, y) in meters
+fn lat_lng_to_web_merc(lon: f64, lat: f64) -> (f64, f64) {
+    let x = EARTH_RADIUS * lon.to_radians();
+    let y = EARTH_RADIUS * ((std::f64::consts::FRAC_PI_4 + lat.to_radians() / 2.0).tan()).ln();
+    (x, y)
+}
+
+/// Convert Web Mercator (EPSG:3857) to lat/lng (EPSG:4326) - matches C++ webMercToLatLng
+/// Input: (x, y) in meters
+/// Output: (longitude, latitude) in degrees
+fn web_merc_to_lat_lng(x: f64, y: f64) -> (f64, f64) {
+    let lon = (x / EARTH_RADIUS).to_degrees();
+    let lat = (2.0 * (y / EARTH_RADIUS).exp().atan() - std::f64::consts::FRAC_PI_2).to_degrees();
+    (lon, lat)
+}
+
+/// Convert a GraphEdge geometry to Web Mercator coordinates
+fn convert_edge_to_web_merc(edge: &mut GraphEdge) {
+    for coord in &mut edge.geometry.points {
+        let (x, y) = lat_lng_to_web_merc(coord.x, coord.y);
+        coord.x = x;
+        coord.y = y;
+    }
+}
+
+/// Convert a GraphEdge geometry back to lat/lng coordinates
+fn convert_edge_to_lat_lng(edge: &mut GraphEdge) {
+    for coord in &mut edge.geometry.points {
+        let (lon, lat) = web_merc_to_lat_lng(coord.x, coord.y);
+        coord.x = lon;
+        coord.y = lat;
+    }
+}
+
+// ===========================================================================
 // Rc-based Line Graph (matches C++ UndirGraph<LineNodePL, LineEdgePL>)
 // ===========================================================================
 
@@ -346,28 +388,39 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     }
 
     // =========================================================================
-    // C++ TopoMain.cpp Pipeline (lines 128-185)
+    // CRITICAL: Convert all coordinates to Web Mercator (meters)
+    // C++ reads lat/lng input and converts to Web Mercator internally
+    // (see LineGraph.cpp line 247: latLngToWebMerc)
     // =========================================================================
+    println!(
+        "Converting {} edges to Web Mercator coordinates...",
+        raw_edges.len()
+    );
+    for edge in &mut raw_edges {
+        convert_edge_to_web_merc(edge);
+        // Recalculate weight in meters (Euclidean in projected coords)
+        let geom = convert_to_geo(&edge.geometry);
+        edge.weight = geom.euclidean_length();
+    }
 
-    // C++ defaults: maxAggrDistance=50m, segmentLength=5m
-    // Convert meters to degrees: 1 degree ≈ 111,111 meters
-    let tight_d_cut = 0.00009; // 10 meters in degrees (C++: dCut=10)
-    let normal_d_cut = 0.00045; // 50 meters in degrees (C++: maxAggrDistance=50)
+    // =========================================================================
+    // C++ TopoMain.cpp Pipeline (lines 128-185)
+    // All thresholds are now in METERS (matching C++ behavior)
+    // =========================================================================
+    let tight_d_cut = 10.0; // 10 meters (C++ first pass: dCut=10)
+    let normal_d_cut = 50.0; // 50 meters (C++ maxAggrDistance=50)
+    let seg_len = 5.0; // 5 meters (C++ segmentLength=5)
 
-    // CRITICAL OPTIMIZATION:
-    // C++ uses "segmentLength = 5". On Lat/Lng data, this is 5 DEGREES (~500km).
-    // This effectively disables densification for almost all segments in C++.
-    // Rust was using 0.000045 (5 meters), causing massive densification (millions of points).
-    // We relax this to 0.005 (~500 meters) to match C++ behaviour of only processing
-    // exceptionally long segments.
-    let seg_len = 0.005;
+    // Snap threshold for building initial graph
+    let snap_threshold = 2.0; // 2 meters in Web Mercator
 
-    // Step 1: Build initial graph from raw edges
+    // Step 1: Build initial graph from raw edges (already in Web Mercator)
     println!(
         "Building initial LineGraph from {} raw edges...",
         raw_edges.len()
     );
-    let mut graph = build_initial_linegraph(&raw_edges, &mut node_id_counter);
+    let mut graph =
+        build_initial_linegraph_webmerc(&raw_edges, &mut node_id_counter, snap_threshold);
 
     // Step 2: averageNodePositions (C++ line 128)
     println!("Averaging node positions...");
@@ -386,13 +439,27 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     contract_short_edges(&mut graph, normal_d_cut);
 
     // Step 6: Two passes of collapseShrdSegs (C++ lines 145-146)
-    println!("Running collapse pass 1 (tight threshold ~10m)...");
+    println!("Running collapse pass 1 (tight threshold 10m)...");
     let collapsed =
         collapse_shared_segments_from_graph(&graph, tight_d_cut, seg_len, 50, &mut node_id_counter);
 
-    println!("Running collapse pass 2 (normal threshold ~50m)...");
-    let collapsed =
+    println!("Running collapse pass 2 (normal threshold 50m)...");
+    let mut collapsed =
         collapse_shared_segments(collapsed, normal_d_cut, seg_len, 50, &mut node_id_counter);
+
+    // =========================================================================
+    // Convert back to lat/lng for output
+    // =========================================================================
+    println!("Converting {} edges back to lat/lng...", collapsed.len());
+    for edge in &mut collapsed {
+        convert_edge_to_lat_lng(edge);
+        // Recalculate weight with haversine
+        let geom = convert_to_geo(&edge.geometry);
+        #[allow(deprecated)]
+        {
+            edge.weight = geom.haversine_length();
+        }
+    }
 
     Ok(collapsed)
 }
@@ -408,6 +475,73 @@ fn build_initial_linegraph(edges: &[GraphEdge], _next_node_id: &mut usize) -> Li
     let snap_threshold = 0.00002; // ~2 meters - snap endpoints this close together
 
     // Spatial index for finding nearby nodes
+    let mut geo_idx = NodeGeoIdx::new(snap_threshold);
+
+    for edge in edges {
+        let geom = convert_to_geo(&edge.geometry);
+        if geom.0.is_empty() {
+            continue;
+        }
+
+        let from_pos = geom.0.first().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
+        let to_pos = geom.0.last().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
+
+        // Find or create FROM node
+        let from_node = {
+            let neighbors = geo_idx.get(from_pos, snap_threshold);
+            if let Some(existing) = neighbors.first() {
+                Rc::clone(existing)
+            } else {
+                let node = graph.add_nd(from_pos);
+                geo_idx.add(from_pos, Rc::clone(&node));
+                node
+            }
+        };
+
+        // Find or create TO node
+        let to_node = {
+            let neighbors = geo_idx.get(to_pos, snap_threshold);
+            if let Some(existing) = neighbors.first() {
+                Rc::clone(existing)
+            } else {
+                let node = graph.add_nd(to_pos);
+                geo_idx.add(to_pos, Rc::clone(&node));
+                node
+            }
+        };
+
+        // Skip self-loops
+        if Rc::ptr_eq(&from_node, &to_node) {
+            continue;
+        }
+
+        // Create edge with geometry
+        let new_edge = graph.add_edg(&from_node, &to_node);
+        new_edge.borrow_mut().geometry = geom.0.iter().map(|c| Coord { x: c.x, y: c.y }).collect();
+
+        // Add routes
+        for (chateau, rid) in &edge.route_ids {
+            let full_id = format!("{}_{}", chateau, rid);
+            new_edge
+                .borrow_mut()
+                .routes
+                .push(LineOcc::new_bidirectional(full_id));
+        }
+    }
+
+    graph
+}
+
+/// Build initial LineGraph with Web Mercator coordinates (meters).
+/// snap_threshold is in meters (matching C++ behavior with projected coordinates).
+fn build_initial_linegraph_webmerc(
+    edges: &[GraphEdge],
+    _next_node_id: &mut usize,
+    snap_threshold: f64,
+) -> LineGraph {
+    let mut graph = LineGraph::new();
+
+    // Spatial index for finding nearby nodes (threshold in meters)
     let mut geo_idx = NodeGeoIdx::new(snap_threshold);
 
     for edge in edges {
@@ -1151,38 +1285,37 @@ fn combine_nodes(
             let routes_from_old = old_edge.borrow().routes.clone();
             let mut ee = existing_edge.borrow_mut();
 
-            // Correctly average geometries by aligning them first
-            // We want to average "Outbound from shared node" vs "Outbound from shared node"
+            // CRITICAL: Align geometry directions before averaging (C++ foldEdges lines 910-914)
+            // In FROM loop: old_edge.from == a, so old_edge goes: a -> other_node
+            // existing_edge is from graph.get_edg(b, &other_node), so: b -> other_node
+            // Check if edges have same direction relative to other_node
+            // If both TO other_node (or both FROM other_node), they're aligned
+            let old_to_is_other = Rc::ptr_eq(&old_edge.borrow().to, &other_node);
+            let existing_to_is_other = Rc::ptr_eq(&ee.to, &other_node);
+            let same_direction = old_to_is_other == existing_to_is_other;
 
-            // 1. Get geometry of old_edge oriented to start at 'a'
-            let geom_old_out = if Rc::ptr_eq(&old_edge.borrow().from, a) {
-                old_edge.borrow().geometry.clone()
+            let geom_old = old_edge.borrow().geometry.clone();
+            let geom_ee = ee.geometry.clone();
+
+            // Align old geometry to match existing_edge direction if needed
+            let geom_old_aligned = if same_direction {
+                geom_old
             } else {
-                let mut g = old_edge.borrow().geometry.clone();
+                let mut g = geom_old;
                 g.reverse();
                 g
             };
 
-            // 2. Get geometry of existing_edge oriented to start at 'b'
-            let geom_ee_out = if Rc::ptr_eq(&ee.from, b) {
-                ee.geometry.clone()
+            // Average aligned geometries
+            let avg_geom = if !geom_ee.is_empty() && !geom_old_aligned.is_empty() {
+                geom_avg(&geom_ee, 1, &geom_old_aligned, 1)
+            } else if geom_ee.is_empty() {
+                geom_old_aligned
             } else {
-                let mut g = ee.geometry.clone();
-                g.reverse();
-                g
+                geom_ee
             };
 
-            // 3. Average them (both starting at the merged node)
-            let avg_geom = geom_avg(&geom_ee_out, 1, &geom_old_out, 1);
-
-            // 4. Assign back to existing_edge, respecting its original direction
-            if Rc::ptr_eq(&ee.from, b) {
-                ee.geometry = avg_geom;
-            } else {
-                let mut g = avg_geom;
-                g.reverse();
-                ee.geometry = g;
-            }
+            ee.geometry = avg_geom;
 
             for r in routes_from_old {
                 if !ee.routes.iter().any(|er| er.line_id == r.line_id) {
@@ -1241,37 +1374,37 @@ fn combine_nodes(
             let routes_from_old = old_edge.borrow().routes.clone();
             let mut ee = existing_edge.borrow_mut();
 
-            // Correctly average geometries by aligning them first
+            // CRITICAL: Align geometry directions before averaging (C++ foldEdges lines 910-914)
+            // In TO loop: old_edge.to == a, so old_edge goes: other_node -> a
+            // existing_edge is from graph.get_edg(&other_node, b), so: other_node -> b
+            // Check if edges have same direction relative to other_node
+            // If both FROM other_node (or both TO other_node), they're aligned
+            let old_from_is_other = Rc::ptr_eq(&old_edge.borrow().from, &other_node);
+            let existing_from_is_other = Rc::ptr_eq(&ee.from, &other_node);
+            let same_direction = old_from_is_other == existing_from_is_other;
 
-            // 1. Get geometry of old_edge oriented to start at 'a'
-            let geom_old_out = if Rc::ptr_eq(&old_edge.borrow().from, a) {
-                old_edge.borrow().geometry.clone()
+            let geom_old = old_edge.borrow().geometry.clone();
+            let geom_ee = ee.geometry.clone();
+
+            // Align old geometry to match existing_edge direction if needed
+            let geom_old_aligned = if same_direction {
+                geom_old
             } else {
-                let mut g = old_edge.borrow().geometry.clone();
+                let mut g = geom_old;
                 g.reverse();
                 g
             };
 
-            // 2. Get geometry of existing_edge oriented to start at 'b'
-            let geom_ee_out = if Rc::ptr_eq(&ee.from, b) {
-                ee.geometry.clone()
+            // Average aligned geometries
+            let avg_geom = if !geom_ee.is_empty() && !geom_old_aligned.is_empty() {
+                geom_avg(&geom_ee, 1, &geom_old_aligned, 1)
+            } else if geom_ee.is_empty() {
+                geom_old_aligned
             } else {
-                let mut g = ee.geometry.clone();
-                g.reverse();
-                g
+                geom_ee
             };
 
-            // 3. Average them (both starting at the merged node)
-            let avg_geom = geom_avg(&geom_ee_out, 1, &geom_old_out, 1);
-
-            // 4. Assign back to existing_edge, respecting its original direction
-            if Rc::ptr_eq(&ee.from, b) {
-                ee.geometry = avg_geom;
-            } else {
-                let mut g = avg_geom;
-                g.reverse();
-                ee.geometry = g;
-            }
+            ee.geometry = avg_geom;
 
             for r in routes_from_old {
                 if !ee.routes.iter().any(|er| er.line_id == r.line_id) {
@@ -2152,7 +2285,17 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                             }
 
                             // Average geometry instead of straight line (C++: foldEdges/geomAvg)
-                            let geom_from_old = other_edge_ref.borrow().geometry.clone();
+                            // CRITICAL: Align geometry directions before averaging (C++ foldEdges lines 910-914)
+                            // Check if edges have same direction relative to other_node
+                            let other_to_other =
+                                Rc::ptr_eq(&other_edge_ref.borrow().to, &other_node);
+                            let existing_to_other = Rc::ptr_eq(&ee.to, &other_node);
+                            let same_direction = other_to_other == existing_to_other;
+
+                            let mut geom_from_old = other_edge_ref.borrow().geometry.clone();
+                            if !same_direction {
+                                geom_from_old.reverse(); // Flip to match existing edge's direction
+                            }
                             if !geom_from_old.is_empty() && !ee.geometry.is_empty() {
                                 ee.geometry = geom_avg(&ee.geometry, 1, &geom_from_old, 1);
                             } else if ee.geometry.is_empty() {
