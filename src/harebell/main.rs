@@ -85,7 +85,7 @@ async fn main() -> std::io::Result<()> {
 
             let generator = generator::Generator::new("tiles_output".to_string());
             generator
-                .generate_all(&graph, 4, 16)
+                .generate_all(&graph, 4, 17)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
             println!("Generation Complete!");

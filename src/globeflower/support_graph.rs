@@ -18,6 +18,25 @@ use std::rc::Rc;
 type NodeRef = Rc<RefCell<LineNode>>;
 type EdgeRef = Rc<RefCell<LineEdge>>;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
+pub enum RouteDirection {
+    Both,
+    Forward,  // From -> To
+    Backward, // To -> From
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LineOcc {
+    pub line_id: String,
+    pub direction: RouteDirection,
+}
+
+impl LineOcc {
+    fn new(line_id: String, direction: RouteDirection) -> Self {
+        Self { line_id, direction }
+    }
+}
+
 #[derive(Debug)]
 struct LineNode {
     id: usize,
@@ -43,7 +62,7 @@ impl LineNode {
 struct LineEdge {
     from: NodeRef,
     to: NodeRef,
-    routes: HashSet<(String, String)>,
+    routes: Vec<LineOcc>,
     geometry: Vec<Coord>,
 }
 
@@ -95,7 +114,7 @@ impl LineGraph {
         let edge = Rc::new(RefCell::new(LineEdge {
             from: Rc::clone(from),
             to: Rc::clone(to),
-            routes: HashSet::new(),
+            routes: Vec::new(),
             geometry: vec![
                 Coord {
                     x: from.borrow().pos[0],
@@ -383,8 +402,13 @@ fn collapse_shared_segments(
                     };
 
                     // Merge route info
-                    for r in &edge.route_ids {
-                        new_e.borrow_mut().routes.insert(r.clone());
+                    // Merge route info (assume Both for initial shapes unless detailed)
+                    for (chateau, rid) in &edge.route_ids {
+                        let full_id = format!("{}_{}", chateau, rid);
+                         // Check if already exists? simple append for now, unique later
+                         if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
+                             new_e.borrow_mut().routes.push(LineOcc::new(full_id, RouteDirection::Both));
+                         }
                     }
                 }
 
@@ -414,8 +438,11 @@ fn collapse_shared_segments(
                         } else {
                             tg_new.add_edg(from_node, front_node)
                         };
-                        for r in &edge.route_ids {
-                            new_e.borrow_mut().routes.insert(r.clone());
+                        for (chateau, rid) in &edge.route_ids {
+                            let full_id = format!("{}_{}", chateau, rid);
+                            if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
+                                new_e.borrow_mut().routes.push(LineOcc::new(full_id, RouteDirection::Both));
+                            }
                         }
                     }
                 }
@@ -430,8 +457,11 @@ fn collapse_shared_segments(
                         } else {
                             tg_new.add_edg(last_node, to_node)
                         };
-                        for r in &edge.route_ids {
-                            new_e.borrow_mut().routes.insert(r.clone());
+                        for (chateau, rid) in &edge.route_ids {
+                            let full_id = format!("{}_{}", chateau, rid);
+                            if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
+                                new_e.borrow_mut().routes.push(LineOcc::new(full_id, RouteDirection::Both));
+                            }
                         }
                     }
                 }
@@ -466,11 +496,22 @@ fn collapse_shared_segments(
             }
         }
 
+        println!("Contract degree-2 nodes...");
         // Contract degree-2 nodes (matches C++ re-collapse phase)
         collapse_degree_2_nodes_serial(&mut tg_new);
 
-        // Apply polish fixes: fold parallel edges, edge artifact removal, intersection reconstruction
-        apply_polish_fixes(&mut tg_new, d_cut);
+        // Edge artifact removal (C++: contractShortEdges)
+        println!("Contract short edges...");
+        contract_short_edges(&mut tg_new, d_cut);
+
+        // Remove orphan lines (C++: removeOrphanLines - called in TopoMain)
+        println!("Remove orphan lines...");
+        remove_orphan_lines(&mut tg_new);
+
+        // Reconstruct intersections (C++: reconstructIntersections - called in TopoMain)
+        // This smooths the junctions by cutting back edges and centering nodes
+        println!("Reconstruct intersections...");
+        reconstruct_intersections(&tg_new, d_cut);
 
         println!("  Simplification complete.");
 
@@ -499,7 +540,10 @@ fn collapse_shared_segments(
                     from: NodeId::Intersection(from_id),
                     to: NodeId::Intersection(to_id),
                     geometry: convert_from_geo(&ls),
-                    route_ids: edge_borrow.routes.iter().cloned().collect(),
+                    // Map back strictly to strings. 
+                    // Note: Direction info is effectively lost in GraphEdge export
+                    // if GraphEdge doesn't support it, but it was used for simplification.
+                    route_ids: edge_borrow.routes.iter().map(|ro| ("_unknown_".to_string(), ro.line_id.clone())).collect(),
                     weight,
                     original_edge_index: None,
                 });
@@ -630,20 +674,308 @@ fn nd_collapse_cand(
     }
 }
 
+
+
+/// Check if line direction matches relative to a shared node
+/// 
+/// Returns true if `dir` (a RouteDirection on an edge) points TOWARDS `target_node`.
+fn is_directed_towards(
+    edge: &EdgeRef,
+    dir: RouteDirection,
+    target_node: &NodeRef
+) -> bool {
+    match dir {
+        RouteDirection::Both => true, // Bidirectional counts as towards anywhere
+        RouteDirection::Forward => {
+            // Forward means from -> to. So it points towards `to`.
+            Rc::ptr_eq(&edge.borrow().to, target_node)
+        },
+        RouteDirection::Backward => {
+            // Backward means to -> from. So it points towards `from`.
+            Rc::ptr_eq(&edge.borrow().from, target_node)
+        }
+    }
+}
+
+/// Check if line direction matches relative to a shared node (Incoming logic)
+/// 
+/// Returns true if `dir` points AWAY from `source_node` (i.e. we are at source_node, looking at edge).
+/// Wait, `lineEq` logic:
+/// C++: `if (ra.direction == shrNd && rb.direction != 0 && rb.direction != shrNd)`
+/// `ra.direction == shrNd` means line on edge A is directed TOWARDS shrNd.
+/// `rb.direction != shrNd` (and != 0) means line on edge B is directed AWAY from shrNd.
+/// So we need to check if it points towards or away.
+fn direction_at_node(
+    edge: &EdgeRef,
+    dir: RouteDirection,
+    node: &NodeRef
+) -> i8 { // 0: Both, 1: Incoming (Towards node), -1: Outgoing (Away from node)
+    match dir {
+        RouteDirection::Both => 0,
+        RouteDirection::Forward => {
+            // Forward: From -> To
+            if Rc::ptr_eq(&edge.borrow().to, node) {
+                 1 // Points to node -> Incoming
+            } else {
+                -1 // Points away from node (must be From if edge connected to node) -> Outgoing
+            }
+        },
+        RouteDirection::Backward => {
+            // Backward: To -> From
+            if Rc::ptr_eq(&edge.borrow().from, node) {
+                1 // Points to from (node) -> Incoming
+            } else {
+                -1 // Points away from node -> Outgoing
+            }
+        }
+    }
+}
+
+/// Matches C++ MapConstructor::lineEq
+/// 
+/// Checks if two edges can be merged based on their routes and directions.
+fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
+    let a_routes = &a.borrow().routes;
+    let b_routes = &b.borrow().routes;
+
+    // 1. Same number of lines
+    if a_routes.len() != b_routes.len() {
+        return false;
+    }
+
+    // Identify shared node
+    let shr_nd = if Rc::ptr_eq(&a.borrow().from, &b.borrow().from) 
+        || Rc::ptr_eq(&a.borrow().from, &b.borrow().to) {
+        Rc::clone(&a.borrow().from)
+    } else if Rc::ptr_eq(&a.borrow().to, &b.borrow().from)
+        || Rc::ptr_eq(&a.borrow().to, &b.borrow().to) {
+        Rc::clone(&a.borrow().to)
+    } else {
+        // Should not happen if called correctly on adjacent edges
+        return false;
+    };
+
+    // 2. Check each line validation
+    for ra in a_routes {
+        // Find corresponding line in b
+        let rb = match b_routes.iter().find(|r| r.line_id == ra.line_id) {
+            Some(r) => r,
+            None => return false,
+        };
+
+        // TODO: connOccurs check (skipped for now as connection constraints not ported yet)
+        // if !conn_occurs(...) return false;
+
+        let dir_a = direction_at_node(a, ra.direction, &shr_nd);
+        let dir_b = direction_at_node(b, rb.direction, &shr_nd);
+
+        // Logic from C++:
+        // if (ra.direction == 0 && rb.direction == 0) found = true;
+        // if (ra.direction == shrNd && rb.direction != 0 && rb.direction != shrNd) found = true;
+        // if (ra.direction != shrNd && ra.direction != 0 && rb.direction == shrNd) found = true;
+        
+        // Translated to 0 (Both), 1 (Incoming to shrNd), -1 (Outgoing from shrNd)
+        
+        // Case 1: Both are bidirectional
+        if dir_a == 0 && dir_b == 0 {
+            continue;
+        }
+
+        // Case 2: A is incoming to shared, B is outgoing from shared
+        // (A points to shared, B points away from shared -> Valid flow through)
+        if dir_a == 1 && dir_b == -1 {
+            continue;
+        }
+
+        // Case 3: A is outgoing from shared, B is incoming to shared
+        // (B points to shared, A points away -> Valid flow through)
+        if dir_a == -1 && dir_b == 1 {
+            continue;
+        }
+
+        // If none matched, continuity is broken (e.g. head-to-head or tail-to-tail one-ways)
+        return false;
+    }
+
+    true
+}
+
+/// Matches C++ MapConstructor::supportEdge
+/// Split a long blocking edge 'ex' into two edges with a new support node in the middle.
+fn support_edge(ex: &EdgeRef, graph: &mut LineGraph) {
+    let ex_borrow = ex.borrow();
+    let from = Rc::clone(&ex_borrow.from);
+    let to = Rc::clone(&ex_borrow.to);
+    let routes = ex_borrow.routes.clone();
+    let geom = ex_borrow.geometry.clone();
+
+    // Split geometry in half
+    let geom_len = geom.len();
+    if geom_len < 2 {
+        return; 
+    }
+    
+    // Simple split index (approximate middle)
+    // C++ uses geometric split at 0.5 length fraction. 
+    // Here we just pick middle vertex index for simplicity, or interpolate if needed.
+    // Given the density, vertex split is likely fine.
+    let mid_idx = geom_len / 2;
+    
+    // Create support node
+    let mid_coord = geom[mid_idx];
+    let sup_nd = graph.add_nd([mid_coord.x, mid_coord.y]); // IDs are internal
+
+    // Create edge A: from -> sup_nd
+    let geom_a = geom[0..=mid_idx].to_vec();
+    let edge_a = Rc::new(RefCell::new(LineEdge {
+        from: Rc::clone(&from),
+        to: Rc::clone(&sup_nd),
+        routes: routes.clone(),
+        geometry: geom_a,
+    }));
+    
+    // Create edge B: sup_nd -> to
+    let geom_b = geom[mid_idx..].to_vec();
+    let edge_b = Rc::new(RefCell::new(LineEdge {
+        from: Rc::clone(&sup_nd),
+        to: Rc::clone(&to),
+        routes: routes.clone(),
+        geometry: geom_b,
+    }));
+
+    // Update Adjacency Lists
+    // 1. Remove ex from 'from' and 'to'
+    from.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, ex));
+    to.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, ex));
+
+    // 2. Add new edges
+    from.borrow_mut().adj_list.push(Rc::clone(&edge_a));
+    sup_nd.borrow_mut().adj_list.push(Rc::clone(&edge_a));
+    
+    sup_nd.borrow_mut().adj_list.push(Rc::clone(&edge_b));
+    to.borrow_mut().adj_list.push(Rc::clone(&edge_b));
+
+    // Note: C++ uses _origEdgs to track provenance. 
+    // We are skipping that complex tracking for now as per plan constraints, 
+    // but the split effectively preserves topology.
+}
+
+/// Combine two edges into one, removing the intermediate node 'n'.
+/// Directions are merged.
+fn combine_edges(edge_a: &EdgeRef, edge_b: &EdgeRef, n: &NodeRef, graph: &mut LineGraph) {
+    let ea_borrow = edge_a.borrow();
+    let eb_borrow = edge_b.borrow();
+    
+    let other_a = ea_borrow.get_other_nd(n);
+    let other_b = eb_borrow.get_other_nd(n);
+
+    // Merge geometry and handle directions
+    // Orientation: We want new edge to be other_a -> other_b
+    
+    let mut new_geom = Vec::new();
+    
+    // Check orientation of A relative to n
+    let a_to_n = Rc::ptr_eq(&ea_borrow.to, n);
+    // If a.to == n, then A is other_a -> n (Correct direction for prefix)
+    // If a.from == n, then A is n -> other_a (Need comparison)
+    
+    if a_to_n {
+        new_geom.extend(ea_borrow.geometry.iter().cloned());
+    } else {
+        new_geom.extend(ea_borrow.geometry.iter().rev().cloned());
+    }
+    
+    // Remove duplicate join point
+    if !new_geom.is_empty() {
+        new_geom.pop();
+    }
+    
+    // Check orientation of B relative to n
+    let b_from_n = Rc::ptr_eq(&eb_borrow.from, n);
+    // If b.from == n, then B is n -> other_b (Correct direction for suffix)
+    
+    if b_from_n {
+        new_geom.extend(eb_borrow.geometry.iter().cloned());
+    } else {
+        new_geom.extend(eb_borrow.geometry.iter().rev().cloned());
+    }
+    
+    let mut new_routes = Vec::new();
+    
+    // foldEdges logic: merge routes
+    // A lines
+    for ra in &ea_borrow.routes {
+        // Find rb
+        if let Some(rb) = eb_borrow.routes.iter().find(|r| r.line_id == ra.line_id) {
+             // Merging directions
+             let dir_a = direction_at_node(edge_a, ra.direction, n);
+             // dir_a == 1 (Incoming to n)
+             // dir_a == -1 (Outgoing from n)
+             
+             let dir_b = direction_at_node(edge_b, rb.direction, n);
+             
+             // Resulting direction on new edge (other_a -> other_b)
+             // If Flow is other_a -> n -> other_b
+             // Then incoming to n (A) is Forward relative to A ? 
+             //   If A is other_a->n, Forward is incoming to n.
+             //   If B is n->other_b, Forward is outgoing from n (towards other_b).
+             
+             // If A(Incoming to n) and B(Outgoing from n) => Continuous Forward flow
+             // new direction: Forward
+             
+             // If A(Outgoing from n) and B(Incoming to n) => Continuous Backward flow
+             // new direction: Backward
+             
+             let new_dir = if dir_a == 1 && dir_b == -1 {
+                 RouteDirection::Forward
+             } else if dir_a == -1 && dir_b == 1 {
+                 RouteDirection::Backward
+             } else {
+                 RouteDirection::Both // or broken? if line_eq passed, it should be consistent.
+             };
+             
+             new_routes.push(LineOcc {
+                 line_id: ra.line_id.clone(),
+                 direction: new_dir,
+             });
+        }
+    }
+
+    // Create new edge
+    let new_edge = Rc::new(RefCell::new(LineEdge {
+        from: Rc::clone(&other_a),
+        to: Rc::clone(&other_b),
+        routes: new_routes,
+        geometry: new_geom,
+    }));
+    
+    // Drop borrows before mutating graph
+    drop(ea_borrow);
+    drop(eb_borrow);
+    
+    // Update adj lists
+    other_a.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, edge_a));
+    other_a.borrow_mut().adj_list.push(Rc::clone(&new_edge));
+
+    other_b.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, edge_b));
+    other_b.borrow_mut().adj_list.push(Rc::clone(&new_edge));
+    
+    // Clear n
+    n.borrow_mut().adj_list.clear();
+}
+
 /// Contract degree-2 nodes with matching routes (matches C++ re-collapse phase)
 /// This is a single-pass implementation to avoid O(N^2) behavior on large graphs.
 fn collapse_degree_2_nodes_serial(graph: &mut LineGraph) {
     let mut total_contracted = 0;
-
+    
     // Collect all nodes to iterate over
-    // We strictly iterate over the initial set of nodes once
-    // We hold Rc references directly to avoid O(N) lookup by ID.
     let nodes: Vec<NodeRef> = graph.nodes.iter().map(Rc::clone).collect();
 
     for node in nodes {
         // Check if node is degree 2
-        // If it was "removed" (adj list cleared) in a previous iteration, degree will be 0
-        if node.borrow().get_deg() != 2 {
+        let deg = node.borrow().get_deg();
+        if deg != 2 {
             continue;
         }
 
@@ -656,25 +988,46 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph) {
         let edge_b = &adj[1];
 
         // Ensure routes match (C++ lineEq)
-        if !routes_equal(&edge_a.borrow().routes, &edge_b.borrow().routes) {
+        if !line_eq(edge_a, edge_b) {
             continue;
         }
 
         let other_a = edge_a.borrow().get_other_nd(&node);
         let other_b = edge_b.borrow().get_other_nd(&node);
-
+        
+        let mut do_contract = true;
+        
         // Check for existing edge between the other two nodes
-        // If one exists, we might need to handle it carefully or skip
-        // C++ logic: if (ex) { ... if long enough support ... else dont contract }
-        // For simplicity, we skip contraction if an edge already exists to prevent
-        // complicating the graph topology or creating multi-edges where not supported
-        if graph.get_edg(&other_a, &other_b).is_some() {
+        if let Some(ex) = graph.get_edg(&other_a, &other_b) {
+            // C++ Logic:
+            // if (ex && ex->pl().longerThan(2 * maxD(...))) -> supportEdge(ex)
+            // else -> continue (don't contract)
+            
+            // maxD is approx dCut.
+            // Let's rely on a geometric length check.
+             #[allow(deprecated)]
+            let ex_len = {
+                let geom = &ex.borrow().geometry;
+                let ls = GeoLineString::new(geom.clone());
+                ls.haversine_length()
+             };
+             
+             // Threshold: if blocking edge is long (> ~60m), split it.
+             if ex_len > 60.0 {
+                 println!("Splitting blocking edge to allow contraction...");
+                 support_edge(&ex, graph);
+                 // After splitting, 'ex' is effectively gone/replaced.
+                 // We can proceed with contraction of node.
+             } else {
+                 do_contract = false;
+             }
+        }
+        
+        if !do_contract {
             continue;
         }
 
         // C++: MAX_COLLAPSED_SEG_LENGTH check (500m ~ 0.0045 degrees)
-        // Don't contract if the resulting edge would be too long
-        // Calculate distance between the two endpoints that would be connected
         {
             let pos_a = other_a.borrow().pos;
             let pos_b = other_b.borrow().pos;
@@ -686,91 +1039,16 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph) {
             }
         }
 
-        // Combine edges: create new edge from other_a to other_b
-        let merged_routes: HashSet<(String, String)> = edge_a
-            .borrow()
-            .routes
-            .union(&edge_b.borrow().routes)
-            .cloned()
-            .collect();
-
-        // Build combined geometry
-        let new_geom;
-        {
-            let ea = edge_a.borrow();
-            let eb = edge_b.borrow();
-
-            // Determine orientation and combine geometries
-            // Geometry goes from other_a through node to other_b
-            let geom_a = if Rc::ptr_eq(&ea.to, &node) {
-                ea.geometry.clone()
-            } else {
-                let mut g = ea.geometry.clone();
-                g.reverse();
-                g
-            };
-
-            let geom_b = if Rc::ptr_eq(&eb.from, &node) {
-                eb.geometry.clone()
-            } else {
-                let mut g = eb.geometry.clone();
-                g.reverse();
-                g
-            };
-
-            // Combine: geom_a ends at node, geom_b starts at node
-            let mut combined = geom_a;
-            if !combined.is_empty() && !geom_b.is_empty() {
-                combined.pop(); // Remove duplicate node point
-            }
-            combined.extend(geom_b);
-            new_geom = combined;
-        }
-
-        // Create new edge
-        let new_edge = Rc::new(RefCell::new(LineEdge {
-            from: Rc::clone(&other_a),
-            to: Rc::clone(&other_b),
-            routes: merged_routes,
-            geometry: new_geom,
-        }));
-
-        // Update adjacency lists
-        other_a
-            .borrow_mut()
-            .adj_list
-            .retain(|e| !Rc::ptr_eq(e, edge_a));
-        other_b
-            .borrow_mut()
-            .adj_list
-            .retain(|e| !Rc::ptr_eq(e, edge_b));
-
-        // Clear the middle node's adj list (effectively disconnecting it)
-        node.borrow_mut().adj_list.clear();
-
-        // Add new edge
-        other_a.borrow_mut().adj_list.push(Rc::clone(&new_edge));
-        other_b.borrow_mut().adj_list.push(Rc::clone(&new_edge));
-
+        combine_edges(edge_a, edge_b, &node, graph);
         total_contracted += 1;
     }
 
-    // Single cleanup pass at the end
     if total_contracted > 0 {
         println!("  Contracted {} degree-2 nodes.", total_contracted);
         graph.nodes.retain(|n| n.borrow().get_deg() > 0);
     }
 }
 
-/// Check if two route sets are equal (matches C++ lineEq simplified)
-fn routes_equal(a: &HashSet<(String, String)>, b: &HashSet<(String, String)>) -> bool {
-    a == b
-}
-
-/// Check if two route sets have any overlap (C++: used before merging)
-fn routes_overlap(a: &HashSet<(String, String)>, b: &HashSet<(String, String)>) -> bool {
-    !a.is_disjoint(b)
-}
 
 /// Line-aware distance cutoff (C++: maxD)
 /// NOTE: In C++ this logic is commented out and just returns d.
@@ -974,8 +1252,10 @@ fn average_node_positions(graph: &LineGraph) {
 /// Reconstruct intersections by cutting back edge geometries (C++: reconstructIntersections)
 /// Cuts back edge geometry by max_aggr_distance from endpoints, then reconnects to node positions
 fn reconstruct_intersections(graph: &LineGraph, max_aggr_distance: f64) {
-    // First average node positions
-    average_node_positions(graph);
+    // Note: C++ calls averageNodePositions here, but we SKIP it to preserve 
+    // the stable junction positions calculated in contract_short_edges (Step 206).
+    // Averaging would re-introduce "dents" by pulling junctions towards spurs.
+    // average_node_positions(graph);
 
     // Then cut back edge geometries
     for node in &graph.nodes {
@@ -1161,14 +1441,14 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                 if from_deg == 1 && to_deg == 2 {
                     let to_adj = to_node.borrow().adj_list.clone();
                     if to_adj.len() == 2 {
-                        if routes_equal(&to_adj[0].borrow().routes, &to_adj[1].borrow().routes) {
+                        if line_eq(&to_adj[0], &to_adj[1]) {
                             continue;
                         }
                     }
                 } else if from_deg == 2 && to_deg == 1 {
                     let from_adj = node.borrow().adj_list.clone();
                     if from_adj.len() == 2 {
-                        if routes_equal(&from_adj[0].borrow().routes, &from_adj[1].borrow().routes) {
+                        if line_eq(&from_adj[0], &from_adj[1]) {
                             continue;
                         }
                     }
@@ -1176,8 +1456,8 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                     let from_adj = node.borrow().adj_list.clone();
                     let to_adj = to_node.borrow().adj_list.clone();
                     if from_adj.len() == 2 && to_adj.len() == 2 {
-                        if routes_equal(&from_adj[0].borrow().routes, &from_adj[1].borrow().routes)
-                            && routes_equal(&to_adj[0].borrow().routes, &to_adj[1].borrow().routes)
+                        if line_eq(&from_adj[0], &from_adj[1])
+                            && line_eq(&to_adj[0], &to_adj[1])
                         {
                             continue;
                         }
@@ -1187,8 +1467,13 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                 // COMBINE NODES: Move all edges from 'node' to 'to_node'
                 // The 'to_node' will be the surviving node
                 
-                // Calculate new position as centroid
-                let new_pos = {
+                // Calculate new position: favor the higher degree node to prevent shifting main lines
+                // when contracting spurs. If degrees equal, use centroid.
+                let new_pos = if to_node.borrow().get_deg() > node.borrow().get_deg() {
+                    to_node.borrow().pos
+                } else if node.borrow().get_deg() > to_node.borrow().get_deg() {
+                    node.borrow().pos
+                } else {
                     let from_pos = node.borrow().pos;
                     let to_pos = to_node.borrow().pos;
                     [(from_pos[0] + to_pos[0]) / 2.0, (from_pos[1] + to_pos[1]) / 2.0]
@@ -1213,14 +1498,37 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                     // Check if to_node already has an edge to other_node
                     let existing = graph.get_edg(&to_node, &other_node);
                     
-                    if let Some(existing_edge) = existing {
+                     if let Some(existing_edge) = existing {
                         // Fold edges: merge routes (geometry is just straight line)
                         {
-                            let routes_b: HashSet<(String, String)> = other_edge_ref.borrow().routes.clone();
+                            let routes_b: Vec<LineOcc> = other_edge_ref.borrow().routes.clone();
                             let mut ee = existing_edge.borrow_mut();
+                            
+                            // Check if direction needs flipping
+                            // existing: A -> B
+                            // other: C -> B (where C is being merged into A) -> effectively A -> B?
+                            // Logic: compare 'other_node' position
+                            let other_node_is_to_existing = Rc::ptr_eq(&ee.to, &other_node);
+                            let other_node_is_to_other = Rc::ptr_eq(&other_edge_ref.borrow().to, &other_node);
+                            
+                            let flip = other_node_is_to_existing != other_node_is_to_other;
+                            
                             for r in routes_b {
-                                ee.routes.insert(r);
+                                let mut new_r = r.clone();
+                                if flip {
+                                    new_r.direction = match new_r.direction {
+                                        RouteDirection::Forward => RouteDirection::Backward,
+                                        RouteDirection::Backward => RouteDirection::Forward,
+                                        RouteDirection::Both => RouteDirection::Both,
+                                    };
+                                }
+                                
+                                // Append if not exists
+                                if !ee.routes.iter().any(|existing_r| existing_r.line_id == new_r.line_id) {
+                                    ee.routes.push(new_r);
+                                }
                             }
+
                             // Update geometry to straight line between new endpoints
                             let from_pos = ee.from.borrow().pos;
                             let to_pos = ee.to.borrow().pos;
@@ -1365,7 +1673,7 @@ fn fold_edges_for_node(graph: &mut LineGraph, node: &NodeRef) -> bool {
 
                 // Merge routes from both edges into edge_a
                 {
-                    let routes_b: HashSet<(String, String)> = edge_b.borrow().routes.clone();
+                    let routes_b: Vec<LineOcc> = edge_b.borrow().routes.clone();
                     let mut ea = edge_a.borrow_mut();
                     
                     // Update geometry, respecting original edge direction
@@ -1378,8 +1686,25 @@ fn fold_edges_for_node(graph: &mut LineGraph, node: &NodeRef) -> bool {
                         ea.geometry = avg_geom;
                     }
 
+                    // For fold_edges_for_node, both edges connect (node, other_node).
+                    // We need to check if they are oriented the same way relative to 'node'.
+                    let ea_to_node = Rc::ptr_eq(&ea.to, node);
+                    let eb_to_node = Rc::ptr_eq(&edge_b.borrow().to, node);
+                    
+                    let flip = ea_to_node != eb_to_node;
+
                     for r in routes_b {
-                        ea.routes.insert(r);
+                        let mut new_r = r.clone();
+                        if flip {
+                            new_r.direction = match new_r.direction {
+                                RouteDirection::Forward => RouteDirection::Backward,
+                                RouteDirection::Backward => RouteDirection::Forward,
+                                RouteDirection::Both => RouteDirection::Both,
+                            };
+                        }
+                        if !ea.routes.iter().any(|existing_r| existing_r.line_id == new_r.line_id) {
+                            ea.routes.push(new_r);
+                        }
                     }
                 }
 
@@ -1416,115 +1741,163 @@ fn apply_polish_fixes(graph: &mut LineGraph, max_aggr_distance: f64) {
 
 /// Soft cleanup: combine nearby high-degree nodes (C++ lines 367-377)
 /// This fixes "soap bubble" artifacts where junctions are too close but distinct
+/// Soft cleanup: combine nearby high-degree nodes (C++ lines 367-377)
+/// This fixes "soap bubble" artifacts where junctions are too close but distinct
 fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
     let mut total_contracted = 0;
     
-    // We can't modify the graph while iterating, so we collect candidates first
-    // In C++ they iterate and break on success, restarting or continuing carefully
-    // distinct from contract_short_edges, this targets non-degree-2 nodes
+    // C++ Strategy: Single pass over a snapshot of nodes. 
+    // NO outer loop (avoids O(N^2) stall).
+    // Strict constraint: only merge if BOTH are not degree 2 (i.e. merge junctions).
     
-    // Simple greedy approach: find one, contract, repeat
-    loop {
-        let mut found = false;
-        let nodes: Vec<NodeRef> = graph.nodes.iter().map(Rc::clone).collect();
+    let nodes: Vec<NodeRef> = graph.nodes.iter().map(Rc::clone).collect();
 
-        for node in nodes {
-            // C++: if ((from->getDeg() == 2 || to->getDeg() == 2)) continue;
-            // We only want to merge junctions (deg != 2), usually deg 1 or >2
-            // Merging deg 2 is handled by collapse_degree_2_nodes_serial
-            if node.borrow().get_deg() == 2 {
+    for node in nodes {
+        // C++: if ((from->getDeg() == 2 || to->getDeg() == 2)) continue;
+        // Strict check: we only want to merge junctions.
+        let node_deg = node.borrow().get_deg();
+        if node_deg == 2 {
+            continue;
+        }
+
+        let adj_list = node.borrow().adj_list.clone();
+        
+        let mut best_candidate: Option<NodeRef> = None;
+        let mut min_dist = threshold; // Only consider within threshold
+
+        for edge_ref in &adj_list {
+            // Only process outgoing edges to avoid double counting (?)
+            // C++ iterates adj and checks if from==node (which it is).
+            if !Rc::ptr_eq(&edge_ref.borrow().from, &node) {
                 continue;
             }
 
-            let adj_list = node.borrow().adj_list.clone();
-            for edge_ref in &adj_list {
-                // Only process outgoing edges to avoid double counting
-                if !Rc::ptr_eq(&edge_ref.borrow().from, &node) {
-                    continue;
-                }
+            let to_node = Rc::clone(&edge_ref.borrow().to);
+            let to_deg = to_node.borrow().get_deg();
 
-                let to_node = Rc::clone(&edge_ref.borrow().to);
-                
-                if to_node.borrow().get_deg() == 2 {
-                    continue;
-                }
-
-                // Check distance/length
-                let from_pos = node.borrow().pos;
-                let to_pos = to_node.borrow().pos;
-                let dx = from_pos[0] - to_pos[0];
-                let dy = from_pos[1] - to_pos[1];
-                let dist = (dx * dx + dy * dy).sqrt();
-
-                if dist > threshold {
-                    continue;
-                }
-
-                // Found a candidate to contract!
-                // Contract 'node' into 'to_node' similar to contract_short_edges
-
-                // Calculate new position as centroid
-                let new_pos = [(from_pos[0] + to_pos[0]) / 2.0, (from_pos[1] + to_pos[1]) / 2.0];
-                to_node.borrow_mut().pos = new_pos;
-
-                // Move edges from 'node' to 'to_node'
-                let node_adj = node.borrow().adj_list.clone();
-                for other_edge_ref in &node_adj {
-                    // Skip the connecting edge we're contracting
-                    if Rc::ptr_eq(other_edge_ref, edge_ref) {
-                        continue;
-                    }
-
-                    let other_node = other_edge_ref.borrow().get_other_nd(&node);
-                    
-                    // Skip if other_node is to_node (would create self-loop)
-                    if Rc::ptr_eq(&other_node, &to_node) {
-                        continue;
-                    }
-
-                    let existing = graph.get_edg(&to_node, &other_node);
-                    
-                    if let Some(existing_edge) = existing {
-                        // Fold edges
-                        {
-                            let routes_b: HashSet<(String, String)> = other_edge_ref.borrow().routes.clone();
-                            let mut ee = existing_edge.borrow_mut();
-                            for r in routes_b {
-                                ee.routes.insert(r);
-                            }
-                            // Geometry update deferred to end of loop
-                        }
-                        other_node.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, other_edge_ref));
-                    } else {
-                        // Create new edge
-                        let new_edge = Rc::new(RefCell::new(LineEdge {
-                            from: Rc::clone(&to_node),
-                            to: Rc::clone(&other_node),
-                            routes: other_edge_ref.borrow().routes.clone(),
-                            geometry: vec![], // Will be set at end of loop
-                        }));
-                        
-                        to_node.borrow_mut().adj_list.push(Rc::clone(&new_edge));
-                        other_node.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, other_edge_ref));
-                        other_node.borrow_mut().adj_list.push(Rc::clone(&new_edge));
-                    }
-                }
-
-                // Remove the connecting edge
-                to_node.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, edge_ref));
-                node.borrow_mut().adj_list.clear();
-
-                found = true;
-                total_contracted += 1;
-                break;
+            // Strict C++ constraint: Skip if either is degree 2
+            if to_deg == 2 {
+                continue;
             }
-            if found { break; }
+
+            // Check distance/length
+            let from_pos = node.borrow().pos;
+            let to_pos = to_node.borrow().pos;
+            let dx = from_pos[0] - to_pos[0];
+            let dy = from_pos[1] - to_pos[1];
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            if dist <= min_dist {
+                min_dist = dist;
+                // In C++, combinedNodes is called immediately. 
+                // Since we want to respect the loop structure and maybe find best?
+                // C++ loop: for (auto e : adj) { if (combineNodes(...)) break; }
+                // It takes the FIRST valid one in adjacency list order, not necessarily the nearest.
+                // But finding nearest is robust.
+                best_candidate = Some(to_node);
+                // If we want to strictly match C++ greedy-first:
+                // break; 
+            }
         }
-        if !found { break; }
+
+        if let Some(to_node) = best_candidate {
+            // Found a candidate to contract!
+            // Contract 'node' into 'to_node'
+            
+            // Get fresh reference to edge connecting them
+            let edge_ref = {
+                let adj = node.borrow().adj_list.clone();
+                let mut found_edge = None;
+                for e in adj {
+                    if Rc::ptr_eq(&e.borrow().to, &to_node) && Rc::ptr_eq(&e.borrow().from, &node) {
+                        found_edge = Some(e);
+                        break;
+                    }
+                }
+                if found_edge.is_none() { continue; } // Should not happen
+                found_edge.unwrap()
+            };
+
+            let from_pos = node.borrow().pos;
+            let to_pos = to_node.borrow().pos;
+
+            // Calculate new position as centroid
+            let new_pos = [(from_pos[0] + to_pos[0]) / 2.0, (from_pos[1] + to_pos[1]) / 2.0];
+            to_node.borrow_mut().pos = new_pos;
+
+            // Move edges from 'node' to 'to_node'
+            let node_adj = node.borrow().adj_list.clone();
+            for other_edge_ref in &node_adj {
+                // Skip the connecting edge we're contracting
+                if Rc::ptr_eq(other_edge_ref, &edge_ref) {
+                    continue;
+                }
+
+                let other_node = other_edge_ref.borrow().get_other_nd(&node);
+                
+                // Skip if other_node is to_node (would create self-loop)
+                if Rc::ptr_eq(&other_node, &to_node) {
+                    continue;
+                }
+
+                let existing = graph.get_edg(&to_node, &other_node);
+                
+                if let Some(existing_edge) = existing {
+                    // Fold edges
+                    {
+                        let routes_b: Vec<LineOcc> = other_edge_ref.borrow().routes.clone();
+                        let mut ee = existing_edge.borrow_mut();
+                        
+                        // Check flipping
+                        let other_node_is_to_existing = Rc::ptr_eq(&ee.to, &other_node);
+                        let other_node_is_to_other = Rc::ptr_eq(&other_edge_ref.borrow().to, &other_node);
+                        
+                        let flip = other_node_is_to_existing != other_node_is_to_other;
+
+                        for r in routes_b {
+                            let mut new_r = r.clone();
+                            if flip {
+                                new_r.direction = match new_r.direction {
+                                    RouteDirection::Forward => RouteDirection::Backward,
+                                    RouteDirection::Backward => RouteDirection::Forward,
+                                    RouteDirection::Both => RouteDirection::Both,
+                                };
+                            }
+                            if !ee.routes.iter().any(|existing_r| existing_r.line_id == new_r.line_id) {
+                                ee.routes.push(new_r);
+                            }
+                        }
+                        // Geometry update deferred to end of loop
+                    }
+                    other_node.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, other_edge_ref));
+                } else {
+                    // Create new edge
+                    // IMPORTANT: Geometry might be empty/straight line, will be fixed by clean_up_geoms or reconstruct
+                    let new_edge = Rc::new(RefCell::new(LineEdge {
+                        from: Rc::clone(&to_node),
+                        to: Rc::clone(&other_node),
+                        routes: other_edge_ref.borrow().routes.clone(),
+                        geometry: vec![], // Will be set at end of loop by clean_up_geoms? 
+                                          // Actually soft_cleanup calls run before "write edge geoms" in C++
+                                          // so geometry is just endpoints.
+                    }));
+                    
+                    to_node.borrow_mut().adj_list.push(Rc::clone(&new_edge));
+                    other_node.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, other_edge_ref));
+                    other_node.borrow_mut().adj_list.push(Rc::clone(&new_edge));
+                }
+            }
+
+            // Remove the connecting edge
+            to_node.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, &edge_ref));
+            node.borrow_mut().adj_list.clear();
+
+            total_contracted += 1;
+        }
     }
     
     if total_contracted > 0 {
-        println!("  Soft cleanup: contracted {} nearby junctions.", total_contracted);
+        println!("  Soft cleanup: contracted {} nearby nodes.", total_contracted);
         graph.nodes.retain(|n| n.borrow().get_deg() > 0);
     }
 }
