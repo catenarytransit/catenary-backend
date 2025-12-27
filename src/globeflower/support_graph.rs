@@ -650,10 +650,24 @@ fn collapse_shared_segments(
         collapse_degree_2_nodes_serial(&mut tg_new);
 
         // =====================================================================
-        // Phase 6: Polish fixes
+        // Phase 6: Polish fixes (C++: lines 164-186)
+        // Multiple passes to clean up all artifacts
         // =====================================================================
         apply_polish_fixes(&mut tg_new, seg_len);
+
+        // First reconstruction pass (C++: line 164)
         reconstruct_intersections(&mut tg_new, seg_len);
+
+        // Remove orphan lines (C++: line 178)
+        remove_orphan_lines(&mut tg_new);
+
+        // C++: removeNodeArtifacts(true) - contract degree-2 nodes again (line 180)
+        collapse_degree_2_nodes_serial(&mut tg_new);
+
+        // Second reconstruction pass (C++: line 182)
+        reconstruct_intersections(&mut tg_new, seg_len);
+
+        // Remove orphan lines again (C++: line 185)
         remove_orphan_lines(&mut tg_new);
 
         println!("  Simplification complete.");
@@ -924,9 +938,17 @@ fn combine_nodes(
 
         // Check if edge from b to other_node already exists
         if let Some(existing_edge) = graph.get_edg(b, &other_node) {
-            // Fold edges: merge routes
+            // Fold edges: merge routes AND geometry (C++: foldEdges)
             let routes_from_old = old_edge.borrow().routes.clone();
+            let geom_from_old = old_edge.borrow().geometry.clone();
             let mut ee = existing_edge.borrow_mut();
+
+            // Average geometries (C++: geomAvg)
+            if !geom_from_old.is_empty() && !ee.geometry.is_empty() {
+                ee.geometry = geom_avg(&ee.geometry, 1, &geom_from_old, 1);
+            } else if ee.geometry.is_empty() {
+                ee.geometry = geom_from_old;
+            }
 
             for r in routes_from_old {
                 if !ee.routes.iter().any(|er| er.line_id == r.line_id) {
@@ -944,12 +966,12 @@ fn combine_nodes(
                 .adj_list
                 .retain(|e| !Rc::ptr_eq(e, old_edge));
         } else {
-            // Create new edge from b to other_node
+            // Create new edge from b to other_node, PRESERVING GEOMETRY (C++: std::move(oldE->pl()))
             let new_edge = Rc::new(RefCell::new(LineEdge {
                 from: Rc::clone(b),
                 to: Rc::clone(&other_node),
                 routes: old_edge.borrow().routes.clone(),
-                geometry: vec![], // Will be set later in "write edge geoms" step
+                geometry: old_edge.borrow().geometry.clone(), // PRESERVE geometry!
             }));
 
             // Update route directions
@@ -981,9 +1003,17 @@ fn combine_nodes(
 
         // Check if edge from other_node to b already exists
         if let Some(existing_edge) = graph.get_edg(&other_node, b) {
-            // Fold edges
+            // Fold edges: merge routes AND geometry (C++: foldEdges)
             let routes_from_old = old_edge.borrow().routes.clone();
+            let geom_from_old = old_edge.borrow().geometry.clone();
             let mut ee = existing_edge.borrow_mut();
+
+            // Average geometries (C++: geomAvg)
+            if !geom_from_old.is_empty() && !ee.geometry.is_empty() {
+                ee.geometry = geom_avg(&ee.geometry, 1, &geom_from_old, 1);
+            } else if ee.geometry.is_empty() {
+                ee.geometry = geom_from_old;
+            }
 
             for r in routes_from_old {
                 if !ee.routes.iter().any(|er| er.line_id == r.line_id) {
@@ -999,12 +1029,12 @@ fn combine_nodes(
                 .adj_list
                 .retain(|e| !Rc::ptr_eq(e, old_edge));
         } else {
-            // Create new edge from other_node to b
+            // Create new edge from other_node to b, PRESERVING GEOMETRY
             let new_edge = Rc::new(RefCell::new(LineEdge {
                 from: Rc::clone(&other_node),
                 to: Rc::clone(b),
                 routes: old_edge.borrow().routes.clone(),
-                geometry: vec![],
+                geometry: old_edge.borrow().geometry.clone(), // PRESERVE geometry!
             }));
 
             node_rpl(&new_edge, a, b);
@@ -1416,6 +1446,23 @@ fn geom_avg(geom_a: &[Coord], weight_a: usize, geom_b: &[Coord], weight_b: usize
         return geom_a.to_vec();
     }
 
+    // Handle single-point geometries - just return weighted average point
+    if geom_a.len() < 2 || geom_b.len() < 2 {
+        // Just average the available points
+        let pa = geom_a.first().unwrap();
+        let pb = geom_b.first().unwrap();
+        let wa = (weight_a * weight_a) as f64;
+        let wb = (weight_b * weight_b) as f64;
+        let total_weight = wa + wb;
+        if total_weight == 0.0 {
+            return geom_a.to_vec();
+        }
+        return vec![Coord {
+            x: (pa.x * wa + pb.x * wb) / total_weight,
+            y: (pa.y * wa + pb.y * wb) / total_weight,
+        }];
+    }
+
     // Weights are squared (as in C++)
     let wa = (weight_a * weight_a) as f64;
     let wb = (weight_b * weight_b) as f64;
@@ -1430,9 +1477,15 @@ fn geom_avg(geom_a: &[Coord], weight_a: usize, geom_b: &[Coord], weight_b: usize
     let resampled_a = resample_polyline(geom_a, num_points);
     let resampled_b = resample_polyline(geom_b, num_points);
 
+    // Use the actual resampled lengths (in case resampling failed)
+    let actual_len = resampled_a.len().min(resampled_b.len());
+    if actual_len == 0 {
+        return geom_a.to_vec();
+    }
+
     // Weighted average of corresponding points
-    let mut result = Vec::with_capacity(num_points);
-    for i in 0..num_points {
+    let mut result = Vec::with_capacity(actual_len);
+    for i in 0..actual_len {
         let pa = resampled_a[i];
         let pb = resampled_b[i];
         result.push(Coord {
@@ -1804,19 +1857,14 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                                 }
                             }
 
-                            // Update geometry to straight line between new endpoints
-                            let from_pos = ee.from.borrow().pos;
-                            let to_pos = ee.to.borrow().pos;
-                            ee.geometry = vec![
-                                Coord {
-                                    x: from_pos[0],
-                                    y: from_pos[1],
-                                },
-                                Coord {
-                                    x: to_pos[0],
-                                    y: to_pos[1],
-                                },
-                            ];
+                            // Average geometry instead of straight line (C++: foldEdges/geomAvg)
+                            let geom_from_old = other_edge_ref.borrow().geometry.clone();
+                            if !geom_from_old.is_empty() && !ee.geometry.is_empty() {
+                                ee.geometry = geom_avg(&ee.geometry, 1, &geom_from_old, 1);
+                            } else if ee.geometry.is_empty() {
+                                ee.geometry = geom_from_old;
+                            }
+                            // If both empty, leave as is - reconstruct_intersections will fix
                         }
 
                         // Remove other_edge from other_node's adj list
@@ -1825,21 +1873,12 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                             .adj_list
                             .retain(|e| !Rc::ptr_eq(e, other_edge_ref));
                     } else {
-                        // Create new edge from to_node to other_node
+                        // Create new edge from to_node to other_node, PRESERVING GEOMETRY
                         let new_edge = Rc::new(RefCell::new(LineEdge {
                             from: Rc::clone(&to_node),
                             to: Rc::clone(&other_node),
                             routes: other_edge_ref.borrow().routes.clone(),
-                            geometry: vec![
-                                Coord {
-                                    x: new_pos[0],
-                                    y: new_pos[1],
-                                },
-                                Coord {
-                                    x: other_node.borrow().pos[0],
-                                    y: other_node.borrow().pos[1],
-                                },
-                            ],
+                            geometry: other_edge_ref.borrow().geometry.clone(), // PRESERVE geometry!
                         }));
 
                         // Add to adj lists
