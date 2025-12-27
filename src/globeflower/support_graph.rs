@@ -1,8 +1,6 @@
 use crate::edges::{GraphEdge, NodeId, convert_from_geo, convert_to_geo};
 use anyhow::Result;
 use catenary::postgres_tools::CatenaryPostgresPool;
-use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
 use geo::prelude::*;
 use geo::{Coord, LineString as GeoLineString, Point as GeoPoint};
 use postgis_diesel::types::{LineString, Point};
@@ -228,6 +226,8 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     let mut conn = pool.get().await?;
 
     use catenary::schema::gtfs::shapes::dsl::*;
+    use diesel_async::RunQueryDsl;
+    use diesel::prelude::*; // Needed for filter, eq_any etc
 
     let loaded_shapes = shapes
         .filter(route_type.eq_any(vec![0, 1, 2])) // Tram, Subway, Rail
@@ -477,6 +477,26 @@ fn collapse_shared_segments(
         soft_cleanup(&mut tg_new, 20.0);
 
         // =====================================================================
+        // CRITICAL: Finalize Geometry and Topology (C++: lines 164-201 in TopoMain)
+        // =====================================================================
+        
+        // 1. Remove artifacts (short edges causing bubbles)
+        apply_polish_fixes(&mut tg_new, seg_len);
+
+        // 2. Reconstruct Intersections
+        // This is crucial for fixing "lines passing over" and "misaligned curves".
+        // It centers nodes and snaps edge ends to them.
+        reconstruct_intersections(&mut tg_new, seg_len);
+        
+        // 3. Remove orphan lines again (cleanup)
+        remove_orphan_lines(&mut tg_new);
+
+        // Check if we converged
+        if num_edges == tg_new.num_edges() {
+            break;
+        }
+        
+        // =====================================================================
         // CRITICAL: Write edge geoms from node positions (C++: lines 379-387)
         // This is the key step - edges just connect nodes, geometry is straight line
         // =====================================================================
@@ -513,7 +533,7 @@ fn collapse_shared_segments(
         // Reconstruct intersections (C++: reconstructIntersections - called in TopoMain)
         // This smooths the junctions by cutting back edges and centering nodes
         println!("Reconstruct intersections...");
-        reconstruct_intersections(&tg_new, d_cut);
+        reconstruct_intersections(&mut tg_new, d_cut);
 
         println!("  Simplification complete.");
 
@@ -1213,105 +1233,7 @@ fn simplify_coords(coords: &[Coord], epsilon: f64) -> Vec<Coord> {
     ls.simplify(epsilon).0
 }
 
-/// Average node positions based on incident edge endpoints (C++: averageNodePositions)
-fn average_node_positions(graph: &LineGraph) {
-    for node in &graph.nodes {
-        let deg = node.borrow().get_deg();
-        if deg == 0 {
-            continue;
-        }
 
-        let mut sum_x = 0.0;
-        let mut sum_y = 0.0;
-        let mut count = 0;
-
-        let adj_list = node.borrow().adj_list.clone();
-        for edge_ref in adj_list {
-            let edge = edge_ref.borrow();
-            let geom = &edge.geometry;
-            if geom.is_empty() {
-                continue;
-            }
-
-            // If this node is the "to" end, use the back of geometry
-            // If this node is the "from" end, use the front of geometry
-            let pt = if Rc::ptr_eq(&edge.to, node) {
-                &geom[geom.len() - 1]
-            } else {
-                &geom[0]
-            };
-            sum_x += pt.x;
-            sum_y += pt.y;
-            count += 1;
-        }
-
-        if count > 0 {
-            node.borrow_mut().pos = [sum_x / count as f64, sum_y / count as f64];
-        }
-    }
-}
-
-/// Reconstruct intersections by cutting back edge geometries (C++: reconstructIntersections)
-/// Cuts back edge geometry by max_aggr_distance from endpoints, then reconnects to node positions
-fn reconstruct_intersections(graph: &LineGraph, max_aggr_distance: f64) {
-    // Note: C++ calls averageNodePositions here, but we SKIP it to preserve 
-    // the stable junction positions calculated in contract_short_edges (Step 206).
-    // Averaging would re-introduce "dents" by pulling junctions towards spurs.
-    // average_node_positions(graph);
-
-    // Then cut back edge geometries
-    for node in &graph.nodes {
-        let adj_list = node.borrow().adj_list.clone();
-        for edge_ref in adj_list {
-            let edge_from_ptr = {
-                let edge = edge_ref.borrow();
-                Rc::clone(&edge.from)
-            };
-
-            // Only process edges where this node is 'from'
-            if !Rc::ptr_eq(&edge_from_ptr, node) {
-                continue;
-            }
-
-            // Get geometry and cut it back
-            let mut edge = edge_ref.borrow_mut();
-            let geom = &edge.geometry;
-            if geom.len() < 2 {
-                continue;
-            }
-
-            // Calculate total length
-            let total_len = calc_polyline_length(geom);
-            if total_len <= 2.0 * max_aggr_distance {
-                // Edge too short, just connect endpoints directly
-                let from_pos = edge.from.borrow().pos;
-                let to_pos = edge.to.borrow().pos;
-                edge.geometry = vec![
-                    Coord { x: from_pos[0], y: from_pos[1] },
-                    Coord { x: to_pos[0], y: to_pos[1] },
-                ];
-                continue;
-            }
-
-            // Cut back from both ends
-            let start_frac = max_aggr_distance / total_len;
-            let end_frac = 1.0 - max_aggr_distance / total_len;
-
-            let cut_geom = get_polyline_segment(geom, start_frac, end_frac);
-
-            // Prepend from node position, append to node position
-            let from_pos = edge.from.borrow().pos;
-            let to_pos = edge.to.borrow().pos;
-
-            let mut new_geom = Vec::with_capacity(cut_geom.len() + 2);
-            new_geom.push(Coord { x: from_pos[0], y: from_pos[1] });
-            new_geom.extend(cut_geom);
-            new_geom.push(Coord { x: to_pos[0], y: to_pos[1] });
-
-            edge.geometry = new_geom;
-        }
-    }
-}
 
 /// Calculate polyline length
 fn calc_polyline_length(coords: &[Coord]) -> f64 {
@@ -1756,62 +1678,83 @@ fn apply_polish_fixes(graph: &mut LineGraph, max_aggr_distance: f64) {
 fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
     let mut total_contracted = 0;
     
-    // C++ Strategy: Single pass over a snapshot of nodes. 
-    // NO outer loop (avoids O(N^2) stall).
-    // Strict constraint: only merge if BOTH are not degree 2 (i.e. merge junctions).
+    // C++ Strategy: Iterate all nodes/edges and merge if "safe".
+    // "Safe" means:
+    // 1. Shorter than threshold (maxAggrDistance)
+    // 2. Geometry check: merging wouldn't fold edges with vastly different geometries.
     
+    // We iterate a snapshot of nodes to avoid concurrent modification issues during iteration.
     let nodes: Vec<NodeRef> = graph.nodes.iter().map(Rc::clone).collect();
 
     for node in nodes {
-        // C++: if ((from->getDeg() == 2 || to->getDeg() == 2)) continue;
-        // Strict check: we only want to merge junctions.
-        let node_deg = node.borrow().get_deg();
-        if node_deg == 2 {
-            continue;
-        }
+        // Skip if node is already effectively deleted (deg 0/isolated) although get_deg handles it.
+        if node.borrow().get_deg() == 0 { continue; }
 
         let adj_list = node.borrow().adj_list.clone();
         
-        let mut best_candidate: Option<NodeRef> = None;
-        let mut min_dist = threshold; // Only consider within threshold
+        // Find best candidate to merge INTO.
+        // C++ iterates outgoing edges.
+        
+        let mut best_candidate: Option<(NodeRef, f64)> = None;
 
         for edge_ref in &adj_list {
-            // Only process outgoing edges to avoid double counting (?)
-            // C++ iterates adj and checks if from==node (which it is).
-            if !Rc::ptr_eq(&edge_ref.borrow().from, &node) {
+            let e = edge_ref.borrow();
+            // Process only outgoing edges to avoid double checking pairs
+            if !Rc::ptr_eq(&e.from, &node) {
                 continue;
             }
 
-            let to_node = Rc::clone(&edge_ref.borrow().to);
-            let to_deg = to_node.borrow().get_deg();
-
-            // Strict C++ constraint: Skip if either is degree 2
-            if to_deg == 2 {
-                continue;
+            // Check if distance/geometry length is small enough
+            // Use actual geometry length, not just displacement
+            let dist = calc_polyline_length(&e.geometry);
+            
+            if dist > threshold {
+                 continue;
             }
 
-            // Check distance/length
-            let from_pos = node.borrow().pos;
-            let to_pos = to_node.borrow().pos;
-            let dx = from_pos[0] - to_pos[0];
-            let dy = from_pos[1] - to_pos[1];
-            let dist = (dx * dx + dy * dy).sqrt();
+            let to_node = Rc::clone(&e.to);
+            if Rc::ptr_eq(&to_node, &node) { continue; } // safe-guard
 
-            if dist <= min_dist {
-                min_dist = dist;
-                // In C++, combinedNodes is called immediately. 
-                // Since we want to respect the loop structure and maybe find best?
-                // C++ loop: for (auto e : adj) { if (combineNodes(...)) break; }
-                // It takes the FIRST valid one in adjacency list order, not necessarily the nearest.
-                // But finding nearest is robust.
-                best_candidate = Some(to_node);
-                // If we want to strictly match C++ greedy-first:
-                // break; 
+            // GEOMETRY CHECK (The "Angle Check"):
+            // Check if we would fold edges with vastly different geoms.
+            // If we merge `node` into `to_node`, `node`'s neighbors become `to_node`'s neighbors.
+            // If `to_node` ALREADY has a connection to a neighbor, we merge edges.
+            // We must ensure the new edge is not wildly different in length from the old edge.
+            
+            let mut safe_to_merge = true;
+            for old_edge_ref in &adj_list {
+                if Rc::ptr_eq(old_edge_ref, edge_ref) { continue; }
+                
+                let old_neighbor = old_edge_ref.borrow().get_other_nd(&node);
+                
+                // If we merge `node` -> `to_node`, the new edge is `to_node` -> `old_neighbor`
+                if let Some(new_edge_ref) = graph.get_edg(&to_node, &old_neighbor) {
+                     let len_old = calc_polyline_length(&old_edge_ref.borrow().geometry);
+                     let len_new = calc_polyline_length(&new_edge_ref.borrow().geometry);
+                     
+                     if (len_new - len_old).abs() > threshold * 2.0 {
+                         safe_to_merge = false;
+                         break;
+                     }
+                }
+            }
+            
+            if !safe_to_merge {
+                continue;
+            }
+            
+            // If multiple candidates, pick shortest? C++ takes first valid.
+            // Let's pick shortest to be safe.
+            if let Some((_, best_dist)) = best_candidate {
+                if dist < best_dist {
+                     best_candidate = Some((to_node, dist));
+                }
+            } else {
+                best_candidate = Some((to_node, dist));
             }
         }
-
-        if let Some(to_node) = best_candidate {
-            // Found a candidate to contract!
+        
+        if let Some((to_node, _)) = best_candidate {
             // Contract 'node' into 'to_node'
             
             // Get fresh reference to edge connecting them
@@ -1824,7 +1767,7 @@ fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
                         break;
                     }
                 }
-                if found_edge.is_none() { continue; } // Should not happen
+                if found_edge.is_none() { continue; } 
                 found_edge.unwrap()
             };
 
@@ -2044,5 +1987,99 @@ fn get_geometry_oriented_from(edge: &LineEdge, node: &NodeRef) -> Vec<Coord> {
     } else {
         // Should not happen if logic is correct
         edge.geometry.clone()
+    }
+}
+
+/// Average node positions based on connected edge geometries (C++: averageNodePositions)
+fn average_node_positions(graph: &mut LineGraph) {
+    for node in &graph.nodes {
+        let mut sum_x = 0.0;
+        let mut sum_y = 0.0;
+        let mut count = 0;
+
+        for edge_ref in &node.borrow().adj_list {
+            let edge = edge_ref.borrow();
+            let geom = &edge.geometry;
+            if geom.is_empty() { continue; }
+
+            // Check if we are connected to the start or end of the edge geometry
+            // The edge object has from/to, but the geometry might be oriented differently?
+            // Usually geometry follows from->to
+            if Rc::ptr_eq(&edge.to, node) {
+                 // Connected to the END of this edge
+                 let last = geom.last().unwrap();
+                 sum_x += last.x;
+                 sum_y += last.y;
+            } else {
+                 // Connected to the START of this edge
+                 let first = geom.first().unwrap();
+                 sum_x += first.x;
+                 sum_y += first.y;
+            }
+            count += 1;
+        }
+
+        if count > 0 {
+            node.borrow_mut().pos = [sum_x / count as f64, sum_y / count as f64];
+        }
+    }
+}
+
+/// Reconstruct intersections (C++: reconstructIntersections)
+/// 1. Average node positions
+/// 2. Trim/Extend edge geometries to meet exactly at the new node positions
+fn reconstruct_intersections(graph: &mut LineGraph, max_aggr_distance: f64) {
+    // 1. Center nodes based on current edge geometries
+    average_node_positions(graph);
+
+    // 2. Adjust edge geometries to meet at new node positions
+    for node in &graph.nodes {
+        // Process each connected edge
+        let adj_list = node.borrow().adj_list.clone();
+        for edge_ref in adj_list {
+             // To avoid double processing and borrow issues, we only process when we are the 'from' node.
+             // But we need to access BOTH nodes to get their positions.
+             
+             let (from_pos, to_pos, is_from) = {
+                 let e = edge_ref.borrow();
+                 let is_from = Rc::ptr_eq(&e.from, node);
+                 (e.from.borrow().pos, e.to.borrow().pos, is_from)
+             };
+
+             if !is_from {
+                 continue; 
+             }
+             
+             let mut edge = edge_ref.borrow_mut();
+             
+             // Cut off the ends (C++: maxAggrDistance)
+             let total_len = calc_polyline_length(&edge.geometry);
+             
+             // If geometry is empty (e.g. from soft_cleanup), we just create straight line
+             if edge.geometry.is_empty() {
+                 edge.geometry = vec![
+                     Coord { x: from_pos[0], y: from_pos[1] },
+                     Coord { x: to_pos[0], y: to_pos[1] },
+                 ];
+                 continue;
+             }
+             
+             if total_len > 2.0 * max_aggr_distance {
+                  // Trim both ends
+                  let start_frac = max_aggr_distance / total_len;
+                  let end_frac = (total_len - max_aggr_distance) / total_len;
+                  
+                  edge.geometry = get_polyline_segment(&edge.geometry, start_frac, end_frac);
+             } else {
+                 // Too short to trim, Replace with empty capable of accepting points
+                 edge.geometry.clear(); 
+             }
+             
+             // Insert explicit Start point (fromNode)
+             edge.geometry.insert(0, Coord { x: from_pos[0], y: from_pos[1] });
+             
+             // Insert explicit End point (toNode)
+             edge.geometry.push(Coord { x: to_pos[0], y: to_pos[1] });
+        }
     }
 }
