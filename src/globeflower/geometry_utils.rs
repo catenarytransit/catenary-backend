@@ -147,3 +147,113 @@ pub fn average_polylines_weighted(
 
     LineString::from(points)
 }
+
+/// Get a line segment orthogonal to the polyline at a specific distance from the start.
+/// Returns a line of length 2 * `width` centered at the point on the polyline.
+pub fn get_ortho_line_at_dist(
+    line_string: &LineString<f64>,
+    dist: f64,
+    width: f64,
+) -> Option<geo::Line<f64>> {
+    if line_string.0.is_empty() {
+        return None;
+    }
+
+    let mut traveled = 0.0;
+    for window in line_string.0.windows(2) {
+        let p1 = Point::from(window[0]);
+        let p2 = Point::from(window[1]);
+        #[allow(deprecated)]
+        let seg_len = p1.haversine_distance(&p2);
+
+        if traveled + seg_len >= dist {
+            let remaining = dist - traveled;
+            let ratio = if seg_len > 0.0 {
+                remaining / seg_len
+            } else {
+                0.0
+            };
+
+            let dx = p2.x() - p1.x();
+            let dy = p2.y() - p1.y();
+            let p_center = Point::new(p1.x() + dx * ratio, p1.y() + dy * ratio);
+
+            let len = (dx * dx + dy * dy).sqrt();
+            let (nx, ny) = if len > 0.0 {
+                (-dy / len, dx / len)
+            } else {
+                (0.0, 1.0)
+            };
+
+            let start = Point::new(p_center.x() + nx * width, p_center.y() + ny * width);
+            let end = Point::new(p_center.x() - nx * width, p_center.y() - ny * width);
+
+            return Some(geo::Line::new(start, end));
+        }
+        traveled += seg_len;
+    }
+
+    // Fallback to last point
+    if let Some(window) = line_string.0.windows(2).last() {
+        let p1 = Point::from(window[0]);
+        let p2 = Point::from(window[1]);
+        let dx = p2.x() - p1.x();
+        let dy = p2.y() - p1.y();
+        let p_center = p2;
+
+        let len = (dx * dx + dy * dy).sqrt();
+        let (nx, ny) = if len > 0.0 {
+            (-dy / len, dx / len)
+        } else {
+            (0.0, 1.0)
+        };
+        let start = Point::new(p_center.x() + nx * width, p_center.y() + ny * width);
+        let end = Point::new(p_center.x() - nx * width, p_center.y() - ny * width);
+
+        return Some(geo::Line::new(start, end));
+    }
+
+    None
+}
+
+/// Find intersection points between two line strings
+pub fn intersection(l1: &LineString<f64>, l2: &LineString<f64>) -> Vec<Point<f64>> {
+    let mut points = Vec::new();
+
+    for w1 in l1.0.windows(2) {
+        let s1 = geo::Line::new(geo::Coord::from(w1[0]), geo::Coord::from(w1[1]));
+        for w2 in l2.0.windows(2) {
+            let s2 = geo::Line::new(geo::Coord::from(w2[0]), geo::Coord::from(w2[1]));
+            if let Some(p) = line_intersection(s1, s2) {
+                points.push(p);
+            }
+        }
+    }
+    points
+}
+
+fn line_intersection(l1: geo::Line<f64>, l2: geo::Line<f64>) -> Option<Point<f64>> {
+    let x1 = l1.start.x;
+    let y1 = l1.start.y;
+    let x2 = l1.end.x;
+    let y2 = l1.end.y;
+
+    let x3 = l2.start.x;
+    let y3 = l2.start.y;
+    let x4 = l2.end.x;
+    let y4 = l2.end.y;
+
+    let denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
+    if denom.abs() < 1e-10 {
+        return None;
+    }
+
+    let ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
+    let ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
+
+    if ua >= 0.0 && ua <= 1.0 && ub >= 0.0 && ub <= 1.0 {
+        return Some(Point::new(x1 + ua * (x2 - x1), y1 + ua * (y2 - y1)));
+    }
+
+    None
+}

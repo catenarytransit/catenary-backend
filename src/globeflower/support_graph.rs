@@ -1149,14 +1149,39 @@ fn combine_nodes(
         if let Some(existing_edge) = graph.get_edg(b, &other_node) {
             // Fold edges: merge routes AND geometry (C++: foldEdges)
             let routes_from_old = old_edge.borrow().routes.clone();
-            let geom_from_old = old_edge.borrow().geometry.clone();
             let mut ee = existing_edge.borrow_mut();
 
-            // Average geometries (C++: geomAvg)
-            if !geom_from_old.is_empty() && !ee.geometry.is_empty() {
-                ee.geometry = geom_avg(&ee.geometry, 1, &geom_from_old, 1);
-            } else if ee.geometry.is_empty() {
-                ee.geometry = geom_from_old;
+            // Correctly average geometries by aligning them first
+            // We want to average "Outbound from shared node" vs "Outbound from shared node"
+
+            // 1. Get geometry of old_edge oriented to start at 'a'
+            let geom_old_out = if Rc::ptr_eq(&old_edge.borrow().from, a) {
+                old_edge.borrow().geometry.clone()
+            } else {
+                let mut g = old_edge.borrow().geometry.clone();
+                g.reverse();
+                g
+            };
+
+            // 2. Get geometry of existing_edge oriented to start at 'b'
+            let geom_ee_out = if Rc::ptr_eq(&ee.from, b) {
+                ee.geometry.clone()
+            } else {
+                let mut g = ee.geometry.clone();
+                g.reverse();
+                g
+            };
+
+            // 3. Average them (both starting at the merged node)
+            let avg_geom = geom_avg(&geom_ee_out, 1, &geom_old_out, 1);
+
+            // 4. Assign back to existing_edge, respecting its original direction
+            if Rc::ptr_eq(&ee.from, b) {
+                ee.geometry = avg_geom;
+            } else {
+                let mut g = avg_geom;
+                g.reverse();
+                ee.geometry = g;
             }
 
             for r in routes_from_old {
@@ -1214,14 +1239,38 @@ fn combine_nodes(
         if let Some(existing_edge) = graph.get_edg(&other_node, b) {
             // Fold edges: merge routes AND geometry (C++: foldEdges)
             let routes_from_old = old_edge.borrow().routes.clone();
-            let geom_from_old = old_edge.borrow().geometry.clone();
             let mut ee = existing_edge.borrow_mut();
 
-            // Average geometries (C++: geomAvg)
-            if !geom_from_old.is_empty() && !ee.geometry.is_empty() {
-                ee.geometry = geom_avg(&ee.geometry, 1, &geom_from_old, 1);
-            } else if ee.geometry.is_empty() {
-                ee.geometry = geom_from_old;
+            // Correctly average geometries by aligning them first
+
+            // 1. Get geometry of old_edge oriented to start at 'a'
+            let geom_old_out = if Rc::ptr_eq(&old_edge.borrow().from, a) {
+                old_edge.borrow().geometry.clone()
+            } else {
+                let mut g = old_edge.borrow().geometry.clone();
+                g.reverse();
+                g
+            };
+
+            // 2. Get geometry of existing_edge oriented to start at 'b'
+            let geom_ee_out = if Rc::ptr_eq(&ee.from, b) {
+                ee.geometry.clone()
+            } else {
+                let mut g = ee.geometry.clone();
+                g.reverse();
+                g
+            };
+
+            // 3. Average them (both starting at the merged node)
+            let avg_geom = geom_avg(&geom_ee_out, 1, &geom_old_out, 1);
+
+            // 4. Assign back to existing_edge, respecting its original direction
+            if Rc::ptr_eq(&ee.from, b) {
+                ee.geometry = avg_geom;
+            } else {
+                let mut g = avg_geom;
+                g.reverse();
+                ee.geometry = g;
             }
 
             for r in routes_from_old {
