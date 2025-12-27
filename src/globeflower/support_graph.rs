@@ -281,26 +281,161 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
         });
     }
 
-    // Collapse shared segments using C++-style algorithm
-    // C++ does TWO passes (TopoMain.cpp lines 145-146):
-    // 1. First with tight threshold (10m ~ 0.00009 degrees)
-    // 2. Second with normal threshold (55m ~ 0.0005 degrees)
-    // Parameters: d_cut, seg_len, max_iters
+    // =========================================================================
+    // C++ TopoMain.cpp Pipeline (lines 128-185)
+    // =========================================================================
 
-    // Pass 1: Tight threshold for very close segments
-    let tight_d_cut = 0.00009; // ~10 meters in degrees
-    let normal_d_cut = 0.0005; // ~55 meters in degrees
-    let seg_len = 0.0005; // ~55 meters segment length
+    // C++ defaults: maxAggrDistance=50m, segmentLength=5m
+    // Convert meters to degrees: 1 degree ≈ 111,111 meters
+    let tight_d_cut = 0.00009; // 10 meters in degrees (C++: dCut=10)
+    let normal_d_cut = 0.00045; // 50 meters in degrees (C++: maxAggrDistance=50)
+    let seg_len = 0.000045; // 5 meters in degrees (C++: segmentLength=5)
 
+    // Step 1: Build initial graph from raw edges
+    println!(
+        "Building initial LineGraph from {} raw edges...",
+        raw_edges.len()
+    );
+    let mut graph = build_initial_linegraph(&raw_edges, &mut node_id_counter);
+
+    // Step 2: averageNodePositions (C++ line 128)
+    println!("Averaging node positions...");
+    average_node_positions(&mut graph);
+
+    // Step 3: removeNodeArtifacts(false) - contract degree-2 nodes (C++ line 131)
+    println!("Pre-collapse: removing node artifacts...");
+    collapse_degree_2_nodes_serial(&mut graph, normal_d_cut);
+
+    // Step 4: cleanUpGeoms (C++ line 133)
+    println!("Cleaning up geometries...");
+    clean_up_geoms(&graph);
+
+    // Step 5: removeEdgeArtifacts - contract short edges (C++ line 142)
+    println!("Pre-collapse: removing edge artifacts...");
+    contract_short_edges(&mut graph, normal_d_cut);
+
+    // Step 6: Two passes of collapseShrdSegs (C++ lines 145-146)
     println!("Running collapse pass 1 (tight threshold ~10m)...");
     let collapsed =
-        collapse_shared_segments(raw_edges, tight_d_cut, seg_len, 7, &mut node_id_counter);
+        collapse_shared_segments_from_graph(&graph, tight_d_cut, seg_len, 50, &mut node_id_counter);
 
-    println!("Running collapse pass 2 (normal threshold ~55m)...");
+    println!("Running collapse pass 2 (normal threshold ~50m)...");
     let collapsed =
-        collapse_shared_segments(collapsed, normal_d_cut, seg_len, 7, &mut node_id_counter);
+        collapse_shared_segments(collapsed, normal_d_cut, seg_len, 50, &mut node_id_counter);
 
     Ok(collapsed)
+}
+
+// ===========================================================================
+// Build Initial LineGraph from GraphEdges
+// ===========================================================================
+
+/// Build initial LineGraph by snapping together geometrically close endpoints.
+/// This creates shared nodes where lines meet, matching C++ input format.
+fn build_initial_linegraph(edges: &[GraphEdge], _next_node_id: &mut usize) -> LineGraph {
+    let mut graph = LineGraph::new();
+    let snap_threshold = 0.00002; // ~2 meters - snap endpoints this close together
+
+    // Spatial index for finding nearby nodes
+    let mut geo_idx = NodeGeoIdx::new(snap_threshold);
+
+    for edge in edges {
+        let geom = convert_to_geo(&edge.geometry);
+        if geom.0.is_empty() {
+            continue;
+        }
+
+        let from_pos = geom.0.first().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
+        let to_pos = geom.0.last().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
+
+        // Find or create FROM node
+        let from_node = {
+            let neighbors = geo_idx.get(from_pos, snap_threshold);
+            if let Some(existing) = neighbors.first() {
+                Rc::clone(existing)
+            } else {
+                let node = graph.add_nd(from_pos);
+                geo_idx.add(from_pos, Rc::clone(&node));
+                node
+            }
+        };
+
+        // Find or create TO node
+        let to_node = {
+            let neighbors = geo_idx.get(to_pos, snap_threshold);
+            if let Some(existing) = neighbors.first() {
+                Rc::clone(existing)
+            } else {
+                let node = graph.add_nd(to_pos);
+                geo_idx.add(to_pos, Rc::clone(&node));
+                node
+            }
+        };
+
+        // Skip self-loops
+        if Rc::ptr_eq(&from_node, &to_node) {
+            continue;
+        }
+
+        // Create edge with geometry
+        let new_edge = graph.add_edg(&from_node, &to_node);
+        new_edge.borrow_mut().geometry = geom.0.iter().map(|c| Coord { x: c.x, y: c.y }).collect();
+
+        // Add routes
+        for (chateau, rid) in &edge.route_ids {
+            let full_id = format!("{}_{}", chateau, rid);
+            new_edge
+                .borrow_mut()
+                .routes
+                .push(LineOcc::new_bidirectional(full_id));
+        }
+    }
+
+    graph
+}
+
+/// Variant of collapse_shared_segments that takes a LineGraph directly
+fn collapse_shared_segments_from_graph(
+    graph: &LineGraph,
+    d_cut: f64,
+    seg_len: f64,
+    max_iters: usize,
+    next_node_id_counter: &mut usize,
+) -> Vec<GraphEdge> {
+    // Convert LineGraph to Vec<GraphEdge> format
+    let mut edges = Vec::new();
+
+    for node in &graph.nodes {
+        let node_borrow = node.borrow();
+        for edge in &node_borrow.adj_list {
+            let edge_borrow = edge.borrow();
+            if !Rc::ptr_eq(&edge_borrow.from, node) {
+                continue;
+            }
+
+            let ls = GeoLineString::new(edge_borrow.geometry.clone());
+            #[allow(deprecated)]
+            let weight = ls.haversine_length();
+
+            let from_id = edge_borrow.from.borrow().id;
+            let to_id = edge_borrow.to.borrow().id;
+
+            edges.push(GraphEdge {
+                from: NodeId::Intersection(from_id),
+                to: NodeId::Intersection(to_id),
+                geometry: convert_from_geo(&ls),
+                route_ids: edge_borrow
+                    .routes
+                    .iter()
+                    .map(|r| ("shape".to_string(), r.line_id.clone()))
+                    .collect(),
+                weight,
+                original_edge_index: None,
+            });
+        }
+    }
+
+    collapse_shared_segments(edges, d_cut, seg_len, max_iters, next_node_id_counter)
 }
 
 // ===========================================================================
@@ -567,21 +702,13 @@ fn collapse_shared_segments(
                     }
                 }
 
-                // Merge affected node into comb (C++ line 362)
+                // Merge affected node into comb (C++ line 362: combineNodes(a, comb, &tgNew))
                 if let Some(comb_node) = comb {
                     if !Rc::ptr_eq(affected_node, &comb_node) {
-                        // Use a simple inline combine that just moves the position
-                        // and rewires edges - full combine_nodes is too heavy here
-                        if let Some(_connecting) = tg_new.get_edg(affected_node, &comb_node) {
-                            // Move comb_node to centroid
-                            let a_pos = affected_node.borrow().pos;
-                            let c_pos = comb_node.borrow().pos;
-                            let new_pos =
-                                [(a_pos[0] + c_pos[0]) / 2.0, (a_pos[1] + c_pos[1]) / 2.0];
-                            comb_node.borrow_mut().pos = new_pos;
-
-                            // Remove from geo_idx (C++ line 363)
-                            geo_idx.remove(affected_node);
+                        // CRITICAL: Must actually combine the nodes, not just move position!
+                        // This rewires all edges from affected_node to comb_node
+                        if combine_nodes(affected_node, &comb_node, &mut tg_new, &mut geo_idx) {
+                            // Successfully merged - geo_idx update handled by combine_nodes
                         }
                     }
                 }
@@ -634,7 +761,7 @@ fn collapse_shared_segments(
         // Contract degree-2 nodes
         // =====================================================================
         println!("  Re-collapse degree-2 nodes...");
-        collapse_degree_2_nodes_serial(&mut tg_new);
+        collapse_degree_2_nodes_serial(&mut tg_new, d_cut);
 
         // =====================================================================
         // Phase 4: Edge artifact removal (C++: lines 421-481)
@@ -647,7 +774,7 @@ fn collapse_shared_segments(
         // Phase 5: Re-collapse again (C++: lines 483-502)
         // May have introduced new degree-2 nodes
         // =====================================================================
-        collapse_degree_2_nodes_serial(&mut tg_new);
+        collapse_degree_2_nodes_serial(&mut tg_new, d_cut);
 
         // =====================================================================
         // Phase 6: Polish fixes (C++: lines 164-186)
@@ -662,7 +789,7 @@ fn collapse_shared_segments(
         remove_orphan_lines(&mut tg_new);
 
         // C++: removeNodeArtifacts(true) - contract degree-2 nodes again (line 180)
-        collapse_degree_2_nodes_serial(&mut tg_new);
+        collapse_degree_2_nodes_serial(&mut tg_new, d_cut);
 
         // Second reconstruction pass (C++: line 182)
         reconstruct_intersections(&mut tg_new, seg_len);
@@ -1060,6 +1187,18 @@ fn combine_nodes(
     true
 }
 
+/// Check if a connection occurs at a node for a given line between two edges.
+/// Matches C++ LineNodePL::connOccurs (LineNodePL.cpp:128-137)
+///
+/// Returns true unless there's an explicit connection exception stored at the node.
+/// Since we don't have connection exception data yet, this always returns true.
+fn conn_occurs(_node: &NodeRef, _line_id: &str, _edge_a: &EdgeRef, _edge_b: &EdgeRef) -> bool {
+    // C++ implementation checks _connEx map for explicit banned connections.
+    // If no exception exists, connection is allowed.
+    // TODO: Implement connection exception tracking if needed for turn restrictions.
+    true
+}
+
 /// Matches C++ MapConstructor::lineEq
 ///
 /// Checks if two edges can be merged based on their routes and directions.
@@ -1094,8 +1233,12 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
             None => return false,
         };
 
-        // TODO: connOccurs check (skipped for now as connection constraints not ported yet)
-        // if !conn_occurs(...) return false;
+        // C++ line 57: if (!shrNd->pl().connOccurs(ra.line, a, b)) return false;
+        // Check if connection is allowed at the shared node (no excluded connections).
+        // Currently always returns true since we don't have connection exception data.
+        if !conn_occurs(&shr_nd, &ra.line_id, a, b) {
+            return false;
+        }
 
         let dir_a = direction_at_node(a, &ra.direction, &shr_nd);
         let dir_b = direction_at_node(b, &rb.direction, &shr_nd);
@@ -1186,9 +1329,10 @@ fn support_edge(ex: &EdgeRef, graph: &mut LineGraph) {
     sup_nd.borrow_mut().adj_list.push(Rc::clone(&edge_b));
     to.borrow_mut().adj_list.push(Rc::clone(&edge_b));
 
-    // Note: C++ uses _origEdgs to track provenance.
-    // We are skipping that complex tracking for now as per plan constraints,
-    // but the split effectively preserves topology.
+    // C++ _origEdgs tracking (MapConstructor.cpp line 733-734: combContEdgs)
+    // Used for edge provenance tracking in restriction inference and freeze/unfreeze operations.
+    // The tracking maps new edges back to their original source edges for turn restriction inference.
+    // Not critical for core geometry algorithm - topology is preserved without it.
 }
 
 /// Combine two edges into one, removing the intermediate node 'n'.
@@ -1305,11 +1449,16 @@ fn combine_edges(edge_a: &EdgeRef, edge_b: &EdgeRef, n: &NodeRef, graph: &mut Li
 
 /// Contract degree-2 nodes with matching routes (matches C++ re-collapse phase)
 /// This is a single-pass implementation to avoid O(N^2) behavior on large graphs.
-fn collapse_degree_2_nodes_serial(graph: &mut LineGraph) {
+fn collapse_degree_2_nodes_serial(graph: &mut LineGraph, d_cut: f64) {
     let mut total_contracted = 0;
 
     // Collect all nodes to iterate over
     let nodes: Vec<NodeRef> = graph.nodes.iter().map(Rc::clone).collect();
+
+    // Convert d_cut (degrees) to meters for threshold comparison
+    // C++ uses: 2 * maxD(numLines, dCut) which is 2 * dCut
+    // 1 degree ≈ 111,111 meters at equator
+    let support_threshold_meters = 2.0 * d_cut * 111111.0;
 
     for node in nodes {
         // Check if node is degree 2
@@ -1342,8 +1491,6 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph) {
             // if (ex && ex->pl().longerThan(2 * maxD(...))) -> supportEdge(ex)
             // else -> continue (don't contract)
 
-            // maxD is approx dCut.
-            // Let's rely on a geometric length check.
             #[allow(deprecated)]
             let ex_len = {
                 let geom = &ex.borrow().geometry;
@@ -1351,8 +1498,8 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph) {
                 ls.haversine_length()
             };
 
-            // Threshold: if blocking edge is long (> ~60m), split it.
-            if ex_len > 60.0 {
+            // Threshold: if blocking edge is long (> 2 * d_cut in meters), split it.
+            if ex_len > support_threshold_meters {
                 println!("Splitting blocking edge to allow contraction...");
                 support_edge(&ex, graph);
                 // After splitting, 'ex' is effectively gone/replaced.
@@ -1812,20 +1959,36 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                             let flip = other_node_is_to_existing != other_node_is_to_other;
 
                             for r in routes_b {
-                                let mut new_dir = r.direction.clone();
+                                // C++ foldEdges lines 917-941: map direction to new edge
+                                // Direction logic based on shared node:
+                                // - If direction is None (bidirectional): stays None
+                                // - If direction points to from_node (being merged): map to to_node
+                                // - If direction points away: keep pointing to other_node
 
-                                // If flipping orientation, swap direction pointers
-                                // With pointer-based directions:
-                                // - If direction points to a node, and we flip the edge orientation,
-                                //   we need to update the direction to point to the correct merged endpoint
-                                if flip {
-                                    if let Some(ref weak_ref) = new_dir {
+                                let new_dir = if r.direction.is_none() {
+                                    None // Bidirectional stays bidirectional
+                                } else if flip {
+                                    // When flipping orientation, swap direction pointer
+                                    // If it pointed to from_node, now point to to_node
+                                    if let Some(ref weak_ref) = r.direction {
                                         if let Some(dir_node) = weak_ref.upgrade() {
-                                            // If it pointed to the "from" of other_edge, should now point to "to" of existing
-                                            // and vice versa. For now, just keep it - nodeRpl will fix later if needed.
+                                            if Rc::ptr_eq(&dir_node, &node) {
+                                                // Was pointing to merged node, now point to merged target
+                                                Some(Rc::downgrade(&to_node))
+                                            } else if Rc::ptr_eq(&dir_node, &other_node) {
+                                                Some(Rc::downgrade(&other_node))
+                                            } else {
+                                                r.direction.clone()
+                                            }
+                                        } else {
+                                            None
                                         }
+                                    } else {
+                                        None
                                     }
-                                }
+                                } else {
+                                    r.direction.clone()
+                                };
 
                                 // Check if this line already exists
                                 let existing_r =
