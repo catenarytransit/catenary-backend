@@ -679,7 +679,7 @@ fn collapse_shared_segments(
 
         println!("Edge sorting by length complete.");
 
-        for edge in &edges {
+        for (edge_idx, edge) in edges.iter().enumerate() {
             let mut last: Option<NodeRef> = None;
             let mut my_nds: AHashSet<usize> = AHashSet::new(); // Blocking set (by node id)
             let mut affected_nodes: Vec<NodeRef> = Vec::new(); // C++ line 230: affectedNodes
@@ -929,7 +929,7 @@ fn collapse_shared_segments(
             // In C++, the node is deleted. In Rust, we must manually remove it to free memory.
             // We do this periodically to amortize the O(N) cost of Vec::retain.
             // 2000 edges threshold is chosen to keep working set size reasonable without excessive scanning.
-            if i % 2000 == 0 {
+            if edge_idx % 2000 == 0 {
                 tg_new.nodes.retain(|n| n.borrow().get_deg() > 0);
             }
         }
