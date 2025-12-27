@@ -308,6 +308,7 @@ fn collapse_shared_segments(
         for edge in &edges {
             let mut last: Option<NodeRef> = None;
             let mut my_nds: HashSet<usize> = HashSet::new(); // Blocking set (by node id)
+            let mut affected_nodes: Vec<NodeRef> = Vec::new(); // C++ lines 230, 298: track nodes for artifact removal
 
             // Build polyline including endpoints
             let geom = convert_to_geo(&edge.geometry);
@@ -417,6 +418,10 @@ fn collapse_shared_segments(
                     front_pos = Some(cur.borrow().pos);
                     front = Some(Rc::clone(&cur));
                 }
+                
+                // Track affected nodes (C++ line 298: affectedNodes.push_back(cur))
+                affected_nodes.push(Rc::clone(&cur));
+                
                 last = Some(cur);
 
                 // Early termination if we reached TO
@@ -463,6 +468,61 @@ fn collapse_shared_segments(
                                 new_e.borrow_mut().routes.push(LineOcc::new(full_id, RouteDirection::Both));
                             }
                         }
+                    }
+                }
+            }
+
+            // =====================================================================
+            // Affected Nodes Artifact Removal (C++ lines 337-364)
+            // Remove short edges connecting high-degree nodes created during this edge's processing
+            // =====================================================================
+            
+            // Build set of original endpoint node IDs (imgNdsSet in C++)
+            let img_nds_set: HashSet<usize> = img_nds.values()
+                .map(|n| n.borrow().id)
+                .collect();
+            
+            for a in &affected_nodes {
+                // Skip original endpoint nodes
+                if img_nds_set.contains(&a.borrow().id) {
+                    continue;
+                }
+                
+                // Skip if node has been deleted (deg 0)
+                if a.borrow().get_deg() == 0 {
+                    continue;
+                }
+                
+                // Find best neighbor to merge with (must have at least one high-degree node)
+                let mut best_comb: Option<(NodeRef, f64)> = None;
+                let adj = a.borrow().adj_list.clone();
+                
+                for edge_ref in &adj {
+                    let b = edge_ref.borrow().get_other_nd(a);
+                    
+                    // C++ line 351: if ((a->getDeg() < 3 && b->getDeg() < 3)) continue;
+                    // ONLY merge when at least one node has degree >= 3
+                    if a.borrow().get_deg() < 3 && b.borrow().get_deg() < 3 {
+                        continue;
+                    }
+                    
+                    let a_pos = a.borrow().pos;
+                    let b_pos = b.borrow().pos;
+                    let dist = ((a_pos[0] - b_pos[0]).powi(2) + (a_pos[1] - b_pos[1]).powi(2)).sqrt();
+                    
+                    // C++ line 353: if (dCur <= dMin)
+                    if dist <= seg_len {
+                        if best_comb.is_none() || dist < best_comb.as_ref().unwrap().1 {
+                            best_comb = Some((b, dist));
+                        }
+                    }
+                }
+                
+                // C++ lines 359-363: combine nodes if found
+                if let Some((comb, _)) = best_comb {
+                    if !Rc::ptr_eq(a, &comb) {
+                        // Combine 'a' into 'comb' (similar to combineNodes)
+                        combine_nodes_artifact(&a, &comb, &mut geo_idx, &mut tg_new);
                     }
                 }
             }
@@ -696,6 +756,104 @@ fn nd_collapse_cand(
     }
 }
 
+/// Combine node 'a' into node 'comb' during artifact removal (C++ lines 359-363)
+/// This merges 'a' into 'comb', moving all edges from 'a' to 'comb' and deleting 'a'
+fn combine_nodes_artifact(
+    a: &NodeRef,
+    comb: &NodeRef,
+    geo_idx: &mut NodeGeoIdx,
+    graph: &mut LineGraph,
+) {
+    // Find the connecting edge between a and comb
+    let connecting: Option<EdgeRef> = {
+        let adj = a.borrow().adj_list.clone();
+        let mut found = None;
+        for e in adj {
+            let other = e.borrow().get_other_nd(a);
+            if Rc::ptr_eq(&other, comb) {
+                found = Some(e);
+                break;
+            }
+        }
+        found
+    };
+    
+    if connecting.is_none() {
+        return; // No direct connection, can't combine
+    }
+    let connecting = connecting.unwrap();
+    
+    // Update comb position to centroid
+    let a_pos = a.borrow().pos;
+    let comb_pos = comb.borrow().pos;
+    let new_pos = [(a_pos[0] + comb_pos[0]) / 2.0, (a_pos[1] + comb_pos[1]) / 2.0];
+    
+    geo_idx.remove(comb);
+    comb.borrow_mut().pos = new_pos;
+    geo_idx.add(new_pos, Rc::clone(comb));
+    
+    // Move all edges from 'a' to 'comb'
+    let a_adj = a.borrow().adj_list.clone();
+    for old_edge in &a_adj {
+        // Skip the connecting edge
+        if Rc::ptr_eq(old_edge, &connecting) {
+            continue;
+        }
+        
+        let other_nd = old_edge.borrow().get_other_nd(a);
+        
+        // Skip if other_nd is comb (would create self-loop)
+        if Rc::ptr_eq(&other_nd, comb) {
+            continue;
+        }
+        
+        // Check if comb already has an edge to other_nd
+        let existing = graph.get_edg(comb, &other_nd);
+        
+        if let Some(existing_edge) = existing {
+            // Fold edges: merge routes
+            let routes_from_old: Vec<LineOcc> = old_edge.borrow().routes.clone();
+            let mut ee = existing_edge.borrow_mut();
+            
+            for r in routes_from_old {
+                if !ee.routes.iter().any(|existing_r| existing_r.line_id == r.line_id) {
+                    ee.routes.push(r);
+                }
+            }
+            
+            // Update geometry to straight line
+            ee.geometry = vec![
+                Coord { x: new_pos[0], y: new_pos[1] },
+                Coord { x: other_nd.borrow().pos[0], y: other_nd.borrow().pos[1] },
+            ];
+            
+            // Remove old_edge from other_nd's adj list
+            other_nd.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, old_edge));
+        } else {
+            // Create new edge from comb to other_nd
+            let new_edge = Rc::new(RefCell::new(LineEdge {
+                from: Rc::clone(comb),
+                to: Rc::clone(&other_nd),
+                routes: old_edge.borrow().routes.clone(),
+                geometry: vec![
+                    Coord { x: new_pos[0], y: new_pos[1] },
+                    Coord { x: other_nd.borrow().pos[0], y: other_nd.borrow().pos[1] },
+                ],
+            }));
+            
+            comb.borrow_mut().adj_list.push(Rc::clone(&new_edge));
+            other_nd.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, old_edge));
+            other_nd.borrow_mut().adj_list.push(Rc::clone(&new_edge));
+        }
+    }
+    
+    // Remove connecting edge from comb's adj list
+    comb.borrow_mut().adj_list.retain(|e| !Rc::ptr_eq(e, &connecting));
+    
+    // Remove 'a' from geo_idx and clear its adj list
+    geo_idx.remove(a);
+    a.borrow_mut().adj_list.clear();
+}
 
 
 /// Check if line direction matches relative to a shared node
