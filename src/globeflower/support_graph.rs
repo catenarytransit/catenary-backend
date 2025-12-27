@@ -472,7 +472,9 @@ fn collapse_shared_segments(
         println!("  Graph built with {} segments. Simplifying...", num_edges);
 
         // Soft cleanup (C++: lines 367-377) - combine nearby junctions before finalizing geometry
-        soft_cleanup(&mut tg_new, seg_len);
+        // Use a tighter threshold (20m) than SEG_LEN (60m) to avoid merging parallel tracks at stations
+        // while still cleaning up small "soap bubble" artifacts.
+        soft_cleanup(&mut tg_new, 20.0);
 
         // =====================================================================
         // CRITICAL: Write edge geoms from node positions (C++: lines 379-387)
@@ -1523,8 +1525,12 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                                     };
                                 }
                                 
-                                // Append if not exists
-                                if !ee.routes.iter().any(|existing_r| existing_r.line_id == new_r.line_id) {
+                                // Append or merge
+                                if let Some(existing_r) = ee.routes.iter_mut().find(|r| r.line_id == new_r.line_id) {
+                                    if existing_r.direction != new_r.direction {
+                                        existing_r.direction = RouteDirection::Both;
+                                    }
+                                } else {
                                     ee.routes.push(new_r);
                                 }
                             }
@@ -1702,7 +1708,11 @@ fn fold_edges_for_node(graph: &mut LineGraph, node: &NodeRef) -> bool {
                                 RouteDirection::Both => RouteDirection::Both,
                             };
                         }
-                        if !ea.routes.iter().any(|existing_r| existing_r.line_id == new_r.line_id) {
+                        if let Some(existing_r) = ea.routes.iter_mut().find(|r| r.line_id == new_r.line_id) {
+                            if existing_r.direction != new_r.direction {
+                                existing_r.direction = RouteDirection::Both;
+                            }
+                        } else {
                             ea.routes.push(new_r);
                         }
                     }
@@ -1863,7 +1873,11 @@ fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
                                     RouteDirection::Both => RouteDirection::Both,
                                 };
                             }
-                            if !ee.routes.iter().any(|existing_r| existing_r.line_id == new_r.line_id) {
+                            if let Some(existing_r) = ee.routes.iter_mut().find(|r| r.line_id == new_r.line_id) {
+                                if existing_r.direction != new_r.direction {
+                                    existing_r.direction = RouteDirection::Both;
+                                }
+                            } else {
                                 ee.routes.push(new_r);
                             }
                         }
