@@ -358,7 +358,7 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     // C++ uses "segmentLength = 5". On Lat/Lng data, this is 5 DEGREES (~500km).
     // This effectively disables densification for almost all segments in C++.
     // Rust was using 0.000045 (5 meters), causing massive densification (millions of points).
-    // We relax this to 0.005 (~500 meters) to match C++ behavior of only processing
+    // We relax this to 0.005 (~500 meters) to match C++ behaviour of only processing
     // exceptionally long segments.
     let seg_len = 0.005;
 
@@ -798,7 +798,7 @@ fn collapse_shared_segments(
         // Combine nearby junctions before finalizing geometry
         // C++ doesn't use explicit threshold here - it just uses edges that exist
         // (which are already short from the collapse process)
-        // We pass d_cut as the threshold (in degrees) to match C++ behavior
+        // We pass d_cut as the threshold (in degrees) to match C++ behaviour
         // =====================================================================
         println!("Soft cleanup...");
         soft_cleanup(&mut tg_new, d_cut);
@@ -1530,7 +1530,7 @@ fn combine_edges(edge_a: &EdgeRef, edge_b: &EdgeRef, n: &NodeRef, graph: &mut Li
 }
 
 /// Contract degree-2 nodes with matching routes (matches C++ re-collapse phase)
-/// This is a single-pass implementation to avoid O(N^2) behavior on large graphs.
+/// This is a single-pass implementation to avoid O(N^2) behaviour on large graphs.
 fn collapse_degree_2_nodes_serial(graph: &mut LineGraph, d_cut: f64) {
     let mut total_contracted = 0;
 

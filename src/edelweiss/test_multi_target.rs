@@ -224,7 +224,7 @@ fn test_multi_partition_target() {
 
     // We do NOT necessarily expect the suboptimal path to C (2000s) to be returned,
     // as the router now optimizes across all partitions and returns the best result.
-    // This is an improvement over the previous behavior which might have returned multiple
+    // This is an improvement over the previous behaviour which might have returned multiple
     // potentially redundant or suboptimal paths, or missed the global optimum if partitions were processed sequentially.
 }
 
