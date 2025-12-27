@@ -228,6 +228,67 @@ impl NodeGeoIdx {
         }
         result
     }
+
+    /// Find the best node within radius using a scoring function (avoids Vec allocation).
+    ///
+    /// The callback receives (node_ref, node_id, node_pos, distance_squared) and returns:
+    /// - Some(score) to consider this node as a candidate (lower score = better)
+    /// - None to skip this node
+    ///
+    /// Returns the node with the lowest score, or None if no candidates.
+    fn find_best_in_radius<F>(
+        &self,
+        pos: [f64; 2],
+        radius: f64,
+        mut score_fn: F,
+    ) -> Option<(NodeRef, f64)>
+    where
+        F: FnMut(&NodeRef, usize, [f64; 2], f64) -> Option<f64>,
+    {
+        let r_sq = radius * radius;
+        let min_c = self.get_cell_coords(pos[0] - radius, pos[1] - radius);
+        let max_c = self.get_cell_coords(pos[0] + radius, pos[1] + radius);
+
+        let mut best: Option<(NodeRef, f64)> = None;
+
+        for cx in min_c.0..=max_c.0 {
+            for cy in min_c.1..=max_c.1 {
+                if let Some(nodes) = self.cells.get(&(cx, cy)) {
+                    for node in nodes {
+                        let node_borrow = node.borrow();
+                        let node_pos = node_borrow.pos;
+                        let node_id = node_borrow.id;
+                        let node_deg = node_borrow.get_deg();
+                        drop(node_borrow); // Release borrow before callback
+
+                        let dx = node_pos[0] - pos[0];
+                        let dy = node_pos[1] - pos[1];
+                        let dist_sq = dx * dx + dy * dy;
+
+                        if dist_sq > r_sq {
+                            continue;
+                        }
+
+                        // Skip degree-0 nodes (matches C++ ndTest->getDeg() == 0 check)
+                        if node_deg == 0 {
+                            continue;
+                        }
+
+                        if let Some(score) = score_fn(node, node_id, node_pos, dist_sq) {
+                            match &best {
+                                None => best = Some((Rc::clone(node), score)),
+                                Some((_, best_score)) if score < *best_score => {
+                                    best = Some((Rc::clone(node), score));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        best
+    }
 }
 
 // ===========================================================================
@@ -471,6 +532,8 @@ fn collapse_shared_segments(
 
         // Sort edges by length (longest first) - matches C++ sorting
         edges.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(Ordering::Equal));
+
+        println!("Edge sorting by length complete.");
 
         for edge in &edges {
             let mut last: Option<NodeRef> = None;
@@ -904,57 +967,46 @@ fn nd_collapse_cand(
 ) -> NodeRef {
     // Use line-aware distance cutoff
     let effective_d_cut = max_d(num_lines, d_cut);
-    let neighbors = geo_idx.get(point, effective_d_cut);
-
-    let mut best: Option<NodeRef> = None;
-    let mut best_dist = f64::INFINITY;
 
     // C++ lines 90-96: Calculate distance constraints from span endpoints
     // A candidate can only be accepted if it's closer to the point than the
     // span endpoints are (divided by sqrt(2) for geometric tolerance)
-    let d_span_a = if let Some(sa_pos) = span_a_pos {
+    let d_span_a_sq = if let Some(sa_pos) = span_a_pos {
         let dx = point[0] - sa_pos[0];
         let dy = point[1] - sa_pos[1];
-        (dx * dx + dy * dy).sqrt() / std::f64::consts::SQRT_2
+        (dx * dx + dy * dy) / 2.0 // sqrt(2)^2 = 2
     } else {
         f64::INFINITY
     };
 
-    let d_span_b = if let Some(sb_pos) = span_b_pos {
+    let d_span_b_sq = if let Some(sb_pos) = span_b_pos {
         let dx = point[0] - sb_pos[0];
         let dy = point[1] - sb_pos[1];
-        (dx * dx + dy * dy).sqrt() / std::f64::consts::SQRT_2
+        (dx * dx + dy * dy) / 2.0 // sqrt(2)^2 = 2
     } else {
         f64::INFINITY
     };
 
-    for nd_test in neighbors {
-        let nd_id = nd_test.borrow().id;
+    let d_cut_sq = effective_d_cut * effective_d_cut;
 
-        // Skip nodes in blocking set (already on this edge's path)
-        if blocking_set.contains(&nd_id) {
-            continue;
-        }
+    // Use callback-based search to avoid Vec allocation (major perf win)
+    let best =
+        geo_idx.find_best_in_radius(point, effective_d_cut, |_node, nd_id, nd_pos, dist_sq| {
+            // Skip nodes in blocking set (already on this edge's path)
+            if blocking_set.contains(&nd_id) {
+                return None;
+            }
 
-        // Skip degree-0 nodes
-        if nd_test.borrow().get_deg() == 0 {
-            continue;
-        }
+            // C++ line 104: d < dSpanA && d < dSpanB && d < dMax && d < dBest
+            // Compare squared distances to avoid sqrt
+            if dist_sq < d_span_a_sq && dist_sq < d_span_b_sq && dist_sq < d_cut_sq {
+                Some(dist_sq) // Score by distance (lower = better)
+            } else {
+                None
+            }
+        });
 
-        let nd_pos = nd_test.borrow().pos;
-        let dx = nd_pos[0] - point[0];
-        let dy = nd_pos[1] - point[1];
-        let d = (dx * dx + dy * dy).sqrt();
-
-        // C++ line 104: d < dSpanA && d < dSpanB && d < dMax && d < dBest
-        // The candidate must be closer than the span endpoints (prevents shortcuts)
-        if d < d_span_a && d < d_span_b && d < effective_d_cut && d < best_dist {
-            best_dist = d;
-            best = Some(nd_test);
-        }
-    }
-
-    if let Some(nd_min) = best {
+    if let Some((nd_min, _score)) = best {
         // Update node position to centroid
         let old_pos = nd_min.borrow().pos;
         let new_pos = [(old_pos[0] + point[0]) / 2.0, (old_pos[1] + point[1]) / 2.0];
