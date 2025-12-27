@@ -1,14 +1,12 @@
 // Copyright Kyler Chin <kyler@catenarymaps.org>
 // Catenary Transit Initiatives
-// Attribution cannot be removed
-
-use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
-use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
-use anyhow::Context;
-// Initial version 3 of ingest written by Kyler Chin
 // Removal of the attribution is not allowed, as covered under the AGPL license
+
+// Initial version 3 of ingest written by Kyler Chin
 use crate::DownloadedFeedsInformation;
 use crate::gtfs_handlers::colour_correction;
+use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
+use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 use crate::gtfs_handlers::shape_colour_calculator::ShapeToColourResponse;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::stops_associated_items::*;
@@ -17,6 +15,7 @@ use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::ins
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres_and_elastic;
 use crate::shapes_reader::*;
+use anyhow::Context;
 use catenary::enum_to_int::*;
 use catenary::gtfs_schedule_protobuf::frequencies_to_protobuf;
 use catenary::maple_syrup;
@@ -138,6 +137,14 @@ pub async fn gtfs_process_feed(
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 true,
+            )?;
+        }
+        "f-bus~dft~gov~uk~england" | "f-bus~dft~gov~uk~scotland" | "f-bus~dft~gov~uk~wales" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./pfaedle-filtered-great-britain-latest.osm.pbf",
+                None,
+                false,
             )?;
         }
         "f-hauts~de~france~du~nord~1"
@@ -431,6 +438,19 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
+        "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => {
+            let mut gtfs = gtfs;
+
+            gtfs.trips.retain(|trip_id, trip| {
+                trip.stop_times
+                    .iter()
+                    .all(|st| st.stop.id.as_str() != "LBO")
+            });
+
+            gtfs.stops.remove_entry("LBO");
+
+            gtfs
+        }
         "f-amtrak~sanjoaquin" => {
             let mut gtfs = gtfs;
 
@@ -457,6 +477,11 @@ pub async fn gtfs_process_feed(
                 for stoptime in trip.stop_times.iter_mut() {
                     stoptime.stop_headsign = None;
                 }
+            }
+
+            if let Some(main_gold_runner) = gtfs.routes.get_mut("SJ2") {
+                main_gold_runner.short_name = None;
+                main_gold_runner.long_name = Some("Gold Runner".to_string());
             }
 
             gtfs

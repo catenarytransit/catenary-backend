@@ -107,3 +107,11 @@ graph_output/
 output/
 temp/
 *.log
+globeflower_graph.geojson
+globeflower_graph.json
+globeflower_graph.gpkg
+globeflower_graph.bin
+tiles_output/
+
+#Agents
+.agent/

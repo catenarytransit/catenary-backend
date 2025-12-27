@@ -9,6 +9,7 @@ use dashmap::DashMap;
 use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
+use flixbus_gtfs_realtime::aggregator::Aggregator;
 use futures::StreamExt;
 use gtfs_realtime::alert;
 use lazy_static::lazy_static;
@@ -42,6 +43,8 @@ lazy_static! {
         "f-northern~indiana~commuter~transportation~district~catenary~alerts~rt",
         "f-9vff-fortworthtransportationauthority~rt~catenary~unwire",
         "f-9vg-dart~rt~catenary~unwire",
+        "f-flixbus~eu~rt",
+        "f-flixbus~us~rt",
     ]);
 }
 
@@ -98,11 +101,13 @@ pub async fn single_fetch_time(
     client: reqwest::Client,
     assignments: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>>,
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
-    amtrak_gtfs: Arc<gtfs_structures::Gtfs>, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
-    chicago_text_str: Arc<Option<String>>,
-    chicago_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
-    rtcquebec_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
-    mnr_gtfs: Arc<Option<gtfs_structures::Gtfs>>,
+    amtrak_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
+    chicago_text_str: Arc<RwLock<Option<String>>>,
+    chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
+    rtcquebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
+    mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
+    flixbus_us_aggregator: Arc<RwLock<Option<Aggregator>>>,
+    flixbus_eu_aggregator: Arc<RwLock<Option<Aggregator>>>,
     etcd_urls: Arc<Vec<String>>,
     etcd_connection_options: Option<etcd_client::ConnectOptions>,
     lease_id: i64,
@@ -137,6 +142,8 @@ pub async fn single_fetch_time(
                 let chicago_text_str = chicago_text_str.clone();
                 let chicago_gtfs = chicago_gtfs.clone();
                 let mnr_gtfs = mnr_gtfs.clone();
+                let flixbus_us_aggregator = flixbus_us_aggregator.clone();
+                let flixbus_eu_aggregator = flixbus_eu_aggregator.clone();
 
                 let mut kv_client = etcd.kv_client();
                 let mut lease_client = etcd.lease_client();
@@ -500,13 +507,16 @@ pub async fn single_fetch_time(
                     } else {
                         match feed_id.as_str() {
                             "f-amtrak~rt" => {
-                                let _ = custom_rt_feeds::amtrak::fetch_amtrak_data(
-                                    &mut kv_client,
-                                    &feed_id,
-                                    &amtrak_gtfs,
-                                    &client,
-                                )
-                                .await;
+                                let amtrak_lock = amtrak_gtfs.read().await;
+                                if let Some(gtfs) = amtrak_lock.as_ref() {
+                                    let _ = custom_rt_feeds::amtrak::fetch_amtrak_data(
+                                        &mut kv_client,
+                                        &feed_id,
+                                        gtfs,
+                                        &client,
+                                    )
+                                    .await;
+                                }
                             }
                             "f-9vg-dart~rt~catenary~unwire" => {
                                 let _ = custom_rt_feeds::unwire::fetch_unwire_dart_data(
@@ -542,13 +552,16 @@ pub async fn single_fetch_time(
                                 .await;
                             }
                             "f-mta~nyc~rt~mnr" => {
-                                let _ = custom_rt_feeds::mta::fetch_mta_metronorth_data(
-                                    &mut kv_client,
-                                    &feed_id,
-                                    &client,
-                                    Arc::clone(&mnr_gtfs),
-                                )
-                                .await;
+                                let mnr_lock = mnr_gtfs.read().await;
+                                if let Some(gtfs) = mnr_lock.as_ref() {
+                                    let _ = custom_rt_feeds::mta::fetch_mta_metronorth_data(
+                                        &mut kv_client,
+                                        &feed_id,
+                                        &client,
+                                        gtfs,
+                                    )
+                                    .await;
+                                }
                             }
                             "f-metrolinktrains~extra~rt" => {
                                 custom_rt_feeds::metrolink_extra::fetch_data(
@@ -566,9 +579,11 @@ pub async fn single_fetch_time(
                                 )
                                 .await;
                             }
-                            "f-dp3-cta~rt" => match chicago_text_str.as_ref() {
-                                Some(chicago_text_str) => {
-                                    if let Some(chicago_gtfs) = chicago_gtfs.as_ref() {
+                            "f-dp3-cta~rt" => {
+                                let chicago_text_lock = chicago_text_str.read().await;
+                                let chicago_gtfs_lock = chicago_gtfs.read().await;
+                                if let Some(chicago_text_str) = chicago_text_lock.as_ref() {
+                                    if let Some(chicago_gtfs) = chicago_gtfs_lock.as_ref() {
                                         custom_rt_feeds::chicagotransit::fetch_chicago_data(
                                             &mut kv_client,
                                             &feed_id,
@@ -580,7 +595,6 @@ pub async fn single_fetch_time(
                                         .await;
                                     }
                                 }
-                                None => {}
                             },
                             "f-tlms~rt" => {
                                 custom_rt_feeds::tlms::fetch_tlms_data(
@@ -591,11 +605,12 @@ pub async fn single_fetch_time(
                                 .await;
                             }
                             "f-rtcquebec~rt" => {
-                                if let Some(rtcquebec_gtfs) = rtcquebec_gtfs.as_ref() {
+                                let rtc_lock = rtcquebec_gtfs.read().await;
+                                if let Some(gtfs) = rtc_lock.as_ref() {
                                     custom_rt_feeds::rtcquebec::fetch_rtc_data(
                                         &mut kv_client,
                                         &feed_id,
-                                        rtcquebec_gtfs,
+                                        gtfs,
                                         &client,
                                     )
                                     .await;
@@ -616,6 +631,30 @@ pub async fn single_fetch_time(
                                     &client,
                                 )
                                 .await;
+                            }
+                            "f-flixbus~us~rt" => {
+                                let lock = flixbus_us_aggregator.read().await;
+                                if let Some(aggregator) = lock.as_ref() {
+                                    if let Err(e) = custom_rt_feeds::flixbus::fetch_flixbus_data(
+                                        &mut kv_client,
+                                        &feed_id,
+                                        aggregator,
+                                    ).await {
+                                        eprintln!("Error fetching flixbus us: {}", e);
+                                    }
+                                }
+                            }
+                            "f-flixbus~eu~rt" => {
+                                let lock = flixbus_eu_aggregator.read().await;
+                                if let Some(aggregator) = lock.as_ref() {
+                                    if let Err(e) = custom_rt_feeds::flixbus::fetch_flixbus_data(
+                                        &mut kv_client,
+                                        &feed_id,
+                                        aggregator,
+                                    ).await {
+                                        eprintln!("Error fetching flixbus eu: {}", e);
+                                    }
+                                }
                             }
                             _ => {}
                         }

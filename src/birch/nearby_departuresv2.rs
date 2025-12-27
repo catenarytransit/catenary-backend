@@ -84,6 +84,7 @@ struct NearbyFromCoords {
     lon: f64,
     departure_time: Option<u64>,
     limit_n_events_after_departure_time: Option<usize>,
+    radius: Option<f64>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -383,8 +384,12 @@ pub async fn nearby_from_coords_v2(
     };
 
     let mut rail_and_other_distance_limit = 3500;
-
     let mut bus_distance_limit = 3500;
+
+    if let Some(radius) = query.radius {
+        rail_and_other_distance_limit = radius as i32;
+        bus_distance_limit = radius as i32;
+    }
 
     let spatial_resolution_in_degs = make_degree_length_as_distance_from_point(
         &input_point,
@@ -413,19 +418,21 @@ pub async fn nearby_from_coords_v2(
 
     let stops = stops.unwrap();
 
-    if stops.len() > 400 {
-        bus_distance_limit = 1500;
-        rail_and_other_distance_limit = 2000;
-    }
+    if query.radius.is_none() {
+        if stops.len() > 400 {
+            bus_distance_limit = 1500;
+            rail_and_other_distance_limit = 2000;
+        }
 
-    if stops.len() > 800 {
-        bus_distance_limit = 1500;
-        rail_and_other_distance_limit = 1500;
-    }
+        if stops.len() > 800 {
+            bus_distance_limit = 1500;
+            rail_and_other_distance_limit = 1500;
+        }
 
-    if stops.len() > 3000 {
-        bus_distance_limit = 1000;
-        rail_and_other_distance_limit = 1500;
+        if stops.len() > 3000 {
+            bus_distance_limit = 1000;
+            rail_and_other_distance_limit = 1500;
+        }
     }
 
     let stops_table = stops

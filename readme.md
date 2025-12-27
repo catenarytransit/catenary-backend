@@ -9,7 +9,7 @@ Catenary Backend is a distributed system comprised of microservices operating in
 - **Aspen**: Processing of realtime data and dynamic insertion into other engines. Submodule Pando is used for distribution management
 - **Linnaea**: Visualisation of the graphs for debugging and research paper purposes
 - **Gentian**: Transit graph generation task server
-- **Foxglove**: Map tile geometry server, will serve line ordering optimised graph maps (LOOM) in the future. [not started yet]
+- **Harebell**: Map tile geometry generator creating line ordering optimised graph maps (LOOM) MVT files.
 - **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times (not started yet)
 - **Birch**: HTTP API server
 
@@ -118,5 +118,4 @@ The following `cargo clippy` rules are enforced.
 ### Future potential submodule names
 
 - **Truffle** reachability analysis
-- **Cypress**
 - **Chinese plum** (needs to pick better syonym for it)

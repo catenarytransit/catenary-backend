@@ -39,7 +39,7 @@ use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use dashmap::DashMap;
 use futures::prelude::*;
 use rand::Rng;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
@@ -56,9 +56,18 @@ use crate::single_fetch_time::UrlType;
 use bytes::Buf;
 use catenary::bincode_deserialize;
 use catenary::bincode_serialize;
+use flixbus_gtfs_realtime::aggregator::Aggregator;
+use flixbus_gtfs_realtime::client::FlixbusClient;
 use get_feed_metadata::RealtimeFeedFetch;
 use scc::HashMap as SccHashMap;
 use std::io::prelude::*;
+
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -71,20 +80,15 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let start = Instant::now();
 
-    let amtrak_gtfs = gtfs_structures::GtfsReader::default()
-        .read_shapes(false)
-        .read_from_url_async("https://github.com/catenarytransit/amtrak-schedule-fixer/releases/download/latest/amtrak-gtfs-noshapes-fixed.zip")
-        .await
-        .unwrap();
+    let amtrak_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
+    let rtc_quebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
+    let chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
+    let mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
+    let flixbus_us_aggregator: Arc<RwLock<Option<Aggregator>>> = Arc::new(RwLock::new(None));
+    let flixbus_eu_aggregator: Arc<RwLock<Option<Aggregator>>> = Arc::new(RwLock::new(None));
+    let chicago_trips_str: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
 
-    let amtrak_gtfs = Arc::new(amtrak_gtfs);
-
-    let rtc_quebec_gtfs = gtfs_structures::GtfsReader::default()
-        .read_shapes(false)
-        .read("rtcquebec.zip")
-        .ok();
-
-    let rtc_quebec_gtfs = Arc::new(rtc_quebec_gtfs);
+    let mut downloads_started: HashSet<String> = HashSet::new();
 
     println!("Worker id {}", this_worker_id);
 
@@ -92,15 +96,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let too_many_requests_log: Arc<SccHashMap<String, std::time::Instant>> =
         Arc::new(SccHashMap::new());
-
-    // if a node drops out, ingestion will be automatically reassigned to the other nodes
-
-    //hands off data to aspen to do additional cleanup and processing, Aspen will perform association with the GTFS schedule data + update dynamic graphs for routing and map representation,
-    //aspen will also forward critical alerts to users
-
-    //If the worker disconnects from zookeeper, that's okay because tasks will be reassigned.
-    // When it reconnects, the same worker id can be used and feed instructions will be reassigned to it.
-    // ingestion won't run when the worker is disconnected from zookeeper due the instructions be written to the worker's ehpehmeral node
 
     // last check time
     let last_check_time_ms: Option<u64> = None;
@@ -111,9 +106,9 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
 
-    let conn_pool = arc_conn_pool.as_ref();
-    let conn_pre = conn_pool.get().await;
-    let conn = &mut conn_pre?;
+    //let conn_pool = arc_conn_pool.as_ref();
+    //let conn_pre = conn_pool.get().await;
+    //let conn = &mut conn_pre?;
 
     let assignments_for_this_worker: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>> =
         Arc::new(RwLock::new(HashMap::new()));
@@ -186,92 +181,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .await?;
 
     println!("etcd registered lease {}", etcd_lease_id);
-
-    println!("Downloading chicago gtfs zip file");
-
-    let chicago_gtfs_url = "https://github.com/catenarytransit/pfaedled-gtfs-actions/releases/download/latest/cta_gtfs_railonly.zip";
-    //let mnr_gtfs_url = "https://rrgtfsfeeds.s3.amazonaws.com/gtfsmnr.zip";
-    let mnr_gtfs_url =
-        "https://github.com/catenarytransit/agency-gtfs-mirror/raw/refs/heads/main/gtfsmnr.zip";
-
-    let chicago_schedule_response = client.get(chicago_gtfs_url).send().await;
-
-    println!("Downloaded chicago gtfs");
-
-    if let Err(e) = &chicago_schedule_response {
-        eprintln!("chicago fetch failed {:#?}", e);
-    }
-
-    let mnr_schedule_response = client.get(mnr_gtfs_url).send().await;
-
-    println!("Downloaded metro north gtfs");
-
-    if let Err(e) = &mnr_schedule_response {
-        eprintln!("mnr fetch failed {:#?}", e);
-    }
-
-    //renew the etcd lease
-
-    let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
-
-    let chicago_bytes: Option<bytes::Bytes> = match chicago_schedule_response {
-        Ok(schedule_resp) => Some(schedule_resp.bytes().await?),
-        Err(e) => {
-            eprintln!("Failed to parse chicago bytes: {:#?}", e);
-            None
-        }
-    };
-
-    let chicago_gtfs_timer = Instant::now();
-
-    let chicago_gtfs = chicago_bytes.as_ref().map(|chicago_bytes| {
-        gtfs_structures::Gtfs::from_reader(io::Cursor::new(chicago_bytes)).unwrap()
-    });
-
-    println!("parsed chicago gtfs in {:?}", chicago_gtfs_timer.elapsed());
-
-    let chicago_gtfs = Arc::new(chicago_gtfs);
-
-    let mnr_bytes: Option<bytes::Bytes> = match mnr_schedule_response {
-        Ok(schedule_resp) => Some(schedule_resp.bytes().await?),
-        Err(e) => {
-            eprintln!("Failed to parse mnr bytes: {:#?}", e);
-            None
-        }
-    };
-
-    let mnr_gtfs = mnr_bytes
-        .as_ref()
-        .map(|mnr_bytes| gtfs_structures::Gtfs::from_reader(io::Cursor::new(mnr_bytes)).unwrap());
-
-    let mnr_gtfs = Arc::new(mnr_gtfs);
-
-    let chicago_trips_str = Arc::new(match chicago_bytes.as_ref() {
-        Some(schedule_bytes) => {
-            let mut archive = ZipArchive::new(io::Cursor::new(schedule_bytes));
-
-            match archive {
-                Ok(mut archive) => {
-                    // Find and open the desired file
-                    let mut trips_file = archive
-                        .by_name("trips.txt")
-                        .expect("trips.txt doesn't exist");
-                    let mut buffer = Vec::new();
-                    io::copy(&mut trips_file, &mut buffer).unwrap();
-
-                    // Convert the buffer to a string
-                    let trips_content = String::from_utf8(buffer).unwrap();
-
-                    Some(trips_content)
-                }
-                Err(_) => None,
-            }
-        }
-        None => {
-            eprintln!("No data found for chicago trips schedule");
-            None
-        }
-    });
 
     //create parent node for workers
 
@@ -462,6 +371,231 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
             //get the feed data from the feeds assigned to this worker
 
+            {
+                let assignments_guard = assignments_for_this_worker.read().await;
+                let assigned_feeds: HashSet<String> = assignments_guard.keys().cloned().collect();
+                drop(assignments_guard);
+
+                // Amtrak
+                if assigned_feeds.contains("f-amtrak~rt") && !downloads_started.contains("amtrak") {
+                    println!("Spawning Amtrak download task...");
+                    downloads_started.insert("amtrak".to_string());
+                    let amtrak_gtfs = amtrak_gtfs.clone();
+                    tokio::spawn(async move {
+                        let gtfs = gtfs_structures::GtfsReader::default()
+                            .read_shapes(false)
+                            .read_from_url_async("https://github.com/catenarytransit/amtrak-schedule-fixer/releases/download/latest/amtrak-gtfs-noshapes-fixed.zip")
+                            .await;
+
+                        match gtfs {
+                            Ok(gtfs) => {
+                                println!("Amtrak GTFS downloaded.");
+                                *amtrak_gtfs.write().await = Some(gtfs);
+                            }
+                            Err(e) => eprintln!("Failed to download Amtrak GTFS: {}", e),
+                        }
+                    });
+                }
+
+                // RTC Quebec
+                if assigned_feeds.contains("f-rtcquebec~rt")
+                    && !downloads_started.contains("rtc_quebec")
+                {
+                    println!("Spawning RTC Quebec read task...");
+                    downloads_started.insert("rtc_quebec".to_string());
+                    let rtc_quebec_gtfs = rtc_quebec_gtfs.clone();
+                    tokio::spawn(async move {
+                        let res = tokio::task::spawn_blocking(|| {
+                            gtfs_structures::GtfsReader::default()
+                                .read_shapes(false)
+                                .read("rtcquebec.zip")
+                        })
+                        .await;
+
+                        match res {
+                            Ok(Ok(gtfs)) => {
+                                println!("RTC Quebec GTFS loaded.");
+                                *rtc_quebec_gtfs.write().await = Some(gtfs);
+                            }
+                            Ok(Err(e)) => eprintln!("Failed to read RTC Quebec GTFS: {}", e),
+                            Err(e) => eprintln!("Join error RTC Quebec: {}", e),
+                        }
+                    });
+                }
+
+                // Chicago & MNR & Flixbus need the client
+                let client_dl = client.clone();
+
+                // Chicago
+                if assigned_feeds.contains("f-dp3-cta~rt") && !downloads_started.contains("chicago")
+                {
+                    println!("Spawning Chicago download task...");
+                    downloads_started.insert("chicago".to_string());
+                    let chicago_gtfs = chicago_gtfs.clone();
+                    let chicago_trips_str = chicago_trips_str.clone();
+                    let client_dl = client_dl.clone();
+                    tokio::spawn(async move {
+                        let url = "https://github.com/catenarytransit/pfaedled-gtfs-actions/releases/download/latest/cta_gtfs_railonly.zip";
+                        println!("Downloading Chicago GTFS...");
+                        match client_dl
+                            .get(url)
+                            .timeout(Duration::from_secs(120))
+                            .send()
+                            .await
+                        {
+                            Ok(resp) => {
+                                match resp.bytes().await {
+                                    Ok(bytes) => {
+                                        println!("Chicago GTFS downloaded, parsing...");
+                                        // Parse GTFS
+                                        let gtfs = gtfs_structures::Gtfs::from_reader(
+                                            io::Cursor::new(bytes.clone()),
+                                        );
+                                        if let Ok(gtfs) = gtfs {
+                                            *chicago_gtfs.write().await = Some(gtfs);
+                                        } else {
+                                            eprintln!("Failed to parse Chicago GTFS");
+                                        }
+
+                                        // Parse trips.txt
+                                        let mut archive = ZipArchive::new(io::Cursor::new(bytes));
+                                        if let Ok(mut archive) = archive {
+                                            if let Ok(mut trips_file) = archive.by_name("trips.txt")
+                                            {
+                                                let mut buffer = Vec::new();
+                                                if io::copy(&mut trips_file, &mut buffer).is_ok() {
+                                                    if let Ok(s) = String::from_utf8(buffer) {
+                                                        *chicago_trips_str.write().await = Some(s);
+                                                        println!("Chicago trips.txt loaded.");
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(e) => eprintln!("Failed to get bytes for Chicago: {}", e),
+                                }
+                            }
+                            Err(e) => eprintln!("Failed to download Chicago: {}", e),
+                        }
+                    });
+                }
+
+                // MNR
+                if assigned_feeds.contains("f-mta~nyc~rt~mnr") && !downloads_started.contains("mnr")
+                {
+                    println!("Spawning MNR download task...");
+                    downloads_started.insert("mnr".to_string());
+                    let mnr_gtfs = mnr_gtfs.clone();
+                    let client_dl = client_dl.clone();
+                    tokio::spawn(async move {
+                        let url = "https://github.com/catenarytransit/agency-gtfs-mirror/raw/refs/heads/main/gtfsmnr.zip";
+                        println!("Downloading MNR GTFS...");
+                        match client_dl
+                            .get(url)
+                            .timeout(Duration::from_secs(120))
+                            .send()
+                            .await
+                        {
+                            Ok(resp) => match resp.bytes().await {
+                                Ok(bytes) => {
+                                    let gtfs =
+                                        gtfs_structures::Gtfs::from_reader(io::Cursor::new(bytes));
+                                    match gtfs {
+                                        Ok(gtfs) => {
+                                            println!("MNR GTFS loaded.");
+                                            *mnr_gtfs.write().await = Some(gtfs);
+                                        }
+                                        Err(e) => eprintln!("Failed to parse MNR GTFS: {}", e),
+                                    }
+                                }
+                                Err(e) => eprintln!("Failed to get bytes for MNR: {}", e),
+                            },
+                            Err(e) => eprintln!("Failed to download MNR: {}", e),
+                        }
+                    });
+                }
+
+                // Flixbus US
+                if assigned_feeds.contains("f-flixbus~us~rt")
+                    && !downloads_started.contains("flixbus_us")
+                {
+                    println!("Spawning Flixbus US download task...");
+                    downloads_started.insert("flixbus_us".to_string());
+                    let flixbus_us_aggregator = flixbus_us_aggregator.clone();
+                    let client_dl = client_dl.clone();
+                    tokio::spawn(async move {
+                        let url = "http://gtfs.gis.flix.tech/gtfs_generic_us.zip";
+                        println!("Downloading Flixbus US GTFS...");
+                        match client_dl
+                            .get(url)
+                            .timeout(Duration::from_secs(120))
+                            .send()
+                            .await
+                        {
+                            Ok(resp) => match resp.bytes().await {
+                                Ok(bytes) => {
+                                    let gtfs =
+                                        gtfs_structures::Gtfs::from_reader(io::Cursor::new(bytes));
+                                    match gtfs {
+                                        Ok(gtfs) => {
+                                            println!("Flixbus US GTFS loaded.");
+                                            let client = FlixbusClient::new();
+                                            let agg = Aggregator::new(client, gtfs);
+                                            *flixbus_us_aggregator.write().await = Some(agg);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Failed to parse Flixbus US GTFS: {}", e)
+                                        }
+                                    }
+                                }
+                                Err(e) => eprintln!("Failed to get bytes for Flixbus US: {}", e),
+                            },
+                            Err(e) => eprintln!("Failed to download Flixbus US: {}", e),
+                        }
+                    });
+                }
+
+                // Flixbus EU
+                if assigned_feeds.contains("f-flixbus~eu~rt")
+                    && !downloads_started.contains("flixbus_eu")
+                {
+                    println!("Spawning Flixbus EU download task...");
+                    downloads_started.insert("flixbus_eu".to_string());
+                    let flixbus_eu_aggregator = flixbus_eu_aggregator.clone();
+                    let client_dl = client_dl.clone();
+                    tokio::spawn(async move {
+                        let url = "http://gtfs.gis.flix.tech/gtfs_generic_eu.zip";
+                        println!("Downloading Flixbus EU GTFS...");
+                        match client_dl
+                            .get(url)
+                            .timeout(Duration::from_secs(120))
+                            .send()
+                            .await
+                        {
+                            Ok(resp) => match resp.bytes().await {
+                                Ok(bytes) => {
+                                    let gtfs =
+                                        gtfs_structures::Gtfs::from_reader(io::Cursor::new(bytes));
+                                    match gtfs {
+                                        Ok(gtfs) => {
+                                            println!("Flixbus EU GTFS loaded.");
+                                            let client = FlixbusClient::new();
+                                            let agg = Aggregator::new(client, gtfs);
+                                            *flixbus_eu_aggregator.write().await = Some(agg);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Failed to parse Flixbus EU GTFS: {}", e)
+                                        }
+                                    }
+                                }
+                                Err(e) => eprintln!("Failed to get bytes for Flixbus EU: {}", e),
+                            },
+                            Err(e) => eprintln!("Failed to download Flixbus EU: {}", e),
+                        }
+                    });
+                }
+            }
+
             single_fetch_time::single_fetch_time(
                 request_limit,
                 client.clone(),
@@ -472,6 +606,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&chicago_gtfs),
                 Arc::clone(&rtc_quebec_gtfs),
                 Arc::clone(&mnr_gtfs),
+                Arc::clone(&flixbus_us_aggregator),
+                Arc::clone(&flixbus_eu_aggregator),
                 etcd_urls.clone(),
                 etcd_connection_options.clone(),
                 etcd_lease_id,

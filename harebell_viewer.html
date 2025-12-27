@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Harebell Viewer</title>
+    <script src='https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js'></script>
+    <link href='https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css' rel='stylesheet' />
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 100%;
+        }
+
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: white;
+            padding: 10px;
+            font-family: sans-serif;
+            border-radius: 4px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+    <div id="info">
+        <strong>Harebell Local Viewer</strong><br>
+        Tiles: <a href="http://127.0.0.1:8080/index.json" target="_blank">http://127.0.0.1:8080</a>
+    </div>
+    <script>
+        var map = new maplibregl.Map({
+            container: 'map',
+            style: 'https://maps.catenarymaps.org/light-style.json',
+            center: [-74.006, 40.7128], // New York
+            zoom: 12
+        });
+
+        map.addControl(new maplibregl.NavigationControl());
+
+        map.on('load', function () {
+            map.addSource('harebell', {
+                type: 'vector',
+                tiles: ['http://127.0.0.1:8080/tiles/{z}/{x}/{y}.pbf'],
+                minzoom: 0,
+                maxzoom: 20
+            });
+
+            map.addLayer({
+                id: 'transit-lines',
+                type: 'line',
+                source: 'harebell',
+                'source-layer': 'transit',
+                paint: {
+                    'line-color': ['get', 'color'],
+                    'line-width': 2,
+                    'line-opacity': 0.8
+                },
+                layout: {
+                    'line-cap': 'round',
+                    'line-join': 'round'
+                }
+            });
+
+            map.addLayer({
+                id: 'transit-lines-label',
+                type: 'symbol',
+                source: 'harebell',
+                'source-layer': 'transit',
+                layout: {
+                    'text-field': ['get', 'route_id'],
+                    'text-font': ['Barlow-Regular'],
+                    'text-size': 10,
+                    'symbol-placement': 'line',
+                    'text-offset': [0, 1]
+                },
+                paint: {
+                    'text-color': '#333',
+                    'text-halo-color': '#fff',
+                    'text-halo-width': 2
+                }
+            });
+        });
+
+        // Stations Layer
+        map.addLayer({
+            id: 'stations',
+            type: 'circle',
+            source: 'harebell',
+            'source-layer': 'stations',
+            paint: {
+                'circle-radius': 4,
+                'circle-color': '#ffffff',
+                'circle-stroke-width': 2,
+                'circle-stroke-color': '#000000'
+            }
+        });
+
+        // Station Labels
+        map.addLayer({
+            id: 'stations-label',
+            type: 'symbol',
+            source: 'harebell',
+            'source-layer': 'stations',
+            layout: {
+                'text-field': ['get', 'name'],
+                'text-font': ['Barlow-Regular'],
+                'text-size': 12,
+                'text-offset': [0, 1.5],
+                'text-anchor': 'top'
+            },
+            paint: {
+                'text-color': '#000',
+                'text-halo-color': '#fff',
+                'text-halo-width': 2
+            }
+        });
+
+        map.on('click', 'transit-lines', function (e) {
+            new maplibregl.Popup()
+                .setLngLat(e.lngLat)
+                .setHTML(JSON.stringify(e.features[0].properties, null, 2))
+                .addTo(map);
+        });
+
+        map.on('mouseenter', 'transit-lines', function () {
+            map.getCanvas().style.cursor = 'pointer';
+        });
+
+        map.on('mouseleave', 'transit-lines', function () {
+            map.getCanvas().style.cursor = '';
+        });
+    </script>
+</body>
+
+</html>
