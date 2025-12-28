@@ -42,6 +42,8 @@ pub struct RenderGraph {
     pub tree: RTree<GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, usize>>,
     pub node_tree: RTree<GeomWithData<[f64; 2], i64>>,
     pub collapsed_lines: HashMap<String, Vec<LineOnEdge>>,
+    // Adjacency list for curve generation: NodeID -> List of Edge Indices connected to it
+    pub node_to_edges: HashMap<i64, Vec<usize>>,
 }
 
 impl RenderGraph {
@@ -53,6 +55,7 @@ impl RenderGraph {
             tree: RTree::new(),
             node_tree: RTree::new(),
             collapsed_lines: HashMap::new(),
+            node_to_edges: HashMap::new(),
         }
     }
 
@@ -97,5 +100,12 @@ impl RenderGraph {
             node_items.push(GeomWithData::new([node.x, node.y], id));
         }
         self.node_tree = RTree::bulk_load(node_items);
+
+        // Rebuild Node Adjacency
+        self.node_to_edges.clear();
+        for (idx, edge) in self.edges.iter().enumerate() {
+            self.node_to_edges.entry(edge.from).or_default().push(idx);
+            self.node_to_edges.entry(edge.to).or_default().push(idx);
+        }
     }
 }

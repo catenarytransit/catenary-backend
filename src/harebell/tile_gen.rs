@@ -64,9 +64,54 @@ impl TileGenerator {
                 },
             );
 
+            // Shorten geometry at junction nodes (nodes with 2+ edges)
+            // This creates gaps that are filled by Bezier curves (Figure 6.1 step 3)
+            let cutback_distance = 0.00015; // approx 15 meters in degrees at mid-latitudes
+
+            let from_degree = graph
+                .node_to_edges
+                .get(&edge.from)
+                .map(|e| e.len())
+                .unwrap_or(1);
+            let to_degree = graph
+                .node_to_edges
+                .get(&edge.to)
+                .map(|e| e.len())
+                .unwrap_or(1);
+
+            let mut working_coords: Vec<[f64; 2]> = edge.geometry.clone();
+
+            // Cutback at start (from node) if it's a junction
+            if from_degree >= 2 && working_coords.len() >= 2 {
+                let p0 = working_coords[0];
+                let p1 = working_coords[1];
+                let dx = p1[0] - p0[0];
+                let dy = p1[1] - p0[1];
+                let seg_len = (dx * dx + dy * dy).sqrt();
+                if seg_len > cutback_distance * 1.5 {
+                    // Shorten from start
+                    let t = cutback_distance / seg_len;
+                    working_coords[0] = [p0[0] + dx * t, p0[1] + dy * t];
+                }
+            }
+
+            // Cutback at end (to node) if it's a junction
+            if to_degree >= 2 && working_coords.len() >= 2 {
+                let n = working_coords.len();
+                let p_last = working_coords[n - 1];
+                let p_prev = working_coords[n - 2];
+                let dx = p_last[0] - p_prev[0];
+                let dy = p_last[1] - p_prev[1];
+                let seg_len = (dx * dx + dy * dy).sqrt();
+                if seg_len > cutback_distance * 1.5 {
+                    // Shorten from end
+                    let t = cutback_distance / seg_len;
+                    working_coords[n - 1] = [p_last[0] - dx * t, p_last[1] - dy * t];
+                }
+            }
+
             // Build the source linestring from edge geometry (lon, lat)
-            let source_coords: Vec<Coord> = edge
-                .geometry
+            let source_coords: Vec<Coord> = working_coords
                 .iter()
                 .map(|p| Coord { x: p[0], y: p[1] })
                 .collect();
@@ -252,6 +297,11 @@ impl TileGenerator {
                 }
             }
         }
+
+        // Generate Node Connections (Bezier Curves)
+        // Uses graph.restrictions for proper partner matching
+        let tile_bbox = BBox::new([(-256.0_f64, -256.0_f64), (extent + 256.0, extent + 256.0)]);
+        layer = Self::generate_node_connections(graph, z, x, y, extent, layer, &tile_bbox);
 
         if let Err(e) = tile.add_layer(station_layer) {
             log::error!("Failed to add station layer: {}", e);
@@ -470,5 +520,290 @@ impl TileGenerator {
                 }
             }
         }
+    }
+
+    /// Generates Bezier curve connections for lines passing through nodes
+    /// Uses graph.restrictions to find valid partner pairs (edges where routes are allowed to connect)
+    fn generate_node_connections(
+        graph: &RenderGraph,
+        z: u8,
+        x: u32,
+        y: u32,
+        tile_extent: f64,
+        mut layer: mvt::Layer,
+        tile_bbox: &BBox<f64>,
+    ) -> mvt::Layer {
+        let (min_lon, min_lat, max_lon, max_lat) = Self::tile_bounds(z, x, y, 0.1);
+        let envelope = rstar::AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
+
+        let nodes_in_tile: Vec<_> = graph
+            .node_tree
+            .locate_in_envelope_intersecting(&envelope)
+            .collect();
+
+        let spacing = Self::get_zoom_spacing(z);
+
+        for item in nodes_in_tile {
+            let node_id = item.data;
+            if let Some(node) = graph.nodes.get(&node_id) {
+                // Get all edges connected to this node
+                if let Some(edge_indices) = graph.node_to_edges.get(&node_id) {
+                    if edge_indices.len() < 2 {
+                        continue;
+                    }
+
+                    // For each pair of edges at this node, check if there are allowed connections
+                    for &edge1_idx in edge_indices {
+                        for &edge2_idx in edge_indices {
+                            if edge1_idx >= edge2_idx {
+                                continue; // Skip self and avoid duplicate pairs
+                            }
+
+                            // Check if there are allowed routes from edge1 to edge2
+                            let allowed_routes: Vec<(String, String)> = {
+                                let mut routes = Vec::new();
+                                if let Some(r) = graph.restrictions.get(&(edge1_idx, edge2_idx)) {
+                                    routes.extend(r.iter().cloned());
+                                }
+                                if let Some(r) = graph.restrictions.get(&(edge2_idx, edge1_idx)) {
+                                    routes.extend(r.iter().cloned());
+                                }
+                                routes
+                            };
+
+                            if allowed_routes.is_empty() {
+                                continue;
+                            }
+
+                            let edge1 = &graph.edges[edge1_idx];
+                            let edge2 = &graph.edges[edge2_idx];
+
+                            if edge1.geometry.len() < 2 || edge2.geometry.len() < 2 {
+                                continue;
+                            }
+
+                            // For each allowed route, find the line on each edge and generate curve
+                            for (route_chateau, route_id) in &allowed_routes {
+                                // Find line position on edge1
+                                let line1_pos = edge1.lines.iter().position(|l| {
+                                    &l.chateau_id == route_chateau && &l.route_id == route_id
+                                });
+                                let line2_pos = edge2.lines.iter().position(|l| {
+                                    &l.chateau_id == route_chateau && &l.route_id == route_id
+                                });
+
+                                let (line1_idx, line2_idx) = match (line1_pos, line2_pos) {
+                                    (Some(i1), Some(i2)) => (i1, i2),
+                                    _ => continue, // Route not on both edges
+                                };
+
+                                let line1 = &edge1.lines[line1_idx];
+
+                                // Calculate tile-space positions and directions for each edge
+                                let calc_point_and_dir = |edge: &crate::graph::Edge, line_idx: usize| -> Option<((f64, f64), (f64, f64))> {
+                                    let n_lines = edge.lines.len();
+                                    if n_lines == 0 {
+                                        return None;
+                                    }
+
+                                    // Direction pointing AWAY from node (into edge)
+                                    let (dx, dy) = if edge.from == node_id {
+                                        let p0 = edge.geometry[0];
+                                        let p1 = edge.geometry[1];
+                                        (p1[0] - p0[0], p1[1] - p0[1])
+                                    } else {
+                                        let len = edge.geometry.len();
+                                        let p_end = edge.geometry[len - 1];
+                                        let p_prev = edge.geometry[len - 2];
+                                        (p_prev[0] - p_end[0], p_prev[1] - p_end[1])
+                                    };
+
+                                    let len_v = (dx * dx + dy * dy).sqrt();
+                                    if len_v < 1e-10 {
+                                        return None;
+                                    }
+                                    let dir = (dx / len_v, dy / len_v);
+
+                                    // Project to tile space
+                                    let (node_tx, node_ty) = Self::project_to_tile(node.x, node.y, z, x, y, tile_extent);
+                                    let epsilon = 0.0001;
+                                    let (h_tx, h_ty) = Self::project_to_tile(
+                                        node.x + dir.0 * epsilon,
+                                        node.y + dir.1 * epsilon,
+                                        z, x, y, tile_extent,
+                                    );
+
+                                    let t_dx = h_tx - node_tx;
+                                    let t_dy = h_ty - node_ty;
+                                    let t_len = (t_dx * t_dx + t_dy * t_dy).sqrt();
+                                    if t_len < 1e-10 {
+                                        return None;
+                                    }
+                                    let (tn_x, tn_y) = (t_dx / t_len, t_dy / t_len);
+
+                                    // Calculate offset for this line
+                                    let shift = (line_idx as f64 - (n_lines as f64 - 1.0) / 2.0) * spacing;
+                                    let norm_x = -tn_y;
+                                    let norm_y = tn_x;
+
+                                    // Point with offset
+                                    let start_x = node_tx + norm_x * shift;
+                                    let start_y = node_ty + norm_y * shift;
+
+                                    // Shorten slightly into edge
+                                    let shorten_dist = 15.0;
+                                    let p_x = start_x + tn_x * shorten_dist;
+                                    let p_y = start_y + tn_y * shorten_dist;
+
+                                    Some(((p_x, p_y), (tn_x, tn_y)))
+                                };
+
+                                let result1 = calc_point_and_dir(edge1, line1_idx);
+                                let result2 = calc_point_and_dir(edge2, line2_idx);
+
+                                let ((p1, dir1), (p2, dir2)) = match (result1, result2) {
+                                    (Some(r1), Some(r2)) => (r1, r2),
+                                    _ => continue,
+                                };
+
+                                // Validate distance
+                                let dist_sq = (p1.0 - p2.0).powi(2) + (p1.1 - p2.1).powi(2);
+                                if dist_sq > 100.0 * 100.0 || dist_sq < 1.0 {
+                                    continue;
+                                }
+
+                                // Generate Bezier curve
+                                // Directions point AWAY from node, so negate for curve tangents
+                                let d_p = (-dir1.0, -dir1.1);
+                                let d_q = (-dir2.0, -dir2.1);
+
+                                let curve = BezierControl::new(p1, p2, d_p, d_q);
+                                let points = curve.points(10);
+
+                                // Encode
+                                let mut encoder = GeomEncoder::new(mvt::GeomType::Linestring)
+                                    .bbox(tile_bbox.clone());
+                                for pt in points {
+                                    let _ = encoder.add_point(pt.0, pt.1);
+                                }
+                                if let Ok(geom) = encoder.encode() {
+                                    let mut feature = layer.into_feature(geom);
+                                    feature.set_id(
+                                        (node_id as u64).wrapping_add(
+                                            edge1_idx as u64 * 1000 + edge2_idx as u64,
+                                        ),
+                                    );
+                                    feature.add_tag_string("line_id", &line1.line_id);
+                                    feature.add_tag_string(
+                                        "color",
+                                        &format!("#{}", line1.color.trim_start_matches('#')),
+                                    );
+                                    feature.add_tag_string("type", "connection");
+                                    layer = feature.into_layer();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        layer
+    }
+}
+
+// Bezier Curve Logic
+#[derive(Clone, Copy, Debug)]
+struct BezierControl {
+    p: (f64, f64),
+    q: (f64, f64),
+    cp1: (f64, f64),
+    cp2: (f64, f64),
+}
+
+impl BezierControl {
+    // k = 4/3 * (sqrt(2) - 1) approx 0.55228474
+    const K: f64 = 0.55228474;
+
+    fn new(p: (f64, f64), q: (f64, f64), dir_p: (f64, f64), dir_q: (f64, f64)) -> Self {
+        let (px, py) = p;
+        let (qx, qy) = q;
+        let (dx_p, dy_p) = dir_p;
+        let (dx_q, dy_q) = dir_q;
+
+        let len_p = (dx_p * dx_p + dy_p * dy_p).sqrt();
+        let len_q = (dx_q * dx_q + dy_q * dy_q).sqrt();
+        let dp = if len_p > 0.0 {
+            (dx_p / len_p, dy_p / len_p)
+        } else {
+            (0.0, 0.0)
+        };
+        let dq = if len_q > 0.0 {
+            (dx_q / len_q, dy_q / len_q)
+        } else {
+            (0.0, 0.0)
+        };
+
+        // Intersection of P + t*dp and Q + s*dq
+        let det = dp.1 * dq.0 - dp.0 * dq.1;
+        let diff_x = qx - px;
+        let diff_y = qy - py;
+
+        let dist = (diff_x * diff_x + diff_y * diff_y).sqrt();
+
+        // If det close to 0, parallel
+        if det.abs() < 1e-4 {
+            // Just straight line or simple curve
+            // The paper says: "if t_euA and t_fuA do not intersect... simple placement"
+            let offset = Self::K * dist;
+            // But which direction? projected?
+            // Fallback: cp1 = p + dp*offset, cp2 = q + dq*offset
+            let cp1 = (px + dp.0 * offset * 0.5, py + dp.1 * offset * 0.5);
+            let cp2 = (qx + dq.0 * offset * 0.5, qy + dq.1 * offset * 0.5);
+            return Self { p, q, cp1, cp2 };
+        }
+
+        let t = (diff_x * (-dq.1) - diff_y * (-dq.0)) / det;
+        // let s = (dp.0 * diff_y - dp.1 * diff_x) / det;
+
+        let i_x = px + t * dp.0;
+        let i_y = py + t * dp.1;
+
+        // If intersection is "behind" both (t < 0?), then we might have parallel-ish anti-aligned?
+        // But we trust the geometry for now.
+
+        let dist_pi = ((i_x - px).powi(2) + (i_y - py).powi(2)).sqrt();
+        let dist_qi = ((i_x - qx).powi(2) + (i_y - qy).powi(2)).sqrt();
+
+        // Handle "magic number" logic
+        // if |p-i| == |q-i| then delta = |p-i|
+        let delta = (dist_pi + dist_qi) / 2.0;
+
+        // We use K * delta as distance from P/Q to CP
+        let offset = Self::K * delta;
+
+        // CP1 is along dp
+        let cp1 = (px + dp.0 * offset, py + dp.1 * offset);
+        // CP2 is along dq
+        let cp2 = (qx + dq.0 * offset, qy + dq.1 * offset);
+
+        Self { p, q, cp1, cp2 }
+    }
+
+    fn points(&self, steps: usize) -> Vec<(f64, f64)> {
+        let mut pts = Vec::with_capacity(steps + 1);
+        for i in 0..=steps {
+            let t = i as f64 / steps as f64;
+            let inv_t = 1.0 - t;
+
+            let b0 = inv_t * inv_t * inv_t;
+            let b1 = 3.0 * inv_t * inv_t * t;
+            let b2 = 3.0 * inv_t * t * t;
+            let b3 = t * t * t;
+
+            let x = b0 * self.p.0 + b1 * self.cp1.0 + b2 * self.cp2.0 + b3 * self.q.0;
+            let y = b0 * self.p.1 + b1 * self.cp1.1 + b2 * self.cp2.1 + b3 * self.q.1;
+            pts.push((x, y));
+        }
+        pts
     }
 }

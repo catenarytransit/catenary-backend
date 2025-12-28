@@ -231,6 +231,13 @@ impl Loader {
                 .push(r.route_id);
         }
 
+        // 5. Build Node Adjacency
+        let mut node_to_edges: HashMap<i64, Vec<usize>> = HashMap::new();
+        for (idx, edge) in edges.iter().enumerate() {
+            node_to_edges.entry(edge.from).or_default().push(idx);
+            node_to_edges.entry(edge.to).or_default().push(idx);
+        }
+
         let mut render_graph = RenderGraph {
             nodes,
             edges,
@@ -238,6 +245,7 @@ impl Loader {
             node_tree,
             restrictions: restriction_map,
             collapsed_lines: HashMap::new(),
+            node_to_edges,
         };
 
         let optimizer = crate::optimizer::Optimizer::new();
