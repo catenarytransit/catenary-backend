@@ -485,7 +485,8 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     // First reconstruction pass (C++: line 164)
     println!("First reconstruction pass (post-collapse)...");
     let mut graph = graph_from_edges(collapsed, &mut node_id_counter);
-    reconstruct_intersections(&mut graph, seg_len);
+    // C++ uses maxAggrDistance here (TopoConfig::maxAggrDistance), not segmentLength.
+    reconstruct_intersections(&mut graph, normal_d_cut);
 
     // Remove orphan lines (C++: line 178)
     println!("Remove orphan lines...");
@@ -498,7 +499,7 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
 
     // Second reconstruction pass (C++: line 182)
     println!("Second reconstruction pass...");
-    reconstruct_intersections(&mut graph, seg_len);
+    reconstruct_intersections(&mut graph, normal_d_cut);
 
     // Remove orphan lines again (C++: line 185)
     println!("Remove orphan lines again...");
@@ -906,29 +907,26 @@ fn collapse_shared_segments(
             let mut affected_nodes: Vec<NodeRef> = Vec::new(); // C++ line 230: affectedNodes
 
             // Build polyline including endpoints (C++ lines 237-245)
-            // CRITICAL: C++ uses e->getFrom()->pl().getGeom() which is the NODE's current position,
-            // not the edge geometry. Nodes may have moved during previous iterations!
-            // Use img_nds to get the current node position if available.
+            // CRITICAL FIX: C++ uses e->getFrom()->pl().getGeom() and e->getTo()->pl().getGeom()
+            // which are the OLD graph's node positions. These do NOT move during iteration.
+            // The Rust code was incorrectly using img_nds (NEW graph positions) which shift
+            // as nodes merge, causing incorrect span constraints and triangle artifacts
+            // between parallel train lines.
             let geom = convert_to_geo(&edge.geometry);
 
-            // Get FROM/TO node positions (may have moved in previous iterations)
-            // Fall back to edge geometry if node not yet mapped
-            let from_pos = img_nds
-                .get(&edge.from)
-                .map(|n| n.borrow().pos)
-                .unwrap_or_else(|| geom.0.first().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]));
-            let to_pos = img_nds
-                .get(&edge.to)
-                .map(|n| n.borrow().pos)
-                .unwrap_or_else(|| geom.0.last().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]));
+            // Use ORIGINAL edge geometry endpoints - matches C++ behavior exactly
+            // C++ iterates over edges from the OLD graph (_g->getNds()) and reads node
+            // positions from the OLD graph nodes (e->getFrom()->pl().getGeom()).
+            // The old graph nodes don't move, so we use geometry endpoints directly.
+            let from_pos = geom.0.first().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
+            let to_pos = geom.0.last().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
 
-            // Build full polyline: FROM -> geometry -> TO (matching C++ pl construction)
-            let mut pl: Vec<[f64; 2]> = Vec::with_capacity(geom.0.len() + 2);
-            pl.push(from_pos); // C++ line 240: pl.push_back(*e->getFrom()->pl().getGeom())
-            for coord in &geom.0 {
-                pl.push([coord.x, coord.y]);
-            }
-            pl.push(to_pos); // C++ line 242: pl.push_back(*e->getTo()->pl().getGeom())
+            // Build polyline from geometry (C++ lines 237-245)
+            // CRITICAL FIX: Unlike C++ where e->pl().getGeom() is INNER geometry only (without endpoints),
+            // our edge.geometry ALREADY INCLUDES the endpoints. So we just use the geometry directly
+            // without adding from_pos/to_pos which would cause duplicate first/last points.
+            // Duplicate points can cause issues with simplification and densification.
+            let pl: Vec<[f64; 2]> = geom.0.iter().map(|c| [c.x, c.y]).collect();
 
             // C++ line 244-245: simplify(pl, 0.5), then densify(..., SEGL)
             // CRITICAL: C++ uses 0.5m for simplification, NOT seg_len!
@@ -957,20 +955,25 @@ fn collapse_shared_segments(
             let num_lines = edge.route_ids.len();
             let mut i = 0;
             let pl_len = pl_dense.len();
-            let mut front_pos: Option<[f64; 2]> = None;
-            let mut front: Option<NodeRef> = None; // For FROM coverage handling
+            let mut front: Option<NodeRef> = None; // For FROM coverage handling (matches C++ 'front' pointer)
             let mut img_from_covered = false;
             let mut img_to_covered = false;
 
-            // C++ line 232: back = e->getTo() - the original TO endpoint position
-            // This is used for span constraint to prevent shortcuts
-            let to_endpoint_pos = *pl_dense.last().unwrap_or(&[0.0, 0.0]);
+            // C++ line 232: back = e->getTo() - use original TO endpoint position
+            // CRITICAL FIX: Use to_pos directly (original geometry endpoint) rather than
+            // pl_dense.last() which may drift during simplification/densification.
+            // This ensures the span constraint uses the exact edge endpoint, matching C++.
+            let to_endpoint_pos = to_pos;
 
             for point in &pl_dense {
                 // For span constraints: use front_pos (first node of this path)
                 // and to_endpoint_pos (original TO endpoint, cleared at last point)
                 // This matches C++: front and back are passed to ndCollapseCand
-                let span_a_pos = front_pos;
+                // IMPORTANT: In C++ 'front' is a node pointer whose position may shift
+                // during collapse (ndCollapseCand moves nodes toward centroids). Using
+                // a cached position here weakens the span constraint and can create
+                // spurious snaps/"knots".
+                let span_a_pos = front.as_ref().map(|n| n.borrow().pos);
                 let span_b_pos = if i == pl_len - 1 {
                     None
                 } else {
@@ -1055,9 +1058,8 @@ fn collapse_shared_segments(
                     }
                 }
 
-                // Track front position and node (C++: if (!front) front = cur)
-                if front_pos.is_none() {
-                    front_pos = Some(cur.borrow().pos);
+                // Track front node (C++: if (!front) front = cur)
+                if front.is_none() {
                     front = Some(Rc::clone(&cur));
                 }
 
@@ -1153,54 +1155,50 @@ fn collapse_shared_segments(
                     let dy = a_pos[1] - b_pos[1];
                     let d_cur = (dx * dx + dy * dy).sqrt();
 
-                    if d_cur <= d_min {
+                    // FIX BUG 1: Also check edge GEOMETRY length, not just node distance
+                    // C++ uses dist() between node positions, but the edge geometry may be
+                    // much longer (curved path). Only merge if actual edge is short.
+                    let edge_geom_len = calc_polyline_length(&edge_ref.borrow().geometry);
+
+                    if d_cur <= d_min && edge_geom_len <= seg_len {
                         d_min = d_cur;
-                        comb = Some(b);
+                        comb = Some(Rc::clone(&b));
                     }
                 }
 
                 // Merge affected node into comb (C++ line 362: combineNodes(a, comb, &tgNew))
                 if let Some(comb_node) = comb {
                     if !Rc::ptr_eq(affected_node, &comb_node) {
-                        // FIX BUG 2: Check for blocking edges before calling combine_nodes
-                        // In the C++ affected nodes loop, there is no explicit check, but combineNodes handles it.
-                        // However, we need to be careful not to create artifacts if the merge implies
-                        // folding edges that shouldn't be folded.
+                        // FIX BUG 2: Check for blocking edges with vastly different geometry
+                        // before calling combine_nodes. This prevents creating triangular
+                        // artifacts when merging creates shortcut edges.
+                        let mut can_merge = true;
+                        let affected_adj = affected_node.borrow().adj_list.clone();
 
-                        // We rely on combine_nodes to handle the folding correctly.
-                        // But let's verify if we are merging nodes that are already connected,
-                        // this effectively collapses the edge between them.
-                        // If they are NOT connected, we are "teleporting" them together.
+                        for other_e in &affected_adj {
+                            let other = other_e.borrow().get_other_nd(affected_node);
+                            // Skip the connecting edge to comb_node
+                            if Rc::ptr_eq(&other, &comb_node) {
+                                continue;
+                            }
 
-                        // C++ `combineNodes` effectively moves `a` to `b`.
-                        // If `a` and `b` are connected, the edge is removed.
-                        // If `a` and `b` are NOT connected, `combineNodes` effectively merges them geometry-wise?
-                        // Actually `combineNodes` logic (lines 1516+) checks:
-                        // "Get connecting edge... if connecting.is_none() return false"
-                        // So combine_nodes ONLY works if they are connected!
+                            // Check if comb_node already has an edge to 'other'
+                            if let Some(existing) = tg_new.get_edg(&comb_node, &other) {
+                                let ex_len = calc_polyline_length(&existing.borrow().geometry);
+                                let oe_len = calc_polyline_length(&other_e.borrow().geometry);
+                                // If geometry lengths differ by more than 2*seg_len, don't merge
+                                // This matches C++ contractNodes check (lines 593-606)
+                                if (ex_len - oe_len).abs() > 2.0 * seg_len {
+                                    can_merge = false;
+                                    break;
+                                }
+                            }
+                        }
 
-                        // Wait, C++ `combineNodes` (MapConstructor.cpp 754) STARTS with:
-                        // LineEdge* connecting = g->getEdg(a, b); assert(connecting);
-                        // So in C++, this loop (affected nodes) ONLY merges if there is an edge?
-                        // Actually no, affected nodes loop finds "nearest high-degree neighbor".
-                        // It does NOT guarantee they are connected.
-                        // If they are NOT connected, C++ crashes on assert(connecting)?
-                        // Let's check C++ again.
-                        // Lines 348-357 iterate `a->getAdjList()`.
-                        // `comb` is `e->getOtherNd(a)`.
-                        // So `comb` IS a neighbor of `a`! They ARE connected!
-                        // So our `combine_nodes` logic requiring connection is correct and consistent.
-
-                        // So where is the bug?
-                        // "Affected nodes artifact removal missing blocking edge check"
-                        // If we hold the edge `a-comb`, and we merge `a` into `comb`.
-                        // Are there OTHER edges between `a` and `comb`? (Parallel edges)
-                        // If so, `combine_nodes` might behave weirdly.
-                        // But `get_edg` returns one edge.
-
-                        // Proceed with merge, ensuring combine_nodes is robust.
-                        if combine_nodes(affected_node, &comb_node, &mut tg_new, &mut geo_idx) {
-                            // Successfully merged
+                        if can_merge {
+                            if combine_nodes(affected_node, &comb_node, &mut tg_new, &mut geo_idx) {
+                                // Successfully merged
+                            }
                         }
                     }
                 }
@@ -1269,7 +1267,9 @@ fn collapse_shared_segments(
         collapse_degree_2_nodes_serial(&mut tg_new, d_cut);
 
         // Phase 4: Edge artifact removal (C++: lines 421-481)
-        // Remove short edges that shouldn't exist
+        // NOTE: Our worklist-based contract_short_edges already iterates internally
+        // until convergence. The C++ do/while pattern is implemented INSIDE the function.
+        // We should NOT wrap it in another loop - that causes infinite cycling.
         println!("Contracting short edges...");
         contract_short_edges(&mut tg_new, d_cut);
 
@@ -1451,9 +1451,16 @@ fn nd_collapse_cand(
 
     // Use callback-based search to avoid Vec allocation (major perf win)
     let best =
-        geo_idx.find_best_in_radius(point, effective_d_cut, |_node, nd_id, nd_pos, dist_sq| {
+        geo_idx.find_best_in_radius(point, effective_d_cut, |node, nd_id, _nd_pos, dist_sq| {
             // Skip nodes in blocking set (already on this edge's path)
             if blocking_set.contains(&nd_id) {
+                return None;
+            }
+
+            // C++: if (ndTest->getDeg() == 0) continue;
+            // In Rust we keep NodeRefs around until Vec::retain, so we must
+            // explicitly avoid collapsing into "deleted" nodes.
+            if node.borrow().get_deg() == 0 {
                 return None;
             }
 
@@ -1647,12 +1654,22 @@ fn combine_nodes(
                 .adj_list
                 .retain(|e| !Rc::ptr_eq(e, old_edge));
         } else {
-            // Create new edge from b to other_node, PRESERVING GEOMETRY (C++: std::move(oldE->pl()))
+            // Create new edge from b to other_node
+            // FIX: Update geometry endpoint to match new 'from' node position
+            let mut geometry = old_edge.borrow().geometry.clone();
+            if !geometry.is_empty() {
+                let b_pos = b.borrow().pos;
+                geometry[0] = Coord {
+                    x: b_pos[0],
+                    y: b_pos[1],
+                };
+            }
+
             let new_edge = Rc::new(RefCell::new(LineEdge {
                 from: Rc::clone(b),
                 to: Rc::clone(&other_node),
                 routes: old_edge.borrow().routes.clone(),
-                geometry: old_edge.borrow().geometry.clone(), // PRESERVE geometry!
+                geometry,
             }));
 
             // Update route directions
@@ -1736,12 +1753,23 @@ fn combine_nodes(
                 .adj_list
                 .retain(|e| !Rc::ptr_eq(e, old_edge));
         } else {
-            // Create new edge from other_node to b, PRESERVING GEOMETRY
+            // Create new edge from other_node to b
+            // FIX: Update geometry endpoint to match new 'to' node position
+            let mut geometry = old_edge.borrow().geometry.clone();
+            if !geometry.is_empty() {
+                let b_pos = b.borrow().pos;
+                let last_idx = geometry.len() - 1;
+                geometry[last_idx] = Coord {
+                    x: b_pos[0],
+                    y: b_pos[1],
+                };
+            }
+
             let new_edge = Rc::new(RefCell::new(LineEdge {
                 from: Rc::clone(&other_node),
                 to: Rc::clone(b),
                 routes: old_edge.borrow().routes.clone(),
-                geometry: old_edge.borrow().geometry.clone(), // PRESERVE geometry!
+                geometry,
             }));
 
             node_rpl(&new_edge, a, b);
@@ -2404,7 +2432,8 @@ fn get_polyline_segment(coords: &[Coord], start_frac: f64, end_frac: f64) -> Vec
 /// Contract very short edges (edge artifact removal) (C++: lines 421-481 of collapseShrdSegs)
 /// Repeatedly merges nodes connected by edges shorter than max_aggr_distance
 /// OPTIMIZED: Uses a worklist algorithm to avoid O(N^2) complexity.
-fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
+/// Returns the number of edges contracted (used for iterative convergence check).
+fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) -> usize {
     let mut total_contracted = 0;
 
     // Worklist for nodes to process.
@@ -2499,7 +2528,16 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                     // Check if there is an edge between 'other' and 'to' (the survivor)
                     if let Some(ex) = graph.get_edg(&other, &to) {
                         let ex_len = calc_polyline_length(&ex.borrow().geometry);
+                        let old_e_len = calc_polyline_length(&old_e.borrow().geometry);
                         let support_threshold = 2.0 * max_aggr_distance;
+
+                        // CRITICAL FIX: Check geometry length difference (C++ lines 593-606)
+                        // Prevent folding edges with vastly different geometries
+                        // This stops Chicago Union Station tracks from merging with CTA Blue Line
+                        if (ex_len - old_e_len).abs() > support_threshold {
+                            dont_contract = true;
+                            continue;
+                        }
 
                         if ex_len > support_threshold {
                             blocking_edges_to_split.push(Rc::clone(&ex));
@@ -2538,10 +2576,9 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
                     skip_degree = true;
                 }
             } else if from_deg == 2 && to_deg == 1 {
-                let from_adj = from.borrow().adj_list.clone();
-                if from_adj.len() == 2 && line_eq(&from_adj[0], &from_adj[1]) {
-                    skip_degree = true;
-                }
+                // C++ CRITICAL: This case always skips (line 466: unconditional continue)
+                // This prevents deleting edges left by degree-2 contraction to avoid long edges
+                skip_degree = true;
             } else if from_deg == 2 && to_deg == 2 {
                 let from_adj = from.borrow().adj_list.clone();
                 let to_adj = to.borrow().adj_list.clone();
@@ -2595,6 +2632,8 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) {
         // Clean up any isolated nodes left behind
         graph.nodes.retain(|n| n.borrow().get_deg() > 0);
     }
+
+    total_contracted
 }
 
 /// Get orthogonal line at a fraction along a polyline (for handle-based restrictions)
@@ -2756,16 +2795,11 @@ fn fold_edges_for_node(graph: &mut LineGraph, node: &NodeRef) -> bool {
 
 /// Apply polish fixes to the graph - INSIDE the iteration loop
 /// Based on C++ collapseShrdSegs lines 421-481 (edge artifact removal)
-fn apply_polish_fixes(graph: &mut LineGraph, max_aggr_distance: f64) {
-    // C++ does edge artifact removal (combineNodes for short edges) in the inner loop
-    // The complex operations (averageNodePositions, reconstructIntersections) are
-    // done OUTSIDE collapseShrdSegs in TopoMain.cpp
-
-    // Edge artifact removal: contract very short edges (C++: lines 421-481)
-    contract_short_edges(graph, max_aggr_distance);
-
-    // C++ lines 504-514: "smoothen a bit" - apply per-iteration edge smoothing
-    // This is CRITICAL for smooth curves and proper convergence
+fn apply_polish_fixes(graph: &mut LineGraph, _max_aggr_distance: f64) {
+    // C++ lines 504-514: "smoothen a bit" - apply per-iteration edge smoothing.
+    // IMPORTANT: C++ does NOT run the short-edge contraction step here; that happens
+    // earlier (the do/while artifact removal block). Contracting again here can
+    // introduce unintended merges near close-but-not-connected geometry.
 
     // PARALLEL PROCESSING: Collect edge geometries, process in parallel, write back
     // Step 1: Collect all edge geometries with their identifiers
@@ -2978,6 +3012,36 @@ fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
                 found_edge.unwrap()
             };
 
+            // FIX BUG 3: Check for blocking edges with vastly different geometry BEFORE merge
+            // If any blocking edge would create a triangle artifact, skip the whole merge
+            let mut can_merge = true;
+            let pre_check_adj = node.borrow().adj_list.clone();
+            for other_edge_ref in &pre_check_adj {
+                if Rc::ptr_eq(other_edge_ref, &edge_ref) {
+                    continue;
+                }
+                let other_node = other_edge_ref.borrow().get_other_nd(&node);
+                if Rc::ptr_eq(&other_node, &to_node) {
+                    continue;
+                }
+
+                // Check if to_node already has an edge to other_node
+                if let Some(existing) = graph.get_edg(&to_node, &other_node) {
+                    let existing_len = calc_polyline_length(&existing.borrow().geometry);
+                    let other_len = calc_polyline_length(&other_edge_ref.borrow().geometry);
+                    let length_diff_threshold = 2.0 * threshold;
+
+                    if (existing_len - other_len).abs() > length_diff_threshold {
+                        can_merge = false;
+                        break;
+                    }
+                }
+            }
+
+            if !can_merge {
+                continue;
+            }
+
             let from_pos = node.borrow().pos;
             let to_pos = to_node.borrow().pos;
 
@@ -3006,7 +3070,7 @@ fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
                 let existing = graph.get_edg(&to_node, &other_node);
 
                 if let Some(existing_edge) = existing {
-                    // Fold edges
+                    // Fold edges - we already checked length compatibility above
                     {
                         let routes_b: Vec<LineOcc> = other_edge_ref.borrow().routes.clone();
                         let mut ee = existing_edge.borrow_mut();
@@ -3054,15 +3118,22 @@ fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
                         .adj_list
                         .retain(|e| !Rc::ptr_eq(e, other_edge_ref));
                 } else {
-                    // Create new edge
-                    // IMPORTANT: Geometry might be empty/straight line, will be fixed by clean_up_geoms or reconstruct
+                    // Create new edge from to_node to other_node
+                    // FIX: Update geometry endpoint to match new 'from' node position
+                    let mut geometry = other_edge_ref.borrow().geometry.clone();
+                    if !geometry.is_empty() {
+                        let to_pos = to_node.borrow().pos;
+                        geometry[0] = Coord {
+                            x: to_pos[0],
+                            y: to_pos[1],
+                        };
+                    }
+
                     let new_edge = Rc::new(RefCell::new(LineEdge {
                         from: Rc::clone(&to_node),
                         to: Rc::clone(&other_node),
                         routes: other_edge_ref.borrow().routes.clone(),
-                        geometry: vec![], // Will be set at end of loop by clean_up_geoms?
-                                          // Actually soft_cleanup calls run before "write edge geoms" in C++
-                                          // so geometry is just endpoints.
+                        geometry,
                     }));
 
                     to_node.borrow_mut().adj_list.push(Rc::clone(&new_edge));
