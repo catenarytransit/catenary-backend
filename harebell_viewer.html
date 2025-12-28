@@ -50,6 +50,8 @@
         map.addControl(new maplibregl.NavigationControl());
 
         map.on('load', function () {
+            map.showTileBoundaries = true;
+
             map.addSource('harebell', {
                 type: 'vector',
                 tiles: ['http://127.0.0.1:8080/tiles/{z}/{x}/{y}.pbf'],
@@ -64,7 +66,7 @@
                 'source-layer': 'transit',
                 paint: {
                     'line-color': ['get', 'color'],
-                    'line-width': 2,
+                    'line-width': 4,
                     'line-opacity': 0.8
                 },
                 layout: {
@@ -100,9 +102,9 @@
             source: 'harebell',
             'source-layer': 'stations',
             paint: {
-                'circle-radius': 4,
+                'circle-radius': 5,
                 'circle-color': '#ffffff',
-                'circle-stroke-width': 2,
+                'circle-stroke-width': 5,
                 'circle-stroke-color': '#000000'
             }
         });
