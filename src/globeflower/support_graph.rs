@@ -1203,22 +1203,6 @@ fn collapse_shared_segments(
                     }
                 }
             }
-
-            // Garbage Collect Dead Nodes Periodically
-            // Rust LineGraph keeps usage of Rc<RefCell<Node>>. When combine_nodes "deletes" a node,
-            // it clears its adjacency list but the Node struct remains in tg_new.nodes.
-            // In C++, the node is deleted. In Rust, we must manually remove it to free memory.
-            // We do this periodically to amortize the O(N) cost of Vec::retain.
-            // 2000 edges threshold is chosen to keep working set size reasonable without excessive scanning.
-            // Garbage Collect Dead Nodes Periodically
-            // Rust LineGraph keeps usage of Rc<RefCell<Node>>.
-            // We reduced frequency significantly to avoid O(N) cost.
-            // Only doing it once per iteration loop (at end) is safer for perf.
-            /*
-            if edge_idx % 2000 == 0 {
-                tg_new.nodes.retain(|n| n.borrow().get_deg() > 0);
-            }
-            */
         }
 
         let num_edges = tg_new.num_edges();
@@ -2133,13 +2117,6 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph, d_cut: f64) {
                 // println!("Splitting blocking edge to allow contraction...");
                 support_edge(&ex, graph);
 
-                // CRITICAL CORRECTION (Fix Bug 3):
-                // After splitting, we must verify that the blocking edge is actually GONE
-                // or that we can now proceed.
-                // In C++, supportEdge permanently modifies the graph so 'ex' is invalid.
-                // But we need to ensure we don't just blindly contract if something is still there.
-                // Since support_edge removes 'ex' from adjacency lists, get_edg should now return None
-                // or a different edge. If it returns None, we are good.
                 if graph.get_edg(&other_a, &other_b).is_some() {
                     // Still blocked (maybe another edge?), abort
                     do_contract = false;
