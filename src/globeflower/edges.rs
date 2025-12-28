@@ -27,8 +27,9 @@ pub struct GraphEdge {
     pub to: NodeId,
     pub geometry: LineString<Point>,
     pub route_ids: Vec<(String, String)>, // (chateau, route_id) - chateau ensures uniqueness across different gtfs files
-    pub weight: f64,                      // length in meters
-    pub original_edge_index: Option<usize>, // For debugging/zippering traceability
+    pub original_shape_ids: Vec<(String, String)>, // (chateau, shape_id) - tracks which GTFS shapes contributed to this edge
+    pub weight: f64,                               // length in meters
+    pub original_edge_index: Option<usize>,        // For debugging/zippering traceability
 }
 
 pub async fn generate_edges(
@@ -144,6 +145,7 @@ pub async fn generate_edges(
                         to: NodeId::Cluster(tc),
                         geometry: convert_from_geo(&segment),
                         route_ids: pattern_to_route.get(&pat_id).cloned().into_iter().collect(),
+                        original_shape_ids: vec![], // Pattern-based edges don't have original shapes
                         weight,
                         original_edge_index: None,
                     });
@@ -312,6 +314,7 @@ fn merge_edges(raw_edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                 to,
                 geometry: convert_from_geo(&chaikin_smoothing(&avg_geom, 1)),
                 route_ids: merged_routes,
+                original_shape_ids: vec![], // Edges don't track shapes in this pipeline
                 weight: avg_weight,
                 original_edge_index: None,
             });
@@ -923,6 +926,7 @@ pub fn snap_clusters_to_edges(
                         to: *node_id,
                         geometry: convert_from_geo(&sub_geom),
                         route_ids: edge.route_ids.clone(),
+                        original_shape_ids: edge.original_shape_ids.clone(),
                         weight: 0.0, // Should recalc
                         original_edge_index: edge.original_edge_index,
                     });
@@ -940,6 +944,7 @@ pub fn snap_clusters_to_edges(
                         to: edge.to,
                         geometry: convert_from_geo(&sub_geom),
                         route_ids: edge.route_ids.clone(),
+                        original_shape_ids: edge.original_shape_ids.clone(),
                         weight: 0.0,
                         original_edge_index: edge.original_edge_index,
                     });
@@ -1068,6 +1073,7 @@ fn split_edges_at_points(
                     to: new_node_id,
                     geometry: convert_from_geo(&geom),
                     route_ids: edge.route_ids.clone(),
+                    original_shape_ids: edge.original_shape_ids.clone(),
                     weight,
                     original_edge_index: edge.original_edge_index,
                 });
@@ -1086,6 +1092,7 @@ fn split_edges_at_points(
                     to: edge.to,
                     geometry: convert_from_geo(&geom),
                     route_ids: edge.route_ids.clone(),
+                    original_shape_ids: edge.original_shape_ids.clone(),
                     weight,
                     original_edge_index: edge.original_edge_index,
                 });
@@ -1141,6 +1148,7 @@ fn bundle_edges(edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                     to: v,
                     geometry: convert_from_geo(&avg_geom),
                     route_ids: all_routes,
+                    original_shape_ids: vec![], // Bundled edges lose shape tracking
                     weight: total_weight,
                     original_edge_index: None,
                 });
@@ -1207,6 +1215,7 @@ fn bundle_edges(edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                 to: v,
                 geometry: convert_from_geo(&avg_geom),
                 route_ids: all_routes,
+                original_shape_ids: vec![], // Bundled edges lose shape tracking
                 weight: total_weight,
                 original_edge_index: None,
             });
@@ -1457,6 +1466,7 @@ fn collapse_shared_segments(
                         },
                     ])),
                     route_ids: edge.route_ids.clone(),
+                    original_shape_ids: edge.original_shape_ids.clone(),
                     weight: segment_len,
                     original_edge_index: edge.original_edge_index,
                 });
@@ -1611,6 +1621,7 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
             to: last.to,
             geometry: convert_from_geo(&post_process_line(&GeoLineString::new(coords))),
             route_ids: route_vec,
+            original_shape_ids: first.original_shape_ids.clone(),
             weight: total_weight,
             original_edge_index: first.original_edge_index,
         }
@@ -2025,6 +2036,7 @@ mod tests {
                 srid: Some(4326),
             },
             route_ids: vec![("test_chateau".to_string(), "R1".to_string())],
+            original_shape_ids: vec![],
             weight: 10.0,
             original_edge_index: None,
         };

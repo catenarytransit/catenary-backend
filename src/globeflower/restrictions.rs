@@ -435,6 +435,10 @@ pub async fn infer_from_db(
     ))
 }
 
+/// Type aliases for handle maps matching C++ _handlesA/_handlesB
+/// Maps: GraphEdgeIdx -> set of RestrNode indices
+type HandleMap = HashMap<usize, HashSet<usize>>;
+
 /// Infer turn restrictions using Dijkstra-based path cost analysis
 /// This matches the C++ RestrInferrer algorithm
 pub fn infer_restrictions_dijkstra(
@@ -445,75 +449,80 @@ pub fn infer_restrictions_dijkstra(
     println!("Inferring turn restrictions (Dijkstra)...");
 
     // Build restriction graph from edges
-    let (mut graph, restr_edge_map) = build_restriction_graph(edges, route_shapes);
+    let (mut graph, restr_edge_map, node_map) = build_restriction_graph(edges, route_shapes);
 
-    // Add handles
-    let handles = add_handles(&mut graph, edges, &restr_edge_map, route_shapes);
+    // Add handles - returns separate A (1/3) and B (2/3) handle maps
+    let (handles_a, handles_b) = add_handles(&mut graph, edges, &restr_edge_map, route_shapes);
 
     let mut restrictions = Vec::new();
 
-    // Build adjacency for the original edges
-    let mut adj_out: HashMap<NodeId, Vec<usize>> = HashMap::new();
-    let mut adj_in: HashMap<NodeId, Vec<usize>> = HashMap::new();
-
+    // Build adjacency for the original edges (treating edges as undirected for iteration)
+    // C++ iterates over all adjacencies, checking each pair
+    let mut adj: HashMap<NodeId, Vec<usize>> = HashMap::new();
     for (i, edge) in edges.iter().enumerate() {
-        adj_out.entry(edge.from).or_default().push(i);
-        adj_in.entry(edge.to).or_default().push(i);
+        adj.entry(edge.from).or_default().push(i);
+        adj.entry(edge.to).or_default().push(i);
     }
 
-    let all_nodes: HashSet<NodeId> = adj_in.keys().chain(adj_out.keys()).cloned().collect();
-
+    let all_nodes: HashSet<NodeId> = adj.keys().cloned().collect();
     let mut restrictions_count = 0;
 
-    for node in all_nodes {
-        let Some(incoming_indices) = adj_in.get(&node) else {
-            continue;
-        };
-        let Some(outgoing_indices) = adj_out.get(&node) else {
+    for node in &all_nodes {
+        let Some(adjacent_indices) = adj.get(node) else {
             continue;
         };
 
-        for &u_idx in incoming_indices {
-            for &v_idx in outgoing_indices {
-                if u_idx == v_idx {
+        // Check every pair of adjacent edges at this node (matching C++ lines 86-112)
+        for &edg1_idx in adjacent_indices {
+            for &edg2_idx in adjacent_indices {
+                if edg1_idx == edg2_idx {
                     continue;
                 }
 
-                let u = &edges[u_idx];
-                let v = &edges[v_idx];
+                let edg1 = &edges[edg1_idx];
+                let edg2 = &edges[edg2_idx];
 
-                let u_routes: HashSet<&(String, String)> = u.route_ids.iter().collect();
-                let v_routes: HashSet<&(String, String)> = v.route_ids.iter().collect();
+                // Get routes on edg1
+                for route_key in &edg1.route_ids {
+                    // Check if edg2 has the same route (C++ line 92: hasLine check)
+                    if !edg2.route_ids.contains(route_key) {
+                        continue;
+                    }
 
-                let shared_routes: Vec<&(String, String)> =
-                    u_routes.intersection(&v_routes).cloned().collect();
-
-                if shared_routes.is_empty() {
-                    continue;
-                }
-
-                let u_geom = convert_to_geo(&u.geometry);
-                let v_geom = convert_to_geo(&v.geometry);
-
-                for route_key in shared_routes {
                     let line_id = format!("{}_{}", route_key.0, route_key.1);
 
-                    let valid_path = check_path_exists(
+                    // NOTE: C++ direction filtering (lines 96-103) would go here
+                    // For now we skip it since GTFS edges are bidirectional by default
+                    // The restriction check below handles this implicitly
+
+                    // C++ line 106: Check BOTH directions - only add restriction if BOTH fail
+                    let check1 = check_path_for_turn(
                         &graph,
-                        &restr_edge_map,
-                        &handles,
-                        u_idx,
-                        v_idx,
+                        edges,
+                        &handles_a,
+                        &handles_b,
+                        edg1_idx,
+                        edg2_idx,
+                        *node,
                         &line_id,
-                        &u_geom,
-                        &v_geom,
+                        max_length_deviation,
+                    );
+                    let check2 = check_path_for_turn(
+                        &graph,
+                        edges,
+                        &handles_a,
+                        &handles_b,
+                        edg2_idx,
+                        edg1_idx,
+                        *node,
+                        &line_id,
                         max_length_deviation,
                     );
 
-                    if !valid_path {
+                    if !check1 && !check2 {
                         restrictions.push(TurnRestriction {
-                            from_edge_index: u_idx,
-                            to_edge_index: v_idx,
+                            from_edge_index: edg1_idx,
+                            to_edge_index: edg2_idx,
                             route_id: route_key.clone(),
                         });
                         restrictions_count += 1;
@@ -523,18 +532,274 @@ pub fn infer_restrictions_dijkstra(
         }
     }
 
+    // C++ lines 116-145: Clear erroneous/superfluous exceptions
+    // If a line on an edge has ALL its continuations blocked, something is wrong
+    restrictions = cleanup_dead_restrictions(restrictions, edges, &adj);
+
     println!(
-        "Inferred {} turn restrictions (Dijkstra).",
+        "Inferred {} turn restrictions (Dijkstra) after cleanup.",
         restrictions_count
     );
     restrictions
 }
 
+/// Clean up restrictions that would block ALL continuations for a line
+/// Matching C++ lines 116-145
+fn cleanup_dead_restrictions(
+    mut restrictions: Vec<TurnRestriction>,
+    edges: &[GraphEdge],
+    adj: &HashMap<NodeId, Vec<usize>>,
+) -> Vec<TurnRestriction> {
+    // Build a set of blocked turns for quick lookup
+    let mut blocked: HashSet<(usize, usize, String)> = HashSet::new();
+    for r in &restrictions {
+        let key = (
+            r.from_edge_index,
+            r.to_edge_index,
+            format!("{}_{}", r.route_id.0, r.route_id.1),
+        );
+        blocked.insert(key);
+    }
+
+    // Check each node
+    let all_nodes: HashSet<NodeId> = adj.keys().cloned().collect();
+    let mut to_remove: HashSet<(usize, usize, String)> = HashSet::new();
+
+    for node in &all_nodes {
+        let Some(adjacent_indices) = adj.get(node) else {
+            continue;
+        };
+
+        for &edg1_idx in adjacent_indices {
+            let edg1 = &edges[edg1_idx];
+
+            for route_key in &edg1.route_ids {
+                let line_id = format!("{}_{}", route_key.0, route_key.1);
+
+                // Count other edges with this line, and how many are connected
+                let mut other_occs = 0;
+                let mut other_cons = 0;
+
+                for &edg2_idx in adjacent_indices {
+                    if edg1_idx == edg2_idx {
+                        continue;
+                    }
+
+                    let edg2 = &edges[edg2_idx];
+                    if edg2.route_ids.contains(route_key) {
+                        other_occs += 1;
+
+                        // Check if connection is allowed (in either direction)
+                        let key1 = (edg1_idx, edg2_idx, line_id.clone());
+                        let key2 = (edg2_idx, edg1_idx, line_id.clone());
+                        if !blocked.contains(&key1) || !blocked.contains(&key2) {
+                            other_cons += 1;
+                        }
+                    }
+                }
+
+                // If there are other edges with this line but NO connections allowed,
+                // delete all restrictions from this edge for this line
+                if other_cons == 0 && other_occs > 0 {
+                    for &edg2_idx in adjacent_indices {
+                        let key = (edg1_idx, edg2_idx, line_id.clone());
+                        to_remove.insert(key);
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove the erroneous restrictions
+    let removed_count = to_remove.len();
+    restrictions.retain(|r| {
+        let key = (
+            r.from_edge_index,
+            r.to_edge_index,
+            format!("{}_{}", r.route_id.0, r.route_id.1),
+        );
+        !to_remove.contains(&key)
+    });
+
+    if removed_count > 0 {
+        println!("Cleaned up {} erroneous restrictions.", removed_count);
+    }
+
+    restrictions
+}
+
+/// Check if a valid path exists for a turn from edg1 to edg2 at shared_node
+/// Matching C++ RestrInferrer::check (lines 313-358)
+#[allow(clippy::too_many_arguments)]
+fn check_path_for_turn(
+    graph: &RestrGraph,
+    edges: &[GraphEdge],
+    handles_a: &HandleMap,
+    handles_b: &HandleMap,
+    edg1_idx: usize,
+    edg2_idx: usize,
+    shared_node: NodeId,
+    line_id: &str,
+    max_dev: f64,
+) -> bool {
+    let edg1 = &edges[edg1_idx];
+    let edg2 = &edges[edg2_idx];
+
+    // Determine which handles to use based on shared node position
+    // C++ lines 322-348: if sharedNd == edg1->getFrom() use handlesA, else handlesB
+    let from_handles = if shared_node == edg1.from {
+        handles_a.get(&edg1_idx)
+    } else {
+        handles_b.get(&edg1_idx)
+    };
+
+    let to_handles = if shared_node == edg2.from {
+        handles_a.get(&edg2_idx)
+    } else {
+        handles_b.get(&edg2_idx)
+    };
+
+    // Collect "from" edges (incoming edges to handle nodes)
+    let mut from_edges: HashSet<usize> = HashSet::new();
+    if let Some(handle_nodes) = from_handles {
+        for &nd in handle_nodes {
+            if let Some(in_edges) = graph.adj_in.get(&nd) {
+                from_edges.extend(in_edges.iter().filter(|&&e| {
+                    graph.edges[e]
+                        .as_ref()
+                        .map(|edge| edge.lines.contains(line_id))
+                        .unwrap_or(false)
+                }));
+            }
+        }
+    }
+
+    // Collect "to" edges (outgoing edges from handle nodes)
+    let mut to_edges: HashSet<usize> = HashSet::new();
+    if let Some(handle_nodes) = to_handles {
+        for &nd in handle_nodes {
+            if let Some(out_edges) = graph.adj_out.get(&nd) {
+                to_edges.extend(out_edges.iter().filter(|&&e| {
+                    graph.edges[e]
+                        .as_ref()
+                        .map(|edge| edge.lines.contains(line_id))
+                        .unwrap_or(false)
+                }));
+            }
+        }
+    }
+
+    if from_edges.is_empty() || to_edges.is_empty() {
+        // No handles found - assume path exists (conservative)
+        return true;
+    }
+
+    // Calculate expected distance (C++ lines 319-320)
+    let edg1_geom = convert_to_geo(&edg1.geometry);
+    let edg2_geom = convert_to_geo(&edg2.geometry);
+    #[allow(deprecated)]
+    let cur_d = edg1_geom.haversine_length() * 0.33 + edg2_geom.haversine_length() * 0.33;
+
+    // curdist + maxL is the infinity threshold (C++ lines 353-355)
+    let eps = 0.1;
+    let max_cost = cur_d + max_dev + eps;
+    let cost_func = CostFunc::new(line_id, max_cost, graph);
+
+    // Run EDijkstra from "from_edges" to "to_edges" (C++ line 357)
+    let min_cost = dijkstra_edges(graph, &from_edges, &to_edges, &cost_func);
+
+    // C++ line 357: return cost - curD < maxLengthDev
+    min_cost.map(|cost| cost - cur_d < max_dev).unwrap_or(false)
+}
+
+/// Dijkstra variant that starts from a set of edges and ends at a set of edges
+/// Matching C++ EDijkstra::shortestPath behavior
+fn dijkstra_edges(
+    graph: &RestrGraph,
+    from_edges: &HashSet<usize>,
+    to_edges: &HashSet<usize>,
+    cost_func: &CostFunc,
+) -> Option<f64> {
+    let mut heap = BinaryHeap::new();
+    let mut dist: HashMap<(usize, usize), f64> = HashMap::new();
+
+    // Initialize with starting edges
+    for &edge_idx in from_edges {
+        let Some(edge) = &graph.edges[edge_idx] else {
+            continue;
+        };
+
+        // Cost to traverse this starting edge (no "from" edge)
+        let c = cost_func.edge_cost(None, edge.from_node, edge_idx);
+        if c < cost_func.inf() {
+            heap.push(DijkstraState {
+                cost: OrderedFloat(c),
+                node: edge.to_node,
+                via_edge: edge_idx,
+            });
+            dist.insert((edge.to_node, edge_idx), c);
+        }
+    }
+
+    while let Some(DijkstraState {
+        cost,
+        node,
+        via_edge,
+    }) = heap.pop()
+    {
+        let cost_val = cost.0;
+
+        // Check if we've reached a target edge
+        if to_edges.contains(&via_edge) {
+            return Some(cost_val);
+        }
+
+        if let Some(&d) = dist.get(&(node, via_edge)) {
+            if cost_val > d {
+                continue;
+            }
+        }
+
+        if let Some(out_edges) = graph.adj_out.get(&node) {
+            for &next_edge_idx in out_edges {
+                let next_cost = cost_val + cost_func.edge_cost(Some(via_edge), node, next_edge_idx);
+                if next_cost >= cost_func.inf() {
+                    continue;
+                }
+
+                let Some(next_edge) = &graph.edges[next_edge_idx] else {
+                    continue;
+                };
+                let next_node = next_edge.to_node;
+
+                if dist
+                    .get(&(next_node, next_edge_idx))
+                    .map_or(true, |&d| next_cost < d)
+                {
+                    dist.insert((next_node, next_edge_idx), next_cost);
+                    heap.push(DijkstraState {
+                        cost: OrderedFloat(next_cost),
+                        node: next_node,
+                        via_edge: next_edge_idx,
+                    });
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Build a restriction graph for Dijkstra-based checking
+/// Returns: (graph, edge_map, node_map)
 fn build_restriction_graph(
     edges: &[GraphEdge],
     _route_shapes: &RouteShapeMap,
-) -> (RestrGraph, HashMap<usize, Vec<usize>>) {
+) -> (
+    RestrGraph,
+    HashMap<usize, Vec<usize>>,
+    HashMap<NodeId, usize>,
+) {
     let mut graph = RestrGraph::new();
     let mut restr_edge_map: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut node_map: HashMap<NodeId, usize> = HashMap::new();
@@ -584,73 +849,7 @@ fn build_restriction_graph(
         restr_edge_map.entry(edge_idx).or_default().push(idx2);
     }
 
-    (graph, restr_edge_map)
-}
-
-/// Check if a valid path exists between two edges using Dijkstra on RestrGraph
-#[allow(clippy::too_many_arguments)]
-fn check_path_exists(
-    graph: &RestrGraph,
-    restr_edge_map: &HashMap<usize, Vec<usize>>,
-    handles: &HashMap<usize, Vec<(usize, f64)>>,
-    from_idx: usize,
-    to_idx: usize,
-    line_id: &str,
-    from_geo: &GeoLineString<f64>,
-    to_geo: &GeoLineString<f64>,
-    max_dev: f64,
-) -> bool {
-    // Determine start nodes (Handle Nodes)
-    let mut starts = Vec::new();
-    if let Some(h_list) = handles.get(&from_idx) {
-        for &(node, _) in h_list {
-            starts.push(node);
-        }
-    }
-    // Fallback if no handles (should imply restriction if rigorous, but for now fallback)
-    if starts.is_empty() {
-        return false;
-    }
-
-    // Determine end nodes
-    let mut ends = HashSet::new();
-    if let Some(h_list) = handles.get(&to_idx) {
-        for &(node, _) in h_list {
-            ends.insert(node);
-        }
-    }
-    if ends.is_empty() {
-        return false;
-    }
-
-    #[allow(deprecated)]
-    let len1 = from_geo.haversine_length();
-    #[allow(deprecated)]
-    let len2 = to_geo.haversine_length();
-
-    let expected_len = (len1 * 0.33) + (len2 * 0.33);
-
-    let max_cost = expected_len + max_dev + 1.0;
-
-    // We need a cost function that restricts line usage
-    let cost_func = CostFunc::new(line_id, max_cost, graph);
-
-    let mut min_dist = f64::MAX;
-
-    for start_node in starts {
-        let d_res = dijkstra(graph, start_node, |n| ends.contains(&n), &cost_func);
-        if let Some(dist) = d_res {
-            if dist < min_dist {
-                min_dist = dist;
-            }
-        }
-    }
-
-    if min_dist == f64::MAX {
-        return false;
-    }
-
-    (min_dist - expected_len) < max_dev
+    (graph, restr_edge_map, node_map)
 }
 
 // ============================================================================
@@ -682,33 +881,37 @@ fn edge_rpl(graph: &mut RestrGraph, node_idx: usize, old_edge: usize, new_edge: 
 }
 
 /// Splits edges based on route shape intersections, creating "handles" for precise restriction checking
+/// Returns: (handles_a, handles_b) - A handles at 1/3 position, B handles at 2/3 position
+/// Matches C++ _handlesA/_handlesB separation
 fn add_handles(
     graph: &mut RestrGraph,
     edges: &[GraphEdge],
     restr_edge_map: &HashMap<usize, Vec<usize>>,
     route_shapes: &RouteShapeMap,
-) -> HashMap<usize, Vec<(usize, f64)>> {
-    let mut handles: HashMap<usize, Vec<(usize, f64)>> = HashMap::new();
+) -> (HandleMap, HandleMap) {
+    let mut handles_a: HandleMap = HashMap::new(); // Handles at 1/3 position
+    let mut handles_b: HandleMap = HashMap::new(); // Handles at 2/3 position
 
     // Configuration for handle checking
     let max_dist = 100.0;
     let aggr_dist = 20.0;
 
-    // Request: (GraphEdgeIdx, RestrEdgeIdx, Fraction, SplitPoint)
-    let mut split_requests: Vec<(usize, usize, f64, GeoPoint<f64>)> = Vec::new();
+    // Request: (GraphEdgeIdx, RestrEdgeIdx, Fraction, SplitPoint, IsHandleA)
+    let mut split_requests: Vec<(usize, usize, f64, GeoPoint<f64>, bool)> = Vec::new();
 
     for (orig_idx, orig_edge) in edges.iter().enumerate() {
         let geom = convert_to_geo(&orig_edge.geometry);
         #[allow(deprecated)]
         let len_meters = geom.haversine_length();
 
-        // Skip very short edges?
+        // Skip very short edges
         if len_meters < 1.0 {
             continue;
         }
 
         let check_pos = (len_meters / 2.0).min(2.0 * aggr_dist);
 
+        // A handles at 1/3, B handles at 2/3 (matching C++ lines 243-254)
         let hndl_la_check = get_ortho_line_at_dist(&geom, check_pos, max_dist);
         let hndl_lb_check = get_ortho_line_at_dist(&geom, len_meters - check_pos, max_dist);
 
@@ -722,8 +925,11 @@ fn add_handles(
             };
 
             for shape in shapes {
+                // Closure to check and collect intersections
                 let mut check_and_collect =
-                    |hndl_opt: Option<geo::Line<f64>>, check_opt: Option<geo::Line<f64>>| {
+                    |hndl_opt: Option<geo::Line<f64>>,
+                     check_opt: Option<geo::Line<f64>>,
+                     is_handle_a: bool| {
                         let Some(hndl_line) = hndl_opt else { return };
                         let Some(check_line) = check_opt else { return };
 
@@ -747,7 +953,13 @@ fn add_handles(
                                                     .geom
                                                     .line_locate_point(&isect)
                                                     .unwrap_or(0.0);
-                                                split_requests.push((orig_idx, r_idx, frac, isect));
+                                                split_requests.push((
+                                                    orig_idx,
+                                                    r_idx,
+                                                    frac,
+                                                    isect,
+                                                    is_handle_a,
+                                                ));
                                             }
                                         }
                                     }
@@ -755,28 +967,28 @@ fn add_handles(
                             }
                         }
                     };
-                check_and_collect(hndl_la, hndl_la_check);
-                check_and_collect(hndl_lb, hndl_lb_check);
+                check_and_collect(hndl_la, hndl_la_check, true); // A handles
+                check_and_collect(hndl_lb, hndl_lb_check, false); // B handles
             }
         }
     }
 
     // Group splits by RestrEdge index
-    // RestrEdgeIdx -> (GraphEdgeIdx, ValidSplits)
-    let mut splits_by_restr_edge: HashMap<usize, (usize, Vec<(f64, GeoPoint<f64>)>)> =
+    // RestrEdgeIdx -> (GraphEdgeIdx, SplitsWithHandleType)
+    let mut splits_by_restr_edge: HashMap<usize, (usize, Vec<(f64, GeoPoint<f64>, bool)>)> =
         HashMap::new();
 
-    for (g_idx, r_idx, frac, pt) in split_requests {
+    for (g_idx, r_idx, frac, pt, is_a) in split_requests {
         if frac > 0.01 && frac < 0.99 {
             splits_by_restr_edge
                 .entry(r_idx)
                 .or_insert((g_idx, Vec::new()))
                 .1
-                .push((frac, pt));
+                .push((frac, pt, is_a));
         }
     }
 
-    // Apply splits
+    // Apply splits and collect handles into A and B maps
     for (edge_idx, (g_idx, mut splits)) in splits_by_restr_edge {
         splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         splits.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-4);
@@ -791,7 +1003,7 @@ fn add_handles(
         let mut last_node = orig_restr_edge.from_node;
         let mut last_frac = 0.0;
 
-        for (frac, pt) in splits {
+        for (frac, pt, is_handle_a) in splits {
             if (frac - last_frac).abs() < 1e-6 {
                 continue;
             }
@@ -806,8 +1018,12 @@ fn add_handles(
                 orig_restr_edge.lines.clone(),
             );
 
-            // Map the NEW handle node to the ORIGINAL GraphEdge
-            handles.entry(g_idx).or_default().push((new_node_id, frac));
+            // Add handle to appropriate map based on position (A or B)
+            if is_handle_a {
+                handles_a.entry(g_idx).or_default().insert(new_node_id);
+            } else {
+                handles_b.entry(g_idx).or_default().insert(new_node_id);
+            }
 
             edge_rpl(graph, last_node, edge_idx, new_edge_idx);
             edge_rpl(graph, new_node_id, edge_idx, new_edge_idx);
@@ -831,7 +1047,7 @@ fn add_handles(
         graph.del_edge(edge_idx);
     }
 
-    handles
+    (handles_a, handles_b)
 }
 
 fn get_sub_geom(geom: &GeoLineString<f64>, start_frac: f64, end_frac: f64) -> GeoLineString<f64> {

@@ -160,6 +160,7 @@ pub async fn insert_stations(
                         to: new_node,
                         geometry: convert_from_geo(&sub_geom),
                         route_ids: current_route_ids.clone(),
+                        original_shape_ids: edge.original_shape_ids.clone(),
                         weight: len,
                         original_edge_index: edge.original_edge_index,
                     });
@@ -177,6 +178,7 @@ pub async fn insert_stations(
                     to: edge.to,
                     geometry: convert_from_geo(&sub_geom),
                     route_ids: current_route_ids,
+                    original_shape_ids: edge.original_shape_ids.clone(),
                     weight: len,
                     original_edge_index: edge.original_edge_index,
                 });
