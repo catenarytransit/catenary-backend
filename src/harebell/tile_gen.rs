@@ -64,51 +64,10 @@ impl TileGenerator {
                 },
             );
 
-            // Shorten geometry at junction nodes (nodes with 2+ edges)
-            // This creates gaps that are filled by Bezier curves (Figure 6.1 step 3)
-            let cutback_distance = 0.00015; // approx 15 meters in degrees at mid-latitudes
-
-            let from_degree = graph
-                .node_to_edges
-                .get(&edge.from)
-                .map(|e| e.len())
-                .unwrap_or(1);
-            let to_degree = graph
-                .node_to_edges
-                .get(&edge.to)
-                .map(|e| e.len())
-                .unwrap_or(1);
-
-            let mut working_coords: Vec<[f64; 2]> = edge.geometry.clone();
-
-            // Cutback at start (from node) if it's a junction
-            if from_degree >= 2 && working_coords.len() >= 2 {
-                let p0 = working_coords[0];
-                let p1 = working_coords[1];
-                let dx = p1[0] - p0[0];
-                let dy = p1[1] - p0[1];
-                let seg_len = (dx * dx + dy * dy).sqrt();
-                if seg_len > cutback_distance * 1.5 {
-                    // Shorten from start
-                    let t = cutback_distance / seg_len;
-                    working_coords[0] = [p0[0] + dx * t, p0[1] + dy * t];
-                }
-            }
-
-            // Cutback at end (to node) if it's a junction
-            if to_degree >= 2 && working_coords.len() >= 2 {
-                let n = working_coords.len();
-                let p_last = working_coords[n - 1];
-                let p_prev = working_coords[n - 2];
-                let dx = p_last[0] - p_prev[0];
-                let dy = p_last[1] - p_prev[1];
-                let seg_len = (dx * dx + dy * dy).sqrt();
-                if seg_len > cutback_distance * 1.5 {
-                    // Shorten from end
-                    let t = cutback_distance / seg_len;
-                    working_coords[n - 1] = [p_last[0] - dx * t, p_last[1] - dy * t];
-                }
-            }
+            // Cutback is applied AFTER projection to tile space, not here.
+            // The cutback distance depends on the number of lines and spacing, which varies per node.
+            // We compute proper "node front" cutback in tile space during rendering.
+            let working_coords: Vec<[f64; 2]> = edge.geometry.clone();
 
             // Build the source linestring from edge geometry (lon, lat)
             let source_coords: Vec<Coord> = working_coords
@@ -220,16 +179,67 @@ impl TileGenerator {
                             (extent + 256.0, extent + 256.0), // Upper-right corner with buffer
                         ]);
 
-                        // Use the fluent API which properly propagates errors
-                        let encoder_result = tile_points.iter().enumerate().try_fold(
-                            GeomEncoder::new(mvt::GeomType::Linestring).bbox(tile_bbox),
-                            |enc, (j, (tx, ty))| {
+                        // Compute cutback distances at each end based on node connectivity
+                        // Following loom's approach: cutback = spacing * (n_lines - 1) / 2 + margin
+                        let from_degree = graph
+                            .node_to_edges
+                            .get(&edge.from)
+                            .map(|e| e.len())
+                            .unwrap_or(1);
+                        let to_degree = graph
+                            .node_to_edges
+                            .get(&edge.to)
+                            .map(|e| e.len())
+                            .unwrap_or(1);
+                        
+                        // Cutback distance scales with number of lines to create room for bezier
+                        let base_cutback = spacing * 0.8;  // Base distance for bezier curves
+                        let start_cutback = if from_degree >= 2 { base_cutback } else { 0.0 };
+                        let end_cutback = if to_degree >= 2 { base_cutback } else { 0.0 };
+
+                        // Build offset polyline with cutback applied
+                        let mut offset_points: Vec<(f64, f64)> = tile_points
+                            .iter()
+                            .enumerate()
+                            .map(|(j, (tx, ty))| {
                                 let (nx, ny) = vertex_normals[j];
-                                let sx = tx + nx * shift;
-                                let sy = ty + ny * shift;
-                                enc.point(sx, sy)
-                            },
+                                (tx + nx * shift, ty + ny * shift)
+                            })
+                            .collect();
+
+                        // Apply cutback at start (shorten the polyline by moving first point forward)
+                        if start_cutback > 0.0 && offset_points.len() >= 2 {
+                            let (x0, y0) = offset_points[0];
+                            let (x1, y1) = offset_points[1];
+                            let dx = x1 - x0;
+                            let dy = y1 - y0;
+                            let seg_len = (dx * dx + dy * dy).sqrt();
+                            if seg_len > start_cutback * 1.5 {
+                                let t = start_cutback / seg_len;
+                                offset_points[0] = (x0 + dx * t, y0 + dy * t);
+                            }
+                        }
+
+                        // Apply cutback at end (shorten the polyline by moving last point backward)
+                        if end_cutback > 0.0 && offset_points.len() >= 2 {
+                            let n = offset_points.len();
+                            let (x_last, y_last) = offset_points[n - 1];
+                            let (x_prev, y_prev) = offset_points[n - 2];
+                            let dx = x_last - x_prev;
+                            let dy = y_last - y_prev;
+                            let seg_len = (dx * dx + dy * dy).sqrt();
+                            if seg_len > end_cutback * 1.5 {
+                                let t = end_cutback / seg_len;
+                                offset_points[n - 1] = (x_last - dx * t, y_last - dy * t);
+                            }
+                        }
+
+                        // Encode the cutback polyline
+                        let encoder_result = offset_points.iter().try_fold(
+                            GeomEncoder::new(mvt::GeomType::Linestring).bbox(tile_bbox),
+                            |enc, (sx, sy)| enc.point(*sx, *sy),
                         );
+
 
                         let geometry = match encoder_result.and_then(|enc| enc.encode()) {
                             Ok(g) => g,
@@ -650,10 +660,11 @@ impl TileGenerator {
                                     let start_x = node_tx + norm_x * shift;
                                     let start_y = node_ty + norm_y * shift;
 
-                                    // Shorten slightly into edge
-                                    let shorten_dist = 15.0;
+                                    // Shorten distance must match edge cutback for seamless connection
+                                    let shorten_dist = spacing * 0.8;
                                     let p_x = start_x + tn_x * shorten_dist;
                                     let p_y = start_y + tn_y * shorten_dist;
+
 
                                     Some(((p_x, p_y), (tn_x, tn_y)))
                                 };
