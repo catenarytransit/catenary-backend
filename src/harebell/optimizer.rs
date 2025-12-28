@@ -483,20 +483,28 @@ impl Optimizer {
                                     // Same direction: crossing if orderings differ
                                     let x_e1_ab = oracle_vars.get(&(e1_idx, a1, b1)).unwrap();
                                     let x_e2_ba = oracle_vars.get(&(e2_idx, b2, a2)).unwrap();
-                                    constraints.push((x_e1_ab.into_expression() + *x_e2_ba - 1.0).leq(c_var));
+                                    constraints.push(
+                                        (x_e1_ab.into_expression() + *x_e2_ba - 1.0).leq(c_var),
+                                    );
 
                                     let x_e1_ba = oracle_vars.get(&(e1_idx, b1, a1)).unwrap();
                                     let x_e2_ab = oracle_vars.get(&(e2_idx, a2, b2)).unwrap();
-                                    constraints.push((x_e1_ba.into_expression() + *x_e2_ab - 1.0).leq(c_var));
+                                    constraints.push(
+                                        (x_e1_ba.into_expression() + *x_e2_ab - 1.0).leq(c_var),
+                                    );
                                 } else {
                                     // Different direction: crossing if orderings are the same
                                     let x_e1_ab = oracle_vars.get(&(e1_idx, a1, b1)).unwrap();
                                     let x_e2_ab = oracle_vars.get(&(e2_idx, a2, b2)).unwrap();
-                                    constraints.push((x_e1_ab.into_expression() + *x_e2_ab - 1.0).leq(c_var));
+                                    constraints.push(
+                                        (x_e1_ab.into_expression() + *x_e2_ab - 1.0).leq(c_var),
+                                    );
 
                                     let x_e1_ba = oracle_vars.get(&(e1_idx, b1, a1)).unwrap();
                                     let x_e2_ba = oracle_vars.get(&(e2_idx, b2, a2)).unwrap();
-                                    constraints.push((x_e1_ba.into_expression() + *x_e2_ba - 1.0).leq(c_var));
+                                    constraints.push(
+                                        (x_e1_ba.into_expression() + *x_e2_ba - 1.0).leq(c_var),
+                                    );
                                 }
                             }
                         }
@@ -611,7 +619,7 @@ impl Optimizer {
         let mut model = vars
             .minimise(objective)
             .using(good_lp::solvers::coin_cbc::coin_cbc);
-        
+
         model.set_parameter("seconds", "60");
         model.set_parameter("threads", "16");
         //model.set_parameter("ratio", "0.05");
@@ -1651,7 +1659,7 @@ impl Optimizer {
             let v_legs = &node_adj[&v];
 
             // Find lines that are isolated on this edge
-            // i.e. not present in any neighbor edge of u or v (excluding e itself)
+            // i.e. not present in any neighbour edge of u or v (excluding e itself)
             let double_stumps: Vec<String> = edge
                 .lines
                 .iter()
@@ -2140,7 +2148,7 @@ impl Optimizer {
                         for &v in neighbors {
                             if let Some(&v_idx) = node_to_idx.get(&v) {
                                 // Important: We can "see" the AP, but we don't traverse *through* it.
-                                // If neighbor is AP, we don't push to Q (it's marked visited).
+                                // If neighbour is AP, we don't push to Q (it's marked visited).
                                 // But effectively AP is part of this component.
                                 // Our `visited` logic handles this: AP is in `visited`.
                                 if !visited.contains(&v_idx) {

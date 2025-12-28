@@ -170,7 +170,7 @@ pub fn chi_shape(points: &[Point], length_threshold: f64) -> Option<Polygon<f64>
         let opp_next = triangulation.halfedges[e_next];
         let opp_prev = triangulation.halfedges[e_prev];
 
-        // Ensure neighbors exist (they should if p3 wasn't boundary, but checked implicitly by triangulation)
+        // Ensure neighbours exist (they should if p3 wasn't boundary, but checked implicitly by triangulation)
         // If opp is EMPTY, it means we reached the void, but we shouldn't have unless p3 was boundary?
         // Actually, if opp is EMPTY, that edge is already boundary.
         // But we checked is_prev_boundary (which checks if e_prev is in set).

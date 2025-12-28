@@ -83,7 +83,7 @@ pub async fn find_osm_link(
 
     let (street_data, rtree) = cache.get_or_load(x, y, osm_dir)?;
 
-    // Use RTree to find nearest neighbor
+    // Use RTree to find nearest neighbour
     let nearest = rtree.nearest_neighbor(&[lon, lat])?;
     let node_idx = nearest.data;
     let node = &street_data.nodes[node_idx as usize];

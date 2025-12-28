@@ -708,7 +708,7 @@ pub fn refine_transfers(partition: &TransitPartition, transfers: &mut Vec<Transf
                                 &mut visited_stops,
                             ) {
                                 transfer_useful = true;
-                                // Propagate to neighbors
+                                // Propagate to neighbours
                                 for &(neighbor, walk) in &footpaths[u_stop_idx] {
                                     if update_tau(
                                         neighbor as usize,

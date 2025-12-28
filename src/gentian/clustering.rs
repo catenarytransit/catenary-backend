@@ -100,7 +100,7 @@ pub fn merge_based_clustering(
 
         let size = clusters[c_idx].len();
         if size < min_size {
-            // Find best neighbor
+            // Find best neighbour
             let mut best_neighbor = None;
             let mut max_weight = 0;
 
@@ -249,7 +249,7 @@ pub fn merge_based_clustering_weighted(
 
         let size = cluster_weights[c_idx];
         if size < min_size {
-            // Find best neighbor
+            // Find best neighbour
             let mut best_neighbor = None;
             let mut max_weight = 0;
 
