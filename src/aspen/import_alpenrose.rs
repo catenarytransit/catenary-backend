@@ -144,16 +144,14 @@ pub async fn new_rt_data(
         .await
         .or_insert(Instant::now());
 
-    let mut compressed_trip_internal_cache: CompressedTripInternalCache =
+    // Fetch existing data once - extracting only what we need to avoid holding the lock
+    let (mut compressed_trip_internal_cache, previous_authoritative_data_store) =
         match authoritative_data_store.get_async(chateau_id).await {
-            Some(data) => data.compressed_trip_internal_cache.clone(),
-            None => CompressedTripInternalCache::new(),
-        };
-
-    let previous_authoritative_data_store =
-        match authoritative_data_store.get_async(chateau_id).await {
-            Some(data) => Some(data.clone()),
-            None => None,
+            Some(data) => (
+                data.compressed_trip_internal_cache.clone(),
+                Some(data.get().clone()),
+            ),
+            None => (CompressedTripInternalCache::new(), None),
         };
 
     // Metrolink provides a separate JSON endpoint with higher fidelity data (PTC status, exact speed)
@@ -388,18 +386,10 @@ pub async fn new_rt_data(
             }
         }
 
-        let trips_to_remove_from_cache = compressed_trip_internal_cache
+        // Remove trips not in the current lookup set using retain (avoids intermediate Vec allocation)
+        compressed_trip_internal_cache
             .compressed_trips
-            .keys()
-            .filter(|x| !trip_ids_to_lookup.contains(x.as_str()))
-            .map(|x| x.clone())
-            .collect::<Vec<String>>();
-
-        for trip_id in trips_to_remove_from_cache {
-            compressed_trip_internal_cache
-                .compressed_trips
-                .remove(&trip_id);
-        }
+            .retain(|k, _| trip_ids_to_lookup.contains(k.as_str()));
 
         let trip_start = std::time::Instant::now();
 
@@ -482,8 +472,8 @@ pub async fn new_rt_data(
         let missing_trip_ids = trip_ids_to_lookup
             .iter()
             .filter(|x| !trip_id_to_trip.contains_key(x.as_str()))
-            .map(|x| x.clone())
-            .collect::<BTreeSet<String>>();
+            .cloned()
+            .collect::<AHashSet<String>>();
 
         let mut stop_ids_to_lookup: AHashSet<String> = AHashSet::new();
 
@@ -883,13 +873,6 @@ pub async fn new_rt_data(
                                                             if let Some(stop_headsigns) =
                                                                 &direction_pattern.stop_headsigns_unique_list
                                                             {
-                                                                let stop_headsigns_flattened: Vec<String> =
-                                                                    stop_headsigns
-                                                                        .iter()
-                                                                        .filter_map(|x| x.as_ref())
-                                                                        .map(|x| x.to_string())
-                                                                        .collect();
-
                                                                 if let Some(current_stop_event) =
                                                                     current_stop_event
                                                                 {
@@ -906,11 +889,16 @@ pub async fn new_rt_data(
                                                                             if let Some(stop_headsign_idx) =
                                                                                 matching_itinerary_row.stop_headsign_idx
                                                                             {
-                                                                                if let Some(aspenised_stop_headsigns) =
-                                                                                    stop_headsigns_flattened.get(stop_headsign_idx as usize)
-                                                                                {
-                                                                                    headsign =
-                                                                                        aspenised_stop_headsigns.to_string();
+                                                                                // Access headsign directly by index - avoids allocating Vec<String>
+                                                                                let mut idx = 0usize;
+                                                                                for headsign_opt in stop_headsigns.iter() {
+                                                                                    if let Some(text) = headsign_opt {
+                                                                                        if idx == stop_headsign_idx as usize {
+                                                                                            headsign = text.clone();
+                                                                                            break;
+                                                                                        }
+                                                                                        idx += 1;
+                                                                                    }
                                                                                 }
                                                                             }
                                                                         }
@@ -1900,11 +1888,13 @@ pub async fn new_rt_data(
         stop_id_to_non_scheduled_trip_ids,
     };
 
+    // Insert the aspenised data - clone only for persistence, move into map when possible
+    let aspenised_data_for_persist = aspenised_data.clone();
     authoritative_data_store
         .entry_async(chateau_id.to_string())
         .await
-        .and_modify(|d| *d = aspenised_data.clone())
-        .or_insert(aspenised_data.clone());
+        .and_modify(|d| *d = aspenised_data_for_persist.clone())
+        .or_insert(aspenised_data);
 
     let should_save = match LAST_SAVE_TIME.get_async(chateau_id).await {
         Some(last_save) => Instant::now().duration_since(*last_save.get()) > SAVE_INTERVAL,
@@ -1912,7 +1902,7 @@ pub async fn new_rt_data(
     };
 
     if should_save {
-        if let Err(e) = persistence::save_chateau_data(chateau_id, &aspenised_data) {
+        if let Err(e) = persistence::save_chateau_data(chateau_id, &aspenised_data_for_persist) {
             eprintln!("Failed to save chateau data for {}: {}", chateau_id, e);
         } else {
             LAST_SAVE_TIME
