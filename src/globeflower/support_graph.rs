@@ -1186,9 +1186,9 @@ fn collapse_shared_segments(
                             if let Some(existing) = tg_new.get_edg(&comb_node, &other) {
                                 let ex_len = calc_polyline_length(&existing.borrow().geometry);
                                 let oe_len = calc_polyline_length(&other_e.borrow().geometry);
-                                // If geometry lengths differ by more than 2*seg_len, don't merge
-                                // This matches C++ contractNodes check (lines 593-606)
-                                if (ex_len - oe_len).abs() > 2.0 * seg_len {
+                                // If geometry lengths differ by more than 2*d_cut, don't merge
+                                // This matches C++ contractNodes check (lines 593-606) using maxAggrDistance * 2
+                                if (ex_len - oe_len).abs() > 2.0 * d_cut {
                                     can_merge = false;
                                     break;
                                 }
@@ -1583,6 +1583,11 @@ fn combine_nodes(
 
         // Check if edge from b to other_node already exists
         if let Some(existing_edge) = graph.get_edg(b, &other_node) {
+            // Safety check: existing_edge cannot be the same as old_edge (would cause RefCell panic)
+            if Rc::ptr_eq(&existing_edge, old_edge) {
+                continue;
+            }
+
             // Fold edges: merge routes AND geometry (C++: foldEdges)
             let routes_from_old = old_edge.borrow().routes.clone();
             let mut ee = existing_edge.borrow_mut();
@@ -1685,6 +1690,11 @@ fn combine_nodes(
 
         // Check if edge from other_node to b already exists
         if let Some(existing_edge) = graph.get_edg(&other_node, b) {
+            // Safety check: existing_edge cannot be the same as old_edge (would cause RefCell panic)
+            if Rc::ptr_eq(&existing_edge, old_edge) {
+                continue;
+            }
+
             // Fold edges: merge routes AND geometry (C++: foldEdges)
             let routes_from_old = old_edge.borrow().routes.clone();
             let mut ee = existing_edge.borrow_mut();
@@ -2122,8 +2132,9 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph, d_cut: f64) {
                     do_contract = false;
                 }
             } else {
-                // Short blocking edge exists - DO NOT CONTRACT (Fix Bug 3)
-                do_contract = false;
+                // Short blocking edge exists - C++ ALLOWS contraction here
+                // We do NOT set dont_contract = true.
+                // This allows the parallel blocking edge (triangle) to be collapsed.
             }
         }
 
@@ -2519,8 +2530,8 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) -> usize 
                         if ex_len > support_threshold {
                             blocking_edges_to_split.push(Rc::clone(&ex));
                         } else {
-                            // Short blocking edge -> assume we shouldn't squash this triangle
-                            dont_contract = true;
+                            // Short blocking edge -> assume we CAN squash this triangle
+                            // C++ allows this contraction to merge parallel tracks
                         }
                     }
                 }
