@@ -31,6 +31,7 @@ pub struct LineOnEdge {
     pub color: String,
     pub chateau_id: String,
     pub route_id: String,
+    pub group_id: Option<String>,
     pub weight: u32,
 }
 
@@ -53,5 +54,48 @@ impl RenderGraph {
             node_tree: RTree::new(),
             collapsed_lines: HashMap::new(),
         }
+    }
+
+    pub fn rebuild_indices(&mut self) {
+        // Rebuild Edge Tree
+        let mut edge_items = Vec::with_capacity(self.edges.len());
+        for (i, edge) in self.edges.iter().enumerate() {
+            if edge.geometry.is_empty() {
+                continue;
+            }
+            // Calculate bbox
+            let mut min_x = f64::INFINITY;
+            let mut min_y = f64::INFINITY;
+            let mut max_x = f64::NEG_INFINITY;
+            let mut max_y = f64::NEG_INFINITY;
+
+            for p in &edge.geometry {
+                if p[0] < min_x {
+                    min_x = p[0];
+                }
+                if p[0] > max_x {
+                    max_x = p[0];
+                }
+                if p[1] < min_y {
+                    min_y = p[1];
+                }
+                if p[1] > max_y {
+                    max_y = p[1];
+                }
+            }
+
+            edge_items.push(GeomWithData::new(
+                rstar::primitives::Rectangle::from_corners([min_x, min_y], [max_x, max_y]),
+                i,
+            ));
+        }
+        self.tree = RTree::bulk_load(edge_items);
+
+        // Rebuild Node Tree
+        let mut node_items = Vec::with_capacity(self.nodes.len());
+        for (&id, node) in &self.nodes {
+            node_items.push(GeomWithData::new([node.x, node.y], id));
+        }
+        self.node_tree = RTree::bulk_load(node_items);
     }
 }

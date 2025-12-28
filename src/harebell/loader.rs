@@ -161,6 +161,7 @@ impl Loader {
                     color,
                     chateau_id: chateau_id.clone(),
                     route_id: route_id.clone(),
+                    group_id: None,
                     weight: 1,
                 });
             }

@@ -8,12 +8,16 @@ use std::f64::consts::PI;
 
 pub struct Optimizer {
     // Weights for the objective function
-    weight_cross: f64,
+    weight_consistency: f64,
+    weight_split: f64,
 }
 
 impl Optimizer {
     pub fn new() -> Self {
-        Self { weight_cross: 10.0 }
+        Self {
+            weight_consistency: 40.0,
+            weight_split: 10.0,
+        }
     }
 
     pub fn optimize(&self, graph: &mut RenderGraph) {
@@ -354,6 +358,53 @@ impl Optimizer {
                     constraints.push((x_ij.into_expression() + *x_ji).eq(1));
                 }
             }
+
+            // --- A2. Group Convexity Constraints ---
+            // "We do this before the ILP step so that way the ILP processor works with groups like NQR together."
+            // Enforce that lines within the same group are contiguous.
+            if n >= 3 {
+                let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+                for (i, line) in edge.lines.iter().enumerate() {
+                    if let Some(gid) = &line.group_id {
+                        groups.entry(gid.clone()).or_default().push(i);
+                    }
+                }
+
+                for (_, members) in groups {
+                    if members.len() < 2 {
+                        continue;
+                    }
+
+                    // For every pair in group
+                    for idx_a in 0..members.len() {
+                        for idx_b in (idx_a + 1)..members.len() {
+                            let i = members[idx_a];
+                            let j = members[idx_b];
+
+                            // For every line k NOT in group
+                            for k in 0..n {
+                                if members.contains(&k) {
+                                    continue;
+                                }
+
+                                // Forbid i < k < j => x_ij + x_ik + x_kj <= 2
+                                let x_ij = oracle_vars.get(&(edge_idx, i, j)).unwrap();
+                                let x_ik = oracle_vars.get(&(edge_idx, i, k)).unwrap();
+                                let x_kj = oracle_vars.get(&(edge_idx, k, j)).unwrap();
+
+                                constraints.push((x_ij.into_expression() + *x_ik + *x_kj).leq(2.0));
+
+                                // Forbid j < k < i => x_ji + x_jk + x_ki <= 2
+                                let x_ji = oracle_vars.get(&(edge_idx, j, i)).unwrap();
+                                let x_jk = oracle_vars.get(&(edge_idx, j, k)).unwrap();
+                                let x_ki = oracle_vars.get(&(edge_idx, k, i)).unwrap();
+
+                                constraints.push((x_ji.into_expression() + *x_jk + *x_ki).leq(2.0));
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // --- B. Constraints (Consistency & Split) ---
@@ -470,30 +521,21 @@ impl Optimizer {
                                 let b2 = get_line_idx(e2_idx, lb).unwrap();
 
                                 let c_var = vars.add(variable().binary());
-                                // Weighted crossing cost
+                                // Weighted crossing cost (Consistency / Same Segment)
                                 let w_a = graph.edges[e1_idx].lines[a1].weight as f64;
                                 let w_b = graph.edges[e1_idx].lines[b1].weight as f64;
-                                objective += c_var * self.weight_cross * w_a * w_b;
+                                objective += c_var * self.weight_consistency * w_a * w_b;
 
                                 // C++ Logic: If edges have same effective direction relative to node,
                                 // a crossing occurs when A<B on e1 AND B<A on e2 (or vice versa).
                                 // If edges have different directions, a crossing occurs when
                                 // A<B on e1 AND A<B on e2 (or B<A on both).
                                 if same_direction {
-                                    // Same direction: crossing if orderings differ
-                                    let x_e1_ab = oracle_vars.get(&(e1_idx, a1, b1)).unwrap();
-                                    let x_e2_ba = oracle_vars.get(&(e2_idx, b2, a2)).unwrap();
-                                    constraints.push(
-                                        (x_e1_ab.into_expression() + *x_e2_ba - 1.0).leq(c_var),
-                                    );
-
-                                    let x_e1_ba = oracle_vars.get(&(e1_idx, b1, a1)).unwrap();
-                                    let x_e2_ab = oracle_vars.get(&(e2_idx, a2, b2)).unwrap();
-                                    constraints.push(
-                                        (x_e1_ba.into_expression() + *x_e2_ab - 1.0).leq(c_var),
-                                    );
-                                } else {
-                                    // Different direction: crossing if orderings are the same
+                                    // Same direction: "inverted" logic from C++ perspective (relative to node).
+                                    // If edges have same direction relative to node, A<B on one implies B<A on the other to be "consistent"
+                                    // (because one enters, one leaves basically, or both enter/leave but indices are reversed geometric ally?
+                                    // Actually, just trusting the Swap is sufficient based on analysis).
+                                    // Logic taken from previous "else" block:
                                     let x_e1_ab = oracle_vars.get(&(e1_idx, a1, b1)).unwrap();
                                     let x_e2_ab = oracle_vars.get(&(e2_idx, a2, b2)).unwrap();
                                     constraints.push(
@@ -504,6 +546,20 @@ impl Optimizer {
                                     let x_e2_ba = oracle_vars.get(&(e2_idx, b2, a2)).unwrap();
                                     constraints.push(
                                         (x_e1_ba.into_expression() + *x_e2_ba - 1.0).leq(c_var),
+                                    );
+                                } else {
+                                    // Different direction: "direct" logic.
+                                    // Logic taken from previous "if" block:
+                                    let x_e1_ab = oracle_vars.get(&(e1_idx, a1, b1)).unwrap();
+                                    let x_e2_ba = oracle_vars.get(&(e2_idx, b2, a2)).unwrap();
+                                    constraints.push(
+                                        (x_e1_ab.into_expression() + *x_e2_ba - 1.0).leq(c_var),
+                                    );
+
+                                    let x_e1_ba = oracle_vars.get(&(e1_idx, b1, a1)).unwrap();
+                                    let x_e2_ab = oracle_vars.get(&(e2_idx, a2, b2)).unwrap();
+                                    constraints.push(
+                                        (x_e1_ba.into_expression() + *x_e2_ab - 1.0).leq(c_var),
                                     );
                                 }
                             }
@@ -594,20 +650,19 @@ impl Optimizer {
                             let prefer_a_left = diff_a < diff_b;
 
                             let split_penalty = vars.add(variable().binary());
-                            objective += split_penalty * self.weight_cross;
+                            // Split Penalty (Diff Segment / Geometry)
+                            objective += split_penalty * self.weight_split;
 
                             if prefer_a_left {
-                                // Want x_{e1, A<B} == 1 ?
-                                // According to Loom/Paper reference:
-                                // If A is geometrically "Left" (CCW first), it should often be placed at High Index (Right).
-                                // (Logic inversion compared to intuitive mapping).
-                                // Current code enforces A < B (Low Index).
-                                // We swap to enforce B < A (A High Index).
-                                let x_ab = oracle_vars.get(&(e1_idx, i, j)).unwrap();
-                                constraints.push(x_ab.into_expression().leq(split_penalty));
-                            } else {
+                                // Want x_{e1, A<B} == 1 (A is Left/Low Index)
+                                // So we PENALIZE the opposite: x_{e1, B<A} == 1
                                 let x_ba = oracle_vars.get(&(e1_idx, j, i)).unwrap();
                                 constraints.push(x_ba.into_expression().leq(split_penalty));
+                            } else {
+                                // Want x_{e1, B<A} == 1 (B is Left/Low Index)
+                                // So we PENALIZE the opposite: x_{e1, A<B} == 1
+                                let x_ab = oracle_vars.get(&(e1_idx, i, j)).unwrap();
+                                constraints.push(x_ab.into_expression().leq(split_penalty));
                             }
                         }
                     }

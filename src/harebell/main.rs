@@ -79,13 +79,27 @@ async fn main() -> std::io::Result<()> {
                 graph.nodes.len()
             );
 
+            // Apply NYC Route Grouping
+            // "NYC interlining shapes can only overlap if they share the same colour"
+            // We group by color for nyct chateau.
+            for edge in &mut graph.edges {
+                for line in &mut edge.lines {
+                    if line.chateau_id == "nyct" {
+                        line.group_id = Some(line.color.clone());
+                    }
+                }
+            }
+
             // Run Optimizer
             let optimizer = optimizer::Optimizer::new();
             optimizer.optimize(&mut graph);
 
+            println!("Rebuilding spatial indices after optimization...");
+            graph.rebuild_indices();
+
             let generator = generator::Generator::new("tiles_output".to_string());
             generator
-                .generate_all(&graph, 4, 17)
+                .generate_all(&graph, 5, 17)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
             println!("Generation Complete!");

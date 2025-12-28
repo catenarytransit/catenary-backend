@@ -47,8 +47,13 @@ impl Generator {
             let (min_tx, min_ty) = Self::latlon_to_tile(min_pt[1], min_pt[0], z);
             let (max_tx, max_ty) = Self::latlon_to_tile(max_pt[1], max_pt[0], z);
 
-            for x in min_tx..=max_tx {
-                for y in min_ty..=max_ty {
+            // Fix: Web Mercator tile Y increases southward, so min_lat gives LARGER tile_y.
+            // Ensure we iterate from smaller to larger tile coordinates.
+            let (tx_start, tx_end) = (min_tx.min(max_tx), min_tx.max(max_tx));
+            let (ty_start, ty_end) = (min_ty.min(max_ty), min_ty.max(max_ty));
+
+            for x in tx_start..=tx_end {
+                for y in ty_start..=ty_end {
                     tiles.insert((x, y));
                 }
             }
