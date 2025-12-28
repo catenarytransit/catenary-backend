@@ -948,6 +948,16 @@ fn collapse_shared_segments(
             // This ensures curves maintain their shape by having regularly-spaced points
             let pl_dense = densify_coords(&coords, seg_len);
 
+            // CRITICAL FIX: Ensure we have at least 2 points (start and end) to form a valid edge.
+            // If simplification + densification produces fewer than 2 points, fall back to
+            // the original FROM and TO positions. This prevents edge gaps when geometry is
+            // very short or gets overly simplified (e.g., at loop junctions like CTA Brown Line).
+            let pl_dense = if pl_dense.len() < 2 {
+                vec![from_pos, to_pos]
+            } else {
+                pl_dense
+            };
+
             // NOTE: C++ has no point cap - simplify(0.5) should already reduce density enough
 
             // Debug logging removed for performance
@@ -2132,9 +2142,10 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph, d_cut: f64) {
                     do_contract = false;
                 }
             } else {
-                // Short blocking edge exists - C++ ALLOWS contraction here
-                // We do NOT set dont_contract = true.
-                // This allows the parallel blocking edge (triangle) to be collapsed.
+                // Short blocking edge exists - C++ says DON'T contract (lines 413-416)
+                // This preserves the topology at divergence/convergence points
+                // and prevents gaps when multiple lines share a segment.
+                do_contract = false;
             }
         }
 
