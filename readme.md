@@ -32,8 +32,20 @@ The code is heavily commented, go to each folder in src for more information.
 ```bash
 sudo apt install -y postgresql-common
 sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh
-sudo apt install libprotoc-dev protobuf-compiler build-essential gcc pkg-config libssl-dev postgresql postgresql-17 postgresql-17-postgis postgresql-contrib unzip wget cmake openssl libpq-dev
+sudo apt install libprotoc-dev protobuf-compiler build-essential gcc pkg-config libssl-dev unzip wget cmake openssl libpq-dev
 ```
+
+#### install coin cbc integer linear programming solver.
+```bash
+sudo apt install coinor-cbc coinor-cbc-dev
+```
+
+### Install postgres
+```bash
+sudo apt install postgresql-18 postgresql-18-postgis-3 postgresql-contrib postgresql
+```
+
+You may also use an external database if you prefer.
 
 ### Enable PostGis
 
