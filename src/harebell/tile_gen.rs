@@ -193,7 +193,7 @@ impl TileGenerator {
                             .unwrap_or(1);
                         
                         // Cutback distance scales with number of lines to create room for bezier
-                        let base_cutback = spacing * 0.8;  // Base distance for bezier curves
+                        let base_cutback = spacing * 2.0;  // Base distance for bezier curves
                         let start_cutback = if from_degree >= 2 { base_cutback } else { 0.0 };
                         let end_cutback = if to_degree >= 2 { base_cutback } else { 0.0 };
 
@@ -661,7 +661,7 @@ impl TileGenerator {
                                     let start_y = node_ty + norm_y * shift;
 
                                     // Shorten distance must match edge cutback for seamless connection
-                                    let shorten_dist = spacing * 0.8;
+                                    let shorten_dist = spacing * 2.0;
                                     let p_x = start_x + tn_x * shorten_dist;
                                     let p_y = start_y + tn_y * shorten_dist;
 
