@@ -26,7 +26,7 @@ pub struct GraphEdge {
     pub from: NodeId,
     pub to: NodeId,
     pub geometry: LineString<Point>,
-    pub route_ids: Vec<(String, String)>, // (chateau, route_id) - chateau ensures uniqueness across different gtfs files
+    pub routes: Vec<(String, String, i32)>, // (chateau, route_id, route_type)
     pub original_shape_ids: Vec<(String, String)>, // (chateau, shape_id) - tracks which GTFS shapes contributed to this edge
     pub weight: f64,                               // length in meters
     pub original_edge_index: Option<usize>,        // For debugging/zippering traceability
@@ -144,7 +144,11 @@ pub async fn generate_edges(
                         from: NodeId::Cluster(fc),
                         to: NodeId::Cluster(tc),
                         geometry: convert_from_geo(&segment),
-                        route_ids: pattern_to_route.get(&pat_id).cloned().into_iter().collect(),
+                        routes: pattern_to_route
+                            .get(&pat_id)
+                            .into_iter()
+                            .map(|(c, r)| (c.clone(), r.clone(), shape.unwrap().route_type as i32))
+                            .collect(),
                         original_shape_ids: vec![], // Pattern-based edges don't have original shapes
                         weight,
                         original_edge_index: None,
@@ -284,14 +288,14 @@ fn merge_edges(raw_edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                 continue;
             }
 
-            // Collect all route IDs
-            let mut all_routes: HashSet<(String, String)> = HashSet::new();
+            // Collect all routes
+            let mut all_routes: HashSet<(String, String, i32)> = HashSet::new();
             for e in &group {
-                for r in &e.route_ids {
+                for r in &e.routes {
                     all_routes.insert(r.clone());
                 }
             }
-            let merged_routes: Vec<(String, String)> = all_routes.into_iter().collect();
+            let merged_routes: Vec<(String, String, i32)> = all_routes.into_iter().collect();
 
             // Average geometries
             let avg_geom = if group.len() == 1 {
@@ -301,7 +305,7 @@ fn merge_edges(raw_edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                     group.iter().map(|e| convert_to_geo(&e.geometry)).collect();
                 let weights: Vec<f64> = group
                     .iter()
-                    .map(|e| (e.route_ids.len().max(1) as f64).powi(2))
+                    .map(|e| (e.routes.len().max(1) as f64).powi(2))
                     .collect();
                 average_polylines_weighted(&geoms, Some(&weights))
             };
@@ -313,7 +317,7 @@ fn merge_edges(raw_edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                 from,
                 to,
                 geometry: convert_from_geo(&chaikin_smoothing(&avg_geom, 1)),
-                route_ids: merged_routes,
+                routes: merged_routes,
                 original_shape_ids: vec![], // Edges don't track shapes in this pipeline
                 weight: avg_weight,
                 original_edge_index: None,
@@ -386,11 +390,11 @@ fn partition_by_chateau(edges: Vec<GraphEdge>) -> HashMap<String, Vec<GraphEdge>
 
     for edge in edges {
         // Determine primary chateau by counting occurrences
-        let primary_chateau = if edge.route_ids.is_empty() {
+        let primary_chateau = if edge.routes.is_empty() {
             "_unknown_".to_string()
         } else {
             let mut chateau_counts: HashMap<&str, usize> = HashMap::new();
-            for (chateau, _) in &edge.route_ids {
+            for (chateau, _, _) in &edge.routes {
                 *chateau_counts.entry(chateau.as_str()).or_default() += 1;
             }
             chateau_counts
@@ -925,7 +929,7 @@ pub fn snap_clusters_to_edges(
                         from: current_start_node,
                         to: *node_id,
                         geometry: convert_from_geo(&sub_geom),
-                        route_ids: edge.route_ids.clone(),
+                        routes: edge.routes.clone(),
                         original_shape_ids: edge.original_shape_ids.clone(),
                         weight: 0.0, // Should recalc
                         original_edge_index: edge.original_edge_index,
@@ -943,7 +947,7 @@ pub fn snap_clusters_to_edges(
                         from: current_start_node,
                         to: edge.to,
                         geometry: convert_from_geo(&sub_geom),
-                        route_ids: edge.route_ids.clone(),
+                        routes: edge.routes.clone(),
                         original_shape_ids: edge.original_shape_ids.clone(),
                         weight: 0.0,
                         original_edge_index: edge.original_edge_index,
@@ -1072,7 +1076,7 @@ fn split_edges_at_points(
                     from: current_node,
                     to: new_node_id,
                     geometry: convert_from_geo(&geom),
-                    route_ids: edge.route_ids.clone(),
+                    routes: edge.routes.clone(),
                     original_shape_ids: edge.original_shape_ids.clone(),
                     weight,
                     original_edge_index: edge.original_edge_index,
@@ -1091,7 +1095,7 @@ fn split_edges_at_points(
                     from: current_node,
                     to: edge.to,
                     geometry: convert_from_geo(&geom),
-                    route_ids: edge.route_ids.clone(),
+                    routes: edge.routes.clone(),
                     original_shape_ids: edge.original_shape_ids.clone(),
                     weight,
                     original_edge_index: edge.original_edge_index,
@@ -1132,12 +1136,12 @@ fn bundle_edges(edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                     group.iter().map(|e| convert_to_geo(&e.geometry)).collect();
                 let weights: Vec<f64> = group
                     .iter()
-                    .map(|e| (e.route_ids.len().max(1) as f64).powi(2))
+                    .map(|e| (e.routes.len().max(1) as f64).powi(2))
                     .collect();
                 let avg_geom = average_polylines_weighted(&geoms, Some(&weights));
 
-                let mut all_routes: Vec<(String, String)> =
-                    group.iter().flat_map(|e| e.route_ids.clone()).collect();
+                let mut all_routes: Vec<(String, String, i32)> =
+                    group.iter().flat_map(|e| e.routes.clone()).collect();
                 all_routes.sort_unstable();
                 all_routes.dedup();
 
@@ -1147,7 +1151,7 @@ fn bundle_edges(edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                     from: u,
                     to: v,
                     geometry: convert_from_geo(&avg_geom),
-                    route_ids: all_routes,
+                    routes: all_routes,
                     original_shape_ids: vec![], // Bundled edges lose shape tracking
                     weight: total_weight,
                     original_edge_index: None,
@@ -1176,10 +1180,10 @@ fn bundle_edges(edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                 let geom_j = convert_to_geo(&group[j].geometry);
 
                 if geom_j.euclidean_length() >= len_i && is_contained(&geom_i, &geom_j, threshold) {
-                    let new_routes = group[i].route_ids.clone();
-                    group[j].route_ids.extend(new_routes);
-                    group[j].route_ids.sort();
-                    group[j].route_ids.dedup();
+                    let new_routes = group[i].routes.clone();
+                    group[j].routes.extend(new_routes);
+                    group[j].routes.sort();
+                    group[j].routes.dedup();
                     group[j].weight += group[i].weight;
                     absorbed = true;
                     break;
@@ -1199,12 +1203,12 @@ fn bundle_edges(edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                 group.iter().map(|e| convert_to_geo(&e.geometry)).collect();
             let weights: Vec<f64> = group
                 .iter()
-                .map(|e| (e.route_ids.len().max(1) as f64).powi(2))
+                .map(|e| (e.routes.len().max(1) as f64).powi(2))
                 .collect();
             let avg_geom = average_polylines_weighted(&geoms, Some(&weights));
 
-            let mut all_routes: Vec<(String, String)> =
-                group.iter().flat_map(|e| e.route_ids.clone()).collect();
+            let mut all_routes: Vec<(String, String, i32)> =
+                group.iter().flat_map(|e| e.routes.clone()).collect();
             all_routes.sort_unstable();
             all_routes.dedup();
 
@@ -1214,7 +1218,7 @@ fn bundle_edges(edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                 from: u,
                 to: v,
                 geometry: convert_from_geo(&avg_geom),
-                route_ids: all_routes,
+                routes: all_routes,
                 original_shape_ids: vec![], // Bundled edges lose shape tracking
                 weight: total_weight,
                 original_edge_index: None,
@@ -1465,7 +1469,7 @@ fn collapse_shared_segments(
                             y: v_pt.y(),
                         },
                     ])),
-                    route_ids: edge.route_ids.clone(),
+                    routes: edge.routes.clone(),
                     original_shape_ids: edge.original_shape_ids.clone(),
                     weight: segment_len,
                     original_edge_index: edge.original_edge_index,
@@ -1538,7 +1542,7 @@ fn densify_geometry(line: &GeoLineString<f64>, max_seg_len: f64) -> Vec<GeoPoint
 /// This ensures we only merge degree-2 chains when the lines are actually the same.
 /// Assumes route_ids are sorted.
 fn routes_equal(a: &GraphEdge, b: &GraphEdge) -> bool {
-    a.route_ids == b.route_ids
+    a.routes == b.routes
 }
 
 fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
@@ -1548,8 +1552,8 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         let key = (e.from, e.to);
         if let Some(existing) = edge_map.get_mut(&key) {
             // Merge routes (avoid duplicates)
-            for r in e.route_ids {
-                existing.route_ids.push(r);
+            for r in e.routes.clone() {
+                existing.routes.push(r);
             }
         } else {
             edge_map.insert(key, e);
@@ -1559,8 +1563,8 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
     // Convert to Vec and sort routes for fast comparison
     let mut edges: Vec<GraphEdge> = edge_map.into_values().collect();
     for e in &mut edges {
-        e.route_ids.sort_unstable();
-        e.route_ids.dedup();
+        e.routes.sort_unstable();
+        e.routes.dedup();
     }
 
     // Step 1: Build Adjacency Lists for Intersections
@@ -1614,13 +1618,13 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
             }
         }
         let total_weight: f64 = indices.iter().map(|&i| edges[i].weight).sum();
-        let route_vec = first.route_ids.clone();
+        let route_vec = first.routes.clone();
 
         GraphEdge {
             from: first.from,
             to: last.to,
             geometry: convert_from_geo(&post_process_line(&GeoLineString::new(coords))),
-            route_ids: route_vec,
+            routes: route_vec,
             original_shape_ids: first.original_shape_ids.clone(),
             weight: total_weight,
             original_edge_index: first.original_edge_index,
@@ -2035,7 +2039,7 @@ mod tests {
                 points: coords,
                 srid: Some(4326),
             },
-            route_ids: vec![("test_chateau".to_string(), "R1".to_string())],
+            routes: vec![("test_chateau".to_string(), "R1".to_string(), 1)],
             original_shape_ids: vec![],
             weight: 10.0,
             original_edge_index: None,

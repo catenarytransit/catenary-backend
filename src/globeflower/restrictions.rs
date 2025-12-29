@@ -483,9 +483,9 @@ pub fn infer_restrictions_dijkstra(
                 let edg2 = &edges[edg2_idx];
 
                 // Get routes on edg1
-                for route_key in &edg1.route_ids {
+                for route_key in &edg1.routes {
                     // Check if edg2 has the same route (C++ line 92: hasLine check)
-                    if !edg2.route_ids.contains(route_key) {
+                    if !edg2.routes.contains(route_key) {
                         continue;
                     }
 
@@ -523,7 +523,7 @@ pub fn infer_restrictions_dijkstra(
                         restrictions.push(TurnRestriction {
                             from_edge_index: edg1_idx,
                             to_edge_index: edg2_idx,
-                            route_id: route_key.clone(),
+                            route_id: (route_key.0.clone(), route_key.1.clone()),
                         });
                         restrictions_count += 1;
                     }
@@ -573,7 +573,7 @@ fn cleanup_dead_restrictions(
         for &edg1_idx in adjacent_indices {
             let edg1 = &edges[edg1_idx];
 
-            for route_key in &edg1.route_ids {
+            for route_key in &edg1.routes {
                 let line_id = format!("{}_{}", route_key.0, route_key.1);
 
                 // Count other edges with this line, and how many are connected
@@ -586,7 +586,7 @@ fn cleanup_dead_restrictions(
                     }
 
                     let edg2 = &edges[edg2_idx];
-                    if edg2.route_ids.contains(route_key) {
+                    if edg2.routes.contains(route_key) {
                         other_occs += 1;
 
                         // Check if connection is allowed (in either direction)
@@ -843,9 +843,9 @@ fn build_restriction_graph(
         let geom = convert_to_geo(&edge.geometry);
 
         let lines: HashSet<String> = edge
-            .route_ids
+            .routes
             .iter()
-            .map(|(chateau, rid)| format!("{}_{}", chateau, rid))
+            .map(|(chateau, rid, _)| format!("{}_{}", chateau, rid))
             .collect();
 
         // Add forward edge
@@ -928,7 +928,8 @@ fn add_handles(
         let hndl_la = get_ortho_line_at_dist(&geom, len_meters / 3.0, max_dist);
         let hndl_lb = get_ortho_line_at_dist(&geom, len_meters * 2.0 / 3.0, max_dist);
 
-        for route_key in &orig_edge.route_ids {
+        for route_key_tuple in &orig_edge.routes {
+            let route_key = &(route_key_tuple.0.clone(), route_key_tuple.1.clone());
             let line_id = format!("{}_{}", route_key.0, route_key.1);
             let Some(shapes) = route_shapes.get(route_key) else {
                 continue;
@@ -1167,10 +1168,10 @@ pub fn infer_restrictions_legacy(
                 let u = &edges[u_idx];
                 let v = &edges[v_idx];
 
-                let u_routes: HashSet<&(String, String)> = u.route_ids.iter().collect();
-                let v_routes: HashSet<&(String, String)> = v.route_ids.iter().collect();
+                let u_routes: HashSet<(String, String)> = u.routes.iter().map(|(c, r, _)| (c.clone(), r.clone())).collect();
+                let v_routes: HashSet<(String, String)> = v.routes.iter().map(|(c, r, _)| (c.clone(), r.clone())).collect();
 
-                let shared_routes: Vec<&(String, String)> =
+                let shared_routes: Vec<(String, String)> =
                     u_routes.intersection(&v_routes).cloned().collect();
 
                 if shared_routes.is_empty() {
@@ -1180,7 +1181,7 @@ pub fn infer_restrictions_legacy(
                 let u_geom = convert_to_geo(&u.geometry);
                 let v_geom = convert_to_geo(&v.geometry);
 
-                for route_key in shared_routes {
+                for route_key in &shared_routes {
                     if let Some(shapes) = route_shapes.get(route_key) {
                         let mut valid_any = false;
 

@@ -108,9 +108,9 @@ pub async fn insert_stations(
                 // The edge currently has a route_id which IS the shape_id (from support_graph.rs).
                 // So check if edge.route_ids intersects Q_A.
                 let served_count = edge
-                    .route_ids
+                    .routes
                     .iter()
-                    .filter(|(_, shape_id)| shapes_serving_cluster.contains(shape_id))
+                    .filter(|(chateau, shape_id, _)| shapes_serving_cluster.contains(shape_id))
                     .count() as f64;
 
                 // Score o = (C / |Q_A|) * 100 - d
@@ -146,7 +146,7 @@ pub async fn insert_stations(
             let geom = convert_to_geo(&edge.geometry);
             let mut current_frac = 0.0;
             let mut current_node = edge.from;
-            let mut current_route_ids = edge.route_ids.clone();
+            let mut current_route_ids = edge.routes.clone();
 
             for (frac, cluster_id, _pt) in splits {
                 // Determine new node ID (It's a Cluster Node now!)
@@ -159,7 +159,7 @@ pub async fn insert_stations(
                         from: current_node,
                         to: new_node,
                         geometry: convert_from_geo(&sub_geom),
-                        route_ids: current_route_ids.clone(),
+                        routes: current_route_ids.clone(),
                         original_shape_ids: edge.original_shape_ids.clone(),
                         weight: len,
                         original_edge_index: edge.original_edge_index,
@@ -177,7 +177,7 @@ pub async fn insert_stations(
                     from: current_node,
                     to: edge.to,
                     geometry: convert_from_geo(&sub_geom),
-                    route_ids: current_route_ids,
+                    routes: current_route_ids,
                     original_shape_ids: edge.original_shape_ids.clone(),
                     weight: len,
                     original_edge_index: edge.original_edge_index,

@@ -71,8 +71,8 @@ pub enum RouteDirection {
 /// direction: None = bidirectional, Some(node) = directed towards that node
 #[derive(Clone, Debug)]
 pub struct LineOcc {
-    // line_id is now (chateau, route_id) tuple
     pub line_id: (String, String),
+    pub route_type: i32,
     /// Direction the line travels. None = bidirectional.
     /// Some(weak_ref) = directed towards the node pointed to.
     /// Using Weak to avoid reference cycles.
@@ -80,14 +80,19 @@ pub struct LineOcc {
 }
 
 impl LineOcc {
-    fn new(line_id: (String, String), direction: Option<Weak<RefCell<LineNode>>>) -> Self {
-        Self { line_id, direction }
+    fn new(line_id: (String, String), route_type: i32, direction: Option<Weak<RefCell<LineNode>>>) -> Self {
+        Self {
+            line_id,
+            route_type,
+            direction,
+        }
     }
 
     /// Create a bidirectional line occurrence
-    fn new_bidirectional(line_id: (String, String)) -> Self {
+    fn new_bidirectional(line_id: (String, String), route_type: i32) -> Self {
         Self {
             line_id,
+            route_type,
             direction: None,
         }
     }
@@ -410,7 +415,10 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
             from: start_node,
             to: end_node,
             geometry: convert_from_geo(&geom),
-            route_ids,
+            routes: route_ids
+                .into_iter()
+                .map(|(c, r)| (c, r, shape.route_type as i32))
+                .collect(),
             original_shape_ids,
             weight,
             original_edge_index: None,
@@ -527,12 +535,10 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
                 from: NodeId::Intersection(edge_borrow.from.borrow().id),
                 to: NodeId::Intersection(edge_borrow.to.borrow().id),
                 geometry: convert_from_geo(&ls),
-                route_ids: edge_borrow
+                routes: edge_borrow
                     .routes
                     .iter()
-                    .filter_map(|r| {
-                        Some(r.line_id.clone())
-                    })
+                    .map(|r| (r.line_id.0.clone(), r.line_id.1.clone(), r.route_type))
                     .collect(),
                 original_shape_ids: vec![], // Lost through LineGraph processing
                 weight,
@@ -628,7 +634,7 @@ fn graph_from_edges(edges: Vec<GraphEdge>, next_node_id: &mut usize) -> LineGrap
         new_edge.borrow_mut().geometry = geom.0.iter().map(|c| Coord { x: c.x, y: c.y }).collect();
 
         // Restore routes
-        for (chateau, rid) in &edge.route_ids {
+        for (chateau, rid, route_type) in &edge.routes {
             let full_id = (chateau.clone(), rid.clone());
             // Since we lost direction info in GraphEdge export (it's flattened),
             // we have to assume bidirectional here unless we change GraphEdge format.
@@ -637,7 +643,7 @@ fn graph_from_edges(edges: Vec<GraphEdge>, next_node_id: &mut usize) -> LineGrap
             new_edge
                 .borrow_mut()
                 .routes
-                .push(LineOcc::new_bidirectional(full_id));
+                .push(LineOcc::new_bidirectional(full_id, *route_type));
         }
     }
 
@@ -700,14 +706,14 @@ fn build_initial_linegraph(edges: &[GraphEdge], _next_node_id: &mut usize) -> Li
         new_edge.borrow_mut().geometry = geom.0.iter().map(|c| Coord { x: c.x, y: c.y }).collect();
 
         // Add routes WITH DIRECTION - GTFS shapes are directional
-        for (chateau, rid) in &edge.route_ids {
+        for (chateau, rid, route_type) in &edge.routes {
             let full_id = (chateau.clone(), rid.clone());
             // Direction points to TO node - shape goes from -> to
             let direction = Some(Rc::downgrade(&to_node));
             new_edge
                 .borrow_mut()
                 .routes
-                .push(LineOcc::new(full_id, direction));
+                .push(LineOcc::new(full_id, *route_type, direction));
         }
     }
 
@@ -787,14 +793,14 @@ fn build_initial_linegraph_webmerc(
         new_edge.borrow_mut().geometry = geom.0.iter().map(|c| Coord { x: c.x, y: c.y }).collect();
 
         // Add routes WITH DIRECTION - GTFS shapes are directional
-        for (chateau, rid) in &edge.route_ids {
+        for (chateau, rid, route_type) in &edge.routes {
             let full_id = (chateau.clone(), rid.clone());
             // Direction points to TO node - shape goes from -> to
             let direction = Some(Rc::downgrade(&to_node));
             new_edge
                 .borrow_mut()
                 .routes
-                .push(LineOcc::new(full_id, direction));
+                .push(LineOcc::new(full_id, *route_type, direction));
         }
     }
 
@@ -837,11 +843,11 @@ fn collapse_shared_segments_from_graph(
                 from: NodeId::Intersection(from_id),
                 to: NodeId::Intersection(to_id),
                 geometry: convert_from_geo(&ls),
-                route_ids: edge_borrow
+                routes: edge_borrow
                     .routes
                     .iter()
-                    .filter_map(|r| {
-                        Some(r.line_id.clone())
+                    .map(|r| {
+                         (r.line_id.0.clone(), r.line_id.1.clone(), r.route_type)
                     })
                     .collect(),
                 original_shape_ids: vec![], // Lost through LineGraph processing
@@ -957,7 +963,7 @@ fn collapse_shared_segments(
 
             // Debug logging removed for performance
 
-            let num_lines = edge.route_ids.len();
+            let num_lines = edge.routes.len();
             let mut i = 0;
             let pl_len = pl_dense.len();
             let mut front: Option<NodeRef> = None; // For FROM coverage handling (matches C++ 'front' pointer)
@@ -985,9 +991,13 @@ fn collapse_shared_segments(
                     Some(to_endpoint_pos)
                 };
 
+                // Collect current edge route modes for compatibility check
+                let current_modes: AHashSet<i32> = edge.routes.iter().map(|(_, _, rt)| *rt).collect();
+
                 // Find or create node with span constraints (matches C++: ndCollapseCand)
                 let cur = nd_collapse_cand(
                     &my_nds,
+                    &current_modes, // Pass current modes
                     num_lines,
                     d_cut,
                     *point,
@@ -1048,7 +1058,7 @@ fn collapse_shared_segments(
                         // Merge route info WITH DIRECTION
                         // CRITICAL: GTFS shapes are directional - trains travel FROM -> TO
                         // New edge target is `cur`. Route should point to `cur`.
-                        for (chateau, rid) in &edge.route_ids {
+                        for (chateau, rid, route_type) in &edge.routes {
                             let full_id = (chateau.clone(), rid.clone());
                             
                             // Check if already exists with same direction
@@ -1059,7 +1069,7 @@ fn collapse_shared_segments(
                                 new_e
                                     .borrow_mut()
                                     .routes
-                                    .push(LineOcc::new(full_id, direction));
+                                    .push(LineOcc::new(full_id, *route_type, direction));
                             }
                         }
                 }
@@ -1092,7 +1102,7 @@ fn collapse_shared_segments(
                         } else {
                             tg_new.add_edg(from_node, front_node)
                         };
-                        for (chateau, rid) in &edge.route_ids {
+                        for (chateau, rid, route_type) in &edge.routes {
                             let full_id = (chateau.clone(), rid.clone());
                             if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
                                 // Direction points to `front` (target of this segment)
@@ -1100,7 +1110,7 @@ fn collapse_shared_segments(
                                 new_e
                                     .borrow_mut()
                                     .routes
-                                    .push(LineOcc::new(full_id, direction));
+                                    .push(LineOcc::new(full_id, *route_type, direction));
                             }
                         }
                     }
@@ -1116,7 +1126,7 @@ fn collapse_shared_segments(
                         } else {
                             tg_new.add_edg(last_node, to_node)
                         };
-                        for (chateau, rid) in &edge.route_ids {
+                        for (chateau, rid, route_type) in &edge.routes {
                             let full_id = (chateau.clone(), rid.clone());
                             if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
                                 // Direction points to `to_node` (target of this segment)
@@ -1124,7 +1134,7 @@ fn collapse_shared_segments(
                                 new_e
                                     .borrow_mut()
                                     .routes
-                                    .push(LineOcc::new(full_id, direction));
+                                    .push(LineOcc::new(full_id, *route_type, direction));
                             }
                         }
                     }
@@ -1344,12 +1354,10 @@ fn collapse_shared_segments(
                     // Map back strictly to tuples.
                     // Note: Direction info is effectively lost in GraphEdge export
                     // if GraphEdge doesn't support it, but it was used for simplification.
-                    route_ids: edge_borrow
+                    routes: edge_borrow
                         .routes
                         .iter()
-                        .filter_map(|ro| {
-                            Some(ro.line_id.clone())
-                        })
+                        .map(|r| (r.line_id.0.clone(), r.line_id.1.clone(), r.route_type))
                         .collect(),
                     original_shape_ids: vec![], // Lost through LineGraph processing
                     weight,
@@ -1403,6 +1411,21 @@ fn collapse_shared_segments(
 /// - graph: the line graph being built
 fn nd_collapse_cand(
     blocking_set: &AHashSet<usize>,
+    current_modes: &AHashSet<i32>,
+    num_lines: usize,
+    d_cut: f64,
+    point: [f64; 2],
+    span_a_pos: Option<[f64; 2]>,
+    span_b_pos: Option<[f64; 2]>,
+    geo_idx: &mut NodeGeoIdx,
+    graph: &mut LineGraph,
+) -> NodeRef {
+    nd_collapse_cand_impl(blocking_set, current_modes, num_lines, d_cut, point, span_a_pos, span_b_pos, geo_idx, graph)
+}
+
+fn nd_collapse_cand_impl(
+    blocking_set: &AHashSet<usize>,
+    current_modes: &AHashSet<i32>,
     num_lines: usize,
     d_cut: f64,
     point: [f64; 2],
@@ -1454,9 +1477,34 @@ fn nd_collapse_cand(
                 return None;
             }
 
+            // Route Mode Compatibility Check
+            // If the candidate node has routes with completely different modes than us,
+            // enforce a much stricter threshold to discourage merging.
+            let mut node_modes = AHashSet::new();
+            for edge_ref in &node.borrow().adj_list {
+                for occ in &edge_ref.borrow().routes {
+                    node_modes.insert(occ.route_type);
+                }
+            }
+
+            // If we have modes and the node has modes, check overlap
+            let mut threshold_sq = d_cut_sq;
+            if !current_modes.is_empty() && !node_modes.is_empty() {
+                // Check if any mode matches
+                let disjoint = current_modes.intersection(&node_modes).next().is_none();
+                if disjoint {
+                    // Modes are disjoint (e.g. Tram vs Rail). 
+                    // CRITICAL FIX: Make threshold MUCH stricter (factor of 100, sq factor 10000).
+                    // This ensures different modes (trains/subways/trams) only merge when 
+                    // almost perfectly coincident (< 0.5m typically), preventing merging 
+                    // at sharp crossing angles where lines pass over/under each other.
+                    threshold_sq /= 10000.0;
+                }
+            }
+
             // C++ line 104: d < dSpanA && d < dSpanB && d < dMax && d < dBest
             // Compare squared distances to avoid sqrt
-            if dist_sq < d_span_a_sq && dist_sq < d_span_b_sq && dist_sq < d_cut_sq {
+            if dist_sq < d_span_a_sq && dist_sq < d_span_b_sq && dist_sq < threshold_sq {
                 Some(dist_sq) // Score by distance (lower = better)
             } else {
                 None
@@ -2015,6 +2063,7 @@ fn combine_edges(edge_a: &EdgeRef, edge_b: &EdgeRef, n: &NodeRef, graph: &mut Li
 
             new_routes.push(LineOcc {
                 line_id: ra.line_id.clone(),
+                route_type: ra.route_type,
                 direction: new_dir,
             });
         } else {
@@ -2033,6 +2082,7 @@ fn combine_edges(edge_a: &EdgeRef, edge_b: &EdgeRef, n: &NodeRef, graph: &mut Li
 
             new_routes.push(LineOcc {
                 line_id: ra.line_id.clone(),
+                route_type: ra.route_type,
                 direction: new_dir,
             });
         }
@@ -2056,6 +2106,7 @@ fn combine_edges(edge_a: &EdgeRef, edge_b: &EdgeRef, n: &NodeRef, graph: &mut Li
 
             new_routes.push(LineOcc {
                 line_id: rb.line_id.clone(),
+                route_type: rb.route_type,
                 direction: new_dir,
             });
         }
@@ -2773,6 +2824,7 @@ fn fold_edges_for_node(graph: &mut LineGraph, node: &NodeRef) -> bool {
                         } else {
                             ea.routes.push(LineOcc {
                                 line_id: r.line_id.clone(),
+                                route_type: r.route_type,
                                 direction: new_dir,
                             });
                         }
@@ -3110,6 +3162,7 @@ fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
                             } else {
                                 ee.routes.push(LineOcc {
                                     line_id: r.line_id.clone(),
+                                    route_type: r.route_type,
                                     direction: new_dir,
                                 });
                             }

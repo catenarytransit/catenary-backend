@@ -43,7 +43,7 @@ pub fn extract_and_export(
             from: convert_node_id(e.from),
             to: convert_node_id(e.to),
             geometry: e.geometry.points.iter().map(|p| [p.x, p.y]).collect(),
-            route_ids: e.route_ids.clone(),
+            route_ids: e.routes.iter().map(|(c, r, _)| (c.clone(), r.clone())).collect(),
             weight: e.weight,
             original_edge_index: e.original_edge_index,
         })
@@ -114,9 +114,9 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
         properties.insert(
             "route_ids".to_string(),
             JsonValue::from(
-                edge.route_ids
+                edge.routes
                     .iter()
-                    .map(|(a, b)| format!("{}:{}", a, b))
+                    .map(|(a, b, _)| format!("{}:{}", a, b))
                     .collect::<Vec<_>>(),
             ),
         );
@@ -224,7 +224,7 @@ fn extract_land_masses(clusters: &[StopCluster], edges: &[GraphEdge]) -> Vec<Lan
                 .sum();
             let mut unique_routes = HashSet::new();
             for &e_idx in &component_edges {
-                for r in &edges[e_idx].route_ids {
+                for r in &edges[e_idx].routes {
                     unique_routes.insert(r.clone());
                 }
             }
