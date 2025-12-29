@@ -111,6 +111,15 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
         let mut properties = JsonObject::new();
         // Minimal metadata for visual debugging
         properties.insert("weight".to_string(), JsonValue::from(edge.weight));
+        properties.insert(
+            "route_ids".to_string(),
+            JsonValue::from(
+                edge.route_ids
+                    .iter()
+                    .map(|(a, b)| format!("{}:{}", a, b))
+                    .collect::<Vec<_>>(),
+            ),
+        );
 
         features.push(Feature {
             bbox: None,

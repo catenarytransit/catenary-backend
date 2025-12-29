@@ -71,7 +71,8 @@ pub enum RouteDirection {
 /// direction: None = bidirectional, Some(node) = directed towards that node
 #[derive(Clone, Debug)]
 pub struct LineOcc {
-    pub line_id: String,
+    // line_id is now (chateau, route_id) tuple
+    pub line_id: (String, String),
     /// Direction the line travels. None = bidirectional.
     /// Some(weak_ref) = directed towards the node pointed to.
     /// Using Weak to avoid reference cycles.
@@ -79,12 +80,12 @@ pub struct LineOcc {
 }
 
 impl LineOcc {
-    fn new(line_id: String, direction: Option<Weak<RefCell<LineNode>>>) -> Self {
+    fn new(line_id: (String, String), direction: Option<Weak<RefCell<LineNode>>>) -> Self {
         Self { line_id, direction }
     }
 
     /// Create a bidirectional line occurrence
-    fn new_bidirectional(line_id: String) -> Self {
+    fn new_bidirectional(line_id: (String, String)) -> Self {
         Self {
             line_id,
             direction: None,
@@ -530,13 +531,7 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
                     .routes
                     .iter()
                     .filter_map(|r| {
-                        // line_id format: "chateau_routeid"
-                        let parts: Vec<&str> = r.line_id.splitn(2, '_').collect();
-                        if parts.len() == 2 {
-                            Some((parts[0].to_string(), parts[1].to_string()))
-                        } else {
-                            None
-                        }
+                        Some(r.line_id.clone())
                     })
                     .collect(),
                 original_shape_ids: vec![], // Lost through LineGraph processing
@@ -634,7 +629,11 @@ fn graph_from_edges(edges: Vec<GraphEdge>, next_node_id: &mut usize) -> LineGrap
 
         // Restore routes
         for (chateau, rid) in &edge.route_ids {
-            let full_id = format!("{}_{}", chateau, rid);
+            let full_id = (chateau.clone(), rid.clone());
+            // Since we lost direction info in GraphEdge export (it's flattened),
+            // we have to assume bidirectional here unless we change GraphEdge format.
+            // But this function is only used for reconstruction (post-collapse),
+            // where direction matters less for topology than during collapse.
             new_edge
                 .borrow_mut()
                 .routes
@@ -702,12 +701,13 @@ fn build_initial_linegraph(edges: &[GraphEdge], _next_node_id: &mut usize) -> Li
 
         // Add routes WITH DIRECTION - GTFS shapes are directional
         for (chateau, rid) in &edge.route_ids {
-            let full_id = format!("{}_{}", chateau, rid);
+            let full_id = (chateau.clone(), rid.clone());
             // Direction points to TO node - shape goes from -> to
+            let direction = Some(Rc::downgrade(&to_node));
             new_edge
                 .borrow_mut()
                 .routes
-                .push(LineOcc::new_bidirectional(full_id));
+                .push(LineOcc::new(full_id, direction));
         }
     }
 
@@ -788,12 +788,13 @@ fn build_initial_linegraph_webmerc(
 
         // Add routes WITH DIRECTION - GTFS shapes are directional
         for (chateau, rid) in &edge.route_ids {
-            let full_id = format!("{}_{}", chateau, rid);
+            let full_id = (chateau.clone(), rid.clone());
             // Direction points to TO node - shape goes from -> to
+            let direction = Some(Rc::downgrade(&to_node));
             new_edge
                 .borrow_mut()
                 .routes
-                .push(LineOcc::new_bidirectional(full_id));
+                .push(LineOcc::new(full_id, direction));
         }
     }
 
@@ -840,13 +841,7 @@ fn collapse_shared_segments_from_graph(
                     .routes
                     .iter()
                     .filter_map(|r| {
-                        // line_id format: "chateau_routeid"
-                        let parts: Vec<&str> = r.line_id.splitn(2, '_').collect();
-                        if parts.len() == 2 {
-                            Some((parts[0].to_string(), parts[1].to_string()))
-                        } else {
-                            None
-                        }
+                        Some(r.line_id.clone())
                     })
                     .collect(),
                 original_shape_ids: vec![], // Lost through LineGraph processing
@@ -1050,22 +1045,23 @@ fn collapse_shared_segments(
                         tg_new.add_edg(last_node, &cur)
                     };
 
-                    // Merge route info WITH DIRECTION
-                    // CRITICAL: GTFS shapes are directional - trains travel FROM -> TO
-                    // C++ mergeLines (lines 977-988) maps direction from old edge to new edge
-                    // Since the original shape goes in one direction, and we're iterating
-                    // from first point to last, the route direction should point toward 'cur' (the TO node)
-                    for (chateau, rid) in &edge.route_ids {
-                        let full_id = format!("{}_{}", chateau, rid);
-                        // Check if already exists with same direction
-                        if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
-                            // C++ uses bidirectional by default; direction comes from input
-                            new_e
-                                .borrow_mut()
-                                .routes
-                                .push(LineOcc::new_bidirectional(full_id));
+                        // Merge route info WITH DIRECTION
+                        // CRITICAL: GTFS shapes are directional - trains travel FROM -> TO
+                        // New edge target is `cur`. Route should point to `cur`.
+                        for (chateau, rid) in &edge.route_ids {
+                            let full_id = (chateau.clone(), rid.clone());
+                            
+                            // Check if already exists with same direction
+                            // We use strict tuple equality now
+                            if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
+                                // Direction points to `cur` (TO node of this segment)
+                                let direction = Some(Rc::downgrade(&cur));
+                                new_e
+                                    .borrow_mut()
+                                    .routes
+                                    .push(LineOcc::new(full_id, direction));
+                            }
                         }
-                    }
                 }
 
                 // Track front node (C++: if (!front) front = cur)
@@ -1097,13 +1093,14 @@ fn collapse_shared_segments(
                             tg_new.add_edg(from_node, front_node)
                         };
                         for (chateau, rid) in &edge.route_ids {
-                            let full_id = format!("{}_{}", chateau, rid);
+                            let full_id = (chateau.clone(), rid.clone());
                             if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
-                                // C++ uses bidirectional by default
+                                // Direction points to `front` (target of this segment)
+                                let direction = Some(Rc::downgrade(front_node));
                                 new_e
                                     .borrow_mut()
                                     .routes
-                                    .push(LineOcc::new_bidirectional(full_id));
+                                    .push(LineOcc::new(full_id, direction));
                             }
                         }
                     }
@@ -1120,13 +1117,14 @@ fn collapse_shared_segments(
                             tg_new.add_edg(last_node, to_node)
                         };
                         for (chateau, rid) in &edge.route_ids {
-                            let full_id = format!("{}_{}", chateau, rid);
+                            let full_id = (chateau.clone(), rid.clone());
                             if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
-                                // C++ uses bidirectional by default
+                                // Direction points to `to_node` (target of this segment)
+                                let direction = Some(Rc::downgrade(to_node));
                                 new_e
                                     .borrow_mut()
                                     .routes
-                                    .push(LineOcc::new_bidirectional(full_id));
+                                    .push(LineOcc::new(full_id, direction));
                             }
                         }
                     }
@@ -1350,13 +1348,7 @@ fn collapse_shared_segments(
                         .routes
                         .iter()
                         .filter_map(|ro| {
-                            // line_id format: "chateau_routeid"
-                            let parts: Vec<&str> = ro.line_id.splitn(2, '_').collect();
-                            if parts.len() == 2 {
-                                Some((parts[0].to_string(), parts[1].to_string()))
-                            } else {
-                                None
-                            }
+                            Some(ro.line_id.clone())
                         })
                         .collect(),
                     original_shape_ids: vec![], // Lost through LineGraph processing
@@ -1424,11 +1416,15 @@ fn nd_collapse_cand(
 
     // C++ lines 90-96: Calculate distance constraints from span endpoints
     // A candidate can only be accepted if it's closer to the point than the
-    // span endpoints are (divided by sqrt(2) for geometric tolerance)
+    // span endpoints are.
+    // MODIFIED: C++ uses sqrt(2) divisor (2.0 squared), which creates a ~45 degree acceptance cone.
+    // We use divisor 4.0 (point must be closer than half the distance to span endpoint),
+    // which creates a ~30 degree cone. This prevents "zipper" artifacts where crossing lines
+    // snap together for a short distance before diverging.
     let d_span_a_sq = if let Some(sa_pos) = span_a_pos {
         let dx = point[0] - sa_pos[0];
         let dy = point[1] - sa_pos[1];
-        (dx * dx + dy * dy) / 2.0 // sqrt(2)^2 = 2
+        (dx * dx + dy * dy) / 4.0 // Stricter than C++ (was 2.0)
     } else {
         f64::INFINITY
     };
@@ -1436,7 +1432,7 @@ fn nd_collapse_cand(
     let d_span_b_sq = if let Some(sb_pos) = span_b_pos {
         let dx = point[0] - sb_pos[0];
         let dy = point[1] - sb_pos[1];
-        (dx * dx + dy * dy) / 2.0 // sqrt(2)^2 = 2
+        (dx * dx + dy * dy) / 4.0 // Stricter than C++ (was 2.0)
     } else {
         f64::INFINITY
     };
@@ -1804,11 +1800,18 @@ fn combine_nodes(
 ///
 /// Returns true unless there's an explicit connection exception stored at the node.
 /// Since we don't have connection exception data yet, this always returns true.
-fn conn_occurs(_node: &NodeRef, _line_id: &str, _edge_a: &EdgeRef, _edge_b: &EdgeRef) -> bool {
-    // C++ implementation checks _connEx map for explicit banned connections.
-    // If no exception exists, connection is allowed.
-    // TODO: Implement connection exception tracking if needed for turn restrictions.
-    true
+/// C++ `LineNodePL::connOccurs`
+fn conn_occurs(
+    _node: &NodeRef,
+    line_id: &(String, String),
+    edge_a: &EdgeRef,
+    edge_b: &EdgeRef,
+) -> bool {
+    // Check if line_id exists on both edges (simplification of C++ logic)
+    // C++ checks if the connection exists for this line at this node.
+    let has_a = edge_a.borrow().routes.iter().any(|r| r.line_id == *line_id);
+    let has_b = edge_b.borrow().routes.iter().any(|r| r.line_id == *line_id);
+    has_a && has_b
 }
 
 /// Matches C++ MapConstructor::lineEq
@@ -2215,6 +2218,7 @@ fn densify_coords(coords: &[[f64; 2]], max_seg_len: f64) -> Vec<[f64; 2]> {
 
 fn haversine_dist(p1: GeoPoint<f64>, p2: GeoPoint<f64>) -> f64 {
     use geo::HaversineDistance;
+    use geo::Distance;
     p1.haversine_distance(&p2)
 }
 
