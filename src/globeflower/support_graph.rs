@@ -80,7 +80,11 @@ pub struct LineOcc {
 }
 
 impl LineOcc {
-    fn new(line_id: (String, String), route_type: i32, direction: Option<Weak<RefCell<LineNode>>>) -> Self {
+    fn new(
+        line_id: (String, String),
+        route_type: i32,
+        direction: Option<Weak<RefCell<LineNode>>>,
+    ) -> Self {
         Self {
             line_id,
             route_type,
@@ -103,6 +107,9 @@ struct LineNode {
     id: usize,
     pos: [f64; 2],
     adj_list: Vec<EdgeRef>,
+    // Connection exceptions: lines that cannot continue between certain edge pairs at this node
+    // Key: line_id, Value: Map of edge_id -> Set of forbidden target edge_ids
+    conn_exc: AHashMap<(String, String), AHashMap<usize, AHashSet<usize>>>,
 }
 
 impl LineNode {
@@ -111,16 +118,51 @@ impl LineNode {
             id,
             pos,
             adj_list: Vec::new(),
+            conn_exc: AHashMap::new(),
         }
     }
 
     fn get_deg(&self) -> usize {
         self.adj_list.len()
     }
+
+    /// Add a connection exception - line cannot continue from edge_a to edge_b at this node
+    fn add_conn_exc(&mut self, line_id: &(String, String), edge_a_id: usize, edge_b_id: usize) {
+        // Store in both directions for fast lookup (matches C++)
+        self.conn_exc
+            .entry(line_id.clone())
+            .or_default()
+            .entry(edge_a_id)
+            .or_default()
+            .insert(edge_b_id);
+        self.conn_exc
+            .entry(line_id.clone())
+            .or_default()
+            .entry(edge_b_id)
+            .or_default()
+            .insert(edge_a_id);
+    }
+
+    /// Check if connection occurs (returns true unless exception exists)
+    /// Matches C++ LineNodePL::connOccurs
+    fn conn_occurs_check(
+        &self,
+        line_id: &(String, String),
+        edge_a_id: usize,
+        edge_b_id: usize,
+    ) -> bool {
+        if let Some(exc_map) = self.conn_exc.get(line_id) {
+            if let Some(forbidden) = exc_map.get(&edge_a_id) {
+                return !forbidden.contains(&edge_b_id);
+            }
+        }
+        true // No exception found - connection is allowed
+    }
 }
 
 #[derive(Debug)]
 struct LineEdge {
+    id: usize,
     from: NodeRef,
     to: NodeRef,
     routes: Vec<LineOcc>,
@@ -140,6 +182,7 @@ impl LineEdge {
 struct LineGraph {
     nodes: Vec<NodeRef>,
     next_node_id: usize,
+    next_edge_id: usize,
 }
 
 impl LineGraph {
@@ -147,6 +190,7 @@ impl LineGraph {
         Self {
             nodes: Vec::new(),
             next_node_id: 0,
+            next_edge_id: 0,
         }
     }
 
@@ -172,7 +216,10 @@ impl LineGraph {
 
     /// Add edge between two nodes
     fn add_edg(&mut self, from: &NodeRef, to: &NodeRef) -> EdgeRef {
+        let edge_id = self.next_edge_id;
+        self.next_edge_id += 1;
         let edge = Rc::new(RefCell::new(LineEdge {
+            id: edge_id,
             from: Rc::clone(from),
             to: Rc::clone(to),
             routes: Vec::new(),
@@ -846,9 +893,7 @@ fn collapse_shared_segments_from_graph(
                 routes: edge_borrow
                     .routes
                     .iter()
-                    .map(|r| {
-                         (r.line_id.0.clone(), r.line_id.1.clone(), r.route_type)
-                    })
+                    .map(|r| (r.line_id.0.clone(), r.line_id.1.clone(), r.route_type))
                     .collect(),
                 original_shape_ids: vec![], // Lost through LineGraph processing
                 weight,
@@ -969,6 +1014,7 @@ fn collapse_shared_segments(
             let mut front: Option<NodeRef> = None; // For FROM coverage handling (matches C++ 'front' pointer)
             let mut img_from_covered = false;
             let mut img_to_covered = false;
+            let mut previous_point: Option<[f64; 2]> = None; // Track previous point for direction computation
 
             // C++ line 232: back = e->getTo() - use original TO endpoint position
             // CRITICAL FIX: Use to_pos directly (original geometry endpoint) rather than
@@ -991,8 +1037,13 @@ fn collapse_shared_segments(
                     Some(to_endpoint_pos)
                 };
 
+                // Compute incoming direction from previous point to current point
+                let incoming_dir =
+                    previous_point.map(|prev| [point[0] - prev[0], point[1] - prev[1]]);
+
                 // Collect current edge route modes for compatibility check
-                let current_modes: AHashSet<i32> = edge.routes.iter().map(|(_, _, rt)| *rt).collect();
+                let current_modes: AHashSet<i32> =
+                    edge.routes.iter().map(|(_, _, rt)| *rt).collect();
 
                 // Find or create node with span constraints (matches C++: ndCollapseCand)
                 let cur = nd_collapse_cand(
@@ -1003,9 +1054,13 @@ fn collapse_shared_segments(
                     *point,
                     span_a_pos,
                     span_b_pos,
+                    incoming_dir,
                     &mut geo_idx,
                     &mut tg_new,
                 );
+
+                // Update previous_point for next iteration
+                previous_point = Some(*point);
 
                 // Track image nodes for FROM/TO
                 if i == 0 {
@@ -1055,23 +1110,24 @@ fn collapse_shared_segments(
                         tg_new.add_edg(last_node, &cur)
                     };
 
-                        // Merge route info WITH DIRECTION
-                        // CRITICAL: GTFS shapes are directional - trains travel FROM -> TO
-                        // New edge target is `cur`. Route should point to `cur`.
-                        for (chateau, rid, route_type) in &edge.routes {
-                            let full_id = (chateau.clone(), rid.clone());
-                            
-                            // Check if already exists with same direction
-                            // We use strict tuple equality now
-                            if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
-                                // Direction points to `cur` (TO node of this segment)
-                                let direction = Some(Rc::downgrade(&cur));
-                                new_e
-                                    .borrow_mut()
-                                    .routes
-                                    .push(LineOcc::new(full_id, *route_type, direction));
-                            }
+                    // Merge route info WITH DIRECTION
+                    // CRITICAL: GTFS shapes are directional - trains travel FROM -> TO
+                    // New edge target is `cur`. Route should point to `cur`.
+                    for (chateau, rid, route_type) in &edge.routes {
+                        let full_id = (chateau.clone(), rid.clone());
+
+                        // Check if already exists with same direction
+                        // We use strict tuple equality now
+                        if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
+                            // Direction points to `cur` (TO node of this segment)
+                            let direction = Some(Rc::downgrade(&cur));
+                            new_e.borrow_mut().routes.push(LineOcc::new(
+                                full_id,
+                                *route_type,
+                                direction,
+                            ));
                         }
+                    }
                 }
 
                 // Track front node (C++: if (!front) front = cur)
@@ -1107,10 +1163,11 @@ fn collapse_shared_segments(
                             if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
                                 // Direction points to `front` (target of this segment)
                                 let direction = Some(Rc::downgrade(front_node));
-                                new_e
-                                    .borrow_mut()
-                                    .routes
-                                    .push(LineOcc::new(full_id, *route_type, direction));
+                                new_e.borrow_mut().routes.push(LineOcc::new(
+                                    full_id,
+                                    *route_type,
+                                    direction,
+                                ));
                             }
                         }
                     }
@@ -1131,10 +1188,11 @@ fn collapse_shared_segments(
                             if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
                                 // Direction points to `to_node` (target of this segment)
                                 let direction = Some(Rc::downgrade(to_node));
-                                new_e
-                                    .borrow_mut()
-                                    .routes
-                                    .push(LineOcc::new(full_id, *route_type, direction));
+                                new_e.borrow_mut().routes.push(LineOcc::new(
+                                    full_id,
+                                    *route_type,
+                                    direction,
+                                ));
                             }
                         }
                     }
@@ -1417,10 +1475,22 @@ fn nd_collapse_cand(
     point: [f64; 2],
     span_a_pos: Option<[f64; 2]>,
     span_b_pos: Option<[f64; 2]>,
+    incoming_dir: Option<[f64; 2]>, // Direction vector from previous point to current point
     geo_idx: &mut NodeGeoIdx,
     graph: &mut LineGraph,
 ) -> NodeRef {
-    nd_collapse_cand_impl(blocking_set, current_modes, num_lines, d_cut, point, span_a_pos, span_b_pos, geo_idx, graph)
+    nd_collapse_cand_impl(
+        blocking_set,
+        current_modes,
+        num_lines,
+        d_cut,
+        point,
+        span_a_pos,
+        span_b_pos,
+        incoming_dir,
+        geo_idx,
+        graph,
+    )
 }
 
 fn nd_collapse_cand_impl(
@@ -1431,6 +1501,7 @@ fn nd_collapse_cand_impl(
     point: [f64; 2],
     span_a_pos: Option<[f64; 2]>,
     span_b_pos: Option<[f64; 2]>,
+    incoming_dir: Option<[f64; 2]>, // Direction vector from previous point to current point
     geo_idx: &mut NodeGeoIdx,
     graph: &mut LineGraph,
 ) -> NodeRef {
@@ -1440,14 +1511,12 @@ fn nd_collapse_cand_impl(
     // C++ lines 90-96: Calculate distance constraints from span endpoints
     // A candidate can only be accepted if it's closer to the point than the
     // span endpoints are.
-    // MODIFIED: C++ uses sqrt(2) divisor (2.0 squared), which creates a ~45 degree acceptance cone.
-    // We use divisor 4.0 (point must be closer than half the distance to span endpoint),
-    // which creates a ~30 degree cone. This prevents "zipper" artifacts where crossing lines
-    // snap together for a short distance before diverging.
+    // C++ uses dist() / sqrt(2.0), which for squared distances equals dist² / 2.0
+    // This creates a ~45 degree acceptance cone for merging candidates.
     let d_span_a_sq = if let Some(sa_pos) = span_a_pos {
         let dx = point[0] - sa_pos[0];
         let dy = point[1] - sa_pos[1];
-        (dx * dx + dy * dy) / 4.0 // Stricter than C++ (was 2.0)
+        (dx * dx + dy * dy) / 2.0 // Match C++: sqrt(2)² = 2.0
     } else {
         f64::INFINITY
     };
@@ -1455,7 +1524,7 @@ fn nd_collapse_cand_impl(
     let d_span_b_sq = if let Some(sb_pos) = span_b_pos {
         let dx = point[0] - sb_pos[0];
         let dy = point[1] - sb_pos[1];
-        (dx * dx + dy * dy) / 4.0 // Stricter than C++ (was 2.0)
+        (dx * dx + dy * dy) / 2.0 // Match C++: sqrt(2)² = 2.0
     } else {
         f64::INFINITY
     };
@@ -1479,7 +1548,7 @@ fn nd_collapse_cand_impl(
 
             // Route Mode Compatibility Check
             // If the candidate node has routes with completely different modes than us,
-            // enforce a much stricter threshold to discourage merging.
+            // enforce a stricter threshold to discourage merging.
             let mut node_modes = AHashSet::new();
             for edge_ref in &node.borrow().adj_list {
                 for occ in &edge_ref.borrow().routes {
@@ -1487,21 +1556,96 @@ fn nd_collapse_cand_impl(
                 }
             }
 
+            // HYSTERESIS: Check if this candidate node already has routes that share
+            // the same mode as us. If so, we're likely continuing an existing merge
+            // and should use relaxed thresholds to prevent oscillation.
+            let has_shared_mode_routes = !current_modes.is_empty()
+                && !node_modes.is_empty()
+                && current_modes.intersection(&node_modes).next().is_some();
+
             // If we have modes and the node has modes, check overlap
             let mut threshold_sq = d_cut_sq;
+            let mut is_disjoint_modes = false;
             if !current_modes.is_empty() && !node_modes.is_empty() {
                 // Check if any mode matches
                 let disjoint = current_modes.intersection(&node_modes).next().is_none();
                 if disjoint {
-                    // Modes are disjoint (e.g. Tram vs Rail). 
-                    // CRITICAL FIX: Make threshold MUCH stricter (factor of 100, sq factor 10000).
-                    // This ensures different modes (trains/subways/trams) only merge when 
-                    // almost perfectly coincident (< 0.5m typically), preventing merging 
-                    // at sharp crossing angles where lines pass over/under each other.
-                    threshold_sq /= 10000.0;
+                    is_disjoint_modes = true;
+                    // Modes are disjoint (e.g. Subway vs Commuter Rail).
+                    // Apply stricter threshold but not extreme - reduced from 10000x to 25x
+                    // to prevent valid parallel lines from being rejected.
+                    threshold_sq /= 25.0;
                 }
             }
 
+            // PARALLELISM AND LONG-DISTANCE MERGE DETECTION
+            // For same-mode lines: reject sharp crossing angles
+            // For different-mode lines: ALLOW merging only if extremely parallel AND long distance
+            //
+            // Use span distances as proxy for shared segment length:
+            // If both span endpoints are far away (>400m each), we're in the middle of a
+            // long parallel section, making it likely these are truly shared tunnels/ROW.
+            const MIN_LONG_SEGMENT_DIST_SQ: f64 = 400.0 * 400.0; // 400 meters squared
+            let is_long_segment =
+                d_span_a_sq > MIN_LONG_SEGMENT_DIST_SQ && d_span_b_sq > MIN_LONG_SEGMENT_DIST_SQ;
+
+            if let Some(inc_dir) = incoming_dir {
+                let inc_len_sq = inc_dir[0] * inc_dir[0] + inc_dir[1] * inc_dir[1];
+                if inc_len_sq > 1e-10 {
+                    // Normalize incoming direction
+                    let inc_len = inc_len_sq.sqrt();
+                    let inc_norm = [inc_dir[0] / inc_len, inc_dir[1] / inc_len];
+
+                    // Find max parallelism with any edge at this node
+                    let mut max_abs_cos: f64 = 0.0;
+
+                    for edge_ref in &node.borrow().adj_list {
+                        let edge = edge_ref.borrow();
+                        // Get direction from node to other endpoint
+                        let other_nd = if Rc::ptr_eq(&edge.from, &node) {
+                            &edge.to
+                        } else {
+                            &edge.from
+                        };
+                        let node_pos = node.borrow().pos;
+                        let other_pos = other_nd.borrow().pos;
+                        let edge_dir = [other_pos[0] - node_pos[0], other_pos[1] - node_pos[1]];
+                        let edge_len_sq = edge_dir[0] * edge_dir[0] + edge_dir[1] * edge_dir[1];
+
+                        if edge_len_sq > 1e-10 {
+                            let edge_len = edge_len_sq.sqrt();
+                            let edge_norm = [edge_dir[0] / edge_len, edge_dir[1] / edge_len];
+
+                            // Calculate angle via dot product
+                            let dot = inc_norm[0] * edge_norm[0] + inc_norm[1] * edge_norm[1];
+                            let abs_cos = dot.abs(); // We care about angle to either direction
+                            max_abs_cos = max_abs_cos.max(abs_cos);
+
+                            // NOTE: C++ does NOT apply angle-based penalties for same-mode lines.
+                            // The span constraints (dSpanA, dSpanB) and blocking set are sufficient
+                            // to prevent bad merges. Angle checks were causing oscillation for
+                            // parallel rail lines. Only apply angle checks for DISJOINT modes
+                            // (different route types) handled below.
+                        }
+                    }
+
+                    // For DISJOINT modes: allow merge ONLY if extremely parallel AND long segment
+                    // abs_cos > 0.966 means angle < 15 degrees (nearly parallel)
+                    // abs_cos > 0.985 means angle < 10 degrees (very parallel)
+                    if is_disjoint_modes && max_abs_cos > 0.966 && is_long_segment {
+                        // Lines are extremely parallel (<15°) and segment is long (>400m each way)
+                        // This is likely a shared tunnel/ROW like NYCT + LIRR East River tunnels
+                        // Relax the threshold back to normal (undo the /25 from above)
+                        threshold_sq *= 25.0;
+                        // Still apply a modest strictness factor (lines must be closer than usual)
+                        threshold_sq /= 4.0;
+                    } else if is_disjoint_modes && max_abs_cos < 0.866 {
+                        // Disjoint modes AND crossing angle - make stricter
+                        // Reduced from 100x to 4x
+                        threshold_sq /= 4.0;
+                    }
+                }
+            }
             // C++ line 104: d < dSpanA && d < dSpanB && d < dMax && d < dBest
             // Compare squared distances to avoid sqrt
             if dist_sq < d_span_a_sq && dist_sq < d_span_b_sq && dist_sq < threshold_sq {
@@ -1709,6 +1853,7 @@ fn combine_nodes(
             }
 
             let new_edge = Rc::new(RefCell::new(LineEdge {
+                id: 0, // ID will be regenerated if needed
                 from: Rc::clone(b),
                 to: Rc::clone(&other_node),
                 routes: old_edge.borrow().routes.clone(),
@@ -1814,6 +1959,7 @@ fn combine_nodes(
             }
 
             let new_edge = Rc::new(RefCell::new(LineEdge {
+                id: 0, // ID will be regenerated if needed
                 from: Rc::clone(&other_node),
                 to: Rc::clone(b),
                 routes: old_edge.borrow().routes.clone(),
@@ -1836,6 +1982,22 @@ fn combine_nodes(
         .adj_list
         .retain(|e| !Rc::ptr_eq(e, &connecting));
 
+    // PROPAGATE CONNECTION EXCEPTIONS from A to B
+    // Matches C++ LineGraph::combineNodes lines 1191-1194
+    // When we merge node A into B, any connection exceptions at A should be
+    // transferred to B so that forbidden connections remain forbidden.
+    {
+        let a_conn_exc = a.borrow().conn_exc.clone();
+        let mut b_mut = b.borrow_mut();
+        for (line_id, exc_map) in a_conn_exc {
+            for (from_edge_id, forbidden_set) in exc_map {
+                for to_edge_id in forbidden_set {
+                    b_mut.add_conn_exc(&line_id, from_edge_id, to_edge_id);
+                }
+            }
+        }
+    }
+
     // Remove 'a' from geo_idx and clear its adjacency list (effectively "deleting" it)
     geo_idx.remove(a);
     a.borrow_mut().adj_list.clear();
@@ -1847,30 +2009,149 @@ fn combine_nodes(
 /// Matches C++ LineNodePL::connOccurs (LineNodePL.cpp:128-137)
 ///
 /// Returns true unless there's an explicit connection exception stored at the node.
-/// Since we don't have connection exception data yet, this always returns true.
-/// C++ `LineNodePL::connOccurs`
 fn conn_occurs(
-    _node: &NodeRef,
+    node: &NodeRef,
     line_id: &(String, String),
     edge_a: &EdgeRef,
     edge_b: &EdgeRef,
 ) -> bool {
-    // Check if line_id exists on both edges (simplification of C++ logic)
-    // C++ checks if the connection exists for this line at this node.
+    // First check if line exists on both edges
     let has_a = edge_a.borrow().routes.iter().any(|r| r.line_id == *line_id);
     let has_b = edge_b.borrow().routes.iter().any(|r| r.line_id == *line_id);
-    has_a && has_b
+    if !has_a || !has_b {
+        return false;
+    }
+
+    // Then check if there's an exception at this node for this line
+    let edge_a_id = edge_a.borrow().id;
+    let edge_b_id = edge_b.borrow().id;
+    node.borrow()
+        .conn_occurs_check(line_id, edge_a_id, edge_b_id)
+}
+
+/// Get the normalized direction vector from a node along an edge (towards the edge interior).
+/// Returns (dx, dy) normalized to unit length.
+fn get_edge_direction_from_node(edge: &EdgeRef, node: &NodeRef) -> (f64, f64) {
+    let edge_borrow = edge.borrow();
+    let node_pos = node.borrow().pos;
+
+    // Determine which geometry point to use based on whether node is at start or end
+    let target_pos = if Rc::ptr_eq(&edge_borrow.from, node) {
+        // Node is at start of edge, get direction towards edge interior (second point)
+        if edge_borrow.geometry.len() >= 2 {
+            [edge_borrow.geometry[1].x, edge_borrow.geometry[1].y]
+        } else {
+            edge_borrow.to.borrow().pos
+        }
+    } else {
+        // Node is at end of edge, get direction towards edge interior (second-to-last point)
+        if edge_borrow.geometry.len() >= 2 {
+            let idx = edge_borrow.geometry.len() - 2;
+            [edge_borrow.geometry[idx].x, edge_borrow.geometry[idx].y]
+        } else {
+            edge_borrow.from.borrow().pos
+        }
+    };
+
+    let dx = target_pos[0] - node_pos[0];
+    let dy = target_pos[1] - node_pos[1];
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1e-10 {
+        return (1.0, 0.0); // Degenerate case
+    }
+    (dx / len, dy / len)
+}
+
+/// Check if two edges have compatible angles for merging.
+/// Returns false if the edges cross at a sharp angle (> 60° from parallel/anti-parallel).
+/// This prevents X-intersection crossings from being merged.
+fn check_edge_angle_for_merge(a: &EdgeRef, b: &EdgeRef) -> bool {
+    // Find shared node
+    let shr_nd = if Rc::ptr_eq(&a.borrow().from, &b.borrow().from)
+        || Rc::ptr_eq(&a.borrow().from, &b.borrow().to)
+    {
+        Rc::clone(&a.borrow().from)
+    } else if Rc::ptr_eq(&a.borrow().to, &b.borrow().from)
+        || Rc::ptr_eq(&a.borrow().to, &b.borrow().to)
+    {
+        Rc::clone(&a.borrow().to)
+    } else {
+        // No shared node - can't merge
+        return false;
+    };
+
+    // Get direction vectors FROM shared node along each edge
+    let dir_a = get_edge_direction_from_node(a, &shr_nd);
+    let dir_b = get_edge_direction_from_node(b, &shr_nd);
+
+    // Calculate dot product of normalized vectors
+    // For merging, we want edges that are nearly anti-parallel (like ---> <--- meeting at a point)
+    // or parallel extensions (fork/join patterns where both go same direction)
+    // Reject if crossing at sharp angles (perpendicular or X-crossings)
+    let dot = dir_a.0 * dir_b.0 + dir_a.1 * dir_b.1;
+    let abs_dot = dot.abs();
+
+    // abs_dot < 0.5 means angle > 60° from parallel/anti-parallel (crossing)
+    // This threshold allows merging of:
+    // - Anti-parallel lines (dot ≈ -1, abs 1.0) - typical through routes
+    // - Forking lines at < 60° angle - Y-junctions
+    // Rejects:
+    // - 45° crossings (abs_dot ≈ 0.707) - still allowed, but close
+    // - 60°+ crossings (abs_dot < 0.5) - rejected as X-intersections
+    // Using 0.4 threshold (66° from parallel) for stricter rejection
+    abs_dot >= 0.4
+}
+
+/// Lenient version of angle check - only rejects true perpendicular X-crossings.
+/// Threshold 0.2 = reject angles >78° from parallel (near-perpendicular crossings).
+/// This allows Y-junctions (45°) and most fork patterns while preventing X-crossings.
+fn check_edge_angle_for_merge_lenient(a: &EdgeRef, b: &EdgeRef) -> bool {
+    // Find shared node
+    let shr_nd = if Rc::ptr_eq(&a.borrow().from, &b.borrow().from)
+        || Rc::ptr_eq(&a.borrow().from, &b.borrow().to)
+    {
+        Rc::clone(&a.borrow().from)
+    } else if Rc::ptr_eq(&a.borrow().to, &b.borrow().from)
+        || Rc::ptr_eq(&a.borrow().to, &b.borrow().to)
+    {
+        Rc::clone(&a.borrow().to)
+    } else {
+        // No shared node - can't merge
+        return false;
+    };
+
+    let dir_a = get_edge_direction_from_node(a, &shr_nd);
+    let dir_b = get_edge_direction_from_node(b, &shr_nd);
+    let dot = dir_a.0 * dir_b.0 + dir_a.1 * dir_b.1;
+    let abs_dot = dot.abs();
+
+    // Very lenient: 0.2 threshold = reject angles >78° from parallel
+    // Allows Y-junctions, T-junctions at normal angles, most forks
+    // Only rejects near-perpendicular X-crossings
+    abs_dot >= 0.2
 }
 
 /// Matches C++ MapConstructor::lineEq
 ///
 /// Checks if two edges can be merged based on their routes and directions.
+/// NOTE: C++ uses connOccurs with connection exceptions. Since we don't have
+/// that data, we add a lenient angle check to reject only true X-crossings
+/// (near-perpendicular) while allowing Y/T junctions.
 fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
     let a_routes = &a.borrow().routes;
     let b_routes = &b.borrow().routes;
 
-    // 1. Same number of lines
+    // 1. Same number of lines (C++ line 48)
     if a_routes.len() != b_routes.len() {
+        return false;
+    }
+
+    // 2. Very lenient angle check - only reject true perpendicular X-crossings
+    // Since we don't have C++'s connection exception data (connOccurs), we use
+    // angle as a proxy to detect crossings that shouldn't merge.
+    // Threshold 0.2 = reject angles >78° from parallel (near-perpendicular crossings)
+    // This allows Y-junctions (45°) and most fork patterns while preventing X-crossings.
+    if !check_edge_angle_for_merge_lenient(a, b) {
         return false;
     }
 
@@ -1965,6 +2246,7 @@ fn support_edge(ex: &EdgeRef, graph: &mut LineGraph) {
     // Create edge A: from -> sup_nd
     let geom_a = geom[0..=mid_idx].to_vec();
     let edge_a = Rc::new(RefCell::new(LineEdge {
+        id: 0, // ID will be regenerated if needed
         from: Rc::clone(&from),
         to: Rc::clone(&sup_nd),
         routes: routes.clone(),
@@ -1974,6 +2256,7 @@ fn support_edge(ex: &EdgeRef, graph: &mut LineGraph) {
     // Create edge B: sup_nd -> to
     let geom_b = geom[mid_idx..].to_vec();
     let edge_b = Rc::new(RefCell::new(LineEdge {
+        id: 0, // ID will be regenerated if needed
         from: Rc::clone(&sup_nd),
         to: Rc::clone(&to),
         routes: routes.clone(),
@@ -2112,12 +2395,17 @@ fn combine_edges(edge_a: &EdgeRef, edge_b: &EdgeRef, n: &NodeRef, graph: &mut Li
         }
     }
 
+    // Simplify the combined geometry to remove zigzag artifacts (matches C++ simplify(0.5))
+    // This is critical per C++ combineEdges lines 650, 662, 677, 689
+    let simplified_geom = simplify_coords(&new_geom, 0.5);
+
     // Create new edge
     let new_edge = Rc::new(RefCell::new(LineEdge {
+        id: 0, // ID will be regenerated if needed
         from: Rc::clone(&other_a),
         to: Rc::clone(&other_b),
         routes: new_routes,
-        geometry: new_geom,
+        geometry: simplified_geom,
     }));
 
     // Drop borrows before mutating graph
@@ -2268,8 +2556,8 @@ fn densify_coords(coords: &[[f64; 2]], max_seg_len: f64) -> Vec<[f64; 2]> {
 }
 
 fn haversine_dist(p1: GeoPoint<f64>, p2: GeoPoint<f64>) -> f64 {
-    use geo::HaversineDistance;
     use geo::Distance;
+    use geo::HaversineDistance;
     p1.haversine_distance(&p2)
 }
 
@@ -3186,6 +3474,7 @@ fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
                     }
 
                     let new_edge = Rc::new(RefCell::new(LineEdge {
+                        id: 0, // ID will be regenerated if needed
                         from: Rc::clone(&to_node),
                         to: Rc::clone(&other_node),
                         routes: other_edge_ref.borrow().routes.clone(),
