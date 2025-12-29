@@ -79,16 +79,7 @@ async fn main() -> std::io::Result<()> {
                 graph.nodes.len()
             );
 
-            // Apply NYC Route Grouping
-            // "NYC interlining shapes can only overlap if they share the same colour"
-            // We group by color for nyct chateau.
-            for edge in &mut graph.edges {
-                for line in &mut edge.lines {
-                    if line.chateau_id == "nyct" {
-                        line.group_id = Some(line.color.clone());
-                    }
-                }
-            }
+            // NYC Route Grouping is now handled automatically by loader (group by color)
 
             // Run Optimizer
             let optimizer = optimizer::Optimizer::new();

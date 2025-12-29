@@ -147,17 +147,15 @@ impl TileGenerator {
 
                 let spacing = Self::get_zoom_spacing(z);
 
-                // Group lines to support interlining (specifically for nyct)
-                // Adjacent lines with same color and chateau='nyct' share the same offset slot.
+                // Group lines by color - adjacent lines with same color share the same offset slot.
+                // This allows interlining where routes with the same color overlap.
                 let mut groups: Vec<Vec<&crate::graph::LineOnEdge>> = Vec::new();
                 for line in &edge.lines {
-                    if line.chateau_id == "nyct" {
-                        if let Some(last_group) = groups.last_mut() {
-                            let first = last_group[0];
-                            if first.chateau_id == "nyct" && first.color == line.color {
-                                last_group.push(line);
-                                continue;
-                            }
+                    if let Some(last_group) = groups.last_mut() {
+                        let first = last_group[0];
+                        if first.color == line.color {
+                            last_group.push(line);
+                            continue;
                         }
                     }
                     groups.push(vec![line]);
@@ -550,6 +548,10 @@ impl TileGenerator {
         // We need to check intersection nodes too
         let spacing = Self::get_zoom_spacing(z);
 
+        if z < 7 {
+            return layer;
+        }
+
         // Iterate over all nodes that have at least 2 edges
         for (&node_id, edge_indices) in &graph.node_to_edges {
             if edge_indices.len() < 2 {
@@ -586,45 +588,70 @@ impl TileGenerator {
                         continue;
                     }
 
-                    // Find matching lines by line_id (same route continues on both edges)
-                    for (line1_idx, line1) in edge1.lines.iter().enumerate() {
-                        // Find matching line on edge2
-                        let line2_result = edge2.lines.iter().enumerate().find(|(_, l2)| {
-                            l2.line_id == line1.line_id
+                    // Build groups for each edge by COLOR
+                    // Returns: Vec of (color, line_indices, Set<line_id>)
+                    let build_groups = |edge: &crate::graph::Edge| -> Vec<(String, Vec<usize>, std::collections::HashSet<String>)> {
+                        let mut groups: Vec<(String, Vec<usize>, std::collections::HashSet<String>)> = Vec::new();
+                        for (idx, line) in edge.lines.iter().enumerate() {
+                            if let Some(last_group) = groups.last_mut() {
+                                if last_group.0 == line.color {
+                                    last_group.1.push(idx);
+                                    last_group.2.insert(line.line_id.clone());
+                                    continue;
+                                }
+                            }
+                            let mut set = std::collections::HashSet::new();
+                            set.insert(line.line_id.clone());
+                            groups.push((line.color.clone(), vec![idx], set));
+                        }
+                        groups
+                    };
+
+                    let groups1 = build_groups(edge1);
+                    let groups2 = build_groups(edge2);
+                    let n_groups1 = groups1.len();
+                    let n_groups2 = groups2.len();
+
+                    // Track which color-group pairs we've already drawn beziers for
+                    let mut drawn_pairs: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+
+                    // Match groups that have same color AND share at least one line_id
+                    for (group1_idx, (color1, line_indices1, ids1)) in groups1.iter().enumerate() {
+                        
+                        // Find matching group on edge2
+                        // Must match color AND have at least one shared line_id
+                        let group2_match = groups2.iter().enumerate().find(|(_, (color2, _, ids2))| {
+                            color1 == color2 && !ids1.is_disjoint(ids2)
                         });
 
-                        let (line2_idx, _line2) = match line2_result {
+                        let (group2_idx, (_, _line_indices2, _)) = match group2_match {
                             Some(r) => r,
                             None => continue,
                         };
 
+                        // Skip if we've already drawn this pair
+                        if !drawn_pairs.insert((group1_idx, group2_idx)) {
+                            continue;
+                        }
+
+                        // Get a representative line for metadata (first line in the group)
+                        let line1 = &edge1.lines[line_indices1[0]];
+
                         // Calculate tile-space positions and directions for each edge
-                        // Following C++ getInnerBezier: get slope at node endpoint
-                        let calc_point_and_dir = |edge: &crate::graph::Edge, line_idx: usize| -> Option<((f64, f64), (f64, f64))> {
-                            let n_lines = edge.lines.len();
-                            if n_lines == 0 {
+                        let calc_point_and_dir = |edge: &crate::graph::Edge, group_idx: usize, n_groups: usize| -> Option<((f64, f64), (f64, f64))> {
+                            if n_groups == 0 {
                                 return None;
                             }
 
                             // Get the geometry endpoint at the node
                             let (node_pt, other_pt) = if edge.from == node_id {
-                                // Node is at start of geometry - direction points away from node
                                 let p0 = edge.geometry[0];
-                                let p1 = if edge.geometry.len() > 2 {
-                                    edge.geometry[1]
-                                } else {
-                                    edge.geometry[1]
-                                };
+                                let p1 = if edge.geometry.len() > 2 { edge.geometry[1] } else { edge.geometry[1] };
                                 (p0, p1)
                             } else {
-                                // Node is at end of geometry - direction points away from node
                                 let len = edge.geometry.len();
                                 let p_end = edge.geometry[len - 1];
-                                let p_prev = if len > 2 {
-                                    edge.geometry[len - 2]
-                                } else {
-                                    edge.geometry[len - 2]
-                                };
+                                let p_prev = if len > 2 { edge.geometry[len - 2] } else { edge.geometry[len - 2] };
                                 (p_end, p_prev)
                             };
 
@@ -655,47 +682,41 @@ impl TileGenerator {
                             // Direction in tile space pointing AWAY from node
                             let tile_dir = (t_dx / t_len, t_dy / t_len);
 
-                            // Calculate offset for this line (perpendicular to direction)
-                            let shift = (line_idx as f64 - (n_lines as f64 - 1.0) / 2.0) * spacing;
+                            // Calculate offset for this GROUP
+                            let shift = (group_idx as f64 - (n_groups as f64 - 1.0) / 2.0) * spacing;
                             let norm_x = -tile_dir.1;
                             let norm_y = tile_dir.0;
 
-                            // Cutback point: offset perpendicular + move along edge direction
+                            // Cutback point
                             let cutback_dist = spacing * 2.0;
                             let p_x = node_tx + norm_x * shift + tile_dir.0 * cutback_dist;
                             let p_y = node_ty + norm_y * shift + tile_dir.1 * cutback_dist;
 
-                            // Return point and direction pointing INTO the node (for bezier tangent)
-                            // Bezier tangent at p should point toward center of node
                             Some(((p_x, p_y), (-tile_dir.0, -tile_dir.1)))
                         };
 
-                        let result1 = calc_point_and_dir(edge1, line1_idx);
-                        let result2 = calc_point_and_dir(edge2, line2_idx);
+                        let result1 = calc_point_and_dir(edge1, group1_idx, n_groups1);
+                        let result2 = calc_point_and_dir(edge2, group2_idx, n_groups2);
 
                         let ((p1, dir1), (p2, dir2)) = match (result1, result2) {
                             (Some(r1), Some(r2)) => (r1, r2),
                             _ => continue,
                         };
 
-                        // Validate distance - allow larger distances for node connections
+                        // Validate distance
+                        // Reduced max distance to prevent long incorrect connections
                         let dist = ((p1.0 - p2.0).powi(2) + (p1.1 - p2.1).powi(2)).sqrt();
-                        if dist > 500.0 || dist < 0.5 {
+                        if dist > 100.0 || dist < 0.5 {
                             continue;
                         }
 
-                        // Generate Bezier curve following C++ approach
-                        // Control point distance = 0.55 * distance (standard bezier approximation for circles)
+                        // Generate Bezier curve
                         let ctrl_dist = dist * 0.55;
-
-                        // Control points: from p, move along dir (which points toward center)
                         let cp1 = (p1.0 + dir1.0 * ctrl_dist, p1.1 + dir1.1 * ctrl_dist);
                         let cp2 = (p2.0 + dir2.0 * ctrl_dist, p2.1 + dir2.1 * ctrl_dist);
 
-                        // Generate cubic bezier points
                         let points = bezier_points(p1, cp1, cp2, p2, 16);
 
-                        // Encode
                         let mut encoder = GeomEncoder::new(mvt::GeomType::Linestring)
                             .bbox(tile_bbox.clone());
                         for pt in &points {
@@ -705,7 +726,7 @@ impl TileGenerator {
                             let mut feature = layer.into_feature(geom);
                             feature.set_id(
                                 (node_id as u64).wrapping_add(
-                                    edge1_idx as u64 * 10000 + edge2_idx as u64 * 100 + line1_idx as u64,
+                                    edge1_idx as u64 * 10000 + edge2_idx as u64 * 100 + group1_idx as u64,
                                 ),
                             );
                             feature.add_tag_string("line_id", &line1.line_id);

@@ -365,9 +365,15 @@ impl Optimizer {
             if n >= 3 {
                 let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
                 for (i, line) in edge.lines.iter().enumerate() {
-                    if let Some(gid) = &line.group_id {
-                        groups.entry(gid.clone()).or_default().push(i);
-                    }
+                    // Use group_id if available, otherwise fallback to color grouping
+                    // This is critical for interlining where we want lines of same color to stay together
+                    let key = if let Some(gid) = &line.group_id {
+                        gid.clone()
+                    } else {
+                        // Use color as grouping key. Prefix with "color:" to avoid collision with explicit IDs if any
+                        format!("color:{}", line.color)
+                    };
+                    groups.entry(key).or_default().push(i);
                 }
 
                 for (_, members) in groups {
@@ -475,16 +481,18 @@ impl Optimizer {
                     } // Only if e2 is in component
 
                     // e1 and e2 share a node and are both in component.
-                    // Check for shared lines >= 2
+                    // Check for shared lines >= 2 (unique line_ids only)
                     let edge2 = &graph.edges[e2_idx];
-                    let mut shared_lines = Vec::new();
+                    let mut shared_lines_set = HashSet::new();
                     for l1 in &edge1.lines {
                         // Include ALL shared lines in consistency constraints
                         // (ILP needs to order all lines, not just those in restrictions)
                         if edge2.lines.iter().any(|l2| l2.line_id == l1.line_id) {
-                            shared_lines.push(l1.line_id.clone());
+                            // Only add unique line_ids (bundled routes share same line_id)
+                            shared_lines_set.insert(l1.line_id.clone());
                         }
                     }
+                    let shared_lines: Vec<String> = shared_lines_set.into_iter().collect();
 
                     if shared_lines.len() >= 2 {
                         // Add consistency constraints
@@ -632,7 +640,16 @@ impl Optimizer {
                             let diff_a = (angle_a - angle_s + 2.0 * PI) % (2.0 * PI);
                             let diff_b = (angle_b - angle_s + 2.0 * PI) % (2.0 * PI);
 
-                            let prefer_a_left = diff_a < diff_b;
+                            // Determine if we are leaving the node relative to edge1's direction
+                            // edge1.dir signals "Forward" direction.
+                            // If edge1.from == node_id, we are at the Start. If dir is true (Fwd), we are Leaving. OK.
+                            // If edge1.from != node_id, we are at End. If dir is true (Fwd), we are Entering. OK.
+                            let is_leaving = (edge1.from == node_id) == edge1.dir;
+
+                            let mut prefer_a_left = diff_a < diff_b;
+                            if !is_leaving {
+                                prefer_a_left = !prefer_a_left;
+                            }
 
                             let split_penalty = vars.add(variable().binary());
                             // Split Penalty (Diff Segment / Geometry)

@@ -160,12 +160,9 @@ impl Loader {
                         ("000000".to_string(), None)
                     });
                 
-                // Bundle by short_name if available and non-empty, otherwise by color
-                let group_key = short_name
-                    .as_ref()
-                    .filter(|s| !s.is_empty())
-                    .cloned()
-                    .unwrap_or_else(|| color.clone());
+                // Bundle strictly by COLOR to ensure lines of same color are merged (e.g. NYC Subway N/Q/R)
+                // This prevents parallel lines of the same color.
+                let group_key = color.clone();
                 
                 // Track route groups for later use
                 route_groups
@@ -258,7 +255,7 @@ impl Loader {
             node_to_edges.entry(edge.to).or_default().push(idx);
         }
 
-        let mut render_graph = RenderGraph {
+        let render_graph = RenderGraph {
             nodes,
             edges,
             tree,
@@ -269,11 +266,8 @@ impl Loader {
             route_groups,
         };
 
-        let optimizer = crate::optimizer::Optimizer::new();
-        optimizer.optimize(&mut render_graph);
-
-        println!("Optimisation complete");
-
+        // Optimizer is NOT called here anymore. It's called by the specific command in main.rs if needed.
+        
         Ok(render_graph)
     }
 
