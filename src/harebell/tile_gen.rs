@@ -189,9 +189,9 @@ impl TileGenerator {
                             .get(&edge.to)
                             .map(|e| e.len())
                             .unwrap_or(1);
-                        
+
                         // Cutback distance scales with number of lines to create room for bezier
-                        let base_cutback = spacing * 2.0;  // Base distance for bezier curves
+                        let base_cutback = spacing * 2.0; // Base distance for bezier curves
                         let start_cutback = if from_degree >= 2 { base_cutback } else { 0.0 };
                         let end_cutback = if to_degree >= 2 { base_cutback } else { 0.0 };
 
@@ -237,7 +237,6 @@ impl TileGenerator {
                             GeomEncoder::new(mvt::GeomType::Linestring).bbox(tile_bbox),
                             |enc, (sx, sy)| enc.point(*sx, *sy),
                         );
-
 
                         let geometry = match encoder_result.and_then(|enc| enc.encode()) {
                             Ok(g) => g,
@@ -590,8 +589,16 @@ impl TileGenerator {
 
                     // Build groups for each edge by COLOR
                     // Returns: Vec of (color, line_indices, Set<line_id>)
-                    let build_groups = |edge: &crate::graph::Edge| -> Vec<(String, Vec<usize>, std::collections::HashSet<String>)> {
-                        let mut groups: Vec<(String, Vec<usize>, std::collections::HashSet<String>)> = Vec::new();
+                    let build_groups = |edge: &crate::graph::Edge| -> Vec<(
+                        String,
+                        Vec<usize>,
+                        std::collections::HashSet<String>,
+                    )> {
+                        let mut groups: Vec<(
+                            String,
+                            Vec<usize>,
+                            std::collections::HashSet<String>,
+                        )> = Vec::new();
                         for (idx, line) in edge.lines.iter().enumerate() {
                             if let Some(last_group) = groups.last_mut() {
                                 if last_group.0 == line.color {
@@ -613,16 +620,17 @@ impl TileGenerator {
                     let n_groups2 = groups2.len();
 
                     // Track which color-group pairs we've already drawn beziers for
-                    let mut drawn_pairs: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+                    let mut drawn_pairs: std::collections::HashSet<(usize, usize)> =
+                        std::collections::HashSet::new();
 
                     // Match groups that have same color AND share at least one line_id
                     for (group1_idx, (color1, line_indices1, ids1)) in groups1.iter().enumerate() {
-                        
                         // Find matching group on edge2
                         // Must match color AND have at least one shared line_id
-                        let group2_match = groups2.iter().enumerate().find(|(_, (color2, _, ids2))| {
-                            color1 == color2 && !ids1.is_disjoint(ids2)
-                        });
+                        let group2_match =
+                            groups2.iter().enumerate().find(|(_, (color2, _, ids2))| {
+                                color1 == color2 && !ids1.is_disjoint(ids2)
+                            });
 
                         let (group2_idx, (_, _line_indices2, _)) = match group2_match {
                             Some(r) => r,
@@ -638,62 +646,93 @@ impl TileGenerator {
                         let line1 = &edge1.lines[line_indices1[0]];
 
                         // Calculate tile-space positions and directions for each edge
-                        let calc_point_and_dir = |edge: &crate::graph::Edge, group_idx: usize, n_groups: usize| -> Option<((f64, f64), (f64, f64))> {
-                            if n_groups == 0 {
-                                return None;
-                            }
+                        let calc_point_and_dir =
+                            |edge: &crate::graph::Edge,
+                             group_idx: usize,
+                             n_groups: usize|
+                             -> Option<((f64, f64), (f64, f64))> {
+                                if n_groups == 0 {
+                                    return None;
+                                }
 
-                            // Get the geometry endpoint at the node
-                            let (node_pt, other_pt) = if edge.from == node_id {
-                                let p0 = edge.geometry[0];
-                                let p1 = if edge.geometry.len() > 2 { edge.geometry[1] } else { edge.geometry[1] };
-                                (p0, p1)
-                            } else {
-                                let len = edge.geometry.len();
-                                let p_end = edge.geometry[len - 1];
-                                let p_prev = if len > 2 { edge.geometry[len - 2] } else { edge.geometry[len - 2] };
-                                (p_end, p_prev)
+                                // Get the geometry endpoint at the node
+                                let (node_pt, other_pt) = if edge.from == node_id {
+                                    let p0 = edge.geometry[0];
+                                    let p1 = if edge.geometry.len() > 2 {
+                                        edge.geometry[1]
+                                    } else {
+                                        edge.geometry[1]
+                                    };
+                                    (p0, p1)
+                                } else {
+                                    let len = edge.geometry.len();
+                                    let p_end = edge.geometry[len - 1];
+                                    let p_prev = if len > 2 {
+                                        edge.geometry[len - 2]
+                                    } else {
+                                        edge.geometry[len - 2]
+                                    };
+                                    (p_end, p_prev)
+                                };
+
+                                // Direction pointing AWAY from node (into the edge)
+                                let dx = other_pt[0] - node_pt[0];
+                                let dy = other_pt[1] - node_pt[1];
+
+                                let len_v = (dx * dx + dy * dy).sqrt();
+                                if len_v < 1e-10 {
+                                    return None;
+                                }
+                                let dir = (dx / len_v, dy / len_v);
+
+                                // Project node position to tile space
+                                let (node_tx, node_ty) =
+                                    Self::project_to_tile(node.x, node.y, z, x, y, tile_extent);
+
+                                // Project a point along the direction to get tile-space direction
+                                let epsilon = 0.0001;
+                                let world_along =
+                                    (node.x + dir.0 * epsilon, node.y + dir.1 * epsilon);
+                                let (along_tx, along_ty) = Self::project_to_tile(
+                                    world_along.0,
+                                    world_along.1,
+                                    z,
+                                    x,
+                                    y,
+                                    tile_extent,
+                                );
+
+                                let t_dx = along_tx - node_tx;
+                                let t_dy = along_ty - node_ty;
+                                let t_len = (t_dx * t_dx + t_dy * t_dy).sqrt();
+                                if t_len < 1e-10 {
+                                    return None;
+                                }
+                                // Direction in tile space pointing AWAY from node
+                                let tile_dir = (t_dx / t_len, t_dy / t_len);
+
+                                // CRITICAL: Invert slot index if edge points TOWARDS the node (edge.to == node_id)
+                                // This matches C++ SvgRenderer.cpp lines 321-330:
+                                // aFromInv = edge->getTo() == nd; aSlotFrom = !aFromInv ? slot : (n-1-slot)
+                                let effective_idx = if edge.to == node_id {
+                                    n_groups - 1 - group_idx
+                                } else {
+                                    group_idx
+                                };
+
+                                // Calculate offset for this GROUP
+                                let shift = (effective_idx as f64 - (n_groups as f64 - 1.0) / 2.0)
+                                    * spacing;
+                                let norm_x = -tile_dir.1;
+                                let norm_y = tile_dir.0;
+
+                                // Cutback point
+                                let cutback_dist = spacing * 2.0;
+                                let p_x = node_tx + norm_x * shift + tile_dir.0 * cutback_dist;
+                                let p_y = node_ty + norm_y * shift + tile_dir.1 * cutback_dist;
+
+                                Some(((p_x, p_y), (-tile_dir.0, -tile_dir.1)))
                             };
-
-                            // Direction pointing AWAY from node (into the edge)
-                            let dx = other_pt[0] - node_pt[0];
-                            let dy = other_pt[1] - node_pt[1];
-
-                            let len_v = (dx * dx + dy * dy).sqrt();
-                            if len_v < 1e-10 {
-                                return None;
-                            }
-                            let dir = (dx / len_v, dy / len_v);
-
-                            // Project node position to tile space
-                            let (node_tx, node_ty) = Self::project_to_tile(node.x, node.y, z, x, y, tile_extent);
-
-                            // Project a point along the direction to get tile-space direction
-                            let epsilon = 0.0001;
-                            let world_along = (node.x + dir.0 * epsilon, node.y + dir.1 * epsilon);
-                            let (along_tx, along_ty) = Self::project_to_tile(world_along.0, world_along.1, z, x, y, tile_extent);
-
-                            let t_dx = along_tx - node_tx;
-                            let t_dy = along_ty - node_ty;
-                            let t_len = (t_dx * t_dx + t_dy * t_dy).sqrt();
-                            if t_len < 1e-10 {
-                                return None;
-                            }
-                            // Direction in tile space pointing AWAY from node
-                            let tile_dir = (t_dx / t_len, t_dy / t_len);
-
-                            // Calculate offset for this GROUP
-                            let shift = (group_idx as f64 - (n_groups as f64 - 1.0) / 2.0) * spacing;
-                            let norm_x = -tile_dir.1;
-                            let norm_y = tile_dir.0;
-
-                            // Cutback point
-                            let cutback_dist = spacing * 2.0;
-                            let p_x = node_tx + norm_x * shift + tile_dir.0 * cutback_dist;
-                            let p_y = node_ty + norm_y * shift + tile_dir.1 * cutback_dist;
-
-                            Some(((p_x, p_y), (-tile_dir.0, -tile_dir.1)))
-                        };
 
                         let result1 = calc_point_and_dir(edge1, group1_idx, n_groups1);
                         let result2 = calc_point_and_dir(edge2, group2_idx, n_groups2);
@@ -706,7 +745,7 @@ impl TileGenerator {
                         // Validate distance
                         // Reduced max distance to prevent long incorrect connections
                         let dist = ((p1.0 - p2.0).powi(2) + (p1.1 - p2.1).powi(2)).sqrt();
-                        if dist > 100.0 || dist < 0.5 {
+                        if dist > 500.0 || dist < 0.5 {
                             continue;
                         }
 
@@ -717,18 +756,18 @@ impl TileGenerator {
 
                         let points = bezier_points(p1, cp1, cp2, p2, 16);
 
-                        let mut encoder = GeomEncoder::new(mvt::GeomType::Linestring)
-                            .bbox(tile_bbox.clone());
+                        let mut encoder =
+                            GeomEncoder::new(mvt::GeomType::Linestring).bbox(tile_bbox.clone());
                         for pt in &points {
                             let _ = encoder.add_point(pt.0, pt.1);
                         }
                         if let Ok(geom) = encoder.encode() {
                             let mut feature = layer.into_feature(geom);
-                            feature.set_id(
-                                (node_id as u64).wrapping_add(
-                                    edge1_idx as u64 * 10000 + edge2_idx as u64 * 100 + group1_idx as u64,
-                                ),
-                            );
+                            feature.set_id((node_id as u64).wrapping_add(
+                                edge1_idx as u64 * 10000
+                                    + edge2_idx as u64 * 100
+                                    + group1_idx as u64,
+                            ));
                             feature.add_tag_string("line_id", &line1.line_id);
                             feature.add_tag_string(
                                 "color",

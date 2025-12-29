@@ -1231,7 +1231,130 @@ fn bundle_edges(edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
     final_edges
 }
 
-fn collapse_shared_segments(
+struct UnionFind {
+    parent: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+        }
+    }
+    fn find(&mut self, i: usize) -> usize {
+        if self.parent[i] == i {
+            i
+        } else {
+            let root = self.find(self.parent[i]);
+            self.parent[i] = root;
+            root
+        }
+    }
+    fn union(&mut self, i: usize, j: usize) {
+        let root_i = self.find(i);
+        let root_j = self.find(j);
+        if root_i != root_j {
+            self.parent[root_i] = root_j;
+        }
+    }
+}
+
+pub fn collapse_shared_segments(
+    mut edges: Vec<GraphEdge>,
+    d_cut: f64,
+    seg_len: f64,
+    max_iters: usize,
+    next_node_id_counter: &mut usize,
+) -> Vec<GraphEdge> {
+    if edges.is_empty() {
+        return vec![];
+    }
+
+    struct IndexedEdge {
+        index: usize,
+        aabb: AABB<[f64; 2]>,
+    }
+
+    impl RTreeObject for IndexedEdge {
+        type Envelope = AABB<[f64; 2]>;
+        fn envelope(&self) -> Self::Envelope {
+            self.aabb
+        }
+    }
+
+    impl rstar::PointDistance for IndexedEdge {
+        fn distance_2(&self, point: &[f64; 2]) -> f64 {
+            self.aabb.distance_2(point)
+        }
+    }
+
+    let indexed_edges: Vec<IndexedEdge> = edges
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let geom = convert_to_geo(&e.geometry);
+            let (min_x, min_y, max_x, max_y) = if geom.0.is_empty() {
+                (0.0, 0.0, 0.0, 0.0)
+            } else {
+                let min_x = geom.0.iter().map(|c| c.x).fold(f64::INFINITY, f64::min);
+                let min_y = geom.0.iter().map(|c| c.y).fold(f64::INFINITY, f64::min);
+                let max_x = geom.0.iter().map(|c| c.x).fold(f64::NEG_INFINITY, f64::max);
+                let max_y = geom.0.iter().map(|c| c.y).fold(f64::NEG_INFINITY, f64::max);
+                (min_x, min_y, max_x, max_y)
+            };
+            IndexedEdge {
+                index: i,
+                aabb: AABB::from_corners([min_x, min_y], [max_x, max_y]),
+            }
+        })
+        .collect();
+
+    let tree = RTree::bulk_load(indexed_edges);
+    let mut uf = UnionFind::new(edges.len());
+    let search_radius = d_cut * 5.0; // 5x threshold to catch nearby edges
+
+    for (i, edge) in edges.iter().enumerate() {
+        let geom = convert_to_geo(&edge.geometry);
+        if geom.0.is_empty() {
+            continue;
+        }
+
+        let min_x = geom.0.iter().map(|c| c.x).fold(f64::INFINITY, f64::min) - search_radius;
+        let min_y = geom.0.iter().map(|c| c.y).fold(f64::INFINITY, f64::min) - search_radius;
+        let max_x = geom.0.iter().map(|c| c.x).fold(f64::NEG_INFINITY, f64::max) + search_radius;
+        let max_y = geom.0.iter().map(|c| c.y).fold(f64::NEG_INFINITY, f64::max) + search_radius;
+
+        let search_env = AABB::from_corners([min_x, min_y], [max_x, max_y]);
+
+        for candidate in tree.locate_in_envelope(&search_env) {
+            if candidate.index != i {
+                uf.union(i, candidate.index);
+            }
+        }
+    }
+
+    let mut components: HashMap<usize, Vec<GraphEdge>> = HashMap::new();
+    for (i, edge) in edges.into_iter().enumerate() {
+        let root = uf.find(i);
+        components.entry(root).or_default().push(edge);
+    }
+
+    println!(
+        "Partitioned edges into {} connected components for collapsing.",
+        components.len()
+    );
+
+    let mut final_results = Vec::new();
+    for (_, component) in components {
+        let processed =
+            collapse_component_impl(component, d_cut, seg_len, max_iters, next_node_id_counter);
+        final_results.extend(processed);
+    }
+
+    final_results
+}
+
+fn collapse_component_impl(
     mut edges: Vec<GraphEdge>,
     d_cut: f64,
     seg_len: f64,

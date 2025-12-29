@@ -1639,10 +1639,10 @@ fn nd_collapse_cand_impl(
                         threshold_sq *= 25.0;
                         // Still apply a modest strictness factor (lines must be closer than usual)
                         threshold_sq /= 4.0;
-                    } else if is_disjoint_modes && max_abs_cos < 0.866 {
+                    } else if is_disjoint_modes && max_abs_cos < 0.985 {
                         // Disjoint modes AND crossing angle - make stricter
-                        // Reduced from 100x to 4x
-                        threshold_sq /= 4.0;
+                        // Increased penalty to 20x (total 500x reduction) to prevent bad merges
+                        threshold_sq /= 20.0;
                     }
                 }
             }
