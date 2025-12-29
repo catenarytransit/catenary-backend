@@ -131,6 +131,14 @@ pub async fn gtfs_process_feed(
     let _ = crate::gtfs_handlers::route_file_fixer::fix_gtfs_route_colors(&path);
 
     match feed_id {
+        "f-dp3-cta" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./cta-rail-filtered-illinois-latest.osm.pbf",
+                Some(vec!["metro".to_string()]),
+                true,
+            )?;
+        }
         "f-u05-tcl~systral" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
