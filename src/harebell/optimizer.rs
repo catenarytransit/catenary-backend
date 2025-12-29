@@ -479,23 +479,8 @@ impl Optimizer {
                     let edge2 = &graph.edges[e2_idx];
                     let mut shared_lines = Vec::new();
                     for l1 in &edge1.lines {
-                        // Restriction Check
-                        let key = (l1.chateau_id.clone(), l1.route_id.clone());
-                        let restricted =
-                            if let Some(r) = graph.restrictions.get(&(e1_idx, e2_idx)) {
-                                r.contains(&key)
-                            } else {
-                                false
-                            } || if let Some(r) = graph.restrictions.get(&(e2_idx, e1_idx)) {
-                                r.contains(&key)
-                            } else {
-                                false
-                            };
-
-                        if restricted {
-                            continue;
-                        }
-
+                        // Include ALL shared lines in consistency constraints
+                        // (ILP needs to order all lines, not just those in restrictions)
                         if edge2.lines.iter().any(|l2| l2.line_id == l1.line_id) {
                             shared_lines.push(l1.line_id.clone());
                         }

@@ -27,19 +27,20 @@ impl Loader {
     pub async fn load_graph(&self) -> Result<RenderGraph> {
         println!("Loading graph from {}", self.graph_path);
 
-        // 1. Fetch Route Colors
+        // 1. Fetch Route Colors and Short Names
         let mut conn = self.pg_pool.get()?;
+        
+        // RouteInfo: (color, short_name)
         let routes_data =
-            tokio::task::block_in_place(|| -> Result<HashMap<(String, String), String>> {
+            tokio::task::block_in_place(|| -> Result<HashMap<(String, String), (String, Option<String>)>> {
                 let results = routes_dsl::routes
-                    .select((routes_dsl::chateau, routes_dsl::route_id, routes_dsl::color))
-                    .load::<(String, String, Option<String>)>(&mut conn)?;
+                    .select((routes_dsl::chateau, routes_dsl::route_id, routes_dsl::color, routes_dsl::short_name))
+                    .load::<(String, String, Option<String>, Option<String>)>(&mut conn)?;
 
                 let mut map = HashMap::new();
-                for (chateau, route_id, color) in results {
-                    if let Some(c) = color {
-                        map.insert((chateau, route_id), c);
-                    }
+                for (chateau, route_id, color, short_name) in results {
+                    let c = color.unwrap_or_else(|| "000000".to_string());
+                    map.insert((chateau, route_id), (c, short_name));
                 }
                 Ok(map)
             })?;
@@ -50,7 +51,7 @@ impl Loader {
             routes_data.keys().take(5).collect::<Vec<_>>()
         );
 
-        println!("Loaded {} route colors", routes_data.len());
+        println!("Loaded {} routes with color/short_name info", routes_data.len());
 
         // 2. Load Bincode Graph
         let file = File::open(&self.graph_path)?;
@@ -138,30 +139,49 @@ impl Loader {
         println!("Total nodes (clusters + intersections): {}", nodes.len());
 
         let mut edges = Vec::new();
+        // Track route groups: (chateau, group_key) -> Vec of (route_id, color)
+        let mut route_groups: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
+        
         for (i, edge) in export_graph.edges.iter().enumerate() {
             let from = Self::convert_node_id(edge.from);
             let to = Self::convert_node_id(edge.to);
 
             let mut lines_on_edge = Vec::new();
             for (chateau_id, route_id) in &edge.route_ids {
-                let color = routes_data
+                let (color, short_name) = routes_data
                     .get(&(chateau_id.clone(), route_id.clone()))
                     .cloned()
                     .unwrap_or_else(|| {
                         // Log failure once per route to avoid spam
                         if i < 5 {
                             // Only log for first few edges
-                            debug!("Missing color for ({}, {})", chateau_id, route_id);
+                            debug!("Missing route info for ({}, {})", chateau_id, route_id);
                         }
-                        "000000".to_string()
+                        ("000000".to_string(), None)
                     });
+                
+                // Bundle by short_name if available and non-empty, otherwise by color
+                let group_key = short_name
+                    .as_ref()
+                    .filter(|s| !s.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| color.clone());
+                
+                // Track route groups for later use
+                route_groups
+                    .entry((chateau_id.clone(), group_key.clone()))
+                    .or_default()
+                    .push((route_id.clone(), color.clone()));
+                
+                // line_id uses the group key for bundling
+                let line_id = format!("{}:{}", chateau_id, group_key);
 
                 lines_on_edge.push(LineOnEdge {
-                    line_id: format!("{}:{}", chateau_id, route_id),
+                    line_id,
                     color,
                     chateau_id: chateau_id.clone(),
                     route_id: route_id.clone(),
-                    group_id: None,
+                    group_id: Some(group_key),
                     weight: 1,
                 });
             }
@@ -246,6 +266,7 @@ impl Loader {
             restrictions: restriction_map,
             collapsed_lines: HashMap::new(),
             node_to_edges,
+            route_groups,
         };
 
         let optimizer = crate::optimizer::Optimizer::new();

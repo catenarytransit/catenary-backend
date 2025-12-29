@@ -674,12 +674,13 @@ fn check_path_for_turn(
         }
     }
 
-    // Collect "to" edges (outgoing edges from handle nodes)
+    // Collect "to" edges (incoming edges to handle nodes - same as C++ getAdjListIn)
     let mut to_edges: HashSet<usize> = HashSet::new();
     if let Some(handle_nodes) = to_handles {
         for &nd in handle_nodes {
-            if let Some(out_edges) = graph.adj_out.get(&nd) {
-                to_edges.extend(out_edges.iter().filter(|&&e| {
+            // C++ uses getAdjListIn() for BOTH from and to edges
+            if let Some(in_edges) = graph.adj_in.get(&nd) {
+                to_edges.extend(in_edges.iter().filter(|&&e| {
                     graph.edges[e]
                         .as_ref()
                         .map(|edge| edge.lines.contains(line_id))
@@ -714,6 +715,9 @@ fn check_path_for_turn(
 
 /// Dijkstra variant that starts from a set of edges and ends at a set of edges
 /// Matching C++ EDijkstra::shortestPath behavior
+/// 
+/// In C++, EDijkstra finds shortest path from a set of "from" edges to a set of "to" edges.
+/// The cost includes traversing the from edge and ends when we reach (not after traversing) a to edge.
 fn dijkstra_edges(
     graph: &RestrGraph,
     from_edges: &HashSet<usize>,
@@ -732,6 +736,11 @@ fn dijkstra_edges(
         // Cost to traverse this starting edge (no "from" edge)
         let c = cost_func.edge_cost(None, edge.from_node, edge_idx);
         if c < cost_func.inf() {
+            // Check if this starting edge is also a target edge
+            if to_edges.contains(&edge_idx) {
+                return Some(c);
+            }
+            
             heap.push(DijkstraState {
                 cost: OrderedFloat(c),
                 node: edge.to_node,
@@ -749,11 +758,6 @@ fn dijkstra_edges(
     {
         let cost_val = cost.0;
 
-        // Check if we've reached a target edge
-        if to_edges.contains(&via_edge) {
-            return Some(cost_val);
-        }
-
         if let Some(&d) = dist.get(&(node, via_edge)) {
             if cost_val > d {
                 continue;
@@ -765,6 +769,12 @@ fn dijkstra_edges(
                 let next_cost = cost_val + cost_func.edge_cost(Some(via_edge), node, next_edge_idx);
                 if next_cost >= cost_func.inf() {
                     continue;
+                }
+
+                // Check if we've reached a target edge
+                // We return when we CAN reach a target, not after traversing it
+                if to_edges.contains(&next_edge_idx) {
+                    return Some(next_cost);
                 }
 
                 let Some(next_edge) = &graph.edges[next_edge_idx] else {
