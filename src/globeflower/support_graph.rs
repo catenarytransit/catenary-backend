@@ -557,8 +557,12 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     collapse_degree_2_nodes_serial(&mut graph, normal_d_cut);
 
     // Second reconstruction pass (C++: line 182)
-    println!("Second reconstruction pass...");
-    reconstruct_intersections(&mut graph, normal_d_cut);
+    println!("Second reconstruction pass (iterative relaxation)...");
+    // Run multiple iterations to relax the graph (spring-like smoothing)
+    // This further helps reduce "bumpy lines" by allowing nodes to settle
+    for i in 0..3 {
+        reconstruct_intersections(&mut graph, normal_d_cut);
+    }
 
     // Remove orphan lines again (C++: line 185)
     println!("Remove orphan lines again...");
@@ -1592,14 +1596,15 @@ fn nd_collapse_cand_impl(
 
             let threshold_sq = if has_shared_mode {
                 // Node already has matching modes - use RELAXED threshold
-                // Intercity rail: 2x base * 2.5x hysteresis = 5x total (25x squared)
+                // Intercity rail: 2x base * 4x hysteresis = 8x total (64x squared)
                 // Other modes: 1x base * 2x hysteresis = 2x total (4x squared)
                 let hysteresis_mult = if is_established_node {
                     // Strongly established - very sticky
-                    if has_intercity_rail { 6.25 } else { 4.0 } // 2.5² or 2²
+                    // "Make Y shaped merges deeper" -> Increase capture radius for Rail
+                    if has_intercity_rail { 16.0 } else { 4.0 } // 4² or 2²
                 } else {
                     // Newly merged - moderately sticky
-                    if has_intercity_rail { 4.0 } else { 2.25 } // 2² or 1.5²
+                    if has_intercity_rail { 9.0 } else { 2.25 } // 3² or 1.5²
                 };
                 d_cut_sq * mode_base_multiplier * hysteresis_mult
             } else if !current_modes.is_empty() && !node_modes.is_empty() {
@@ -1622,14 +1627,19 @@ fn nd_collapse_cand_impl(
         });
 
     if let Some((nd_min, _score)) = best {
-        // Update node position using simple MIDPOINT centroid (Match C++ util::geo::centroid logic)
-        // C++: ndMin->pl().setGeom(util::geo::centroid(util::geo::LineSegment<double>(*ndMin->pl().getGeom(), point)));
-        // This is a simple average of the current position and the new point: (old + new) / 2
-        // We do NOT use weighted average based on merge_count, as that causes nodes to become "sticky"
-        // and prevents them from drifting to the true geometric center of the cluster.
+        // Update node position using WEIGHTED average (C++ uses midpoint, but weighted is smoother)
+        // User reported "bumpy lines", which suggests the simple iterative midpoint update
+        // essentially does an Exponential Moving Average biased to the last points.
+        // Weighted average based on number of merged points ensures geometric stability.
 
         let old_pos = nd_min.borrow().pos;
-        let new_pos = [(old_pos[0] + point[0]) / 2.0, (old_pos[1] + point[1]) / 2.0];
+        let count = nd_min.borrow().merge_count as f64;
+
+        // New centroid = (old * count + new) / (count + 1)
+        let new_pos = [
+            (old_pos[0] * count + point[0]) / (count + 1.0),
+            (old_pos[1] * count + point[1]) / (count + 1.0),
+        ];
 
         // ALWAYS remove and re-add (matching C++ behavior)
         geo_idx.remove(&nd_min);
@@ -2103,6 +2113,32 @@ fn check_edge_angle_for_merge_lenient(a: &EdgeRef, b: &EdgeRef) -> bool {
     abs_dot >= 0.2
 }
 
+/// Strict angle check for merging Rail lines.
+/// Rejects merges if deviations are > 30 degrees (abs_dot < 0.866).
+/// This discourages sharp turns/merges on rail lines which should be smooth.
+fn check_edge_angle_strict_merge(a: &EdgeRef, b: &EdgeRef) -> bool {
+    // Find shared node
+    let shr_nd = if Rc::ptr_eq(&a.borrow().from, &b.borrow().from)
+        || Rc::ptr_eq(&a.borrow().from, &b.borrow().to)
+    {
+        Rc::clone(&a.borrow().from)
+    } else if Rc::ptr_eq(&a.borrow().to, &b.borrow().from)
+        || Rc::ptr_eq(&a.borrow().to, &b.borrow().to)
+    {
+        Rc::clone(&a.borrow().to)
+    } else {
+        return false;
+    };
+
+    let dir_a = get_edge_direction_from_node(a, &shr_nd);
+    let dir_b = get_edge_direction_from_node(b, &shr_nd);
+    let dot = dir_a.0 * dir_b.0 + dir_a.1 * dir_b.1;
+    let abs_dot = dot.abs();
+
+    // Strict: 0.85 threshold = reject angles > 31° from parallel/anti-parallel
+    abs_dot >= 0.85
+}
+
 /// Matches C++ MapConstructor::lineEq
 ///
 /// Checks if two edges can be merged based on their routes and directions.
@@ -2158,9 +2194,22 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
         }
     } else {
         // Same or overlapping route types
-        // Use lenient angle check - only reject true perpendicular X-crossings
-        if !check_edge_angle_for_merge_lenient(a, b) {
-            return false;
+
+        // SPECIAL HANDLING FOR RAIL (Route Type 2)
+        // User request: "discourage sharp turns on rail lines compared to subways and trams"
+        let has_rail = a_modes.contains(&2) || b_modes.contains(&2);
+
+        if has_rail {
+            // Rail lines have large turning radii. Merging should only happen if lines are parallel.
+            // Strict check: abs_dot >= 0.85 (approx 30 degrees max deviation)
+            if !check_edge_angle_strict_merge(a, b) {
+                return false;
+            }
+        } else {
+            // Use lenient angle check for Subway/Tram - only reject true perpendicular X-crossings
+            if !check_edge_angle_for_merge_lenient(a, b) {
+                return false;
+            }
         }
     }
 
