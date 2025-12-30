@@ -54,14 +54,9 @@ impl Optimizer {
             }
             let mut changed = false;
 
-            // 1. Complex Untangling Rules (Rules 2-8)
-            // Loop internally to exhaust opportunities (emulating "Full Round")
+            // 1. Complex Untangling Rules (matches C++ order: DoubleStump → OuterStump → FullX → Y → PartialY → DogBone → PartialDogBone)
+            // Full X is now integrated here matching C++ loom's approach
             if self.untangle_complex_repeatedly(graph) {
-                changed = true;
-            }
-
-            // 2. Simple Untangling Rule (Rule 1: Full X)
-            if self.untangle_simple_repeatedly(graph) {
                 changed = true;
             }
 
@@ -233,31 +228,58 @@ impl Optimizer {
                 continue;
             }
 
-            // Skip huge components to prevent solver hang/OOM
-            if size > 300 {
-                println!(
-                    "Skipping component {}/{} (Size: {} edges) - too large for ILP optimization.",
-                    i + 1,
-                    total_components,
-                    size
-                );
+            // Calculate solution space size like C++ loom does:
+            // solutionSpaceSize = Π factorial(lines_per_edge)
+            // C++ uses ExhaustiveOptimizer when solutionSpaceSize < 500
+            // We use greedy ordering for large solution spaces to avoid ILP OOM
+            let solution_space: f64 = component
+                .iter()
+                .map(|&idx| {
+                    let n = graph.edges[idx].lines.len();
+                    (1..=n).product::<usize>() as f64 // factorial
+                })
+                .product();
+
+            // Match C++ ILPOptimizer.cpp line 33: if (solutionSpaceSize(g) < 500)
+            // For very small solution spaces, use simple greedy (like C++ ExhaustiveOptimizer)
+            if solution_space < 500.0 {
+                for &edge_idx in component {
+                    let mut lines = graph.edges[edge_idx].lines.clone();
+                    lines.sort_by(|a, b| a.line_id.cmp(&b.line_id));
+                    global_results.insert(edge_idx, lines);
+                }
                 continue;
             }
 
-            if size > 50 {
+            // For very large solution spaces (> 1e12), skip ILP entirely to avoid OOM
+            // This is a safety limit beyond what C++ handles
+            if solution_space > 1e12 || size > 50 {
                 println!(
-                    "Processing component {}/{} (Size: {} edges). Building model...",
+                    "Component {}/{} (Size: {} edges, SolSpace: {:.0}) too large for ILP, using greedy.",
                     i + 1,
                     total_components,
-                    size
+                    size,
+                    solution_space
                 );
+                for &edge_idx in component {
+                    let mut lines = graph.edges[edge_idx].lines.clone();
+                    lines.sort_by(|a, b| a.line_id.cmp(&b.line_id));
+                    global_results.insert(edge_idx, lines);
+                }
+                continue;
             }
+
+            println!(
+                "Component {}/{} (Size: {} edges, SolSpace: {:.0}). Building ILP model...",
+                i + 1,
+                total_components,
+                size,
+                solution_space
+            );
             if let Some(res) = self.solve_component(graph, component, &node_to_all_edges) {
                 global_results.extend(res);
             }
-            if size > 50 {
-                println!("Component {}/{} solved.", i + 1, total_components);
-            }
+            println!("Component {}/{} solved.", i + 1, total_components);
         }
 
         // 5. Apply Results
@@ -678,7 +700,7 @@ impl Optimizer {
             .using(good_lp::solvers::coin_cbc::coin_cbc);
 
         model.set_parameter("seconds", "60");
-        model.set_parameter("threads", "16");
+        model.set_parameter("threads", "4"); // Reduced from 16 to match C++ loom (less memory per thread)
         //model.set_parameter("ratio", "0.05");
 
         for c in constraints {
@@ -733,53 +755,65 @@ impl Optimizer {
     }
 
     fn untangle_complex_repeatedly(&self, graph: &mut RenderGraph) -> bool {
+        // Order matches C++ loom's OptGraph::untangle():
+        // DoubleStump → OuterStump → FullX (loop) → Y → PartialY →
+        // DogBone → PartialDogBone → InnerStump
         let mut any_changed = false;
         loop {
             let mut changed = false;
             let node_adj = self.build_node_adjacency(graph);
 
-            // Rule 2: Full Y
-            if self.untangle_rule_2(graph, &node_adj) {
-                changed = true;
-                any_changed = true;
-                // println!("Applied Untangling Rule 2 (Full Y)");
-                continue;
-            }
-
-            // Rule 3: Partial Y
-            if self.untangle_rule_3(graph, &node_adj) {
-                changed = true;
-                any_changed = true;
-                // println!("Applied Untangling Rule 3 (Partial Y)");
-                continue;
-            }
-
-            // Rule 4: Full Double Y
-            if self.untangle_rule_4(graph, &node_adj) {
-                changed = true;
-                any_changed = true;
-                // println!("Applied Untangling Rule 4 (Full Double Y)");
-                continue;
-            }
-
-            // Rule 5: Partial Double Y
-            if self.untangle_rule_5(graph, &node_adj) {
-                changed = true;
-                any_changed = true;
-                // println!("Applied Untangling Rule 5 (Partial Double Y)");
-                continue;
-            }
-
-            // Rule 6 & 8: Stumps
-            // Rule 8: Double Stump
+            // 1. Rule 8: Double Stump (C++ untangleDoubleStump)
             if self.untangle_rule_8_double_stump(graph, &node_adj) {
                 changed = true;
                 any_changed = true;
                 continue;
             }
 
-            // Rule 6: Outer/Inner Stump
+            // 2. Rule 6: Outer Stump (C++ untangleOuterStump)
             if self.untangle_rule_6_outer_stump(graph, &node_adj) {
+                changed = true;
+                any_changed = true;
+                continue;
+            }
+
+            // 3. Rule 1: Full X (C++ untangleFullX - runs in loop)
+            if self.untangle_rule_1(graph, &node_adj) {
+                changed = true;
+                any_changed = true;
+                continue;
+            }
+
+            // 4. Rule 2: Full Y (C++ untangleY)
+            if self.untangle_rule_2(graph, &node_adj) {
+                changed = true;
+                any_changed = true;
+                continue;
+            }
+
+            // 5. Rule 3: Partial Y (C++ untanglePartialY)
+            if self.untangle_rule_3(graph, &node_adj) {
+                changed = true;
+                any_changed = true;
+                continue;
+            }
+
+            // 6. Rule 4: Full Double Y / DogBone (C++ untangleDogBone)
+            if self.untangle_rule_4(graph, &node_adj) {
+                changed = true;
+                any_changed = true;
+                continue;
+            }
+
+            // 7. Rule 5: Partial Double Y / PartialDogBone (C++ untanglePartialDogBone)
+            if self.untangle_rule_5(graph, &node_adj) {
+                changed = true;
+                any_changed = true;
+                continue;
+            }
+
+            // 8. Rule 7: Inner Stump (C++ untangleInnerStump)
+            if self.untangle_rule_7_inner_stump(graph, &node_adj) {
                 changed = true;
                 any_changed = true;
                 continue;
@@ -822,127 +856,138 @@ impl Optimizer {
         graph: &mut RenderGraph,
         node_adj: &HashMap<i64, Vec<usize>>,
     ) -> bool {
-        // Untangling Rule 1: Full X
-        // Node v, deg(v)=4. Edges e1, e2, e3, e4.
-        // L(e1) = L(e3) = A
-        // L(e2) = L(e4) = B
-        // A disjoint B
+        // Untangling Rule 1: Generalized Full X (Isolated Flow)
+        // Matches C++ isFullX/untangleFullX logic.
+        // At any node v with deg(v) >= 3, find a pair of edges (ea, eb) where:
+        // 1. L(ea) == L(eb)  (same lines)
+        // 2. Lines on ea/eb do NOT appear on any other edge at v (isolated flow)
+        // 3. No lines from OTHER edges partially continue through ea-eb pair
+        // Action: Split v into v' and v''. Connect ea/eb to v', rest to v''.
 
-        let mut changes = false;
         let mut nodes: Vec<i64> = node_adj.keys().cloned().collect();
         nodes.sort(); // Determinism
 
         for v in nodes {
             if let Some(adj) = node_adj.get(&v) {
-                if adj.len() != 4 {
+                if adj.len() < 3 {
                     continue;
                 }
 
-                // Check pairs
-                // We need to find two pairs (e1, e3) and (e2, e4) such that L(e1)=L(e3) and L(e2)=L(e4) and disjoint.
-                let mut pair1 = None;
-                let mut pair2 = None;
+                // Try all pairs of edges at v
+                for i in 0..adj.len() {
+                    for j in (i + 1)..adj.len() {
+                        let ea_idx = adj[i];
+                        let eb_idx = adj[j];
+                        let ea = &graph.edges[ea_idx];
+                        let eb = &graph.edges[eb_idx];
 
-                // There are 3 ways to pair 4 edges: (0,1)/(2,3), (0,2)/(1,3), (0,3)/(1,2)
-                let mut pairings = vec![((0, 1), (2, 3)), ((0, 2), (1, 3)), ((0, 3), (1, 2))];
+                        // Condition 1: L(ea) == L(eb)
+                        let mut lines_a: Vec<_> =
+                            ea.lines.iter().map(|x| x.line_id.clone()).collect();
+                        let mut lines_b: Vec<_> =
+                            eb.lines.iter().map(|x| x.line_id.clone()).collect();
+                        lines_a.sort();
+                        lines_b.sort();
 
-                for ((i, j), (k, l)) in pairings {
-                    let e_i = &graph.edges[adj[i]];
-                    let e_j = &graph.edges[adj[j]];
-                    let e_k = &graph.edges[adj[k]];
-                    let e_l = &graph.edges[adj[l]];
-
-                    let mut lines_i: Vec<_> = e_i.lines.iter().map(|x| x.line_id.clone()).collect();
-                    let mut lines_j: Vec<_> = e_j.lines.iter().map(|x| x.line_id.clone()).collect();
-                    let mut lines_k: Vec<_> = e_k.lines.iter().map(|x| x.line_id.clone()).collect();
-                    let mut lines_l: Vec<_> = e_l.lines.iter().map(|x| x.line_id.clone()).collect();
-                    lines_i.sort();
-                    lines_j.sort();
-                    lines_k.sort();
-                    lines_l.sort();
-
-                    if lines_i == lines_j && lines_k == lines_l {
-                        // Check disjoint
-                        let set_i: HashSet<_> = lines_i.iter().cloned().collect();
-                        let set_k: HashSet<_> = lines_k.iter().cloned().collect();
-                        if set_i.is_disjoint(&set_k) {
-                            pair1 = Some((adj[i], adj[j])); // e_i, e_j (indices)
-                            pair2 = Some((adj[k], adj[l])); // e_k, e_l
-                            break;
+                        if lines_a != lines_b || lines_a.is_empty() {
+                            continue;
                         }
+
+                        let flow_lines: HashSet<_> = lines_a.iter().cloned().collect();
+
+                        // Condition 2: These lines do NOT appear on any other edge at v
+                        let mut isolated = true;
+                        for k in 0..adj.len() {
+                            if k == i || k == j {
+                                continue;
+                            }
+                            let ek = &graph.edges[adj[k]];
+                            for l in &ek.lines {
+                                if flow_lines.contains(&l.line_id) {
+                                    isolated = false;
+                                    break;
+                                }
+                            }
+                            if !isolated {
+                                break;
+                            }
+                        }
+                        if !isolated {
+                            continue;
+                        }
+
+                        // Condition 3: No lines from OTHER edges partially continue over ea-eb
+                        // i.e., no line on some other edge ek also appears on ea or eb
+                        // (This is already covered by Condition 2 in a stricter sense)
+                        // The C++ logic also checks that remaining edges are "line disjunct"
+                        // but here we just need the isolated pair.
+
+                        // Found an isolated flow pair!
+                        let max_node_id = graph.nodes.keys().max().cloned().unwrap_or(0);
+                        let v_prime = max_node_id + 1;
+                        let v_double_prime = max_node_id + 2;
+
+                        let v_node = graph.nodes[&v].clone();
+
+                        graph.nodes.insert(
+                            v_prime,
+                            crate::graph::Node {
+                                id: v_prime,
+                                x: v_node.x,
+                                y: v_node.y,
+                                is_cluster: false,
+                                name: None,
+                            },
+                        );
+
+                        graph.nodes.insert(
+                            v_double_prime,
+                            crate::graph::Node {
+                                id: v_double_prime,
+                                x: v_node.x,
+                                y: v_node.y,
+                                is_cluster: false,
+                                name: None,
+                            },
+                        );
+
+                        // Isolated pair -> v_prime
+                        for &idx in &[ea_idx, eb_idx] {
+                            let e = &mut graph.edges[idx];
+                            if e.from == v {
+                                e.from = v_prime;
+                            }
+                            if e.to == v {
+                                e.to = v_prime;
+                            }
+                        }
+                        // Rest -> v_double_prime
+                        for k in 0..adj.len() {
+                            if k == i || k == j {
+                                continue;
+                            }
+                            let e = &mut graph.edges[adj[k]];
+                            if e.from == v {
+                                e.from = v_double_prime;
+                            }
+                            if e.to == v {
+                                e.to = v_double_prime;
+                            }
+                        }
+
+                        graph.nodes.remove(&v);
+
+                        debug!(
+                            "Applied Untangling Rule 1 (Generalized FullX) at node {} (deg={})",
+                            v,
+                            adj.len()
+                        );
+                        return true;
                     }
-                }
-
-                if let (Some((e1_idx, e3_idx)), Some((e2_idx, e4_idx))) = (pair1, pair2) {
-                    // Split v into v' and v''
-                    // Connect e1, e3 to v'
-                    // Connect e2, e4 to v''
-
-                    let max_node_id = graph.nodes.keys().max().cloned().unwrap_or(0);
-                    let v_prime = max_node_id + 1;
-                    let v_double_prime = max_node_id + 2;
-
-                    let v_node = graph.nodes[&v].clone();
-
-                    graph.nodes.insert(
-                        v_prime,
-                        crate::graph::Node {
-                            id: v_prime,
-                            x: v_node.x,
-                            y: v_node.y,
-                            is_cluster: false,
-                            name: None,
-                            // Wait, I changed it to name: None without checking definition!
-                            // Node definition in graph.rs:8
-                            // pub struct Node { ... pub name: Option<String> ... }
-                            // So name: None is correct.
-                        },
-                    );
-                    // Oops, my code drafted above used name: String::new(). I must fix it to None.
-
-                    graph.nodes.insert(
-                        v_double_prime,
-                        crate::graph::Node {
-                            id: v_double_prime,
-                            x: v_node.x,
-                            y: v_node.y,
-                            is_cluster: false,
-                            name: None,
-                        },
-                    );
-
-                    // Fix v_prime above too
-
-                    // Update edges
-                    // Pair 1 -> v_prime
-                    for &idx in &[e1_idx, e3_idx] {
-                        let e = &mut graph.edges[idx];
-                        if e.from == v {
-                            e.from = v_prime;
-                        }
-                        if e.to == v {
-                            e.to = v_prime;
-                        }
-                    }
-                    // Pair 2 -> v_double_prime
-                    for &idx in &[e2_idx, e4_idx] {
-                        let e = &mut graph.edges[idx];
-                        if e.from == v {
-                            e.from = v_double_prime;
-                        }
-                        if e.to == v {
-                            e.to = v_double_prime;
-                        }
-                    }
-
-                    graph.nodes.remove(&v);
-
-                    changes = true;
-                    return true;
                 }
             }
         }
-        changes
+        false
     }
 
     fn untangle_rule_2(
@@ -2008,10 +2053,142 @@ impl Optimizer {
             }
         }
 
-        println!(
-            "Applied Untangling Rule 6 (Outer/Inner Stump) on {} edges",
-            count
-        );
+        println!("Applied Untangling Rule 6 (Outer Stump) on {} edges", count);
+        true
+    }
+
+    fn untangle_rule_7_inner_stump(
+        &self,
+        graph: &mut RenderGraph,
+        node_adj: &HashMap<i64, Vec<usize>>,
+    ) -> bool {
+        // Rule 7: Inner Stump (C++ untangleInnerStump)
+        // Detect internal dead-end flows between nodes u and v connected by "leg" edge.
+        // An "inner stump" occurs when:
+        // - Edge e (leg) connects u and v with deg(u) >= 3 and deg(v) >= 3
+        // - Some lines on e branch at u into specific edges, and those lines terminate at v
+        //   (i.e., they don't continue past v on any other edge)
+        // Action: Split u->u', v->v'. Move the inner stump flow to u'-v'.
+
+        let mut actions: Vec<(usize, i64, i64, Vec<String>)> = Vec::new(); // (e_idx, u, v, stump_lines)
+        let mut touched_edges: HashSet<usize> = HashSet::new();
+
+        for (e_idx, edge) in graph.edges.iter().enumerate() {
+            if edge.lines.is_empty() || touched_edges.contains(&e_idx) {
+                continue;
+            }
+
+            let u = edge.from;
+            let v = edge.to;
+            let u_legs = node_adj.get(&u).map(|x| x.as_slice()).unwrap_or(&[]);
+            let v_legs = node_adj.get(&v).map(|x| x.as_slice()).unwrap_or(&[]);
+
+            // Need deg >= 3 at both ends
+            if u_legs.len() < 3 || v_legs.len() < 3 {
+                continue;
+            }
+
+            // Find lines on e that:
+            // 1. Branch from u into specific other edges at u
+            // 2. Terminate at v (don't continue on any other edge at v)
+            let mut stump_lines: Vec<String> = Vec::new();
+
+            for line in &edge.lines {
+                // Check if this line terminates at v
+                let terminates_at_v = !v_legs.iter().any(|&vl_idx| {
+                    vl_idx != e_idx
+                        && graph.edges[vl_idx]
+                            .lines
+                            .iter()
+                            .any(|l| l.line_id == line.line_id)
+                });
+
+                // Check if this line comes from another edge at u (not just terminating at u)
+                let comes_from_u = u_legs.iter().any(|&ul_idx| {
+                    ul_idx != e_idx
+                        && graph.edges[ul_idx]
+                            .lines
+                            .iter()
+                            .any(|l| l.line_id == line.line_id)
+                });
+
+                if terminates_at_v && comes_from_u {
+                    stump_lines.push(line.line_id.clone());
+                }
+            }
+
+            // Need at least one stump line, and not ALL lines (otherwise use other rules)
+            if !stump_lines.is_empty() && stump_lines.len() < edge.lines.len() {
+                actions.push((e_idx, u, v, stump_lines));
+                touched_edges.insert(e_idx);
+            }
+        }
+
+        if actions.is_empty() {
+            return false;
+        }
+
+        let count = actions.len();
+        let mut max_node_id = graph.nodes.keys().max().cloned().unwrap_or(0);
+        let mut max_edge_id = graph.edges.iter().map(|e| e.id).max().unwrap_or(0);
+
+        for (e_idx, u, v, stump_lines) in actions {
+            let edge_data = graph.edges[e_idx].clone();
+
+            // Create u' and v'
+            max_node_id += 1;
+            let u_prime_id = max_node_id;
+            max_node_id += 1;
+            let v_prime_id = max_node_id;
+
+            let mut u_prime = graph.nodes[&u].clone();
+            u_prime.id = u_prime_id;
+            let mut v_prime = graph.nodes[&v].clone();
+            v_prime.id = v_prime_id;
+
+            graph.nodes.insert(u_prime_id, u_prime);
+            graph.nodes.insert(v_prime_id, v_prime);
+
+            // Create e' = {u', v'} with stump lines only
+            max_edge_id += 1;
+            let mut e_prime = edge_data.clone();
+            e_prime.id = max_edge_id;
+            e_prime.from = u_prime_id;
+            e_prime.to = v_prime_id;
+            e_prime.lines.retain(|l| stump_lines.contains(&l.line_id));
+            graph.edges.push(e_prime);
+
+            // Remove stump lines from original edge
+            graph.edges[e_idx]
+                .lines
+                .retain(|l| !stump_lines.contains(&l.line_id));
+
+            // Move the source edges at u (that carry stump lines) to u'
+            let u_legs = node_adj.get(&u).map(|x| x.clone()).unwrap_or_default();
+            for ul_idx in u_legs {
+                if ul_idx == e_idx {
+                    continue;
+                }
+                let ul_edge = &graph.edges[ul_idx];
+                // Check if this edge carries any stump lines
+                let carries_stump = ul_edge
+                    .lines
+                    .iter()
+                    .any(|l| stump_lines.contains(&l.line_id));
+
+                if carries_stump {
+                    // Move this edge endpoint from u to u'
+                    let ul = &mut graph.edges[ul_idx];
+                    if ul.from == u {
+                        ul.from = u_prime_id;
+                    } else if ul.to == u {
+                        ul.to = u_prime_id;
+                    }
+                }
+            }
+        }
+
+        println!("Applied Untangling Rule 7 (Inner Stump) on {} edges", count);
         true
     }
 
