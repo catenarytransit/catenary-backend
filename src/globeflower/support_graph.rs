@@ -198,6 +198,16 @@ impl LineGraph {
         }
     }
 
+    /// Create a new LineGraph with a specified starting node ID.
+    /// CRITICAL: Used to ensure node IDs are globally unique across partitions.
+    fn new_with_start_id(start_node_id: usize) -> Self {
+        Self {
+            nodes: Vec::new(),
+            next_node_id: start_node_id,
+            next_edge_id: 0,
+        }
+    }
+
     fn add_nd(&mut self, pos: [f64; 2]) -> NodeRef {
         let id = self.next_node_id;
         self.next_node_id += 1;
@@ -866,7 +876,10 @@ fn collapse_shared_segments(
         println!("Iteration {}/{}...", iter + 1, max_iters);
 
         // Create new graph for this iteration (matches C++: `LineGraph tgNew`)
-        let mut tg_new = LineGraph::new();
+        // CRITICAL: Initialize with current node ID counter to ensure global uniqueness
+        // across partitions. Without this, each partition's graph starts from ID 0,
+        // causing edges from completely different geographic regions to connect!
+        let mut tg_new = LineGraph::new_with_start_id(*next_node_id_counter);
 
         // Spatial index for node collapse candidates
         let mut geo_idx = NodeGeoIdx::new(d_cut);
