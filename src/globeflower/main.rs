@@ -3,6 +3,8 @@ mod edges;
 mod export;
 mod geometry_utils;
 mod insertion;
+mod partition_storage;
+mod partitioning;
 mod restrictions;
 mod support_graph;
 

@@ -21,15 +21,48 @@ const CONVERGENCE_THRESHOLD: f64 = 0.002;
 
 pub use catenary::graph_formats::NodeId;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphEdge {
     pub from: NodeId,
     pub to: NodeId,
+    #[serde(with = "geometry_serde")]
     pub geometry: LineString<Point>,
     pub routes: Vec<(String, String, i32)>, // (chateau, route_id, route_type)
     pub original_shape_ids: Vec<(String, String)>, // (chateau, shape_id) - tracks which GTFS shapes contributed to this edge
     pub weight: f64,                               // length in meters
     pub original_edge_index: Option<usize>,        // For debugging/zippering traceability
+}
+
+mod geometry_serde {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S>(geom: &LineString<Point>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Convert to Vec<(f64, f64)>
+        let points: Vec<(f64, f64)> = geom.points.iter().map(|p| (p.x, p.y)).collect();
+        points.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<LineString<Point>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let points: Vec<(f64, f64)> = Vec::deserialize(deserializer)?;
+        Ok(LineString {
+            points: points
+                .into_iter()
+                .map(|(x, y)| Point {
+                    x,
+                    y,
+                    srid: Some(4326),
+                })
+                .collect(),
+            srid: Some(4326),
+        })
+    }
 }
 
 pub async fn generate_edges(

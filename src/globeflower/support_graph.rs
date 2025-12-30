@@ -1,4 +1,5 @@
 use crate::edges::{GraphEdge, NodeId, convert_from_geo, convert_to_geo};
+use crate::partitioning::*;
 use ahash::{AHashMap, AHashSet};
 use anyhow::Result;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -57,8 +58,8 @@ fn convert_edge_to_lat_lng(edge: &mut GraphEdge) {
 // Rc-based Line Graph (matches C++ UndirGraph<LineNodePL, LineEdgePL>)
 // ===========================================================================
 
-type NodeRef = Rc<RefCell<LineNode>>;
-type EdgeRef = Rc<RefCell<LineEdge>>;
+pub type NodeRef = Rc<RefCell<LineNode>>;
+pub type EdgeRef = Rc<RefCell<LineEdge>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
 pub enum RouteDirection {
@@ -103,19 +104,19 @@ impl LineOcc {
 }
 
 #[derive(Debug)]
-struct LineNode {
-    id: usize,
-    pos: [f64; 2],
-    adj_list: Vec<EdgeRef>,
+pub struct LineNode {
+    pub id: usize,
+    pub pos: [f64; 2],
+    pub adj_list: Vec<EdgeRef>,
     // Connection exceptions: lines that cannot continue between certain edge pairs at this node
     // Key: line_id, Value: Map of edge_id -> Set of forbidden target edge_ids
-    conn_exc: AHashMap<(String, String), AHashMap<usize, AHashSet<usize>>>,
+    pub conn_exc: AHashMap<(String, String), AHashMap<usize, AHashSet<usize>>>,
     // Track how many points have been merged into this node for weighted centroid
-    merge_count: usize,
+    pub merge_count: usize,
 }
 
 impl LineNode {
-    fn new(id: usize, pos: [f64; 2]) -> Self {
+    pub fn new(id: usize, pos: [f64; 2]) -> Self {
         Self {
             id,
             pos,
@@ -125,7 +126,7 @@ impl LineNode {
         }
     }
 
-    fn get_deg(&self) -> usize {
+    pub fn get_deg(&self) -> usize {
         self.adj_list.len()
     }
 
@@ -164,7 +165,7 @@ impl LineNode {
 }
 
 #[derive(Debug)]
-struct LineEdge {
+pub struct LineEdge {
     id: usize,
     from: NodeRef,
     to: NodeRef,
@@ -269,132 +270,7 @@ impl LineGraph {
 }
 
 // ===========================================================================
-// Spatial Index for Nodes (matches C++ NodeGeoIdx)
-// ===========================================================================
-
-struct NodeGeoIdx {
-    cell_size: f64,
-    cells: AHashMap<(i32, i32), Vec<NodeRef>>,
-}
-
-impl NodeGeoIdx {
-    fn new(cell_size: f64) -> Self {
-        Self {
-            cell_size,
-            cells: AHashMap::new(),
-        }
-    }
-
-    fn get_cell_coords(&self, x: f64, y: f64) -> (i32, i32) {
-        (
-            (x / self.cell_size).floor() as i32,
-            (y / self.cell_size).floor() as i32,
-        )
-    }
-
-    fn add(&mut self, pos: [f64; 2], node: NodeRef) {
-        let coords = self.get_cell_coords(pos[0], pos[1]);
-        self.cells.entry(coords).or_default().push(node);
-    }
-
-    fn remove(&mut self, node: &NodeRef) {
-        let pos = node.borrow().pos;
-        let coords = self.get_cell_coords(pos[0], pos[1]);
-        if let Some(nodes) = self.cells.get_mut(&coords) {
-            if let Some(pos) = nodes.iter().position(|n| Rc::ptr_eq(n, node)) {
-                nodes.swap_remove(pos);
-            }
-        }
-    }
-
-    /// Get nodes within radius of point
-    fn get(&self, pos: [f64; 2], radius: f64) -> Vec<NodeRef> {
-        let mut result = Vec::new();
-        let r_sq = radius * radius;
-        let min_c = self.get_cell_coords(pos[0] - radius, pos[1] - radius);
-        let max_c = self.get_cell_coords(pos[0] + radius, pos[1] + radius);
-
-        for cx in min_c.0..=max_c.0 {
-            for cy in min_c.1..=max_c.1 {
-                if let Some(nodes) = self.cells.get(&(cx, cy)) {
-                    for node in nodes {
-                        let node_pos = node.borrow().pos;
-                        let dx = node_pos[0] - pos[0];
-                        let dy = node_pos[1] - pos[1];
-                        if dx * dx + dy * dy <= r_sq {
-                            result.push(Rc::clone(node));
-                        }
-                    }
-                }
-            }
-        }
-        result
-    }
-
-    /// Find the best node within radius using a scoring function (avoids Vec allocation).
-    ///
-    /// The callback receives (node_ref, node_id, node_pos, distance_squared) and returns:
-    /// - Some(score) to consider this node as a candidate (lower score = better)
-    /// - None to skip this node
-    ///
-    /// Returns the node with the lowest score, or None if no candidates.
-    fn find_best_in_radius<F>(
-        &self,
-        pos: [f64; 2],
-        radius: f64,
-        mut score_fn: F,
-    ) -> Option<(NodeRef, f64)>
-    where
-        F: FnMut(&NodeRef, usize, [f64; 2], f64) -> Option<f64>,
-    {
-        let r_sq = radius * radius;
-        let min_c = self.get_cell_coords(pos[0] - radius, pos[1] - radius);
-        let max_c = self.get_cell_coords(pos[0] + radius, pos[1] + radius);
-
-        let mut best: Option<(NodeRef, f64)> = None;
-
-        for cx in min_c.0..=max_c.0 {
-            for cy in min_c.1..=max_c.1 {
-                if let Some(nodes) = self.cells.get(&(cx, cy)) {
-                    for node in nodes {
-                        let node_borrow = node.borrow();
-                        let node_pos = node_borrow.pos;
-                        let node_id = node_borrow.id;
-                        let node_deg = node_borrow.get_deg();
-                        drop(node_borrow); // Release borrow before callback
-
-                        let dx = node_pos[0] - pos[0];
-                        let dy = node_pos[1] - pos[1];
-                        let dist_sq = dx * dx + dy * dy;
-
-                        if dist_sq > r_sq {
-                            continue;
-                        }
-
-                        // Skip degree-0 nodes (matches C++ ndTest->getDeg() == 0 check)
-                        if node_deg == 0 {
-                            continue;
-                        }
-
-                        if let Some(score) = score_fn(node, node_id, node_pos, dist_sq) {
-                            match &best {
-                                None => best = Some((Rc::clone(node), score)),
-                                Some((_, best_score)) if score < *best_score => {
-                                    best = Some((Rc::clone(node), score));
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        best
-    }
-}
-
-// ===========================================================================
-// Build Support Graph (public API)
+// Build Support Graph
 // ===========================================================================
 
 /// Build the Support Graph from raw Shapes (Thesis Section 3.2).
@@ -502,38 +378,94 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     // Snap threshold for building initial graph
     let snap_threshold = 2.0; // 2 meters in Web Mercator
 
-    // Step 1: Build initial graph from raw edges (already in Web Mercator)
+    // =========================================================================
+    // SPATIAL PARTITIONING for Germany-scale networks
+    // Without this, processing all of Germany as one component causes OOM
+    // =========================================================================
+
+    // Step 1: Partition by geography using spatial grid (BEFORE node snapping)
+    // Grid size of 50km creates reasonable geographic regions
+    let grid_size_meters = 50000.0; // 50km grid cells
+    let components = partition_by_geography(raw_edges, grid_size_meters);
+
+    // Step 2: Further split large components using K-means + mode-aware cutting
+    let max_edges_per_cluster = 1000; // Target cluster size
+    let min_cluster_size = 50; // Minimum cluster size before consolidation
+    let mut all_clusters: Vec<Vec<GraphEdge>> = Vec::new();
+    for component in components {
+        let clusters = partition_large_component(component, max_edges_per_cluster);
+        all_clusters.extend(clusters);
+    }
+
+    // Step 3: Consolidate small clusters with adjacent ones
+    // This is critical because initial edges can be very long (ICE/TGV routes spanning
+    // hundreds of km) and K-means may create tiny clusters that explode during densification
+    all_clusters = consolidate_small_clusters(all_clusters, min_cluster_size);
+
     println!(
-        "Building initial LineGraph from {} raw edges...",
-        raw_edges.len()
+        "\n=== Processing {} clusters (after consolidation) ===",
+        all_clusters.len()
     );
-    let mut graph =
-        build_initial_linegraph_webmerc(&raw_edges, &mut node_id_counter, snap_threshold);
 
-    // Step 2: averageNodePositions (C++ line 128)
-    println!("Averaging node positions...");
-    average_node_positions(&mut graph);
+    // Offload clusters to disk to save memory
+    println!("Offloading clusters to disk to save memory...");
+    let mut partition_store = crate::partition_storage::PartitionStore::new()?;
+    let mut partition_handles = Vec::with_capacity(all_clusters.len());
+    for cluster in all_clusters {
+        partition_handles.push(partition_store.store_partition(&cluster)?);
+    }
+    // all_clusters is consumed and dropped here, freeing memory
 
-    // Step 3: removeNodeArtifacts(false) - contract degree-2 nodes (C++ line 131)
-    println!("Pre-collapse: removing node artifacts...");
-    collapse_degree_2_nodes_serial(&mut graph, normal_d_cut);
+    // Step 4: Process each cluster independently
+    let mut all_collapsed: Vec<GraphEdge> = Vec::new();
 
-    // Step 4: cleanUpGeoms (C++ line 133)
-    println!("Cleaning up geometries...");
-    clean_up_geoms(&graph);
+    for (cluster_idx, handle) in partition_handles.into_iter().enumerate() {
+        // Load cluster from disk
+        let cluster: Vec<GraphEdge> = partition_store.load_partition(&handle)?;
 
-    // Step 5: removeEdgeArtifacts - contract short edges (C++ line 142)
-    println!("Pre-collapse: removing edge artifacts...");
-    contract_short_edges(&mut graph, normal_d_cut);
+        println!(
+            "\n=== Processing cluster {}: {} edges ===",
+            cluster_idx + 1,
+            cluster.len()
+        );
 
-    // Step 6: Two passes of collapseShrdSegs (C++ lines 145-146)
-    println!("Running collapse pass 1 (tight threshold 10m)...");
-    let collapsed =
-        collapse_shared_segments_from_graph(&graph, tight_d_cut, seg_len, 50, &mut node_id_counter);
+        // Build initial graph for this cluster
+        let mut graph =
+            build_initial_linegraph_webmerc(&cluster, &mut node_id_counter, snap_threshold);
 
-    println!("Running collapse pass 2 (normal threshold 50m)...");
-    let mut collapsed =
-        collapse_shared_segments(collapsed, normal_d_cut, seg_len, 50, &mut node_id_counter);
+        // Pre-collapse cleanup
+        average_node_positions(&mut graph);
+        collapse_degree_2_nodes_serial(&mut graph, normal_d_cut);
+        clean_up_geoms(&graph);
+        contract_short_edges(&mut graph, normal_d_cut);
+
+        // Two passes of collapse (C++ lines 145-146)
+        let collapsed = collapse_shared_segments_from_graph(
+            &graph,
+            tight_d_cut,
+            seg_len,
+            50,
+            &mut node_id_counter,
+        );
+        graph.clear(); // Release memory from initial graph
+
+        let collapsed =
+            collapse_shared_segments(collapsed, normal_d_cut, seg_len, 50, &mut node_id_counter);
+
+        all_collapsed.extend(collapsed);
+
+        println!(
+            "Cluster {} complete. Total edges so far: {}",
+            cluster_idx + 1,
+            all_collapsed.len()
+        );
+    }
+
+    println!(
+        "\n=== All clusters processed: {} total edges ===",
+        all_collapsed.len()
+    );
+    let mut collapsed = all_collapsed;
 
     // =========================================================================
     // Post-Collapse Reconstruction (matches C++ TopoMain.cpp lines 164-186)
@@ -813,7 +745,9 @@ fn build_initial_linegraph_webmerc(
         // Use find_best_in_radius to find CLOSEST node without allocating a vector
         let from_node = {
             if let Some((existing, _)) =
-                geo_idx.find_best_in_radius(from_pos, snap_threshold, |_, _, _, d_sq| Some(d_sq))
+                geo_idx.find_best_in_radius(from_pos, snap_threshold, |_: &NodeRef, _, _, d_sq| {
+                    Some(d_sq)
+                })
             {
                 existing
             } else {
@@ -826,7 +760,9 @@ fn build_initial_linegraph_webmerc(
         // Find or create TO node
         let to_node = {
             if let Some((existing, _)) =
-                geo_idx.find_best_in_radius(to_pos, snap_threshold, |_, _, _, d_sq| Some(d_sq))
+                geo_idx.find_best_in_radius(to_pos, snap_threshold, |_: &NodeRef, _, _, d_sq| {
+                    Some(d_sq)
+                })
             {
                 existing
             } else {
@@ -1544,8 +1480,10 @@ fn nd_collapse_cand_impl(
     let d_cut_sq = effective_d_cut * effective_d_cut;
 
     // Use callback-based search to avoid Vec allocation (major perf win)
-    let best =
-        geo_idx.find_best_in_radius(point, effective_d_cut, |node, nd_id, _nd_pos, dist_sq| {
+    let best = geo_idx.find_best_in_radius(
+        point,
+        effective_d_cut,
+        |node: &NodeRef, nd_id, _nd_pos, dist_sq| {
             // Skip nodes in blocking set (already on this edge's path)
             if blocking_set.contains(&nd_id) {
                 return None;
@@ -1623,7 +1561,8 @@ fn nd_collapse_cand_impl(
             } else {
                 None
             }
-        });
+        },
+    );
 
     if let Some((nd_min, _score)) = best {
         // Update node position using WEIGHTED average (C++ uses midpoint, but weighted is smoother)
