@@ -221,15 +221,16 @@ fn jaccard_similarity(s1: &str, s2: &str) -> f64 {
 /// Prefix similarity: Check if one name is a prefix of the other (or very close)
 /// Helpful for cases like "London St Pancras" vs "London St Pancras International"
 fn prefix_similarity(s1: &str, s2: &str) -> f64 {
-    let len1 = s1.len();
-    let len2 = s2.len();
+    let chars1: Vec<char> = s1.chars().collect();
+    let chars2: Vec<char> = s2.chars().collect();
+    let len1 = chars1.len();
+    let len2 = chars2.len();
+
     if len1 == 0 || len2 == 0 {
         return 0.0;
     }
 
     let min_len = len1.min(len2);
-    let chars1: Vec<char> = s1.chars().collect();
-    let chars2: Vec<char> = s2.chars().collect();
 
     let mut common_prefix = 0;
     for i in 0..min_len {
