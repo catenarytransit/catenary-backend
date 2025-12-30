@@ -494,7 +494,6 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
 
     // =========================================================================
     // C++ TopoMain.cpp Pipeline (lines 128-185)
-    // All thresholds are now in METERS (matching C++ behaviour)
     // =========================================================================
     let tight_d_cut = 10.0; // 10 meters (C++ first pass: dCut=10)
     let normal_d_cut = 50.0; // 50 meters (C++ maxAggrDistance=50)
@@ -2305,7 +2304,8 @@ fn check_edge_angle_strict_antiparallel(a: &EdgeRef, b: &EdgeRef) -> bool {
 
 /// Matches C++ MapConstructor::supportEdge
 /// Split a long blocking edge 'ex' into two edges with a new support node in the middle.
-fn support_edge(ex: &EdgeRef, graph: &mut LineGraph) {
+/// Returns the ID of the new support node, or None if split failed.
+fn support_edge(ex: &EdgeRef, graph: &mut LineGraph) -> Option<usize> {
     let ex_borrow = ex.borrow();
     let from = Rc::clone(&ex_borrow.from);
     let to = Rc::clone(&ex_borrow.to);
@@ -2315,7 +2315,7 @@ fn support_edge(ex: &EdgeRef, graph: &mut LineGraph) {
     // Split geometry in half
     let geom_len = geom.len();
     if geom_len < 2 {
-        return;
+        return None;
     }
 
     // Simple split index (approximate middle)
@@ -2327,6 +2327,7 @@ fn support_edge(ex: &EdgeRef, graph: &mut LineGraph) {
     // Create support node
     let mid_coord = geom[mid_idx];
     let sup_nd = graph.add_nd([mid_coord.x, mid_coord.y]); // IDs are internal
+    let sup_id = sup_nd.borrow().id;
 
     // Create edge A: from -> sup_nd
     let geom_a = geom[0..=mid_idx].to_vec();
@@ -2364,6 +2365,8 @@ fn support_edge(ex: &EdgeRef, graph: &mut LineGraph) {
     // Used for edge provenance tracking in restriction inference and freeze/unfreeze operations.
     // The tracking maps new edges back to their original source edges for turn restriction inference.
     // Not critical for core geometry algorithm - topology is preserved without it.
+
+    Some(sup_id)
 }
 
 /// Combine two edges into one, removing the intermediate node 'n'.
@@ -3029,7 +3032,25 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) -> usize 
                 // support_edge modifies 'to' and 'other' adjacency lists.
                 // Ideally support_edge would return the new node ID, but we can verify later.
                 // For now, let's just run it.
-                support_edge(&block_ex, graph);
+                if let Some(new_node_id) = support_edge(&block_ex, graph) {
+                    if !in_worklist.contains(&new_node_id) {
+                        worklist.push_back(new_node_id);
+                        in_worklist.insert(new_node_id);
+                    }
+                    // Also add the endpoints of the split edge since their adjacencies changed
+                    // (They now connect to the new node instead of each other)
+                    let ex_from_id = block_ex.borrow().from.borrow().id;
+                    let ex_to_id = block_ex.borrow().to.borrow().id;
+
+                    if !in_worklist.contains(&ex_from_id) {
+                        worklist.push_back(ex_from_id);
+                        in_worklist.insert(ex_from_id);
+                    }
+                    if !in_worklist.contains(&ex_to_id) {
+                        worklist.push_back(ex_to_id);
+                        in_worklist.insert(ex_to_id);
+                    }
+                }
             }
 
             if dont_contract {
