@@ -110,6 +110,8 @@ struct LineNode {
     // Connection exceptions: lines that cannot continue between certain edge pairs at this node
     // Key: line_id, Value: Map of edge_id -> Set of forbidden target edge_ids
     conn_exc: AHashMap<(String, String), AHashMap<usize, AHashSet<usize>>>,
+    // Track how many points have been merged into this node for weighted centroid
+    merge_count: usize,
 }
 
 impl LineNode {
@@ -119,6 +121,7 @@ impl LineNode {
             pos,
             adj_list: Vec::new(),
             conn_exc: AHashMap::new(),
+            merge_count: 1, // Start at 1 - the initial point
         }
     }
 
@@ -1333,6 +1336,12 @@ fn collapse_shared_segments(
         println!("Contracting short edges...");
         contract_short_edges(&mut tg_new, d_cut);
 
+        // Phase 4.5: Stabilize intercity rail corridors
+        // Look ahead 500m to detect and fix flip-flop patterns where parallel
+        // intercity rail tracks split and re-merge rapidly
+        println!("Stabilizing intercity rail corridors...");
+        stabilize_intercity_rail_corridors(&mut tg_new, 500.0);
+
         // Phase 5: Re-collapse again (C++: lines 483-502)
         // May have introduced new degree-2 nodes
         println!("Contracting degree-2 nodes...");
@@ -1501,11 +1510,11 @@ fn nd_collapse_cand_impl(
     point: [f64; 2],
     span_a_pos: Option<[f64; 2]>,
     span_b_pos: Option<[f64; 2]>,
-    incoming_dir: Option<[f64; 2]>, // Direction vector from previous point to current point
+    _incoming_dir: Option<[f64; 2]>, // Unused - mode separation moved to line_eq
     geo_idx: &mut NodeGeoIdx,
     graph: &mut LineGraph,
 ) -> NodeRef {
-    // Use line-aware distance cutoff
+    // Use line-aware distance cutoff (C++ maxD - currently just returns d_cut)
     let effective_d_cut = max_d(num_lines, d_cut);
 
     // C++ lines 90-96: Calculate distance constraints from span endpoints
@@ -1546,9 +1555,13 @@ fn nd_collapse_cand_impl(
                 return None;
             }
 
-            // Route Mode Compatibility Check
-            // If the candidate node has routes with completely different modes than us,
-            // enforce a stricter threshold to discourage merging.
+            // HYSTERESIS - Check if this candidate node already has routes
+            // with matching modes. If so, use RELAXED thresholds to create "sticky"
+            // behavior that prevents oscillation between merge states.
+            //
+            // The idea: once a node starts accumulating routes of a certain mode,
+            // it becomes "sticky" for that mode - easier to keep merging similar modes,
+            // preventing the zigzag where a node alternates between being merged/not-merged.
             let mut node_modes = AHashSet::new();
             for edge_ref in &node.borrow().adj_list {
                 for occ in &edge_ref.borrow().routes {
@@ -1556,96 +1569,49 @@ fn nd_collapse_cand_impl(
                 }
             }
 
-            // HYSTERESIS: Check if this candidate node already has routes that share
-            // the same mode as us. If so, we're likely continuing an existing merge
-            // and should use relaxed thresholds to prevent oscillation.
-            let has_shared_mode_routes = !current_modes.is_empty()
+            let has_shared_mode = !current_modes.is_empty()
                 && !node_modes.is_empty()
                 && current_modes.intersection(&node_modes).next().is_some();
 
-            // If we have modes and the node has modes, check overlap
-            let mut threshold_sq = d_cut_sq;
-            let mut is_disjoint_modes = false;
-            if !current_modes.is_empty() && !node_modes.is_empty() {
-                // Check if any mode matches
-                let disjoint = current_modes.intersection(&node_modes).next().is_none();
-                if disjoint {
-                    is_disjoint_modes = true;
-                    // Modes are disjoint (e.g. Subway vs Commuter Rail).
-                    // Apply stricter threshold but not extreme - reduced from 10000x to 25x
-                    // to prevent valid parallel lines from being rejected.
-                    threshold_sq /= 25.0;
-                }
-            }
+            // Check if we're dealing with intercity rail (route_type 2)
+            // Intercity rail has wider corridors and needs larger merge thresholds
+            let has_intercity_rail = current_modes.contains(&2) || node_modes.contains(&2);
 
-            // PARALLELISM AND LONG-DISTANCE MERGE DETECTION
-            // For same-mode lines: reject sharp crossing angles
-            // For different-mode lines: ALLOW merging only if extremely parallel AND long distance
+            // Base threshold multiplier for intercity rail (corridors are much wider)
+            let mode_base_multiplier = if has_intercity_rail { 4.0 } else { 1.0 }; // 2x distance = 4x squared
+
+            // Determine threshold based on hysteresis state
+            // With weighted centroid, we can be more relaxed on thresholds
+            // The weighted averaging will stabilize positions naturally
             //
-            // Use span distances as proxy for shared segment length:
-            // If both span endpoints are far away (>400m each), we're in the middle of a
-            // long parallel section, making it likely these are truly shared tunnels/ROW.
-            const MIN_LONG_SEGMENT_DIST_SQ: f64 = 400.0 * 400.0; // 400 meters squared
-            let is_long_segment =
-                d_span_a_sq > MIN_LONG_SEGMENT_DIST_SQ && d_span_b_sq > MIN_LONG_SEGMENT_DIST_SQ;
+            // ANTI-FLIP-FLOP: For parallel tracks, use stronger hysteresis.
+            // Check merge_count to see if this node is already established (has absorbed points).
+            // Established nodes get even stickier behavior to prevent rapid state changes.
+            let merge_count = node.borrow().merge_count;
+            let is_established_node = merge_count >= 2;
 
-            if let Some(inc_dir) = incoming_dir {
-                let inc_len_sq = inc_dir[0] * inc_dir[0] + inc_dir[1] * inc_dir[1];
-                if inc_len_sq > 1e-10 {
-                    // Normalize incoming direction
-                    let inc_len = inc_len_sq.sqrt();
-                    let inc_norm = [inc_dir[0] / inc_len, inc_dir[1] / inc_len];
+            let threshold_sq = if has_shared_mode {
+                // Node already has matching modes - use RELAXED threshold
+                // Intercity rail: 2x base * 2.5x hysteresis = 5x total (25x squared)
+                // Other modes: 1x base * 2x hysteresis = 2x total (4x squared)
+                let hysteresis_mult = if is_established_node {
+                    // Strongly established - very sticky
+                    if has_intercity_rail { 6.25 } else { 4.0 } // 2.5² or 2²
+                } else {
+                    // Newly merged - moderately sticky
+                    if has_intercity_rail { 4.0 } else { 2.25 } // 2² or 1.5²
+                };
+                d_cut_sq * mode_base_multiplier * hysteresis_mult
+            } else if !current_modes.is_empty() && !node_modes.is_empty() {
+                // Node has DIFFERENT modes only - use VERY strict threshold (~0.316x)
+                // This strongly discourages rail/subway cross-mode merges
+                // For intercity rail crossing other modes, still be strict
+                d_cut_sq * 0.1 // sqrt(0.1) ≈ 0.316x normal distance
+            } else {
+                // Empty modes or new node - use base threshold (with mode multiplier)
+                d_cut_sq * mode_base_multiplier
+            };
 
-                    // Find max parallelism with any edge at this node
-                    let mut max_abs_cos: f64 = 0.0;
-
-                    for edge_ref in &node.borrow().adj_list {
-                        let edge = edge_ref.borrow();
-                        // Get direction from node to other endpoint
-                        let other_nd = if Rc::ptr_eq(&edge.from, &node) {
-                            &edge.to
-                        } else {
-                            &edge.from
-                        };
-                        let node_pos = node.borrow().pos;
-                        let other_pos = other_nd.borrow().pos;
-                        let edge_dir = [other_pos[0] - node_pos[0], other_pos[1] - node_pos[1]];
-                        let edge_len_sq = edge_dir[0] * edge_dir[0] + edge_dir[1] * edge_dir[1];
-
-                        if edge_len_sq > 1e-10 {
-                            let edge_len = edge_len_sq.sqrt();
-                            let edge_norm = [edge_dir[0] / edge_len, edge_dir[1] / edge_len];
-
-                            // Calculate angle via dot product
-                            let dot = inc_norm[0] * edge_norm[0] + inc_norm[1] * edge_norm[1];
-                            let abs_cos = dot.abs(); // We care about angle to either direction
-                            max_abs_cos = max_abs_cos.max(abs_cos);
-
-                            // NOTE: C++ does NOT apply angle-based penalties for same-mode lines.
-                            // The span constraints (dSpanA, dSpanB) and blocking set are sufficient
-                            // to prevent bad merges. Angle checks were causing oscillation for
-                            // parallel rail lines. Only apply angle checks for DISJOINT modes
-                            // (different route types) handled below.
-                        }
-                    }
-
-                    // For DISJOINT modes: allow merge ONLY if extremely parallel AND long segment
-                    // abs_cos > 0.966 means angle < 15 degrees (nearly parallel)
-                    // abs_cos > 0.985 means angle < 10 degrees (very parallel)
-                    if is_disjoint_modes && max_abs_cos > 0.966 && is_long_segment {
-                        // Lines are extremely parallel (<15°) and segment is long (>400m each way)
-                        // This is likely a shared tunnel/ROW like NYCT + LIRR East River tunnels
-                        // Relax the threshold back to normal (undo the /25 from above)
-                        threshold_sq *= 25.0;
-                        // Still apply a modest strictness factor (lines must be closer than usual)
-                        threshold_sq /= 4.0;
-                    } else if is_disjoint_modes && max_abs_cos < 0.985 {
-                        // Disjoint modes AND crossing angle - make stricter
-                        // Increased penalty to 20x (total 500x reduction) to prevent bad merges
-                        threshold_sq /= 20.0;
-                    }
-                }
-            }
             // C++ line 104: d < dSpanA && d < dSpanB && d < dMax && d < dBest
             // Compare squared distances to avoid sqrt
             if dist_sq < d_span_a_sq && dist_sq < d_span_b_sq && dist_sq < threshold_sq {
@@ -1656,9 +1622,16 @@ fn nd_collapse_cand_impl(
         });
 
     if let Some((nd_min, _score)) = best {
-        // Update node position to centroid
+        // Update node position using WEIGHTED centroid
+        // The more points already merged into this node, the more "anchored" it is
+        // This prevents zigzag oscillation from simple midpoint averaging
         let old_pos = nd_min.borrow().pos;
-        let new_pos = [(old_pos[0] + point[0]) / 2.0, (old_pos[1] + point[1]) / 2.0];
+        let k = nd_min.borrow().merge_count as f64;
+        // Weighted average: (k * old_pos + point) / (k + 1)
+        let new_pos = [
+            (k * old_pos[0] + point[0]) / (k + 1.0),
+            (k * old_pos[1] + point[1]) / (k + 1.0),
+        ];
 
         // ALWAYS remove and re-add (matching C++ behavior)
         // C++ lines 113-122: geoIdx.remove(ndMin); ... geoIdx.add(..., ret);
@@ -1666,6 +1639,7 @@ fn nd_collapse_cand_impl(
         // This ensures consistent neighbor lookups and avoids stale position data.
         geo_idx.remove(&nd_min);
         nd_min.borrow_mut().pos = new_pos;
+        nd_min.borrow_mut().merge_count += 1; // Increment merge count
         geo_idx.add(new_pos, Rc::clone(&nd_min));
 
         nd_min
@@ -1753,13 +1727,21 @@ fn combine_nodes(
     }
     let connecting = connecting.unwrap();
 
-    // Update b's position to centroid of a and b
+    // Update b's position using WEIGHTED centroid based on merge counts
+    // Nodes that have had more points merged are more "anchored"
     let a_pos = a.borrow().pos;
     let b_pos = b.borrow().pos;
-    let new_pos = [(a_pos[0] + b_pos[0]) / 2.0, (a_pos[1] + b_pos[1]) / 2.0];
+    let a_weight = a.borrow().merge_count as f64;
+    let b_weight = b.borrow().merge_count as f64;
+    let total_weight = a_weight + b_weight;
+    let new_pos = [
+        (a_weight * a_pos[0] + b_weight * b_pos[0]) / total_weight,
+        (a_weight * a_pos[1] + b_weight * b_pos[1]) / total_weight,
+    ];
 
     geo_idx.remove(b);
     b.borrow_mut().pos = new_pos;
+    b.borrow_mut().merge_count = (a_weight + b_weight) as usize; // Combined merge count
     geo_idx.add(new_pos, Rc::clone(b));
 
     // Process edges where 'a' is the FROM node
@@ -2134,9 +2116,11 @@ fn check_edge_angle_for_merge_lenient(a: &EdgeRef, b: &EdgeRef) -> bool {
 /// Matches C++ MapConstructor::lineEq
 ///
 /// Checks if two edges can be merged based on their routes and directions.
-/// NOTE: C++ uses connOccurs with connection exceptions. Since we don't have
-/// that data, we add a lenient angle check to reject only true X-crossings
-/// (near-perpendicular) while allowing Y/T junctions.
+///
+///  Mode-based route type checking replaces C++'s connOccurs.
+/// The C++ uses connection exceptions (connOccurs) to prevent bad merges.
+/// Since we generate connection exceptions dynamically, we use route type
+/// (mode) compatibility combined with angle checks to achieve the same effect.
 fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
     let a_routes = &a.borrow().routes;
     let b_routes = &b.borrow().routes;
@@ -2146,13 +2130,47 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
         return false;
     }
 
-    // 2. Very lenient angle check - only reject true perpendicular X-crossings
-    // Since we don't have C++'s connection exception data (connOccurs), we use
-    // angle as a proxy to detect crossings that shouldn't merge.
-    // Threshold 0.2 = reject angles >78° from parallel (near-perpendicular crossings)
-    // This allows Y-junctions (45°) and most fork patterns while preventing X-crossings.
-    if !check_edge_angle_for_merge_lenient(a, b) {
-        return false;
+    // 2. Mode compatibility check
+    // Collect route types from each edge
+    let a_modes: AHashSet<i32> = a_routes.iter().map(|r| r.route_type).collect();
+    let b_modes: AHashSet<i32> = b_routes.iter().map(|r| r.route_type).collect();
+
+    // Check if modes are completely disjoint (no overlap)
+    let modes_disjoint = !a_modes.is_empty()
+        && !b_modes.is_empty()
+        && a_modes.intersection(&b_modes).next().is_none();
+
+    // 3. Angle-based crossing detection
+    // For same-mode edges: use lenient angle check (allow Y-junctions)
+    // For different-mode edges: use stricter angle check (reject most crossings)
+    if modes_disjoint {
+        // Different route types (e.g. Subway vs Commuter Rail)
+        // Only allow merging if edges are nearly anti-parallel (through route)
+        // This prevents X-crossings and angled merges between different modes
+        if !check_edge_angle_strict_antiparallel(a, b) {
+            return false;
+        }
+
+        // MINIMUM SEGMENT LENGTH CHECK for disjoint modes
+        // Coordinates are in Web Mercator (EPSG:3857) where units are meters.
+        // Require at least 400m combined length for different route types to merge.
+        // This prevents short accidental merges at crossings while allowing
+        // long parallel shared right-of-way segments (like subway + commuter rail tunnels).
+        const MIN_DISJOINT_SEGMENT_LENGTH: f64 = 400.0; // meters
+
+        let len_a = calc_polyline_length(&a.borrow().geometry);
+        let len_b = calc_polyline_length(&b.borrow().geometry);
+        let combined_length = len_a + len_b;
+
+        if combined_length < MIN_DISJOINT_SEGMENT_LENGTH {
+            return false;
+        }
+    } else {
+        // Same or overlapping route types
+        // Use lenient angle check - only reject true perpendicular X-crossings
+        if !check_edge_angle_for_merge_lenient(a, b) {
+            return false;
+        }
     }
 
     // Identify shared node
@@ -2169,7 +2187,7 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
         return false;
     };
 
-    // 2. Check each line validation
+    // 4. Check each line validation
     for ra in a_routes {
         // Find corresponding line in b
         let rb = match b_routes.iter().find(|r| r.line_id == ra.line_id) {
@@ -2179,7 +2197,6 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
 
         // C++ line 57: if (!shrNd->pl().connOccurs(ra.line, a, b)) return false;
         // Check if connection is allowed at the shared node (no excluded connections).
-        // Currently always returns true since we don't have connection exception data.
         if !conn_occurs(&shr_nd, &ra.line_id, a, b) {
             return false;
         }
@@ -2216,6 +2233,34 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
     }
 
     true
+}
+
+/// Strict angle check for different-mode edges.
+/// Only allows merging if edges are nearly anti-parallel (through route pattern).
+/// This prevents X-crossings and angled intersections between different transit modes.
+/// Returns true if edges form a valid through-route (angle >160° i.e. <20° from straight).
+fn check_edge_angle_strict_antiparallel(a: &EdgeRef, b: &EdgeRef) -> bool {
+    // Find shared node
+    let shr_nd = if Rc::ptr_eq(&a.borrow().from, &b.borrow().from)
+        || Rc::ptr_eq(&a.borrow().from, &b.borrow().to)
+    {
+        Rc::clone(&a.borrow().from)
+    } else if Rc::ptr_eq(&a.borrow().to, &b.borrow().from)
+        || Rc::ptr_eq(&a.borrow().to, &b.borrow().to)
+    {
+        Rc::clone(&a.borrow().to)
+    } else {
+        return false;
+    };
+
+    let dir_a = get_edge_direction_from_node(a, &shr_nd);
+    let dir_b = get_edge_direction_from_node(b, &shr_nd);
+    let dot = dir_a.0 * dir_b.0 + dir_a.1 * dir_b.1;
+
+    // For anti-parallel (through route), dot product should be close to -1
+    // dot < -0.94 means angle > 160° (edges form nearly straight through-route)
+    // This is much stricter than the lenient check and only allows true through-routes
+    dot < -0.94
 }
 
 /// Matches C++ MapConstructor::supportEdge
@@ -2881,6 +2926,33 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) -> usize 
                             continue;
                         }
 
+                        // Y-JUNCTION TRIANGLE PREVENTION (MODE-AWARE):
+                        // Only block Y-angle contractions for DIFFERENT route types.
+                        // Same-mode Y-junctions should merge smoothly (they share track).
+                        let edge_modes: AHashSet<i32> =
+                            edge.borrow().routes.iter().map(|r| r.route_type).collect();
+                        let old_e_modes: AHashSet<i32> =
+                            old_e.borrow().routes.iter().map(|r| r.route_type).collect();
+                        let modes_disjoint = !edge_modes.is_empty()
+                            && !old_e_modes.is_empty()
+                            && edge_modes.intersection(&old_e_modes).next().is_none();
+
+                        if modes_disjoint {
+                            // Different route types - check if they form a Y-angle
+                            let dir_edge = get_edge_direction_from_node(&edge, &from);
+                            let dir_old_e = get_edge_direction_from_node(old_e, &from);
+                            let dot = dir_edge.0 * dir_old_e.0 + dir_edge.1 * dir_old_e.1;
+
+                            // If angle is in the 45°-135° range (Y-shape), don't contract
+                            // This prevents triangular artifacts at cross-mode junctions
+                            if dot.abs() < 0.707 {
+                                dont_contract = true;
+                                continue;
+                            }
+                        }
+                        // Same-mode edges: allow contraction regardless of angle
+                        // The weighted centroid will stabilize the position
+
                         if ex_len > support_threshold {
                             blocking_edges_to_split.push(Rc::clone(&ex));
                         } else {
@@ -2976,6 +3048,231 @@ fn contract_short_edges(graph: &mut LineGraph, max_aggr_distance: f64) -> usize 
     }
 
     total_contracted
+}
+
+/// Stabilize intercity rail corridors by looking ahead to prevent flip-flopping.
+///
+/// For intercity rail (route_type 2), parallel tracks often split and re-merge rapidly,
+/// creating a zigzag pattern. This function analyzes diverging intercity rail edges
+/// and looks ahead up to `look_ahead_distance` meters. If the tracks would re-converge
+/// within that distance, it forces them to stay merged instead of splitting.
+///
+/// Returns the number of stabilization merges performed.
+fn stabilize_intercity_rail_corridors(graph: &mut LineGraph, look_ahead_distance: f64) -> usize {
+    const INTERCITY_RAIL: i32 = 2;
+    let mut total_stabilized = 0;
+
+    // Build a node map for fast lookup
+    let node_map: AHashMap<usize, NodeRef> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.borrow().id, Rc::clone(n)))
+        .collect();
+
+    // Find all junction nodes (degree > 2) that have intercity rail edges diverging
+    let junction_nodes: Vec<NodeRef> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.borrow().get_deg() > 2)
+        .map(Rc::clone)
+        .collect();
+
+    for junction in &junction_nodes {
+        // Skip dead nodes
+        if junction.borrow().get_deg() == 0 {
+            continue;
+        }
+
+        // Find all outgoing intercity rail edges from this junction
+        let adj_list = junction.borrow().adj_list.clone();
+        let intercity_edges: Vec<EdgeRef> = adj_list
+            .iter()
+            .filter(|e| {
+                e.borrow()
+                    .routes
+                    .iter()
+                    .any(|r| r.route_type == INTERCITY_RAIL)
+            })
+            .map(Rc::clone)
+            .collect();
+
+        // Check pairs of diverging intercity rail edges
+        for i in 0..intercity_edges.len() {
+            for j in i + 1..intercity_edges.len() {
+                let edge_a = &intercity_edges[i];
+                let edge_b = &intercity_edges[j];
+
+                // Get the "other" nodes (where these edges lead to)
+                let other_a = edge_a.borrow().get_other_nd(junction);
+                let other_b = edge_b.borrow().get_other_nd(junction);
+
+                // Skip if they go to the same node (already merged)
+                if Rc::ptr_eq(&other_a, &other_b) {
+                    continue;
+                }
+
+                // Check if edges are diverging (not parallel)
+                // Get directions of edges leaving the junction
+                let dir_a = get_edge_direction_from_node(edge_a, junction);
+                let dir_b = get_edge_direction_from_node(edge_b, junction);
+                let dot = dir_a.0 * dir_b.0 + dir_a.1 * dir_b.1;
+
+                // If edges are going in nearly opposite directions, skip
+                // (they're not a diverging pair, they go different ways)
+                if dot < -0.5 {
+                    continue;
+                }
+
+                // Look ahead from both edges to see if they reconverge
+                let reconverge_distance = find_reconvergence_distance(
+                    graph,
+                    junction,
+                    &other_a,
+                    &other_b,
+                    look_ahead_distance,
+                    &node_map,
+                );
+
+                if let Some(dist) = reconverge_distance {
+                    // Tracks reconverge within look_ahead_distance!
+                    // This is a flip-flop pattern - force merge
+
+                    // Merge the two "other" nodes
+                    // Create a dummy geo_idx just for this merge
+                    let mut dummy_idx = NodeGeoIdx::new(look_ahead_distance);
+                    dummy_idx.add(other_a.borrow().pos, Rc::clone(&other_a));
+                    dummy_idx.add(other_b.borrow().pos, Rc::clone(&other_b));
+
+                    if combine_nodes(&other_a, &other_b, graph, &mut dummy_idx) {
+                        total_stabilized += 1;
+                        // println!(
+                        //     "  Stabilized intercity rail: merged nodes at distance {:.1}m",
+                        //     dist
+                        // );
+                    }
+                }
+            }
+        }
+    }
+
+    if total_stabilized > 0 {
+        println!(
+            "  Stabilized {} intercity rail flip-flop patterns.",
+            total_stabilized
+        );
+        graph.nodes.retain(|n| n.borrow().get_deg() > 0);
+    }
+
+    total_stabilized
+}
+
+/// Trace paths from two nodes to see if they reconverge within max_distance.
+/// Returns Some(distance) if they reconverge, None otherwise.
+fn find_reconvergence_distance(
+    _graph: &LineGraph,
+    start_junction: &NodeRef,
+    node_a: &NodeRef,
+    node_b: &NodeRef,
+    max_distance: f64,
+    node_map: &AHashMap<usize, NodeRef>,
+) -> Option<f64> {
+    // BFS from both nodes simultaneously, tracking visited nodes and distances
+    // If we find a node reachable from both, they reconverge
+
+    let mut visited_a: AHashMap<usize, f64> = AHashMap::new();
+    let mut visited_b: AHashMap<usize, f64> = AHashMap::new();
+
+    let start_id = start_junction.borrow().id;
+    visited_a.insert(start_id, 0.0);
+    visited_b.insert(start_id, 0.0);
+
+    // Worklist entries: (node, accumulated_distance)
+    let mut queue_a: VecDeque<(NodeRef, f64)> = VecDeque::new();
+    let mut queue_b: VecDeque<(NodeRef, f64)> = VecDeque::new();
+
+    queue_a.push_back((Rc::clone(node_a), 0.0));
+    queue_b.push_back((Rc::clone(node_b), 0.0));
+    visited_a.insert(node_a.borrow().id, 0.0);
+    visited_b.insert(node_b.borrow().id, 0.0);
+
+    // Process both queues alternately
+    while !queue_a.is_empty() || !queue_b.is_empty() {
+        // Process one node from queue A
+        if let Some((current, dist)) = queue_a.pop_front() {
+            if dist > max_distance {
+                continue;
+            }
+
+            let current_id = current.borrow().id;
+
+            // Check if this node was reached by path B
+            if let Some(&dist_b) = visited_b.get(&current_id) {
+                // Found reconvergence!
+                return Some(dist + dist_b);
+            }
+
+            // Explore neighbors
+            let adj_list = current.borrow().adj_list.clone();
+            for edge in &adj_list {
+                let neighbor = edge.borrow().get_other_nd(&current);
+                let neighbor_id = neighbor.borrow().id;
+
+                // Don't go back to start
+                if neighbor_id == start_id {
+                    continue;
+                }
+
+                let edge_len = calc_polyline_length(&edge.borrow().geometry);
+                let new_dist = dist + edge_len;
+
+                if new_dist <= max_distance {
+                    if !visited_a.contains_key(&neighbor_id) || visited_a[&neighbor_id] > new_dist {
+                        visited_a.insert(neighbor_id, new_dist);
+                        queue_a.push_back((neighbor, new_dist));
+                    }
+                }
+            }
+        }
+
+        // Process one node from queue B
+        if let Some((current, dist)) = queue_b.pop_front() {
+            if dist > max_distance {
+                continue;
+            }
+
+            let current_id = current.borrow().id;
+
+            // Check if this node was reached by path A
+            if let Some(&dist_a) = visited_a.get(&current_id) {
+                // Found reconvergence!
+                return Some(dist + dist_a);
+            }
+
+            // Explore neighbors
+            let adj_list = current.borrow().adj_list.clone();
+            for edge in &adj_list {
+                let neighbor = edge.borrow().get_other_nd(&current);
+                let neighbor_id = neighbor.borrow().id;
+
+                // Don't go back to start
+                if neighbor_id == start_id {
+                    continue;
+                }
+
+                let edge_len = calc_polyline_length(&edge.borrow().geometry);
+                let new_dist = dist + edge_len;
+
+                if new_dist <= max_distance {
+                    if !visited_b.contains_key(&neighbor_id) || visited_b[&neighbor_id] > new_dist {
+                        visited_b.insert(neighbor_id, new_dist);
+                        queue_b.push_back((neighbor, new_dist));
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Get orthogonal line at a fraction along a polyline (for handle-based restrictions)
