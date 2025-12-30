@@ -66,7 +66,17 @@
                 'source-layer': 'transit',
                 paint: {
                     'line-color': ['get', 'color'],
-                    'line-width': 4,
+                    'line-width': [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        7,
+                        1.5,
+                        10,
+                        2,
+                        14,
+                        4
+                    ],
                     'line-opacity': 0.8
                 },
                 layout: {
