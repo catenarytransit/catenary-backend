@@ -1622,24 +1622,19 @@ fn nd_collapse_cand_impl(
         });
 
     if let Some((nd_min, _score)) = best {
-        // Update node position using WEIGHTED centroid
-        // The more points already merged into this node, the more "anchored" it is
-        // This prevents zigzag oscillation from simple midpoint averaging
+        // Update node position using simple MIDPOINT centroid (Match C++ util::geo::centroid logic)
+        // C++: ndMin->pl().setGeom(util::geo::centroid(util::geo::LineSegment<double>(*ndMin->pl().getGeom(), point)));
+        // This is a simple average of the current position and the new point: (old + new) / 2
+        // We do NOT use weighted average based on merge_count, as that causes nodes to become "sticky"
+        // and prevents them from drifting to the true geometric center of the cluster.
+
         let old_pos = nd_min.borrow().pos;
-        let k = nd_min.borrow().merge_count as f64;
-        // Weighted average: (k * old_pos + point) / (k + 1)
-        let new_pos = [
-            (k * old_pos[0] + point[0]) / (k + 1.0),
-            (k * old_pos[1] + point[1]) / (k + 1.0),
-        ];
+        let new_pos = [(old_pos[0] + point[0]) / 2.0, (old_pos[1] + point[1]) / 2.0];
 
         // ALWAYS remove and re-add (matching C++ behavior)
-        // C++ lines 113-122: geoIdx.remove(ndMin); ... geoIdx.add(..., ret);
-        // The C++ always removes then re-adds regardless of cell position.
-        // This ensures consistent neighbor lookups and avoids stale position data.
         geo_idx.remove(&nd_min);
         nd_min.borrow_mut().pos = new_pos;
-        nd_min.borrow_mut().merge_count += 1; // Increment merge count
+        nd_min.borrow_mut().merge_count += 1;
         geo_idx.add(new_pos, Rc::clone(&nd_min));
 
         nd_min
@@ -1727,21 +1722,16 @@ fn combine_nodes(
     }
     let connecting = connecting.unwrap();
 
-    // Update b's position using WEIGHTED centroid based on merge counts
-    // Nodes that have had more points merged are more "anchored"
+    // Update b's position using simple MIDPOINT centroid (Match C++ MapConstructor::combineNodes)
+    // C++ line 761: b->pl().setGeom(util::geo::centroid(util::geo::LineSegment<double>(*a->pl().getGeom(), *b->pl().getGeom())));
     let a_pos = a.borrow().pos;
     let b_pos = b.borrow().pos;
-    let a_weight = a.borrow().merge_count as f64;
-    let b_weight = b.borrow().merge_count as f64;
-    let total_weight = a_weight + b_weight;
-    let new_pos = [
-        (a_weight * a_pos[0] + b_weight * b_pos[0]) / total_weight,
-        (a_weight * a_pos[1] + b_weight * b_pos[1]) / total_weight,
-    ];
+
+    let new_pos = [(a_pos[0] + b_pos[0]) / 2.0, (a_pos[1] + b_pos[1]) / 2.0];
 
     geo_idx.remove(b);
     b.borrow_mut().pos = new_pos;
-    b.borrow_mut().merge_count = (a_weight + b_weight) as usize; // Combined merge count
+    b.borrow_mut().merge_count += a.borrow().merge_count; // Sum counts (though unused for pos now)
     geo_idx.add(new_pos, Rc::clone(b));
 
     // Process edges where 'a' is the FROM node
@@ -2153,10 +2143,11 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
 
         // MINIMUM SEGMENT LENGTH CHECK for disjoint modes
         // Coordinates are in Web Mercator (EPSG:3857) where units are meters.
-        // Require at least 400m combined length for different route types to merge.
+        // Require at least 800m combined length for different route types to merge.
         // This prevents short accidental merges at crossings while allowing
         // long parallel shared right-of-way segments (like subway + commuter rail tunnels).
-        const MIN_DISJOINT_SEGMENT_LENGTH: f64 = 400.0; // meters
+        // User requested this be increased to make merging harder.
+        const MIN_DISJOINT_SEGMENT_LENGTH: f64 = 800.0; // meters
 
         let len_a = calc_polyline_length(&a.borrow().geometry);
         let len_b = calc_polyline_length(&b.borrow().geometry);
@@ -2646,8 +2637,22 @@ fn geom_avg(geom_a: &[Coord], weight_a: usize, geom_b: &[Coord], weight_b: usize
         return geom_a.to_vec();
     }
 
-    // Resample both geometries to same number of points
-    let num_points = geom_a.len().max(geom_b.len()).max(5);
+    // Resample both geometries to same number of points based on LENGTH (Match C++)
+    // C++ PolyLine::average uses AVERAGING_STEP = 20.0
+    // It samples at 0, 20, 40... meters.
+    // This acts as a LOW-PASS FILTER, ignoring high-frequency zigzags < 20m.
+
+    let len_a = calc_polyline_length(geom_a);
+    let len_b = calc_polyline_length(geom_b);
+    let max_len = len_a.max(len_b);
+
+    // Calculate number of steps based on 20m interval
+    // Ensure at least 2 points (start/end)
+    // num_segments = ceil(len / step)
+    // num_points = num_segments + 1
+    let num_points = (max_len / 20.0).ceil() as usize + 1;
+    let num_points = num_points.max(2);
+
     let resampled_a = resample_polyline(geom_a, num_points);
     let resampled_b = resample_polyline(geom_b, num_points);
 
@@ -2668,8 +2673,12 @@ fn geom_avg(geom_a: &[Coord], weight_a: usize, geom_b: &[Coord], weight_b: usize
         });
     }
 
+    // Apply Chaikin smoothing to eliminate "shakiness"
+    // Depth 1 is subtle, Depth 2 is strong.
+    let smoothed = chaikin_smooth_coords(&result, 1);
+
     // Simplify the result
-    simplify_coords(&result, 0.5)
+    simplify_coords(&smoothed, 0.5)
 }
 
 /// Resample a polyline to have exactly n points
