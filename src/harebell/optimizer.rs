@@ -2681,30 +2681,6 @@ impl Optimizer {
                 } else if edge.to == old_v {
                     edge.to = new_v;
                 }
-                // Geometry adjustment?
-                // Visually we want it to touch the station?
-                // If we detach, we might lose connectivity for rendering (dots might not connect).
-                // However, for *Optimization* (Line Ordering), this is crucial.
-                // The rendering code draws lines based on Edge geometry + offsets.
-                // If the edge ends at `new_v` (which is at same coord as `old_v`), it looks fine.
-                // BUT, `new_v` is not `old_v`.
-                // If `old_v` draws a "Station Dot", `new_v` won't be part of it?
-                // Or maybe it will?
-                // If harebell merges nodes by distance or something...
-                // Actually, Cutting Rule 2 is for Line Order Optimization.
-                // If we persist this change to `RenderGraph` for final export, we might break connectivity in the MVT?
-                // The MVT generator likely iterates edges.
-                // If the edge ends at `new_v` (same lat/lon), the line geometry is fine.
-                // But topological connectivity is broken.
-                // This is INTENTIONAL for simplification.
-                // Does it break anything else?
-                // Maybe "Transfers" or "Interchanges" logic?
-                // If we assume this simplification happens *only* for the purpose of calculating offsets,
-                // and we map back results?
-                // But here we are modifying `RenderGraph` in place.
-                // The logic assumes `RenderGraph` is malleable.
-
-                // Let's stick to the plan.
             }
         }
 

@@ -88,9 +88,11 @@ async fn main() -> std::io::Result<()> {
             println!("Rebuilding spatial indices after optimization...");
             graph.rebuild_indices();
 
+            println!("Generating tiles...");
+
             let generator = generator::Generator::new("tiles_output".to_string());
             generator
-                .generate_all(&graph, 5, 17)
+                .generate_all(&graph, 5, 16)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
             println!("Generation Complete!");

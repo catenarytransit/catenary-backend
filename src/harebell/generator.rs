@@ -59,7 +59,7 @@ impl Generator {
             }
         }
 
-        info!("Generating {} tiles for zoom level {}", tiles.len(), z);
+        println!("Generating {} tiles for zoom level {}", tiles.len(), z);
 
         let tile_vec: Vec<(u32, u32)> = tiles.into_iter().collect();
 
