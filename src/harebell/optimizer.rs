@@ -184,7 +184,8 @@ impl Optimizer {
             }
 
             // Sub-divide component using Articulation Points to "break problems up more"
-            if component.len() > 100 {
+            // Lowered threshold from 100 to 40 for better subdivisions
+            if component.len() > 40 {
                 let sub_components = self.split_by_articulation_points(&component, &adj);
                 components.extend(sub_components);
             } else {
@@ -251,9 +252,9 @@ impl Optimizer {
                 continue;
             }
 
-            // For very large solution spaces (> 1e12), skip ILP entirely to avoid OOM
-            // This is a safety limit beyond what C++ handles
-            if solution_space > 1e12 || size > 50 {
+            // For very large solution spaces, use greedy instead of ILP to avoid OOM
+            // Lowered thresholds: size > 30 or solution_space > 1e10
+            if solution_space > 1e10 || size > 30 {
                 println!(
                     "Component {}/{} (Size: {} edges, SolSpace: {:.0}) too large for ILP, using greedy.",
                     i + 1,
@@ -278,6 +279,14 @@ impl Optimizer {
             );
             if let Some(res) = self.solve_component(graph, component, &node_to_all_edges) {
                 global_results.extend(res);
+            } else {
+                // ILP failed, use greedy fallback
+                println!("  - ILP failed, using greedy fallback.");
+                for &edge_idx in component {
+                    let mut lines = graph.edges[edge_idx].lines.clone();
+                    lines.sort_by(|a, b| a.line_id.cmp(&b.line_id));
+                    global_results.insert(edge_idx, lines);
+                }
             }
             println!("Component {}/{} solved.", i + 1, total_components);
         }
@@ -302,6 +311,13 @@ impl Optimizer {
         println!("Decomposed ILP Optimization complete.");
     }
 
+    /// Solve a component using ILP formulation matching C++ loom's ILPEdgeOrderOptimizer.
+    ///
+    /// Key changes from previous implementation:
+    /// 1. Position vars use cumulative semantics: x_(l, p<=k) means "line l has position <= k"
+    /// 2. Oracle vars linked via linear constraint instead of Big-M:
+    ///    m * x_{A<B} + sum_p(x_A_p<=p - x_B_p<=p) >= 0
+    /// 3. Crossing detection uses: decVar >= |x_{A<B}^e1 - x_{A<B}^e2|
     fn solve_component(
         &self,
         graph: &RenderGraph,
@@ -309,90 +325,104 @@ impl Optimizer {
         node_to_all_edges: &HashMap<i64, Vec<usize>>,
     ) -> Option<HashMap<usize, Vec<LineOnEdge>>> {
         let mut vars = ProblemVariables::new();
-        let mut range_vars: HashMap<(usize, usize, usize), Variable> = HashMap::new();
+        // Position vars: (edge, line_idx, p) -> binary, meaning "line's position <= p"
+        // Note: p is 0-indexed here to match C++ (0..n-1)
+        let mut pos_vars: HashMap<(usize, usize, usize), Variable> = HashMap::new();
+        // Oracle vars: (edge, line_a, line_b) -> binary, meaning "line_a < line_b"
         let mut oracle_vars: HashMap<(usize, usize, usize), Variable> = HashMap::new();
         let mut constraints = Vec::new();
         let mut objective: Expression = 0.into();
-        // Compute dynamic Big-M based on the maximum number of lines in any edge of this component
-        let max_lines = edge_indices
+
+        // Find max cardinality across all edges in component (needed for oracle linking)
+        let max_cardinality = edge_indices
             .iter()
             .map(|&idx| graph.edges[idx].lines.len())
             .max()
             .unwrap_or(0);
 
-        // M must be > max possible difference in ranks (which is max_lines).
-        // We use max_lines + 2 to be safe.
-        let big_m = (max_lines + 2) as f64;
-
-        // --- A. Setup Variables (only for component edges) ---
+        // --- A. Setup Position Variables (matching C++ createProblem) ---
         for &edge_idx in edge_indices {
             let edge = &graph.edges[edge_idx];
             let n = edge.lines.len(); // Known >= 2
 
+            // For each line l and position p (0-indexed), create x_(edge, l, p<=p)
             for l_idx in 0..n {
-                for p in 1..=n {
+                for p in 0..n {
                     let v = vars.add(variable().binary());
-                    range_vars.insert((edge_idx, l_idx, p), v);
+                    pos_vars.insert((edge_idx, l_idx, p), v);
 
-                    // Monotonicity
-                    if p > 1 {
-                        let v_prev = range_vars.get(&(edge_idx, l_idx, p - 1)).unwrap();
+                    // Monotonicity constraint: x_(l, p<=k) >= x_(l, p<=k-1)
+                    // In C++: lp->addRow(..., 0, shared::optim::LO); x_p - x_{p-1} >= 0
+                    if p > 0 {
+                        let v_prev = pos_vars.get(&(edge_idx, l_idx, p - 1)).unwrap();
                         constraints.push((v.into_expression() - *v_prev).geq(0));
                     }
                 }
             }
-            // Uniqueness
-            for p in 1..=n {
+
+            // Uniqueness constraint: sum over all lines of x_(l, p<=k) = k+1
+            // This ensures exactly k+1 lines have position <= k
+            for p in 0..n {
                 let mut sum_expr: Expression = 0.into();
                 for l_idx in 0..n {
-                    sum_expr += range_vars.get(&(edge_idx, l_idx, p)).unwrap();
+                    sum_expr += pos_vars.get(&(edge_idx, l_idx, p)).unwrap();
                 }
-                constraints.push(sum_expr.eq(p as f64));
+                constraints.push(sum_expr.eq((p + 1) as f64));
+            }
+        }
+
+        // --- B. Setup Oracle Variables (matching C++ writeCrossingOracle) ---
+        for &edge_idx in edge_indices {
+            let edge = &graph.edges[edge_idx];
+            let n = edge.lines.len();
+
+            // Create oracle variables for all line pairs
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    // x_(edge, i < j) - "line i is before line j"
+                    let x_ij = vars.add(variable().binary());
+                    oracle_vars.insert((edge_idx, i, j), x_ij);
+
+                    // x_(edge, j < i) - "line j is before line i"
+                    let x_ji = vars.add(variable().binary());
+                    oracle_vars.insert((edge_idx, j, i), x_ji);
+
+                    // Antisymmetry: x_ij + x_ji = 1 (exactly one must be true)
+                    constraints.push((x_ij.into_expression() + x_ji).eq(1.0));
+                }
             }
 
-            // Oracle Vars
+            // Link oracle vars to position vars (matching C++ "sum constraint")
+            // Constraint: m * x_{A<B} + sum_p(x_A_p<=p - x_B_p<=p) >= 0
+            // This ensures: if A < B (x_{A<B}=1), constraint satisfied trivially
+            //               if A >= B (x_{A<B}=0), then sum(x_A - x_B) >= 0 means pos(A) <= pos(B)
             for i in 0..n {
                 for j in 0..n {
                     if i == j {
                         continue;
                     }
-                    let v_oracle = vars.add(variable().binary());
-                    oracle_vars.insert((edge_idx, i, j), v_oracle);
-                }
-            }
-            // Oracle Constraints
-            for i in 0..n {
-                for j in 0..n {
-                    if i == j {
-                        continue;
-                    }
-                    let x_ji = oracle_vars.get(&(edge_idx, j, i)).unwrap();
+
                     let x_ij = oracle_vars.get(&(edge_idx, i, j)).unwrap();
 
-                    let mut sum_i: Expression = 0.into();
-                    let mut sum_j: Expression = 0.into();
-                    for p in 1..=n {
-                        sum_i += range_vars.get(&(edge_idx, i, p)).unwrap();
-                        sum_j += range_vars.get(&(edge_idx, j, p)).unwrap();
+                    // Build: m * x_ij + sum_p(x_i_p - x_j_p) >= 0
+                    let mut expr: Expression = x_ij.into_expression() * (max_cardinality as f64);
+                    for p in 0..n {
+                        let x_i_p = pos_vars.get(&(edge_idx, i, p)).unwrap();
+                        let x_j_p = pos_vars.get(&(edge_idx, j, p)).unwrap();
+                        expr = expr + *x_i_p - *x_j_p;
                     }
-
-                    constraints.push((sum_i - sum_j + x_ji.into_expression() * big_m).geq(0));
-                    constraints.push((x_ij.into_expression() + *x_ji).eq(1));
+                    constraints.push(expr.geq(0));
                 }
             }
 
-            // --- A2. Group Convexity Constraints ---
-            // "We do this before the ILP step so that way the ILP processor works with groups like NQR together."
+            // --- B2. Group Convexity Constraints ---
             // Enforce that lines within the same group are contiguous.
             if n >= 3 {
                 let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
                 for (i, line) in edge.lines.iter().enumerate() {
-                    // Use group_id if available, otherwise fallback to color grouping
-                    // This is critical for interlining where we want lines of same color to stay together
                     let key = if let Some(gid) = &line.group_id {
                         gid.clone()
                     } else {
-                        // Use color as grouping key. Prefix with "color:" to avoid collision with explicit IDs if any
                         format!("color:{}", line.color)
                     };
                     groups.entry(key).or_default().push(i);
@@ -415,19 +445,22 @@ impl Optimizer {
                                     continue;
                                 }
 
-                                // Forbid i < k < j => x_ij + x_ik + x_kj <= 2
-                                let x_ij = oracle_vars.get(&(edge_idx, i, j)).unwrap();
-                                let x_ik = oracle_vars.get(&(edge_idx, i, k)).unwrap();
-                                let x_kj = oracle_vars.get(&(edge_idx, k, j)).unwrap();
+                                // Forbid i < k < j => x_ik + x_kj <= 1
+                                // (if both i<k and k<j, then k is between i and j)
+                                if let (Some(x_ik), Some(x_kj)) = (
+                                    oracle_vars.get(&(edge_idx, i, k)),
+                                    oracle_vars.get(&(edge_idx, k, j)),
+                                ) {
+                                    constraints.push((x_ik.into_expression() + *x_kj).leq(1.0));
+                                }
 
-                                constraints.push((x_ij.into_expression() + *x_ik + *x_kj).leq(2.0));
-
-                                // Forbid j < k < i => x_ji + x_jk + x_ki <= 2
-                                let x_ji = oracle_vars.get(&(edge_idx, j, i)).unwrap();
-                                let x_jk = oracle_vars.get(&(edge_idx, j, k)).unwrap();
-                                let x_ki = oracle_vars.get(&(edge_idx, k, i)).unwrap();
-
-                                constraints.push((x_ji.into_expression() + *x_jk + *x_ki).leq(2.0));
+                                // Forbid j < k < i => x_jk + x_ki <= 1
+                                if let (Some(x_jk), Some(x_ki)) = (
+                                    oracle_vars.get(&(edge_idx, j, k)),
+                                    oracle_vars.get(&(edge_idx, k, i)),
+                                ) {
+                                    constraints.push((x_jk.into_expression() + *x_ki).leq(1.0));
+                                }
                             }
                         }
                     }
@@ -721,7 +754,9 @@ impl Optimizer {
 
         println!("  - Solver completed.");
 
-        // Collect results
+        // Collect results - extract positions from cumulative pos_vars
+        // For each line, position = sum over p of x_(l, p<=p)
+        // (Higher sum means higher/later position, lower sum means earlier position)
         let mut component_results = HashMap::new();
         for &edge_idx in edge_indices {
             let edge = &graph.edges[edge_idx];
@@ -729,14 +764,15 @@ impl Optimizer {
             let mut ranks: Vec<(usize, f64)> = Vec::new();
             for i in 0..n {
                 let mut rank_sum = 0.0;
-                for p in 1..=n {
-                    if let Some(v) = range_vars.get(&(edge_idx, i, p)) {
+                for p in 0..n {
+                    if let Some(v) = pos_vars.get(&(edge_idx, i, p)) {
                         rank_sum += solution.value(*v);
                     }
                 }
                 ranks.push((i, rank_sum));
             }
 
+            // Sort by rank_sum descending (higher sum = later position = appears later in array)
             let mut line_indices: Vec<usize> = (0..n).collect();
             line_indices.sort_by(|&a, &b| {
                 let sum_a = ranks.iter().find(|(idx, _)| *idx == a).unwrap().1;
