@@ -232,15 +232,9 @@ async fn try_to_download(
 
     if url.contains("api.odpt.org") && !url.contains("acl:consumerKey") {
         let mut url_with_key = new_url.clone();
-        if url_with_key.contains("?") {
-            url_with_key.push_str(
-                "&acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e",
-            );
-        } else {
-            url_with_key.push_str(
-                "?acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e",
-            );
-        }
+        let separator = if url_with_key.contains('?') { '&' } else { '?' };
+        url_with_key.push(separator);
+        url_with_key.push_str("acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e");
         return client.get(&url_with_key).send().await;
     }
 
@@ -717,8 +711,9 @@ fn transform_for_bay_area(x: String) -> String {
 
     if x.contains("api.511.org") {
         let mut a = x;
-
-        a.push_str("&api_key=094f6bc5-9d6a-4529-bfb3-6f1bc4d809d9");
+        let separator = if a.contains('?') { '&' } else { '?' };
+        a.push(separator);
+        a.push_str("api_key=094f6bc5-9d6a-4529-bfb3-6f1bc4d809d9");
 
         a
     } else {
