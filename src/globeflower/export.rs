@@ -43,7 +43,11 @@ pub fn extract_and_export(
             from: convert_node_id(e.from),
             to: convert_node_id(e.to),
             geometry: e.geometry.points.iter().map(|p| [p.x, p.y]).collect(),
-            route_ids: e.routes.iter().map(|(c, r, _)| (c.clone(), r.clone())).collect(),
+            route_ids: e
+                .routes
+                .iter()
+                .map(|(c, r, _)| (c.clone(), r.clone()))
+                .collect(),
             weight: e.weight,
             original_edge_index: e.original_edge_index,
         })
@@ -69,6 +73,7 @@ fn convert_node_id(id: NodeId) -> SerialNodeId {
     match id {
         NodeId::Cluster(i) => SerialNodeId::Cluster(i),
         NodeId::Intersection(i) => SerialNodeId::Intersection(i),
+        NodeId::Split(e, s) => SerialNodeId::Split(e, s),
     }
 }
 

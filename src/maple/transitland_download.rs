@@ -156,7 +156,7 @@ fn make_reqwest_client() -> reqwest::Client {
 
 /// Creates a client that better mimics a real browser to bypass anti-bot systems
 fn make_browser_like_client() -> reqwest::Client {
-    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE};
+    use reqwest::header::{ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, HeaderMap, HeaderValue};
 
     let mut default_headers = HeaderMap::new();
     default_headers.insert(
@@ -166,15 +166,15 @@ fn make_browser_like_client() -> reqwest::Client {
         ),
     );
     default_headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
-    default_headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip, deflate, br"));
+    default_headers.insert(
+        ACCEPT_ENCODING,
+        HeaderValue::from_static("gzip, deflate, br"),
+    );
     default_headers.insert("Sec-Fetch-Dest", HeaderValue::from_static("document"));
     default_headers.insert("Sec-Fetch-Mode", HeaderValue::from_static("navigate"));
     default_headers.insert("Sec-Fetch-Site", HeaderValue::from_static("none"));
     default_headers.insert("Sec-Fetch-User", HeaderValue::from_static("?1"));
-    default_headers.insert(
-        "Upgrade-Insecure-Requests",
-        HeaderValue::from_static("1"),
-    );
+    default_headers.insert("Upgrade-Insecure-Requests", HeaderValue::from_static("1"));
     default_headers.insert("Cache-Control", HeaderValue::from_static("max-age=0"));
 
     reqwest::ClientBuilder::new()
@@ -196,13 +196,19 @@ fn make_browser_like_client() -> reqwest::Client {
 
 /// Visits the homepage of a URL first to obtain cookies and warm up the session
 /// This helps bypass anti-bot systems that require a valid session
-async fn warm_up_homepage(client: &reqwest::Client, parsed_url: &Url) -> Result<(), reqwest::Error> {
+async fn warm_up_homepage(
+    client: &reqwest::Client,
+    parsed_url: &Url,
+) -> Result<(), reqwest::Error> {
     // Construct homepage URL from the parsed URL
     let homepage = format!(
         "{}://{}{}",
         parsed_url.scheme(),
         parsed_url.host_str().unwrap_or(""),
-        parsed_url.port().map(|p| format!(":{}", p)).unwrap_or_default()
+        parsed_url
+            .port()
+            .map(|p| format!(":{}", p))
+            .unwrap_or_default()
     );
 
     // Make a GET request to the homepage to obtain session cookies
@@ -241,7 +247,11 @@ async fn try_to_download(
     // Use browser-like client for feeds that are known to have anti-bot protection
     let needs_browser_client = matches!(
         feed_id,
-        "f-9q5b-torrancetransit" | "f-west~hollywood" | "f-genentech" | "f-glendora~ca~us"
+        "f-9q5b-torrancetransit"
+            | "f-west~hollywood"
+            | "f-genentech"
+            | "f-glendora~ca~us"
+            | "f-dr4e-patco"
     ) || url.contains("showpublisheddocument")
         || url.contains("showdocument");
 

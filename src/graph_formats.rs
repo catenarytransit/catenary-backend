@@ -37,6 +37,7 @@ pub struct LandMass {
 pub enum NodeId {
     Cluster(usize),
     Intersection(usize),
+    Split(usize, usize), // (edge_index, split_index)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

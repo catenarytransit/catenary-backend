@@ -7,7 +7,9 @@ use diesel_async::RunQueryDsl;
 use geo::prelude::*;
 use geo::{Coord, LineString as GeoLineString, Point as GeoPoint};
 use ordered_float::OrderedFloat;
+use rayon::prelude::*;
 use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::sync::Arc;
 
 // ============================================================================
 // Configuration Constants (matching C++ TopoConfig defaults)
@@ -382,7 +384,9 @@ pub async fn infer_from_db(
     use catenary::schema::gtfs::direction_pattern_meta::dsl as meta_dsl;
 
     // Load relationships: Pattern -> Shape, Pattern -> Route
+    // Only load rail route types (0=Tram, 1=Subway, 2=Rail) to minimize memory usage
     let metas = meta_dsl::direction_pattern_meta
+        .filter(meta_dsl::route_type.eq_any(vec![Some(0i16), Some(1i16), Some(2i16)]))
         .load::<catenary::models::DirectionPatternMeta>(&mut conn)
         .await?;
 
@@ -441,100 +445,134 @@ type HandleMap = HashMap<usize, HashSet<usize>>;
 
 /// Infer turn restrictions using Dijkstra-based path cost analysis
 /// This matches the C++ RestrInferrer algorithm
+/// Parallelized by route for better performance
 pub fn infer_restrictions_dijkstra(
     edges: &[GraphEdge],
     route_shapes: &RouteShapeMap,
     max_length_deviation: f64,
 ) -> Vec<TurnRestriction> {
-    println!("Inferring turn restrictions (Dijkstra)...");
+    println!("Inferring turn restrictions (Dijkstra, parallel by route)...");
+
+    // TODO speed up restriction graph construction, parallel by connected component
 
     // Build restriction graph from edges
-    let (mut graph, restr_edge_map, node_map) = build_restriction_graph(edges, route_shapes);
+    let (mut graph, restr_edge_map, _node_map) = build_restriction_graph(edges, route_shapes);
 
     // Add handles - returns separate A (1/3) and B (2/3) handle maps
     let (handles_a, handles_b) = add_handles(&mut graph, edges, &restr_edge_map, route_shapes);
 
-    let mut restrictions = Vec::new();
-
     // Build adjacency for the original edges (treating edges as undirected for iteration)
-    // C++ iterates over all adjacencies, checking each pair
     let mut adj: HashMap<NodeId, Vec<usize>> = HashMap::new();
     for (i, edge) in edges.iter().enumerate() {
         adj.entry(edge.from).or_default().push(i);
         adj.entry(edge.to).or_default().push(i);
     }
 
-    let all_nodes: HashSet<NodeId> = adj.keys().cloned().collect();
-    let mut restrictions_count = 0;
-
-    for node in &all_nodes {
-        let Some(adjacent_indices) = adj.get(node) else {
-            continue;
-        };
-
-        // Check every pair of adjacent edges at this node (matching C++ lines 86-112)
-        for &edg1_idx in adjacent_indices {
-            for &edg2_idx in adjacent_indices {
-                if edg1_idx == edg2_idx {
-                    continue;
-                }
-
-                let edg1 = &edges[edg1_idx];
-                let edg2 = &edges[edg2_idx];
-
-                // Get routes on edg1
-                for route_key in &edg1.routes {
-                    // Check if edg2 has the same route (C++ line 92: hasLine check)
-                    if !edg2.routes.contains(route_key) {
-                        continue;
-                    }
-
-                    let line_id = format!("{}_{}", route_key.0, route_key.1);
-
-                    // NOTE: C++ direction filtering (lines 96-103) would go here
-                    // For now we skip it since GTFS edges are bidirectional by default
-                    // The restriction check below handles this implicitly
-
-                    // C++ line 106: Check BOTH directions - only add restriction if BOTH fail
-                    let check1 = check_path_for_turn(
-                        &graph,
-                        edges,
-                        &handles_a,
-                        &handles_b,
-                        edg1_idx,
-                        edg2_idx,
-                        *node,
-                        &line_id,
-                        max_length_deviation,
-                    );
-                    let check2 = check_path_for_turn(
-                        &graph,
-                        edges,
-                        &handles_a,
-                        &handles_b,
-                        edg2_idx,
-                        edg1_idx,
-                        *node,
-                        &line_id,
-                        max_length_deviation,
-                    );
-
-                    if !check1 && !check2 {
-                        restrictions.push(TurnRestriction {
-                            from_edge_index: edg1_idx,
-                            to_edge_index: edg2_idx,
-                            route_id: (route_key.0.clone(), route_key.1.clone()),
-                        });
-                        restrictions_count += 1;
-                    }
-                }
-            }
+    // Build edges_per_route mapping (C++ OrigEdgs equivalent)
+    // Maps: (chateau, route_id) -> set of edge indices that contain this route
+    let mut edges_per_route: HashMap<(String, String), HashSet<usize>> = HashMap::new();
+    for (i, edge) in edges.iter().enumerate() {
+        for (chateau, route_id, _) in &edge.routes {
+            edges_per_route
+                .entry((chateau.clone(), route_id.clone()))
+                .or_default()
+                .insert(i);
         }
     }
 
+    // Collect unique routes for parallel processing
+    let unique_routes: Vec<(String, String)> = edges_per_route.keys().cloned().collect();
+    println!(
+        "Processing {} unique routes in parallel...",
+        unique_routes.len()
+    );
+
+    // Wrap shared data in Arc for parallel access
+    let graph = Arc::new(graph);
+    let handles_a = Arc::new(handles_a);
+    let handles_b = Arc::new(handles_b);
+    let adj = Arc::new(adj);
+    let edges_per_route = Arc::new(edges_per_route);
+
+    // Process routes in parallel
+    let restrictions: Vec<TurnRestriction> = unique_routes
+        .par_iter()
+        .flat_map(|route_key| {
+            let line_id = format!("{}_{}", route_key.0, route_key.1);
+            let mut route_restrictions = Vec::new();
+
+            // Get edges that contain this route
+            let Some(route_edge_indices) = edges_per_route.get(route_key) else {
+                return route_restrictions;
+            };
+
+            // Find nodes where this route has multiple edges (potential turn points)
+            let mut route_nodes: HashMap<NodeId, Vec<usize>> = HashMap::new();
+            for &edge_idx in route_edge_indices {
+                let edge = &edges[edge_idx];
+                route_nodes.entry(edge.from).or_default().push(edge_idx);
+                route_nodes.entry(edge.to).or_default().push(edge_idx);
+            }
+
+            // Check each node where this route has 2+ edges
+            for (node, node_edges) in &route_nodes {
+                if node_edges.len() < 2 {
+                    continue;
+                }
+
+                // Check every pair of edges at this node for this route
+                for &edg1_idx in node_edges {
+                    for &edg2_idx in node_edges {
+                        if edg1_idx == edg2_idx {
+                            continue;
+                        }
+
+                        // Both edges are guaranteed to have this route (from route_edge_indices)
+
+                        // C++ line 106: Check BOTH directions - only add restriction if BOTH fail
+                        let check1 = check_path_for_turn(
+                            &graph,
+                            edges,
+                            &handles_a,
+                            &handles_b,
+                            edg1_idx,
+                            edg2_idx,
+                            *node,
+                            &line_id,
+                            max_length_deviation,
+                        );
+                        let check2 = check_path_for_turn(
+                            &graph,
+                            edges,
+                            &handles_a,
+                            &handles_b,
+                            edg2_idx,
+                            edg1_idx,
+                            *node,
+                            &line_id,
+                            max_length_deviation,
+                        );
+
+                        if !check1 && !check2 {
+                            route_restrictions.push(TurnRestriction {
+                                from_edge_index: edg1_idx,
+                                to_edge_index: edg2_idx,
+                                route_id: (route_key.0.clone(), route_key.1.clone()),
+                            });
+                        }
+                    }
+                }
+            }
+
+            route_restrictions
+        })
+        .collect();
+
+    let restrictions_count = restrictions.len();
+
     // C++ lines 116-145: Clear erroneous/superfluous exceptions
     // If a line on an edge has ALL its continuations blocked, something is wrong
-    restrictions = cleanup_dead_restrictions(restrictions, edges, &adj);
+    let restrictions = cleanup_dead_restrictions(restrictions, edges, &adj);
 
     println!(
         "Inferred {} turn restrictions (Dijkstra) after cleanup.",
@@ -715,7 +753,7 @@ fn check_path_for_turn(
 
 /// Dijkstra variant that starts from a set of edges and ends at a set of edges
 /// Matching C++ EDijkstra::shortestPath behavior
-/// 
+///
 /// In C++, EDijkstra finds shortest path from a set of "from" edges to a set of "to" edges.
 /// The cost includes traversing the from edge and ends when we reach (not after traversing) a to edge.
 fn dijkstra_edges(
@@ -724,6 +762,12 @@ fn dijkstra_edges(
     to_edges: &HashSet<usize>,
     cost_func: &CostFunc,
 ) -> Option<f64> {
+    // C++ behavior: if from and to sets overlap, return 0 immediately
+    // This handles the case where the path is trivially satisfied
+    if !from_edges.is_disjoint(to_edges) {
+        return Some(0.0);
+    }
+
     let mut heap = BinaryHeap::new();
     let mut dist: HashMap<(usize, usize), f64> = HashMap::new();
 
@@ -736,11 +780,6 @@ fn dijkstra_edges(
         // Cost to traverse this starting edge (no "from" edge)
         let c = cost_func.edge_cost(None, edge.from_node, edge_idx);
         if c < cost_func.inf() {
-            // Check if this starting edge is also a target edge
-            if to_edges.contains(&edge_idx) {
-                return Some(c);
-            }
-            
             heap.push(DijkstraState {
                 cost: OrderedFloat(c),
                 node: edge.to_node,
@@ -1168,8 +1207,16 @@ pub fn infer_restrictions_legacy(
                 let u = &edges[u_idx];
                 let v = &edges[v_idx];
 
-                let u_routes: HashSet<(String, String)> = u.routes.iter().map(|(c, r, _)| (c.clone(), r.clone())).collect();
-                let v_routes: HashSet<(String, String)> = v.routes.iter().map(|(c, r, _)| (c.clone(), r.clone())).collect();
+                let u_routes: HashSet<(String, String)> = u
+                    .routes
+                    .iter()
+                    .map(|(c, r, _)| (c.clone(), r.clone()))
+                    .collect();
+                let v_routes: HashSet<(String, String)> = v
+                    .routes
+                    .iter()
+                    .map(|(c, r, _)| (c.clone(), r.clone()))
+                    .collect();
 
                 let shared_routes: Vec<(String, String)> =
                     u_routes.intersection(&v_routes).cloned().collect();

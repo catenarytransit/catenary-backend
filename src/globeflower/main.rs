@@ -3,6 +3,7 @@ mod edges;
 mod export;
 mod geometry_utils;
 mod insertion;
+mod intercity_split;
 mod partition_storage;
 mod partitioning;
 mod restrictions;
@@ -11,6 +12,13 @@ mod support_graph;
 use anyhow::Result;
 use catenary::postgres_tools::make_async_pool;
 use std::sync::Arc;
+
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -2,7 +2,7 @@ use crate::edges::{GraphEdge, NodeId, convert_from_geo, convert_to_geo};
 use crate::support_graph::{LineNode, NodeRef};
 use ahash::AHashMap;
 use anyhow::Result;
-use geo::{Coord, LineString as GeoLineString, Point as GeoPoint};
+use geo::{Coord, EuclideanLength, LineString as GeoLineString, Point as GeoPoint};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -169,17 +169,61 @@ impl UnionFind {
     }
 }
 
-/// Split an edge's geometry at cluster boundaries
-fn split_edge_at_grid_boundaries(
+/// Helper struct to track boundary node positions and their assigned IDs
+struct BoundaryNodeTracker {
+    /// Map from quantized position to NodeId
+    position_to_node: AHashMap<(i64, i64), NodeId>,
+    /// Quantization factor (positions within this threshold are considered the same)
+    quantize_factor: f64,
+}
+
+impl BoundaryNodeTracker {
+    fn new(quantize_factor: f64) -> Self {
+        Self {
+            position_to_node: AHashMap::new(),
+            quantize_factor,
+        }
+    }
+
+    /// Get or create a NodeId for a boundary position
+    /// Positions within quantize_factor of each other get the same NodeId
+    fn get_or_create(&mut self, pos: Coord, node_id_counter: &mut usize) -> NodeId {
+        // Quantize position to avoid floating point comparison issues
+        let qx = (pos.x / self.quantize_factor).round() as i64;
+        let qy = (pos.y / self.quantize_factor).round() as i64;
+        let key = (qx, qy);
+
+        self.position_to_node
+            .entry(key)
+            .or_insert_with(|| {
+                // Use sequential IDs for boundary nodes (managed by shared counter)
+                let id = NodeId::Intersection(*node_id_counter);
+                *node_id_counter += 1;
+                id
+            })
+            .clone()
+    }
+}
+
+/// Split an edge's geometry at cluster boundaries, assigning unique NodeIds to boundary points.
+///
+/// Returns a Vec of (cell, GraphEdge, Option<boundary_pos>) where:
+/// - cell: the grid cell this segment belongs to
+/// - GraphEdge: the segment with proper from/to NodeIds
+/// - boundary_pos: if this segment ends at a boundary, the boundary position for deduplication
+fn split_edge_at_grid_boundaries_internal(
     edge: &GraphEdge,
     grid_size_meters: f64,
-) -> Vec<((i64, i64), Vec<Coord>)> {
+    boundary_tracker: &mut BoundaryNodeTracker,
+    node_id_counter: &mut usize,
+) -> Vec<((i64, i64), GraphEdge)> {
     let geom = convert_to_geo(&edge.geometry);
     if geom.0.is_empty() {
         return vec![];
     }
 
-    let mut segments: Vec<((i64, i64), Vec<Coord>)> = Vec::new();
+    // First, compute raw geometry segments with their cells and boundary points
+    let mut raw_segments: Vec<((i64, i64), Vec<Coord>, Option<Coord>)> = Vec::new();
     let mut current_segment: Vec<Coord> = Vec::new();
     let mut current_cell: Option<(i64, i64)> = None;
 
@@ -207,7 +251,8 @@ fn split_edge_at_grid_boundaries(
                     );
 
                     current_segment.push(boundary_point);
-                    segments.push((prev_cell, current_segment.clone()));
+                    // Store the boundary point for this segment
+                    raw_segments.push((prev_cell, current_segment.clone(), Some(boundary_point)));
 
                     current_segment = vec![boundary_point, *coord];
                     current_cell = Some(cell);
@@ -218,11 +263,84 @@ fn split_edge_at_grid_boundaries(
 
     if let Some(cell) = current_cell {
         if !current_segment.is_empty() {
-            segments.push((cell, current_segment));
+            // Last segment has no boundary at the end
+            raw_segments.push((cell, current_segment, None));
         }
     }
 
-    segments
+    // If no splits occurred, return the original edge as-is
+    if raw_segments.len() <= 1 {
+        if raw_segments.is_empty() {
+            return vec![];
+        }
+        // Single segment - keep original from/to NodeIds
+        return vec![(raw_segments[0].0, edge.clone())];
+    }
+
+    // CRITICAL FIX: Use boundary position to deduplicate NodeIds
+    // When multiple edges cross the same grid boundary at the same (or very close) position,
+    // they should share the same NodeId so they reconnect properly after parallel processing.
+    let mut result: Vec<((i64, i64), GraphEdge)> = Vec::with_capacity(raw_segments.len());
+    let mut prev_boundary_node: Option<NodeId> = None;
+
+    for (idx, (cell, coords, boundary_pos)) in raw_segments.into_iter().enumerate() {
+        let from_node = if idx == 0 {
+            edge.from.clone()
+        } else {
+            // Use the boundary node from the previous segment
+            prev_boundary_node
+                .clone()
+                .expect("Previous segment should have set boundary node")
+        };
+
+        let to_node = if let Some(bpos) = boundary_pos {
+            // This segment ends at a boundary - get or create a shared NodeId for this position
+            let node = boundary_tracker.get_or_create(bpos, node_id_counter);
+            prev_boundary_node = Some(node.clone());
+            node
+        } else {
+            // Last segment - use original edge's 'to' node
+            edge.to.clone()
+        };
+
+        let ls = GeoLineString::new(coords);
+        let weight = ls.euclidean_length();
+
+        result.push((
+            cell,
+            GraphEdge {
+                from: from_node,
+                to: to_node,
+                geometry: convert_from_geo(&ls),
+                routes: edge.routes.clone(),
+                original_shape_ids: edge.original_shape_ids.clone(),
+                weight,
+                original_edge_index: edge.original_edge_index,
+            },
+        ));
+    }
+
+    result
+}
+
+/// Split an edge's geometry at cluster boundaries, assigning unique NodeIds to boundary points.
+///
+/// Returns a Vec of (cell, GraphEdge) where each GraphEdge has:
+/// - First segment: from = original edge's from, to = boundary NodeId
+/// - Middle segments: from = previous boundary NodeId, to = next boundary NodeId  
+/// - Last segment: from = previous boundary NodeId, to = original edge's to
+///
+/// NOTE: This is a wrapper that creates a new tracker for single-edge processing.
+/// For batch processing, use partition_by_geography which handles deduplication across all edges.
+fn split_edge_at_grid_boundaries(
+    edge: &GraphEdge,
+    grid_size_meters: f64,
+    node_id_counter: &mut usize,
+) -> Vec<((i64, i64), GraphEdge)> {
+    // For single-edge processing, create a temporary tracker
+    // Quantize to 1 meter (positions within 1m share the same NodeId)
+    let mut tracker = BoundaryNodeTracker::new(1.0);
+    split_edge_at_grid_boundaries_internal(edge, grid_size_meters, &mut tracker, node_id_counter)
 }
 
 /// Calculate intersection point where line crosses grid boundary
@@ -263,7 +381,11 @@ fn calculate_grid_boundary_intersection(
 }
 
 /// Partition edges by geographic proximity using spatial grid
-pub fn partition_by_geography(edges: Vec<GraphEdge>, grid_size_meters: f64) -> Vec<Vec<GraphEdge>> {
+pub fn partition_by_geography(
+    edges: Vec<GraphEdge>,
+    grid_size_meters: f64,
+    node_id_counter: &mut usize,
+) -> Vec<Vec<GraphEdge>> {
     if edges.is_empty() {
         return vec![];
     }
@@ -274,17 +396,26 @@ pub fn partition_by_geography(edges: Vec<GraphEdge>, grid_size_meters: f64) -> V
         grid_size_meters
     );
 
+    // CRITICAL FIX: Use a single BoundaryNodeTracker for ALL edges
+    // This ensures that when multiple edges cross the same grid boundary at the same position,
+    // they get the same NodeId and will reconnect properly after parallel processing.
+    // Quantize to 1 meter (positions within 1m share the same NodeId)
+    let mut boundary_tracker = BoundaryNodeTracker::new(1.0);
+
     let mut split_edges: Vec<(GraphEdge, (i64, i64))> = Vec::new();
     let mut total_segments = 0;
 
     for edge in &edges {
-        let segments = split_edge_at_grid_boundaries(edge, grid_size_meters);
+        let segments = split_edge_at_grid_boundaries_internal(
+            edge,
+            grid_size_meters,
+            &mut boundary_tracker,
+            node_id_counter,
+        );
         total_segments += segments.len();
 
-        for (cell, geometry) in segments {
-            let mut new_edge = edge.clone();
-            new_edge.geometry = convert_from_geo(&GeoLineString::new(geometry));
-            split_edges.push((new_edge, cell));
+        for (cell, split_edge) in segments {
+            split_edges.push((split_edge, cell));
         }
     }
 
@@ -292,6 +423,11 @@ pub fn partition_by_geography(edges: Vec<GraphEdge>, grid_size_meters: f64) -> V
         "  Split into {} edge segments (avg {:.1} segments per original edge)",
         total_segments,
         total_segments as f64 / edges.len() as f64
+    );
+
+    println!(
+        "  Created {} unique boundary nodes (deduplication working!)",
+        boundary_tracker.position_to_node.len()
     );
 
     let mut grid_cells: HashMap<(i64, i64), Vec<GraphEdge>> = HashMap::new();

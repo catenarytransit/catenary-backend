@@ -1027,7 +1027,7 @@ pub async fn gtfs_process_feed(
 
     // check_is_active check not needed for pool based functions unless explicitly desired, relying on internal pool behavior
     // but we can ensure our held connection is good if we used it, but here we call a function using pool.
-    
+
     calendar_into_postgres(
         &gtfs,
         feed_id,
@@ -1232,7 +1232,7 @@ pub async fn gtfs_process_feed(
         if !check_is_active(&mut conn).await {
             conn = conn_pool.get().await?;
         }
-        
+
         conn.build_transaction()
             .run::<(), diesel::result::Error, _>(|conn| {
                 Box::pin(async move {
@@ -1730,7 +1730,7 @@ pub async fn gtfs_process_feed(
         if !check_is_active(&mut conn).await {
             conn = conn_pool.get().await?;
         }
-        
+
         use catenary::schema::gtfs::feed_info::dsl::feed_info as feed_table;
 
         let feed_info_pg = catenary::models::FeedInfo {

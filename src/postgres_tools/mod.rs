@@ -50,7 +50,6 @@ fn database_url_for_env() -> String {
     env::var("DATABASE_URL").expect("DATABASE_URL must be set")
 }
 
-
 pub async fn check_is_active(
     conn: &mut bb8::PooledConnection<
         '_,

@@ -1,4 +1,5 @@
 use crate::edges::{GraphEdge, NodeId, convert_from_geo, convert_to_geo};
+use crate::intercity_split::{LongEdgeRegistry, extract_long_intercity_edges};
 use crate::partitioning::*;
 use ahash::{AHashMap, AHashSet};
 use anyhow::Result;
@@ -11,6 +12,99 @@ use rstar::{AABB, RTree, RTreeObject};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::{Rc, Weak};
+use std::sync::{Arc, Mutex};
+
+// ===========================================================================
+// Node ID Allocator for parallel cluster processing
+// ===========================================================================
+
+/// Thread-safe allocator that dispenses chunks of node IDs on demand.
+/// Each cluster processing thread can request a chunk when it starts,
+/// and request more if needed during processing.
+pub struct NodeIdAllocator {
+    next_id: Mutex<usize>,
+    chunk_size: usize,
+}
+
+impl NodeIdAllocator {
+    pub fn new(start: usize, chunk_size: usize) -> Self {
+        Self {
+            next_id: Mutex::new(start),
+            chunk_size,
+        }
+    }
+
+    /// Allocate a new chunk of node IDs. Returns the starting ID of the chunk.
+    pub fn allocate_chunk(&self) -> usize {
+        let mut guard = self.next_id.lock().unwrap();
+        let start = *guard;
+        *guard += self.chunk_size;
+        start
+    }
+
+    /// Get the current next_id value (for updating external counter after parallel phase)
+    pub fn current(&self) -> usize {
+        *self.next_id.lock().unwrap()
+    }
+}
+
+/// Wrapper for a cluster that can dynamically request additional ID chunks as needed.
+/// This prevents clusters from failing when they exceed their initial chunk allocation,
+/// and allows efficient use of ID space by starting with smaller chunks.
+pub struct ChunkedNodeIdTracker {
+    allocator: Arc<NodeIdAllocator>,
+    current_chunk_start: usize,
+    current_chunk_end: usize,
+    next_id: usize,
+}
+
+impl ChunkedNodeIdTracker {
+    /// Create a new tracker with an initial chunk from the allocator
+    pub fn new(allocator: Arc<NodeIdAllocator>) -> Self {
+        let chunk_start = allocator.allocate_chunk();
+        let chunk_end = chunk_start + allocator.chunk_size;
+        Self {
+            allocator,
+            current_chunk_start: chunk_start,
+            current_chunk_end: chunk_end,
+            next_id: chunk_start,
+        }
+    }
+
+    /// Get the next node ID, requesting a new chunk if needed
+    pub fn next(&mut self) -> usize {
+        // Check if we've exhausted the current chunk
+        if self.next_id >= self.current_chunk_end {
+            // Request a new chunk
+            let old_chunk = self.current_chunk_start;
+            self.current_chunk_start = self.allocator.allocate_chunk();
+            self.current_chunk_end = self.current_chunk_start + self.allocator.chunk_size;
+            self.next_id = self.current_chunk_start;
+
+            println!(
+                "  [ChunkAlloc] Exhausted chunk {}-{}, allocated new chunk {}-{}",
+                old_chunk,
+                old_chunk + self.allocator.chunk_size - 1,
+                self.current_chunk_start,
+                self.current_chunk_end - 1
+            );
+        }
+
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    /// Get the current next_id value (for statistics)
+    pub fn current(&self) -> usize {
+        self.next_id
+    }
+
+    /// Get the initial chunk start (for statistics)
+    pub fn chunk_start(&self) -> usize {
+        self.current_chunk_start
+    }
+}
 
 // ===========================================================================
 // Web Mercator Coordinate Conversion (matches C++ util::geo::latLngToWebMerc)
@@ -308,13 +402,15 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
         .load::<catenary::models::DirectionPatternMeta>(&mut conn)
         .await?;
 
-    // Build map: shape_id -> Vec<(chateau, route_id)>
-    let mut shape_to_routes: std::collections::HashMap<String, Vec<(String, String)>> =
+    // Build map: (chateau, shape_id) -> Vec<(chateau, route_id)>
+    // CRITICAL: Key must include chateau, otherwise different agencies with the same
+    // shape_id (e.g., both have "1") will have their routes incorrectly combined!
+    let mut shape_to_routes: std::collections::HashMap<(String, String), Vec<(String, String)>> =
         std::collections::HashMap::new();
     for m in metas {
         if let (Some(sid), Some(rid)) = (m.gtfs_shape_id, m.route_id) {
             shape_to_routes
-                .entry(sid)
+                .entry((m.chateau.clone(), sid))
                 .or_default()
                 .push((m.chateau.clone(), rid.to_string()));
         }
@@ -336,8 +432,9 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
         node_id_counter += 1;
 
         // Get actual route IDs for this shape (chateau, route_id)
+        // Key is now (chateau, shape_id) to prevent cross-agency contamination
         let route_ids = shape_to_routes
-            .get(&shape.shape_id)
+            .get(&(shape.chateau.clone(), shape.shape_id.clone()))
             .cloned()
             .unwrap_or_default();
 
@@ -389,14 +486,25 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     let snap_threshold = 2.0; // 2 meters in Web Mercator
 
     // =========================================================================
-    // SPATIAL PARTITIONING for Germany-scale networks
-    // Without this, processing all of Germany as one component causes OOM
+    // SPATIAL PARTITIONING for Country-scale networks
+    // Without this, processing as one component causes OOM
     // =========================================================================
 
     // Step 1: Partition by geography using spatial grid (BEFORE node snapping)
     // Grid size of 50km creates reasonable geographic regions
     let grid_size_meters = 50000.0; // 50km grid cells
-    let components = partition_by_geography(raw_edges, grid_size_meters);
+
+    // CRITICAL: Extract long intercity edges BEFORE partitioning
+    // These are deferred from cluster processing to prevent junction corruption
+    println!("Extracting long intercity edges for deferred processing...");
+    let (short_edges, long_edge_registry) = extract_long_intercity_edges(raw_edges);
+    println!(
+        "  {} edges for cluster processing, {} deferred for post-processing",
+        short_edges.len(),
+        long_edge_registry.len()
+    );
+
+    let components = partition_by_geography(short_edges, grid_size_meters, &mut node_id_counter);
 
     // Step 2: Further split large components using K-means + mode-aware cutting
     let max_edges_per_cluster = 1000; // Target cluster size
@@ -412,6 +520,9 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     // hundreds of km) and K-means may create tiny clusters that explode during densification
     all_clusters = consolidate_small_clusters(all_clusters, min_cluster_size);
 
+    // NOTE: Long intercity edges were already extracted BEFORE partitioning
+    // They are stored in long_edge_registry and will be reattached post-processing
+
     println!(
         "\n=== Processing {} clusters (after consolidation) ===",
         all_clusters.len()
@@ -426,56 +537,145 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     }
     // all_clusters is consumed and dropped here, freeing memory
 
-    // Step 4: Process each cluster independently
+    // Step 4: Process each cluster in PARALLEL
+    // Use a shared node ID allocator that dispenses chunks on demand
+    // Start with smaller chunks (100K) that can be extended dynamically
+    // This is more memory-efficient than allocating 10M IDs upfront
+    let allocator = Arc::new(NodeIdAllocator::new(node_id_counter, 100_000));
+    let total_clusters = partition_handles.len();
+
+    // Configure thread count via environment variable (default: 2 to limit memory usage)
+    let num_threads: usize = std::env::var("GLOBEFLOWER_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2);
+
+    println!(
+        "Processing {} clusters in parallel with {} threads (set GLOBEFLOWER_THREADS to change)...",
+        total_clusters, num_threads
+    );
+
+    // Build a custom thread pool with limited threads
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .expect("Failed to create rayon thread pool");
+
+    let results: Vec<Result<Vec<GraphEdge>, anyhow::Error>> = pool.install(|| {
+        partition_handles
+            .par_iter()
+            .enumerate()
+            .map(|(cluster_idx, handle)| {
+                // Load cluster from disk (thread-safe: each partition is a separate file)
+                let cluster: Vec<GraphEdge> = partition_store.load_partition(handle)?;
+
+                println!(
+                    "\n=== Processing cluster {}/{}: {} edges ===",
+                    cluster_idx + 1,
+                    total_clusters,
+                    cluster.len()
+                );
+
+                // Create a chunked ID tracker for this cluster (dynamic allocation)
+                let mut id_tracker = ChunkedNodeIdTracker::new(Arc::clone(&allocator));
+                let chunk_start = id_tracker.chunk_start();
+                let chunk_end = chunk_start + 100_000 - 1;
+
+                println!(
+                    "[Cluster {}] Allocated ID range: {}-{} (chunk size: 100K)",
+                    cluster_idx + 1,
+                    chunk_start,
+                    chunk_end
+                );
+
+                // Build initial graph for this cluster
+                let mut graph = build_initial_linegraph_webmerc_tracked(
+                    &cluster,
+                    &mut id_tracker,
+                    snap_threshold,
+                );
+
+                // Pre-collapse cleanup
+                average_node_positions(&mut graph);
+                collapse_degree_2_nodes_serial(&mut graph, normal_d_cut);
+                clean_up_geoms(&graph);
+                contract_short_edges(&mut graph, normal_d_cut);
+
+                // Two passes of collapse (C++ lines 145-146)
+                let collapsed = collapse_shared_segments_from_graph_tracked(
+                    &graph,
+                    tight_d_cut,
+                    seg_len,
+                    50,
+                    &mut id_tracker,
+                );
+                graph.clear(); // Release memory from initial graph
+
+                let collapsed = collapse_shared_segments_tracked(
+                    collapsed,
+                    normal_d_cut,
+                    seg_len,
+                    50,
+                    &mut id_tracker,
+                );
+
+                let nodes_used = id_tracker.current() - id_tracker.chunk_start();
+
+                // Find min/max node IDs in output to verify uniqueness
+                let mut min_id = usize::MAX;
+                let mut max_id = usize::MIN;
+                for edge in &collapsed {
+                    if let NodeId::Intersection(id) = edge.from {
+                        min_id = min_id.min(id);
+                        max_id = max_id.max(id);
+                    }
+                    if let NodeId::Intersection(id) = edge.to {
+                        min_id = min_id.min(id);
+                        max_id = max_id.max(id);
+                    }
+                }
+
+                println!(
+                    "Cluster {}/{} complete: {} edges, {} nodes used, actual ID range: {}-{}",
+                    cluster_idx + 1,
+                    total_clusters,
+                    collapsed.len(),
+                    nodes_used,
+                    min_id,
+                    max_id
+                );
+
+                Ok(collapsed)
+            })
+            .collect()
+    });
+
+    // Collect all results, propagating any errors
     let mut all_collapsed: Vec<GraphEdge> = Vec::new();
-
-    for (cluster_idx, handle) in partition_handles.into_iter().enumerate() {
-        // Load cluster from disk
-        let cluster: Vec<GraphEdge> = partition_store.load_partition(&handle)?;
-
-        println!(
-            "\n=== Processing cluster {}: {} edges ===",
-            cluster_idx + 1,
-            cluster.len()
-        );
-
-        // Build initial graph for this cluster
-        let mut graph =
-            build_initial_linegraph_webmerc(&cluster, &mut node_id_counter, snap_threshold);
-
-        // Pre-collapse cleanup
-        average_node_positions(&mut graph);
-        collapse_degree_2_nodes_serial(&mut graph, normal_d_cut);
-        clean_up_geoms(&graph);
-        contract_short_edges(&mut graph, normal_d_cut);
-
-        // Two passes of collapse (C++ lines 145-146)
-        let collapsed = collapse_shared_segments_from_graph(
-            &graph,
-            tight_d_cut,
-            seg_len,
-            50,
-            &mut node_id_counter,
-        );
-        graph.clear(); // Release memory from initial graph
-
-        let collapsed =
-            collapse_shared_segments(collapsed, normal_d_cut, seg_len, 50, &mut node_id_counter);
-
-        all_collapsed.extend(collapsed);
-
-        println!(
-            "Cluster {} complete. Total edges so far: {}",
-            cluster_idx + 1,
-            all_collapsed.len()
-        );
+    for result in results {
+        all_collapsed.extend(result?);
     }
+
+    // Update node_id_counter to reflect all allocations
+    node_id_counter = allocator.current();
 
     println!(
         "\n=== All clusters processed: {} total edges ===",
         all_collapsed.len()
     );
     let mut collapsed = all_collapsed;
+
+    // =========================================================================
+    // CRITICAL: Reattach deferred long intercity edges
+    // =========================================================================
+    // Long edges were extracted before partitioning to prevent junction corruption.
+    // Now we reattach them using spatial queries to find matching endpoints.
+    println!(
+        "Reattaching {} deferred long intercity edges...",
+        long_edge_registry.len()
+    );
+    collapsed = reattach_long_edges(collapsed, long_edge_registry, &mut node_id_counter);
+    println!("After reattachment: {} edges", collapsed.len());
 
     // =========================================================================
     // Post-Collapse Reconstruction (matches C++ TopoMain.cpp lines 164-186)
@@ -562,62 +762,176 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     Ok(collapsed)
 }
 
+// After parallel cluster processing, deferred long intercity edges need to be
+// reattached to the processed graph using spatial queries to find matching endpoints.
+
+/// Reattach deferred long intercity edges to the processed graph.
+///
+/// Algorithm:
+/// 1. Build an rtree of endpoint positions from processed edges
+/// 2. For each deferred long edge:
+///    a. Find nearest node in processed graph to edge.from_pos
+///    b. Find nearest node in processed graph to edge.to_pos  
+///    c. Create edge connecting these nodes with original geometry
+/// 3. Return processed edges + reattached long edges
+fn reattach_long_edges(
+    mut edges: Vec<GraphEdge>,
+    registry: LongEdgeRegistry,
+    node_id_counter: &mut usize,
+) -> Vec<GraphEdge> {
+    use rstar::{AABB, RTree};
+
+    if registry.is_empty() {
+        return edges;
+    }
+
+    // Build a map from position -> NodeId for all existing edge endpoints
+    // Quantize positions to 1 meter precision for matching
+    let quantize = |x: f64| -> i64 { (x / 1.0).round() as i64 };
+
+    let mut position_to_node: HashMap<(i64, i64), NodeId> = HashMap::new();
+    let mut node_positions: Vec<([f64; 2], NodeId)> = Vec::new();
+
+    for edge in &edges {
+        // From endpoint
+        if let Some(p) = edge.geometry.points.first() {
+            let key = (quantize(p.x), quantize(p.y));
+            position_to_node.entry(key).or_insert(edge.from);
+            node_positions.push(([p.x, p.y], edge.from));
+        }
+        // To endpoint
+        if let Some(p) = edge.geometry.points.last() {
+            let key = (quantize(p.x), quantize(p.y));
+            position_to_node.entry(key).or_insert(edge.to);
+            node_positions.push(([p.x, p.y], edge.to));
+        }
+    }
+
+    // Build rtree for spatial queries
+    let rtree_items: Vec<rstar::primitives::GeomWithData<[f64; 2], NodeId>> = node_positions
+        .iter()
+        .map(|(pos, node)| rstar::primitives::GeomWithData::new(*pos, *node))
+        .collect();
+    let rtree = RTree::bulk_load(rtree_items);
+
+    let snap_threshold = 100.0; // 100 meters maximum snap distance
+    let mut reattached_count = 0;
+    let mut failed_count = 0;
+
+    for deferred in registry.edges {
+        // Find nearest node to 'from' position
+        let from_pos = [deferred.from_pos.x, deferred.from_pos.y];
+        let from_node = rtree
+            .nearest_neighbor(&from_pos)
+            .filter(|item| {
+                let dx = item.geom()[0] - from_pos[0];
+                let dy = item.geom()[1] - from_pos[1];
+                (dx * dx + dy * dy).sqrt() <= snap_threshold
+            })
+            .map(|item| item.data);
+
+        // Find nearest node to 'to' position
+        let to_pos = [deferred.to_pos.x, deferred.to_pos.y];
+        let to_node = rtree
+            .nearest_neighbor(&to_pos)
+            .filter(|item| {
+                let dx = item.geom()[0] - to_pos[0];
+                let dy = item.geom()[1] - to_pos[1];
+                (dx * dx + dy * dy).sqrt() <= snap_threshold
+            })
+            .map(|item| item.data);
+
+        match (from_node, to_node) {
+            (Some(from), Some(to)) => {
+                // Successfully matched both endpoints - create reattached edge
+                edges.push(GraphEdge {
+                    from,
+                    to,
+                    geometry: deferred.edge.geometry,
+                    routes: deferred.edge.routes,
+                    original_shape_ids: deferred.edge.original_shape_ids,
+                    weight: deferred.edge.weight,
+                    original_edge_index: deferred.edge.original_edge_index,
+                });
+                reattached_count += 1;
+            }
+            _ => {
+                // Could not match one or both endpoints
+                // Create new intersection nodes and attach anyway
+                let new_from = if from_node.is_some() {
+                    from_node.unwrap()
+                } else {
+                    let id = NodeId::Intersection(*node_id_counter);
+                    *node_id_counter += 1;
+                    id
+                };
+                let new_to = if to_node.is_some() {
+                    to_node.unwrap()
+                } else {
+                    let id = NodeId::Intersection(*node_id_counter);
+                    *node_id_counter += 1;
+                    id
+                };
+
+                edges.push(GraphEdge {
+                    from: new_from,
+                    to: new_to,
+                    geometry: deferred.edge.geometry,
+                    routes: deferred.edge.routes,
+                    original_shape_ids: deferred.edge.original_shape_ids,
+                    weight: deferred.edge.weight,
+                    original_edge_index: deferred.edge.original_edge_index,
+                });
+                failed_count += 1;
+            }
+        }
+    }
+
+    println!(
+        "  Reattached {} long edges ({} with new nodes)",
+        reattached_count, failed_count
+    );
+    edges
+}
+
 /// Reconstruct a LineGraph from a list of GraphEdges, respecting existing NodeIds.
 /// This does NOT snap nodes; it assumes edges sharing a NodeId are connected.
 fn graph_from_edges(edges: Vec<GraphEdge>, next_node_id: &mut usize) -> LineGraph {
-    let mut graph = LineGraph::new();
-    let mut node_map: HashMap<usize, NodeRef> = HashMap::new();
+    // CRITICAL: Use new_with_start_id to ensure new nodes created here don't collide
+    let mut graph = LineGraph::new_with_start_id(*next_node_id);
+    // Use NodeId as key directly to support all variants (Cluster, Intersection, Split) uniquely
+    let mut node_map: HashMap<NodeId, NodeRef> = HashMap::new();
 
     // First pass: Create all nodes
     for edge in &edges {
-        let from_id = match edge.from {
-            NodeId::Intersection(id) => id,
-            _ => continue, // Should not happen in this context
-        };
-        let to_id = match edge.to {
-            NodeId::Intersection(id) => id,
-            _ => continue,
-        };
-
         // Determine positions (approximate, will be fixed by reconstruction)
         // We use the first/last point of geometry
         let geom = convert_to_geo(&edge.geometry);
         let from_pos = geom.0.first().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
         let to_pos = geom.0.last().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
 
-        node_map.entry(from_id).or_insert_with(|| {
-            let n = graph.add_nd(from_pos);
-            n.borrow_mut().id = from_id;
-            n
+        node_map.entry(edge.from).or_insert_with(|| {
+            // Internal ID is assigned sequentially by graph.add_nd
+            graph.add_nd(from_pos)
         });
-        node_map.entry(to_id).or_insert_with(|| {
-            let n = graph.add_nd(to_pos);
-            n.borrow_mut().id = to_id;
-            n
-        });
+        node_map
+            .entry(edge.to)
+            .or_insert_with(|| graph.add_nd(to_pos));
     }
 
-    // Update next_node_id to ensure future nodes don't collide
-    if let Some(&max_id) = node_map.keys().max() {
-        if max_id >= *next_node_id {
-            *next_node_id = max_id + 1;
-        }
-    }
-    graph.next_node_id = *next_node_id;
+    graph.next_node_id = graph.next_node_id.max(*next_node_id);
+    *next_node_id = graph.next_node_id;
 
     // Second pass: Create edges
     for edge in edges {
-        let from_id = match edge.from {
-            NodeId::Intersection(id) => id,
-            _ => continue,
+        let from_node = match node_map.get(&edge.from) {
+            Some(n) => n,
+            None => continue,
         };
-        let to_id = match edge.to {
-            NodeId::Intersection(id) => id,
-            _ => continue,
+        let to_node = match node_map.get(&edge.to) {
+            Some(n) => n,
+            None => continue,
         };
-
-        let from_node = node_map.get(&from_id).unwrap();
-        let to_node = node_map.get(&to_id).unwrap();
 
         // Check if self-loop
         if Rc::ptr_eq(from_node, to_node) {
@@ -651,8 +965,9 @@ fn graph_from_edges(edges: Vec<GraphEdge>, next_node_id: &mut usize) -> LineGrap
 
 /// Build initial LineGraph by snapping together geometrically close endpoints.
 /// This creates shared nodes where lines meet, matching C++ input format.
-fn build_initial_linegraph(edges: &[GraphEdge], _next_node_id: &mut usize) -> LineGraph {
-    let mut graph = LineGraph::new();
+fn build_initial_linegraph(edges: &[GraphEdge], next_node_id: &mut usize) -> LineGraph {
+    // CRITICAL: Use new_with_start_id to ensure unique node IDs across clusters
+    let mut graph = LineGraph::new_with_start_id(*next_node_id);
     let snap_threshold = 0.00002; // ~2 meters - snap endpoints this close together
 
     // Spatial index for finding nearby nodes
@@ -712,17 +1027,22 @@ fn build_initial_linegraph(edges: &[GraphEdge], _next_node_id: &mut usize) -> Li
         }
     }
 
+    // Propagate counter so subsequent functions get unique IDs
+    *next_node_id = graph.next_node_id;
+
     graph
 }
 
 /// Build initial LineGraph with Web Mercator coordinates (meters).
 /// snap_threshold is in meters (matching C++ behaviour with projected coordinates).
+/// CRITICAL: Uses next_node_id to ensure globally unique node IDs across clusters.
 fn build_initial_linegraph_webmerc(
     edges: &[GraphEdge],
-    _next_node_id: &mut usize,
+    next_node_id: &mut usize,
     snap_threshold: f64,
 ) -> LineGraph {
-    let mut graph = LineGraph::new();
+    // CRITICAL FIX: Use new_with_start_id to ensure node IDs don't collide across clusters
+    let mut graph = LineGraph::new_with_start_id(*next_node_id);
 
     // Spatial index for finding nearby nodes (threshold in meters)
     let mut geo_idx = NodeGeoIdx::new(snap_threshold);
@@ -809,6 +1129,9 @@ fn build_initial_linegraph_webmerc(
         graph.num_edges()
     );
 
+    // CRITICAL: Update the counter so subsequent clusters get unique IDs
+    *next_node_id = graph.next_node_id;
+
     graph
 }
 
@@ -855,6 +1178,67 @@ fn collapse_shared_segments_from_graph(
     }
 
     collapse_shared_segments(edges, d_cut, seg_len, max_iters, next_node_id_counter)
+}
+
+// ===========================================================================
+// Tracker-based Wrapper Functions
+// ===========================================================================
+
+/// Wrapper for build_initial_linegraph_webmerc that uses ChunkedNodeIdTracker.
+/// Simply delegates to existing function and syncs the tracker afterward.
+fn build_initial_linegraph_webmerc_tracked(
+    edges: &[GraphEdge],
+    id_tracker: &mut ChunkedNodeIdTracker,
+    snap_threshold: f64,
+) -> LineGraph {
+    let mut next_node_id = id_tracker.current();
+    let graph = build_initial_linegraph_webmerc(edges, &mut next_node_id, snap_threshold);
+
+    // Sync tracker to account for IDs used
+    while id_tracker.current() < next_node_id {
+        id_tracker.next();
+    }
+
+    graph
+}
+
+/// Wrapper for collapse_shared_segments_from_graph that uses ChunkedNodeIdTracker.
+fn collapse_shared_segments_from_graph_tracked(
+    graph: &LineGraph,
+    d_cut: f64,
+    seg_len: f64,
+    max_iters: usize,
+    id_tracker: &mut ChunkedNodeIdTracker,
+) -> Vec<GraphEdge> {
+    let mut next_node_id = id_tracker.current();
+    let result =
+        collapse_shared_segments_from_graph(graph, d_cut, seg_len, max_iters, &mut next_node_id);
+
+    // Sync tracker to account for IDs used
+    while id_tracker.current() < next_node_id {
+        id_tracker.next();
+    }
+
+    result
+}
+
+/// Wrapper for collapse_shared_segments that uses ChunkedNodeIdTracker.
+fn collapse_shared_segments_tracked(
+    edges: Vec<GraphEdge>,
+    d_cut: f64,
+    seg_len: f64,
+    max_iters: usize,
+    id_tracker: &mut ChunkedNodeIdTracker,
+) -> Vec<GraphEdge> {
+    let mut next_node_id = id_tracker.current();
+    let result = collapse_shared_segments(edges, d_cut, seg_len, max_iters, &mut next_node_id);
+
+    // Sync tracker to account for IDs used
+    while id_tracker.current() < next_node_id {
+        id_tracker.next();
+    }
+
+    result
 }
 
 // ===========================================================================

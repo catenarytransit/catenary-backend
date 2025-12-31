@@ -29,12 +29,17 @@ impl Loader {
 
         // 1. Fetch Route Colors and Short Names
         let mut conn = self.pg_pool.get()?;
-        
+
         // RouteInfo: (color, short_name)
-        let routes_data =
-            tokio::task::block_in_place(|| -> Result<HashMap<(String, String), (String, Option<String>)>> {
+        let routes_data = tokio::task::block_in_place(
+            || -> Result<HashMap<(String, String), (String, Option<String>)>> {
                 let results = routes_dsl::routes
-                    .select((routes_dsl::chateau, routes_dsl::route_id, routes_dsl::color, routes_dsl::short_name))
+                    .select((
+                        routes_dsl::chateau,
+                        routes_dsl::route_id,
+                        routes_dsl::color,
+                        routes_dsl::short_name,
+                    ))
                     .load::<(String, String, Option<String>, Option<String>)>(&mut conn)?;
 
                 let mut map = HashMap::new();
@@ -43,7 +48,8 @@ impl Loader {
                     map.insert((chateau, route_id), (c, short_name));
                 }
                 Ok(map)
-            })?;
+            },
+        )?;
 
         // Print some sample keys from DB
         println!(
@@ -51,7 +57,10 @@ impl Loader {
             routes_data.keys().take(5).collect::<Vec<_>>()
         );
 
-        println!("Loaded {} routes with color/short_name info", routes_data.len());
+        println!(
+            "Loaded {} routes with color/short_name info",
+            routes_data.len()
+        );
 
         // 2. Load Bincode Graph
         let file = File::open(&self.graph_path)?;
@@ -141,7 +150,7 @@ impl Loader {
         let mut edges = Vec::new();
         // Track route groups: (chateau, group_key) -> Vec of (route_id, color)
         let mut route_groups: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
-        
+
         for (i, edge) in export_graph.edges.iter().enumerate() {
             let from = Self::convert_node_id(edge.from);
             let to = Self::convert_node_id(edge.to);
@@ -159,17 +168,17 @@ impl Loader {
                         }
                         ("000000".to_string(), None)
                     });
-                
+
                 // Bundle strictly by COLOR to ensure lines of same color are merged (e.g. NYC Subway N/Q/R)
                 // This prevents parallel lines of the same color.
                 let group_key = color.clone();
-                
+
                 // Track route groups for later use
                 route_groups
                     .entry((chateau_id.clone(), group_key.clone()))
                     .or_default()
                     .push((route_id.clone(), color.clone()));
-                
+
                 // line_id uses the group key for bundling
                 let line_id = format!("{}:{}", chateau_id, group_key);
 
@@ -267,7 +276,7 @@ impl Loader {
         };
 
         // Optimizer is NOT called here anymore. It's called by the specific command in main.rs if needed.
-        
+
         Ok(render_graph)
     }
 
@@ -275,6 +284,12 @@ impl Loader {
         match id {
             NodeId::Cluster(c) => c as i64,
             NodeId::Intersection(i) => -((i + 1) as i64),
+            // Split nodes: use a hash to create unique negative ID
+            // Pack edge_idx and split_idx into a unique number
+            NodeId::Split(e, s) => {
+                let combined = ((e as i64) << 20) | (s as i64);
+                -(combined + 1_000_000_000) // Offset to avoid collision with Intersection IDs
+            }
         }
     }
 }
