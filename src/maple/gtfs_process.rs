@@ -121,8 +121,6 @@ pub async fn gtfs_process_feed(
     println!("Begin feed {} processing", feed_id);
     let start = Instant::now();
     let conn_pool = arc_conn_pool.as_ref();
-    let conn_pre = conn_pool.get().await;
-    let conn = &mut conn_pre?;
 
     //read the GTFS zip file
     let path = format!("{}/{}", gtfs_unzipped_path, feed_id);
@@ -959,7 +957,7 @@ pub async fn gtfs_process_feed(
 
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
-    let conn = &mut conn_pre?;
+    let mut conn = conn_pre?;
 
     //insert agencies
     let mut agency_id_already_done: HashSet<Option<&String>> = HashSet::new();
@@ -986,7 +984,7 @@ pub async fn gtfs_process_feed(
 
             diesel::insert_into(agencies)
                 .values(agency_row)
-                .execute(conn)
+                .execute(&mut conn)
                 .await?;
 
             agency_id_already_done.insert(agency.id.as_ref());
@@ -1002,6 +1000,11 @@ pub async fn gtfs_process_feed(
     println!("Inserting shapes for {}", feed_id);
 
     //shove raw geometry into postgresql
+
+    use catenary::postgres_tools::check_is_active;
+    if !check_is_active(&mut conn).await {
+        conn = conn_pool.get().await?;
+    }
 
     shapes_into_postgres(
         &gtfs,
@@ -1022,6 +1025,9 @@ pub async fn gtfs_process_feed(
 
     println!("Inserting calendar for {}", feed_id);
 
+    // check_is_active check not needed for pool based functions unless explicitly desired, relying on internal pool behavior
+    // but we can ensure our held connection is good if we used it, but here we call a function using pool.
+    
     calendar_into_postgres(
         &gtfs,
         feed_id,
@@ -1035,6 +1041,7 @@ pub async fn gtfs_process_feed(
     println!("Inserting stops for {}", feed_id);
 
     //insert stops
+    // check_postgres_alive(&conn_pool).await?; // relying on pool
     stops_into_postgres_and_elastic(
         &gtfs,
         feed_id,
@@ -1222,6 +1229,10 @@ pub async fn gtfs_process_feed(
             }
         }
 
+        if !check_is_active(&mut conn).await {
+            conn = conn_pool.get().await?;
+        }
+        
         conn.build_transaction()
             .run::<(), diesel::result::Error, _>(|conn| {
                 Box::pin(async move {
@@ -1330,6 +1341,10 @@ pub async fn gtfs_process_feed(
             }
         }
 
+        if !check_is_active(&mut conn).await {
+            conn = conn_pool.get().await?;
+        }
+
         conn.build_transaction()
             .run::<(), diesel::result::Error, _>(|conn| {
                 Box::pin(async move {
@@ -1405,6 +1420,10 @@ pub async fn gtfs_process_feed(
             for trip_chunk in trip_pg.chunks(2000) {
                 t_final.push(trip_chunk.to_vec());
             }
+        }
+
+        if !check_is_active(&mut conn).await {
+            conn = conn_pool.get().await?;
         }
 
         conn.build_transaction()
@@ -1657,6 +1676,10 @@ pub async fn gtfs_process_feed(
         finished_route_chunks_elasticsearch.push(insertable_elastic);
     }
 
+    if !check_is_active(&mut conn).await {
+        conn = conn_pool.get().await?;
+    }
+
     conn.build_transaction()
         .run::<(), diesel::result::Error, _>(|conn| {
             Box::pin(async move {
@@ -1704,6 +1727,10 @@ pub async fn gtfs_process_feed(
 
     // insert feed info
     if let Some(feed_info) = &feed_info {
+        if !check_is_active(&mut conn).await {
+            conn = conn_pool.get().await?;
+        }
+        
         use catenary::schema::gtfs::feed_info::dsl::feed_info as feed_table;
 
         let feed_info_pg = catenary::models::FeedInfo {
@@ -1723,7 +1750,7 @@ pub async fn gtfs_process_feed(
 
         diesel::insert_into(feed_table)
             .values(feed_info_pg)
-            .execute(conn)
+            .execute(&mut conn)
             .await?;
     }
     //submit hull
@@ -1768,6 +1795,10 @@ pub async fn gtfs_process_feed(
     };
 
     //create the static feed entry
+    if !check_is_active(&mut conn).await {
+        conn = conn_pool.get().await?;
+    }
+
     let _ = diesel::insert_into(catenary::schema::gtfs::static_feeds::dsl::static_feeds)
         .values(&static_feed_pg)
         .on_conflict(catenary::schema::gtfs::static_feeds::dsl::onestop_feed_id)
@@ -1778,7 +1809,7 @@ pub async fn gtfs_process_feed(
             catenary::schema::gtfs::static_feeds::dsl::hull
                 .eq(hull_pg.map(postgis_diesel::types::GeometryContainer::Polygon)),
         ))
-        .execute(conn)
+        .execute(&mut conn)
         .await?;
 
     let ingest_duration = start.elapsed();
