@@ -3299,54 +3299,38 @@ impl Optimizer {
             let use_left = cost_left < cost_right;
 
             // Sort lines using the chosen comparator
+            // Match C++ loom's LineCmp: direct lookup {a,b} only, XOR with rev flag
             let mut lines = edge.lines.clone();
             if use_left {
+                // LineCmp with rev=false: return map[{a,b}].first
                 lines.sort_by(|a, b| {
-                    // Check both directions to ensure total order
-                    let key_ab = (a.line_id.clone(), b.line_id.clone());
-                    let key_ba = (b.line_id.clone(), a.line_id.clone());
-                    
-                    if let Some((is_less, _)) = left.get(&key_ab) {
+                    let key = (a.line_id.clone(), b.line_id.clone());
+                    if let Some((is_less, _)) = left.get(&key) {
                         if *is_less {
-                            return std::cmp::Ordering::Less;
+                            std::cmp::Ordering::Less
                         } else {
-                            return std::cmp::Ordering::Greater;
+                            std::cmp::Ordering::Greater
                         }
+                    } else {
+                        // Fallback (should not happen since we build all pairs)
+                        a.line_id.cmp(&b.line_id)
                     }
-                    if let Some((is_less, _)) = left.get(&key_ba) {
-                        // If b < a, then a > b
-                        if *is_less {
-                            return std::cmp::Ordering::Greater;
-                        } else {
-                            return std::cmp::Ordering::Less;
-                        }
-                    }
-                    // Consistent fallback
-                    a.line_id.cmp(&b.line_id)
                 });
             } else {
+                // LineCmp with rev=true: return map[{a,b}].first ^ true (inverted)
                 lines.sort_by(|a, b| {
-                    // Check both directions to ensure total order
-                    let key_ab = (a.line_id.clone(), b.line_id.clone());
-                    let key_ba = (b.line_id.clone(), a.line_id.clone());
-                    
-                    if let Some((is_less, _)) = right.get(&key_ab) {
-                        // For right, the semantics are inverted
+                    let key = (a.line_id.clone(), b.line_id.clone());
+                    if let Some((is_less, _)) = right.get(&key) {
+                        // XOR with true inverts the result
                         if *is_less {
-                            return std::cmp::Ordering::Greater;
+                            std::cmp::Ordering::Greater
                         } else {
-                            return std::cmp::Ordering::Less;
+                            std::cmp::Ordering::Less
                         }
+                    } else {
+                        // Fallback (should not happen since we build all pairs)
+                        a.line_id.cmp(&b.line_id)
                     }
-                    if let Some((is_less, _)) = right.get(&key_ba) {
-                        if *is_less {
-                            return std::cmp::Ordering::Less;
-                        } else {
-                            return std::cmp::Ordering::Greater;
-                        }
-                    }
-                    // Consistent fallback
-                    a.line_id.cmp(&b.line_id)
                 });
             }
 
