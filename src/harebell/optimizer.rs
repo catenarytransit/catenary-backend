@@ -3300,39 +3300,37 @@ impl Optimizer {
 
             // Sort lines using the chosen comparator
             // Match C++ loom's LineCmp: direct lookup {a,b} only, XOR with rev flag
+            // CRITICAL: Must ensure total order:
+            //   1. Reflexivity: cmp(a, a) = Equal
+            //   2. Antisymmetry: if cmp(a, b) = Less then cmp(b, a) = Greater
+            //   3. Transitivity: if cmp(a, b) = Less and cmp(b, c) = Less then cmp(a, c) = Less
             let mut lines = edge.lines.clone();
-            if use_left {
-                // LineCmp with rev=false: return map[{a,b}].first
-                lines.sort_by(|a, b| {
-                    let key = (a.line_id.clone(), b.line_id.clone());
-                    if let Some((is_less, _)) = left.get(&key) {
-                        if *is_less {
-                            std::cmp::Ordering::Less
-                        } else {
-                            std::cmp::Ordering::Greater
-                        }
+            let cmp_map = if use_left { &left } else { &right };
+            let rev = !use_left; // right uses rev=true in C++ loom
+            
+            lines.sort_by(|a, b| {
+                // Reflexivity: equal elements must return Equal
+                if a.line_id == b.line_id {
+                    return std::cmp::Ordering::Equal;
+                }
+                
+                // Look up (a, b) in the map
+                let key = (a.line_id.clone(), b.line_id.clone());
+                if let Some((is_less, _)) = cmp_map.get(&key) {
+                    // C++ loom: return _map.find({a, b})->second.first ^ _rev
+                    // is_less is true if a < b according to guess_order
+                    // If rev, we invert the result
+                    let result = *is_less ^ rev;
+                    if result {
+                        std::cmp::Ordering::Less
                     } else {
-                        // Fallback (should not happen since we build all pairs)
-                        a.line_id.cmp(&b.line_id)
+                        std::cmp::Ordering::Greater
                     }
-                });
-            } else {
-                // LineCmp with rev=true: return map[{a,b}].first ^ true (inverted)
-                lines.sort_by(|a, b| {
-                    let key = (a.line_id.clone(), b.line_id.clone());
-                    if let Some((is_less, _)) = right.get(&key) {
-                        // XOR with true inverts the result
-                        if *is_less {
-                            std::cmp::Ordering::Greater
-                        } else {
-                            std::cmp::Ordering::Less
-                        }
-                    } else {
-                        // Fallback (should not happen since we build all pairs)
-                        a.line_id.cmp(&b.line_id)
-                    }
-                });
-            }
+                } else {
+                    // Fallback: use lexicographic ordering to ensure total order
+                    a.line_id.cmp(&b.line_id)
+                }
+            });
 
             cfg.insert(edge_idx, lines);
             settled.insert(edge_idx);
