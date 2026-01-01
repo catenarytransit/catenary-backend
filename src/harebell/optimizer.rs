@@ -242,31 +242,25 @@ impl Optimizer {
                 .product();
 
             // Match C++ ILPOptimizer.cpp line 33: if (solutionSpaceSize(g) < 500)
-            // For very small solution spaces, use simple greedy (like C++ ExhaustiveOptimizer)
+            // For very small solution spaces, use greedy + hill climbing (like C++ ExhaustiveOptimizer)
             if solution_space < 500.0 {
-                for &edge_idx in component {
-                    let mut lines = graph.edges[edge_idx].lines.clone();
-                    lines.sort_by(|a, b| a.line_id.cmp(&b.line_id));
-                    global_results.insert(edge_idx, lines);
-                }
+                let results = self.greedy_hillclimb_component(graph, component, &node_to_all_edges);
+                global_results.extend(results);
                 continue;
             }
 
-            // For very large solution spaces, use greedy instead of ILP to avoid OOM
-            // Lowered thresholds: size > 30 or solution_space > 1e10
+            // For very large solution spaces, use greedy + hill climbing instead of ILP to avoid OOM
+            // Thresholds: size > 30 or solution_space > 1e10
             if solution_space > 1e10 || size > 30 {
                 println!(
-                    "Component {}/{} (Size: {} edges, SolSpace: {:.0}) too large for ILP, using greedy.",
+                    "Component {}/{} (Size: {} edges, SolSpace: {:.0}) too large for ILP, using greedy+hillclimb.",
                     i + 1,
                     total_components,
                     size,
                     solution_space
                 );
-                for &edge_idx in component {
-                    let mut lines = graph.edges[edge_idx].lines.clone();
-                    lines.sort_by(|a, b| a.line_id.cmp(&b.line_id));
-                    global_results.insert(edge_idx, lines);
-                }
+                let results = self.greedy_hillclimb_component(graph, component, &node_to_all_edges);
+                global_results.extend(results);
                 continue;
             }
 
@@ -280,13 +274,10 @@ impl Optimizer {
             if let Some(res) = self.solve_component(graph, component, &node_to_all_edges) {
                 global_results.extend(res);
             } else {
-                // ILP failed, use greedy fallback
-                println!("  - ILP failed, using greedy fallback.");
-                for &edge_idx in component {
-                    let mut lines = graph.edges[edge_idx].lines.clone();
-                    lines.sort_by(|a, b| a.line_id.cmp(&b.line_id));
-                    global_results.insert(edge_idx, lines);
-                }
+                // ILP failed, use greedy + hill climbing fallback
+                println!("  - ILP failed, using greedy+hillclimb fallback.");
+                let results = self.greedy_hillclimb_component(graph, component, &node_to_all_edges);
+                global_results.extend(results);
             }
             println!("Component {}/{} solved.", i + 1, total_components);
         }
@@ -517,7 +508,7 @@ impl Optimizer {
                     edge_angles.push((idx, angle));
                 }
                 // Sort
-                edge_angles.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                edge_angles.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
                 // Rank map
                 let edge_rank: HashMap<usize, usize> = edge_angles
@@ -777,7 +768,7 @@ impl Optimizer {
             line_indices.sort_by(|&a, &b| {
                 let sum_a = ranks.iter().find(|(idx, _)| *idx == a).unwrap().1;
                 let sum_b = ranks.iter().find(|(idx, _)| *idx == b).unwrap().1;
-                sum_b.partial_cmp(&sum_a).unwrap() // Descending
+                sum_b.partial_cmp(&sum_a).unwrap_or(std::cmp::Ordering::Equal) // Descending
             });
 
             let new_lines: Vec<LineOnEdge> = line_indices
@@ -2929,5 +2920,668 @@ impl Optimizer {
             "Pruning Rule 2 Complete. Collapsed {} groups.",
             collapse_count
         );
+    }
+
+    // ============================================================================
+    // GREEDY + HILL CLIMBING OPTIMIZER (matching C++ loom)
+    // ============================================================================
+
+    /// Get edges around a node in clockwise order, starting from the "noon" edge.
+    /// Matches C++ loom's OptGraph::clockwEdges
+    fn clockwise_edges(
+        &self,
+        graph: &RenderGraph,
+        noon_edge_idx: usize,
+        node_id: i64,
+        node_to_edges: &HashMap<i64, Vec<usize>>,
+    ) -> Vec<usize> {
+        let connected = match node_to_edges.get(&node_id) {
+            Some(c) => c,
+            None => return vec![],
+        };
+
+        if connected.len() <= 1 {
+            return connected
+                .iter()
+                .filter(|&&e| e != noon_edge_idx)
+                .cloned()
+                .collect();
+        }
+
+        // Calculate angles for each edge relative to the node
+        let node = match graph.nodes.get(&node_id) {
+            Some(n) => n,
+            None => return vec![],
+        };
+
+        let mut edge_angles: Vec<(usize, f64)> = connected
+            .iter()
+            .map(|&edge_idx| {
+                let edge = &graph.edges[edge_idx];
+                let default = [node.x, node.y];
+                let (dx, dy) = if edge.from == node_id {
+                    let p1 = edge.geometry.get(0).unwrap_or(&default);
+                    let p2 = edge.geometry.get(1).unwrap_or(&default);
+                    (p2[0] - p1[0], p2[1] - p1[1])
+                } else {
+                    let p_last = edge.geometry.last().unwrap_or(&default);
+                    let p_prev = edge
+                        .geometry
+                        .get(edge.geometry.len().saturating_sub(2))
+                        .unwrap_or(&default);
+                    (p_prev[0] - p_last[0], p_prev[1] - p_last[1])
+                };
+                let angle = dy.atan2(dx);
+                let angle = if angle < 0.0 { angle + 2.0 * PI } else { angle };
+                (edge_idx, angle)
+            })
+            .collect();
+
+        edge_angles.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Find noon edge position
+        let noon_pos = edge_angles.iter().position(|(idx, _)| *idx == noon_edge_idx);
+
+        // Reorder starting after noon in clockwise order
+        let mut result = Vec::new();
+        if let Some(pos) = noon_pos {
+            // Add edges after noon (clockwise = increasing angle order)
+            for i in (pos + 1)..edge_angles.len() {
+                if edge_angles[i].0 != noon_edge_idx {
+                    result.push(edge_angles[i].0);
+                }
+            }
+            // Wrap around
+            for i in 0..pos {
+                if edge_angles[i].0 != noon_edge_idx {
+                    result.push(edge_angles[i].0);
+                }
+            }
+        } else {
+            // noon not found, return all except noon
+            result = edge_angles
+                .into_iter()
+                .filter(|(idx, _)| *idx != noon_edge_idx)
+                .map(|(idx, _)| idx)
+                .collect();
+        }
+
+        result
+    }
+
+    /// Get the initial edge for greedy algorithm: highest cardinality edge.
+    /// Matches C++ loom's GreedyOptimizer::getInitialEdge
+    fn get_initial_edge(&self, component: &[usize], graph: &RenderGraph) -> Option<usize> {
+        component
+            .iter()
+            .filter(|&&idx| graph.edges[idx].lines.len() >= 2)
+            .max_by_key(|&&idx| graph.edges[idx].lines.len())
+            .cloned()
+    }
+
+    /// Get next unsettled edge adjacent to the settled set.
+    /// Matches C++ loom's GreedyOptimizer::getNextEdge
+    fn get_next_edge(
+        &self,
+        graph: &RenderGraph,
+        settled: &HashSet<usize>,
+        node_to_edges: &HashMap<i64, Vec<usize>>,
+        component_set: &HashSet<usize>,
+    ) -> Option<usize> {
+        for &edge_idx in settled.iter() {
+            let edge = &graph.edges[edge_idx];
+
+            // Check adjacent edges at 'from' node
+            if let Some(adj_edges) = node_to_edges.get(&edge.from) {
+                for &adj_idx in adj_edges {
+                    if !settled.contains(&adj_idx) && component_set.contains(&adj_idx) {
+                        return Some(adj_idx);
+                    }
+                }
+            }
+
+            // Check adjacent edges at 'to' node
+            if let Some(adj_edges) = node_to_edges.get(&edge.to) {
+                for &adj_idx in adj_edges {
+                    if !settled.contains(&adj_idx) && component_set.contains(&adj_idx) {
+                        return Some(adj_idx);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Determine if line A should come before line B based on already-settled edges.
+    /// Returns (decision, cost):
+    ///   decision: 1 = A < B, -1 = B < A, 0 = undecided
+    ///   cost: penalty weight
+    /// Matches C++ loom's GreedyOptimizer::smallerThanAt
+    fn smaller_than_at(
+        &self,
+        graph: &RenderGraph,
+        line_a: &str,
+        line_b: &str,
+        start_edge_idx: usize,
+        node_id: i64,
+        ignore_edge_idx: usize,
+        cfg: &HashMap<usize, Vec<LineOnEdge>>,
+        node_to_edges: &HashMap<i64, Vec<usize>>,
+    ) -> (i32, f64) {
+        let clockwise = self.clockwise_edges(graph, start_edge_idx, node_id, node_to_edges);
+
+        let mut positions_a: Vec<usize> = Vec::new();
+        let mut positions_b: Vec<usize> = Vec::new();
+        let mut cost = 0.0;
+        let mut offset = 0usize;
+
+        for edge_idx in clockwise {
+            if edge_idx == ignore_edge_idx {
+                continue;
+            }
+
+            let edge = &graph.edges[edge_idx];
+            let has_a = edge.lines.iter().any(|l| l.line_id == line_a);
+            let has_b = edge.lines.iter().any(|l| l.line_id == line_b);
+
+            if has_a && has_b {
+                // Both lines on this edge - check settled ordering
+                if let Some(ordered_lines) = cfg.get(&edge_idx) {
+                    let rev = (edge.from != node_id) ^ edge.dir;
+
+                    let pos_a = ordered_lines.iter().position(|l| l.line_id == line_a);
+                    let pos_b = ordered_lines.iter().position(|l| l.line_id == line_b);
+
+                    if let (Some(pa), Some(pb)) = (pos_a, pos_b) {
+                        let n = ordered_lines.len();
+                        if rev {
+                            positions_a.push(offset + pa);
+                            positions_b.push(offset + pb);
+                        } else {
+                            positions_a.push(offset + (n - 1 - pa));
+                            positions_b.push(offset + (n - 1 - pb));
+                        }
+                        // Crossing penalty for same-segment (both lines on edge)
+                        cost += 40.0;
+                    }
+                }
+            } else if has_a {
+                positions_a.push(offset);
+                cost += 10.0; // Different segment penalty
+            } else if has_b {
+                positions_b.push(offset);
+                cost += 10.0;
+            }
+
+            offset += edge.lines.len();
+        }
+
+        if positions_a.is_empty() || positions_b.is_empty() {
+            return (0, 0.0);
+        }
+
+        // Check if all A positions come before all B positions
+        if let (Some(&max_a), Some(&min_b)) = (positions_a.iter().max(), positions_b.iter().min()) {
+            if max_a < min_b {
+                return (1, cost); // A < B
+            }
+        }
+        if let (Some(&min_a), Some(&max_b)) = (positions_a.iter().min(), positions_b.iter().max()) {
+            if min_a > max_b {
+                return (-1, cost); // B < A
+            }
+        }
+
+        (0, 0.0) // Undecided
+    }
+
+    /// Guess whether line A should come before line B on an edge.
+    /// Walks through adjacent settled edges to make the decision.
+    /// Matches C++ loom's GreedyOptimizer::guess
+    fn guess_order(
+        &self,
+        graph: &RenderGraph,
+        line_a: &str,
+        line_b: &str,
+        start_edge_idx: usize,
+        ref_node_id: i64,
+        cfg: &HashMap<usize, Vec<LineOnEdge>>,
+        node_to_edges: &HashMap<i64, Vec<usize>>,
+    ) -> (bool, f64) {
+        let edge = &graph.edges[start_edge_idx];
+        let mut dec = 0i32;
+        let mut cost = 0.0;
+        let mut not_ref = false;
+
+        // Try from ref node first
+        let result = self.smaller_than_at(
+            graph,
+            line_a,
+            line_b,
+            start_edge_idx,
+            ref_node_id,
+            start_edge_idx,
+            cfg,
+            node_to_edges,
+        );
+        if result.0 != 0 {
+            dec = result.0;
+            cost = result.1;
+        }
+
+        // If undecided, try from other node
+        if dec == 0 {
+            let other_node_id = if edge.from == ref_node_id {
+                edge.to
+            } else {
+                edge.from
+            };
+            let result = self.smaller_than_at(
+                graph,
+                line_a,
+                line_b,
+                start_edge_idx,
+                other_node_id,
+                start_edge_idx,
+                cfg,
+                node_to_edges,
+            );
+            if result.0 != 0 {
+                dec = result.0;
+                cost = result.1;
+                not_ref = true;
+            }
+        }
+
+        // Build return value with direction adjustment
+        let rev = !edge.dir;
+
+        if dec == 1 {
+            return (not_ref ^ rev, cost);
+        }
+        if dec == -1 {
+            return (!not_ref ^ rev, cost);
+        }
+
+        // Undecided - fall back to line ID comparison
+        (line_a < line_b, 0.0)
+    }
+
+    /// Greedy ordering for a component.
+    /// Implements C++ loom's GreedyOptimizer::getFlatConfig
+    pub fn greedy_order_component(
+        &self,
+        graph: &RenderGraph,
+        component: &[usize],
+        node_to_edges: &HashMap<i64, Vec<usize>>,
+    ) -> HashMap<usize, Vec<LineOnEdge>> {
+        let mut cfg: HashMap<usize, Vec<LineOnEdge>> = HashMap::new();
+        let mut settled: HashSet<usize> = HashSet::new();
+        let component_set: HashSet<usize> = component.iter().cloned().collect();
+
+        // Get initial edge (highest cardinality)
+        let initial = match self.get_initial_edge(component, graph) {
+            Some(e) => e,
+            None => {
+                // No suitable edge, just return lines in existing order
+                for &edge_idx in component {
+                    cfg.insert(edge_idx, graph.edges[edge_idx].lines.clone());
+                }
+                return cfg;
+            }
+        };
+
+        // Process edges one by one
+        let mut current_edge = Some(initial);
+
+        while let Some(edge_idx) = current_edge {
+            let edge = &graph.edges[edge_idx];
+
+            // Build comparison map for left and right orientations
+            // Cmp: (line_a, line_b) -> (should_a_be_first, cost)
+            let mut left: HashMap<(String, String), (bool, f64)> = HashMap::new();
+            let mut right: HashMap<(String, String), (bool, f64)> = HashMap::new();
+
+            for lo1 in &edge.lines {
+                for lo2 in &edge.lines {
+                    if lo1.line_id == lo2.line_id {
+                        continue;
+                    }
+                    let key = (lo1.line_id.clone(), lo2.line_id.clone());
+                    left.insert(
+                        key.clone(),
+                        self.guess_order(
+                            graph,
+                            &lo1.line_id,
+                            &lo2.line_id,
+                            edge_idx,
+                            edge.from,
+                            &cfg,
+                            node_to_edges,
+                        ),
+                    );
+                    right.insert(
+                        key,
+                        self.guess_order(
+                            graph,
+                            &lo1.line_id,
+                            &lo2.line_id,
+                            edge_idx,
+                            edge.to,
+                            &cfg,
+                            node_to_edges,
+                        ),
+                    );
+                }
+            }
+
+            // Calculate costs for left vs right
+            let mut cost_left = 0.0;
+            let mut cost_right = 0.0;
+
+            for lo1 in &edge.lines {
+                for lo2 in &edge.lines {
+                    if lo1.line_id == lo2.line_id {
+                        continue;
+                    }
+                    let key = (lo1.line_id.clone(), lo2.line_id.clone());
+                    if let (Some(l), Some(r)) = (left.get(&key), right.get(&key)) {
+                        if l.0 == r.0 {
+                            // Agreement - add other side's cost as penalty
+                            cost_left += r.1;
+                            cost_right += l.1;
+                        }
+                    }
+                }
+            }
+
+            // Choose the cheaper orientation
+            let use_left = cost_left < cost_right;
+
+            // Sort lines using the chosen comparator
+            let mut lines = edge.lines.clone();
+            if use_left {
+                lines.sort_by(|a, b| {
+                    // Check both directions to ensure total order
+                    let key_ab = (a.line_id.clone(), b.line_id.clone());
+                    let key_ba = (b.line_id.clone(), a.line_id.clone());
+                    
+                    if let Some((is_less, _)) = left.get(&key_ab) {
+                        if *is_less {
+                            return std::cmp::Ordering::Less;
+                        } else {
+                            return std::cmp::Ordering::Greater;
+                        }
+                    }
+                    if let Some((is_less, _)) = left.get(&key_ba) {
+                        // If b < a, then a > b
+                        if *is_less {
+                            return std::cmp::Ordering::Greater;
+                        } else {
+                            return std::cmp::Ordering::Less;
+                        }
+                    }
+                    // Consistent fallback
+                    a.line_id.cmp(&b.line_id)
+                });
+            } else {
+                lines.sort_by(|a, b| {
+                    // Check both directions to ensure total order
+                    let key_ab = (a.line_id.clone(), b.line_id.clone());
+                    let key_ba = (b.line_id.clone(), a.line_id.clone());
+                    
+                    if let Some((is_less, _)) = right.get(&key_ab) {
+                        // For right, the semantics are inverted
+                        if *is_less {
+                            return std::cmp::Ordering::Greater;
+                        } else {
+                            return std::cmp::Ordering::Less;
+                        }
+                    }
+                    if let Some((is_less, _)) = right.get(&key_ba) {
+                        if *is_less {
+                            return std::cmp::Ordering::Less;
+                        } else {
+                            return std::cmp::Ordering::Greater;
+                        }
+                    }
+                    // Consistent fallback
+                    a.line_id.cmp(&b.line_id)
+                });
+            }
+
+            cfg.insert(edge_idx, lines);
+            settled.insert(edge_idx);
+
+            // Get next edge
+            current_edge = self.get_next_edge(graph, &settled, node_to_edges, &component_set);
+        }
+
+        // Handle any edges not reached (disconnected parts)
+        for &edge_idx in component {
+            if !cfg.contains_key(&edge_idx) {
+                cfg.insert(edge_idx, graph.edges[edge_idx].lines.clone());
+            }
+        }
+
+        cfg
+    }
+
+    /// Count crossings at a single node for a given edge ordering config.
+    /// Returns (same_segment_crossings, diff_segment_crossings)
+    fn count_crossings_at_node(
+        &self,
+        graph: &RenderGraph,
+        node_id: i64,
+        cfg: &HashMap<usize, Vec<LineOnEdge>>,
+        node_to_edges: &HashMap<i64, Vec<usize>>,
+    ) -> (usize, usize) {
+        let edges = match node_to_edges.get(&node_id) {
+            Some(e) => e,
+            None => return (0, 0),
+        };
+
+        let mut same_seg = 0usize;
+        let mut diff_seg = 0usize;
+
+        // For each pair of edges at this node
+        for i in 0..edges.len() {
+            for j in (i + 1)..edges.len() {
+                let ea_idx = edges[i];
+                let eb_idx = edges[j];
+                let ea = &graph.edges[ea_idx];
+                let eb = &graph.edges[eb_idx];
+
+                let cfg_a = match cfg.get(&ea_idx) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let cfg_b = match cfg.get(&eb_idx) {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                // Calculate reversal flags based on direction
+                let rev_a = (ea.from != node_id) ^ ea.dir;
+                let rev_b = (eb.from != node_id) ^ eb.dir;
+                let same_dir = !(rev_a ^ rev_b);
+
+                // Build relative ordering map for edge A
+                let mut ordering: HashMap<String, usize> = HashMap::new();
+                for (i, line) in cfg_a.iter().enumerate() {
+                    let pos = if same_dir {
+                        cfg_a.len() - 1 - i
+                    } else {
+                        i
+                    };
+                    ordering.insert(line.line_id.clone(), pos);
+                }
+
+                // Collect positions of shared lines in edge B's order
+                let mut rel_order: Vec<usize> = Vec::new();
+                for line in cfg_b.iter() {
+                    if let Some(&pos) = ordering.get(&line.line_id) {
+                        rel_order.push(pos);
+                    }
+                }
+
+                // Count inversions (crossings)
+                let inversions = self.count_inversions(&rel_order);
+
+                if cfg_a.len() == cfg_b.len() && rel_order.len() == cfg_a.len() {
+                    // Same segment crossing (all lines shared)
+                    same_seg += inversions;
+                } else {
+                    // Different segment crossing (partial sharing)
+                    diff_seg += inversions;
+                }
+            }
+        }
+
+        (same_seg, diff_seg)
+    }
+
+    /// Count inversions in a sequence (used for crossing count)
+    fn count_inversions(&self, arr: &[usize]) -> usize {
+        let mut count = 0;
+        for i in 0..arr.len() {
+            for j in (i + 1)..arr.len() {
+                if arr[i] > arr[j] {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// Compute total crossing score for a component
+    fn compute_crossing_score(
+        &self,
+        graph: &RenderGraph,
+        component: &[usize],
+        cfg: &HashMap<usize, Vec<LineOnEdge>>,
+        node_to_edges: &HashMap<i64, Vec<usize>>,
+    ) -> f64 {
+        // Collect all nodes in component
+        let mut nodes: HashSet<i64> = HashSet::new();
+        for &edge_idx in component {
+            let edge = &graph.edges[edge_idx];
+            nodes.insert(edge.from);
+            nodes.insert(edge.to);
+        }
+
+        let mut total = 0.0;
+        for node_id in nodes {
+            let (same, diff) = self.count_crossings_at_node(graph, node_id, cfg, node_to_edges);
+            total += same as f64 * 40.0 + diff as f64 * 10.0;
+        }
+
+        total
+    }
+
+    /// Compute crossing score for a single edge (at both endpoints)
+    fn compute_edge_score(
+        &self,
+        graph: &RenderGraph,
+        edge_idx: usize,
+        cfg: &HashMap<usize, Vec<LineOnEdge>>,
+        node_to_edges: &HashMap<i64, Vec<usize>>,
+    ) -> f64 {
+        let edge = &graph.edges[edge_idx];
+        let (same_from, diff_from) =
+            self.count_crossings_at_node(graph, edge.from, cfg, node_to_edges);
+        let (same_to, diff_to) = self.count_crossings_at_node(graph, edge.to, cfg, node_to_edges);
+
+        (same_from + same_to) as f64 * 40.0 + (diff_from + diff_to) as f64 * 10.0
+    }
+
+    /// Hill climbing optimization: iteratively swap line pairs to reduce crossings.
+    /// Matches C++ loom's HillClimbOptimizer::optimizeComp
+    pub fn hill_climb_refine(
+        &self,
+        graph: &RenderGraph,
+        component: &[usize],
+        mut cfg: HashMap<usize, Vec<LineOnEdge>>,
+        node_to_edges: &HashMap<i64, Vec<usize>>,
+    ) -> HashMap<usize, Vec<LineOnEdge>> {
+        // Only process edges with >= 2 lines
+        let edges: Vec<usize> = component
+            .iter()
+            .filter(|&&idx| graph.edges[idx].lines.len() >= 2)
+            .cloned()
+            .collect();
+
+        if edges.is_empty() {
+            return cfg;
+        }
+
+        loop {
+            let mut best_change = 0.0;
+            let mut best_edge = None;
+            let mut best_order: Option<Vec<LineOnEdge>> = None;
+
+            for &edge_idx in &edges {
+                let lines = match cfg.get(&edge_idx) {
+                    Some(l) => l.clone(),
+                    None => continue,
+                };
+
+                if lines.len() < 2 {
+                    continue;
+                }
+
+                let old_score = self.compute_edge_score(graph, edge_idx, &cfg, node_to_edges);
+
+                // Try all pairwise swaps
+                for p1 in 0..lines.len() {
+                    for p2 in p1..lines.len() {
+                        if p1 == p2 {
+                            continue;
+                        }
+
+                        // Swap
+                        let mut swapped = lines.clone();
+                        swapped.swap(p1, p2);
+                        cfg.insert(edge_idx, swapped.clone());
+
+                        let new_score = self.compute_edge_score(graph, edge_idx, &cfg, node_to_edges);
+
+                        if new_score < old_score && old_score - new_score > best_change {
+                            best_change = old_score - new_score;
+                            best_edge = Some(edge_idx);
+                            best_order = Some(swapped);
+                        }
+
+                        // Swap back
+                        cfg.insert(edge_idx, lines.clone());
+                    }
+                }
+            }
+
+            // Apply best improvement if found
+            match (best_edge, best_order) {
+                (Some(edge_idx), Some(order)) => {
+                    cfg.insert(edge_idx, order);
+                }
+                _ => break, // No improvement found, stop
+            }
+        }
+
+        cfg
+    }
+
+    /// Combined greedy + hill climbing for large components
+    /// Use this as fallback when ILP is too expensive
+    pub fn greedy_hillclimb_component(
+        &self,
+        graph: &RenderGraph,
+        component: &[usize],
+        node_to_edges: &HashMap<i64, Vec<usize>>,
+    ) -> HashMap<usize, Vec<LineOnEdge>> {
+        // Step 1: Greedy ordering
+        let cfg = self.greedy_order_component(graph, component, node_to_edges);
+
+        // Step 2: Hill climbing refinement
+        self.hill_climb_refine(graph, component, cfg, node_to_edges)
     }
 }

@@ -110,7 +110,7 @@ impl Loader {
 
             // If it's an intersection (negative ID), we need to ensure it's in `nodes`.
             // Use edge geometry endpoints.
-            if let NodeId::Intersection(_) = edge.from {
+            if let NodeId::Intersection(..) = edge.from {
                 if !nodes.contains_key(&from_node) {
                     if let Some(first_pt) = edge.geometry.first() {
                         nodes.insert(
@@ -127,7 +127,7 @@ impl Loader {
                 }
             }
 
-            if let NodeId::Intersection(_) = edge.to {
+            if let NodeId::Intersection(..) = edge.to {
                 if !nodes.contains_key(&to_node) {
                     if let Some(last_pt) = edge.geometry.last() {
                         nodes.insert(
@@ -283,7 +283,11 @@ impl Loader {
     fn convert_node_id(id: NodeId) -> i64 {
         match id {
             NodeId::Cluster(c) => c as i64,
-            NodeId::Intersection(i) => -((i + 1) as i64),
+            NodeId::Intersection(cluster_id, local_id) => {
+                // Combine cluster_id and local_id into a unique negative ID
+                let combined = ((cluster_id as i64) << 32) | (local_id as i64);
+                -((combined % 1_000_000_000) + 1) // Ensure it stays in a reasonable range
+            }
             // Split nodes: use a hash to create unique negative ID
             // Pack edge_idx and split_idx into a unique number
             NodeId::Split(e, s) => {

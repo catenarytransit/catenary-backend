@@ -3,7 +3,36 @@ use geo::{Coord, Rect};
 use log::{debug, info};
 use mvt::{GeomData, GeomEncoder, Tile};
 use pointy::BBox;
+use rayon::prelude::*;
+use std::collections::HashSet;
 use std::f64::consts::PI;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Result of parallel tile generation
+pub struct GeneratedTile {
+    pub z: u8,
+    pub x: u32,
+    pub y: u32,
+    pub tile: Tile,
+}
+
+/// Configuration for parallel tile generation
+#[derive(Debug, Clone)]
+pub struct ParallelTileConfig {
+    /// Number of threads to use (None = use rayon default)
+    pub num_threads: Option<usize>,
+    /// Buffer percentage for tile bounds (default 0.1 = 10%)
+    pub buffer_pct: f64,
+}
+
+impl Default for ParallelTileConfig {
+    fn default() -> Self {
+        Self {
+            num_threads: None,
+            buffer_pct: 0.1,
+        }
+    }
+}
 
 pub struct TileGenerator;
 
@@ -588,28 +617,37 @@ impl TileGenerator {
                     }
 
                     // Build groups for each edge by COLOR
-                    // Returns: Vec of (color, line_indices, Set<line_id>)
+                    // Returns: Vec of (color, line_indices, Set<line_id>, Vec<(chateau_id, route_id)>)
+                    // The route metadata is needed to check restrictions
                     let build_groups = |edge: &crate::graph::Edge| -> Vec<(
                         String,
                         Vec<usize>,
                         std::collections::HashSet<String>,
+                        Vec<(String, String)>,
                     )> {
                         let mut groups: Vec<(
                             String,
                             Vec<usize>,
                             std::collections::HashSet<String>,
+                            Vec<(String, String)>,
                         )> = Vec::new();
                         for (idx, line) in edge.lines.iter().enumerate() {
                             if let Some(last_group) = groups.last_mut() {
                                 if last_group.0 == line.color {
                                     last_group.1.push(idx);
                                     last_group.2.insert(line.line_id.clone());
+                                    last_group.3.push((line.chateau_id.clone(), line.route_id.clone()));
                                     continue;
                                 }
                             }
                             let mut set = std::collections::HashSet::new();
                             set.insert(line.line_id.clone());
-                            groups.push((line.color.clone(), vec![idx], set));
+                            groups.push((
+                                line.color.clone(),
+                                vec![idx],
+                                set,
+                                vec![(line.chateau_id.clone(), line.route_id.clone())],
+                            ));
                         }
                         groups
                     };
@@ -623,16 +661,40 @@ impl TileGenerator {
                     let mut drawn_pairs: std::collections::HashSet<(usize, usize)> =
                         std::collections::HashSet::new();
 
-                    // Match groups that have same color AND share at least one line_id
-                    for (group1_idx, (color1, line_indices1, ids1)) in groups1.iter().enumerate() {
+                    // Match groups that have same color AND share at least one UNRESTRICTED route
+                    // This fixes the "ladder" bug where routes that split at junctions were
+                    // incorrectly connected across all branch combinations.
+                    for (group1_idx, (color1, line_indices1, ids1, routes1)) in groups1.iter().enumerate() {
                         // Find matching group on edge2
                         // Must match color AND have at least one shared line_id
                         let group2_match =
-                            groups2.iter().enumerate().find(|(_, (color2, _, ids2))| {
-                                color1 == color2 && !ids1.is_disjoint(ids2)
+                            groups2.iter().enumerate().find(|(_, (color2, _, ids2, routes2))| {
+                                if color1 != color2 || ids1.is_disjoint(ids2) {
+                                    return false;
+                                }
+                                // Check if at least one route is NOT restricted between these edges
+                                // A route can transition if it's NOT in the restriction map
+                                for route in routes1 {
+                                    if !routes2.contains(route) {
+                                        continue;
+                                    }
+                                    // Check if this route is restricted
+                                    let is_restricted = graph.restrictions
+                                        .get(&(edge1_idx, edge2_idx))
+                                        .map(|r| r.contains(route))
+                                        .unwrap_or(false)
+                                        || graph.restrictions
+                                            .get(&(edge2_idx, edge1_idx))
+                                            .map(|r| r.contains(route))
+                                            .unwrap_or(false);
+                                    if !is_restricted {
+                                        return true; // Found at least one unrestricted shared route
+                                    }
+                                }
+                                false // All shared routes are restricted
                             });
 
-                        let (group2_idx, (_, _line_indices2, _)) = match group2_match {
+                        let (group2_idx, (_, _line_indices2, _, _)) = match group2_match {
                             Some(r) => r,
                             None => continue,
                         };
@@ -750,7 +812,10 @@ impl TileGenerator {
                         }
 
                         // Generate Bezier curve
-                        let ctrl_dist = dist * 0.55;
+                        // Cap control distance to cutback distance to prevent bezier from 
+                        // extending beyond the cutback points (matching C++ loom behavior)
+                        let cutback_dist = spacing * 2.0;
+                        let ctrl_dist = (dist * 0.55).min(cutback_dist);
                         let cp1 = (p1.0 + dir1.0 * ctrl_dist, p1.1 + dir1.1 * ctrl_dist);
                         let cp2 = (p2.0 + dir2.0 * ctrl_dist, p2.1 + dir2.1 * ctrl_dist);
 
@@ -781,6 +846,216 @@ impl TileGenerator {
             }
         }
         layer
+    }
+
+    // ========== Parallel Tile Generation Methods ==========
+
+    /// Generate multiple tiles in parallel.
+    /// Returns a vector of generated tiles with their coordinates.
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `tiles` - List of (z, x, y) tile coordinates to generate
+    ///
+    /// # Example
+    /// ```ignore
+    /// let tiles = vec![(10, 512, 512), (10, 512, 513), (10, 513, 512)];
+    /// let results = TileGenerator::generate_tiles_parallel(graph, &tiles);
+    /// ```
+    pub fn generate_tiles_parallel(graph: &RenderGraph, tiles: &[(u8, u32, u32)]) -> Vec<GeneratedTile> {
+        tiles
+            .par_iter()
+            .map(|&(z, x, y)| {
+                let tile = Self::generate_tile(graph, z, x, y);
+                GeneratedTile { z, x, y, tile }
+            })
+            .collect()
+    }
+
+    /// Generate multiple tiles in parallel with progress tracking.
+    /// The progress counter is updated atomically as tiles are completed.
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `tiles` - List of (z, x, y) tile coordinates to generate
+    /// * `progress` - Atomic counter that tracks the number of completed tiles
+    ///
+    /// # Example
+    /// ```ignore
+    /// use std::sync::atomic::{AtomicUsize, Ordering};
+    /// use std::sync::Arc;
+    ///
+    /// let tiles = vec![(10, 512, 512), (10, 512, 513), (10, 513, 512)];
+    /// let progress = Arc::new(AtomicUsize::new(0));
+    /// let total = tiles.len();
+    ///
+    /// // In another thread, monitor progress
+    /// let progress_clone = progress.clone();
+    /// std::thread::spawn(move || {
+    ///     loop {
+    ///         let completed = progress_clone.load(Ordering::Relaxed);
+    ///         println!("Progress: {}/{}", completed, total);
+    ///         if completed >= total { break; }
+    ///         std::thread::sleep(std::time::Duration::from_millis(100));
+    ///     }
+    /// });
+    ///
+    /// let results = TileGenerator::generate_tiles_parallel_with_progress(graph, &tiles, &progress);
+    /// ```
+    pub fn generate_tiles_parallel_with_progress(
+        graph: &RenderGraph,
+        tiles: &[(u8, u32, u32)],
+        progress: &AtomicUsize,
+    ) -> Vec<GeneratedTile> {
+        tiles
+            .par_iter()
+            .map(|&(z, x, y)| {
+                let tile = Self::generate_tile(graph, z, x, y);
+                progress.fetch_add(1, Ordering::Relaxed);
+                GeneratedTile { z, x, y, tile }
+            })
+            .collect()
+    }
+
+    /// Generate all tiles for a specific zoom level in parallel.
+    /// Automatically determines which tiles need to be generated based on the graph's spatial index.
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `z` - Zoom level to generate tiles for
+    ///
+    /// # Returns
+    /// A vector of generated tiles for the specified zoom level
+    pub fn generate_tiles_for_zoom_level(graph: &RenderGraph, z: u8) -> Vec<GeneratedTile> {
+        let tile_coords = Self::collect_tiles_for_zoom(graph, z);
+        info!(
+            "Generating {} tiles for zoom level {} in parallel",
+            tile_coords.len(),
+            z
+        );
+        Self::generate_tiles_parallel(graph, &tile_coords)
+    }
+
+    /// Generate all tiles for a zoom level range in parallel.
+    /// Generates tiles for each zoom level from min_z to max_z (inclusive).
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `min_z` - Minimum zoom level (inclusive)
+    /// * `max_z` - Maximum zoom level (inclusive)
+    ///
+    /// # Returns
+    /// A vector of all generated tiles across all zoom levels
+    pub fn generate_tiles_for_zoom_range(
+        graph: &RenderGraph,
+        min_z: u8,
+        max_z: u8,
+    ) -> Vec<GeneratedTile> {
+        // Collect all tile coordinates for all zoom levels
+        let all_tiles: Vec<(u8, u32, u32)> = (min_z..=max_z)
+            .flat_map(|z| Self::collect_tiles_for_zoom(graph, z))
+            .collect();
+
+        info!(
+            "Generating {} total tiles for zoom levels {}-{} in parallel",
+            all_tiles.len(),
+            min_z,
+            max_z
+        );
+
+        Self::generate_tiles_parallel(graph, &all_tiles)
+    }
+
+    /// Generate all tiles for a zoom level range with progress tracking.
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `min_z` - Minimum zoom level (inclusive)
+    /// * `max_z` - Maximum zoom level (inclusive)
+    /// * `progress` - Atomic counter that tracks the number of completed tiles
+    ///
+    /// # Returns
+    /// A tuple of (total tile count, vector of generated tiles)
+    pub fn generate_tiles_for_zoom_range_with_progress(
+        graph: &RenderGraph,
+        min_z: u8,
+        max_z: u8,
+        progress: &AtomicUsize,
+    ) -> (usize, Vec<GeneratedTile>) {
+        let all_tiles: Vec<(u8, u32, u32)> = (min_z..=max_z)
+            .flat_map(|z| Self::collect_tiles_for_zoom(graph, z))
+            .collect();
+
+        let total = all_tiles.len();
+        info!(
+            "Generating {} total tiles for zoom levels {}-{} in parallel",
+            total, min_z, max_z
+        );
+
+        let tiles = Self::generate_tiles_parallel_with_progress(graph, &all_tiles, progress);
+        (total, tiles)
+    }
+
+    /// Collect all tile coordinates that need to be generated for a zoom level.
+    /// Uses the graph's spatial index to determine which tiles contain data.
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `z` - Zoom level
+    ///
+    /// # Returns
+    /// A vector of (z, x, y) tile coordinates
+    pub fn collect_tiles_for_zoom(graph: &RenderGraph, z: u8) -> Vec<(u8, u32, u32)> {
+        let mut tiles: HashSet<(u32, u32)> = HashSet::new();
+
+        // Query the spatial index to find all edges
+        for item in graph.tree.iter() {
+            let bounds = item.geom();
+            let min_pt = bounds.lower();
+            let max_pt = bounds.upper();
+
+            // Convert lat/lon to tile coordinates
+            let (min_tx, min_ty) = Self::latlon_to_tile(min_pt[1], min_pt[0], z);
+            let (max_tx, max_ty) = Self::latlon_to_tile(max_pt[1], max_pt[0], z);
+
+            // Ensure we iterate from smaller to larger tile coordinates
+            let (tx_start, tx_end) = (min_tx.min(max_tx), min_tx.max(max_tx));
+            let (ty_start, ty_end) = (min_ty.min(max_ty), min_ty.max(max_ty));
+
+            for x in tx_start..=tx_end {
+                for y in ty_start..=ty_end {
+                    tiles.insert((x, y));
+                }
+            }
+        }
+
+        tiles.into_iter().map(|(x, y)| (z, x, y)).collect()
+    }
+
+    /// Convert latitude/longitude to tile coordinates.
+    fn latlon_to_tile(lat: f64, lon: f64, z: u8) -> (u32, u32) {
+        let n = 2.0f64.powi(z as i32);
+        let x = ((lon + 180.0) / 360.0 * n).floor() as u32;
+        let lat_rad = lat.to_radians();
+        let y = ((1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0 * n).floor() as u32;
+        (x, y)
+    }
+
+    /// Set the thread pool size for parallel operations.
+    /// This affects all subsequent parallel tile generation calls.
+    ///
+    /// Note: This function should be called before starting tile generation.
+    /// Calling it during generation may have undefined behavior.
+    ///
+    /// # Arguments
+    /// * `num_threads` - Number of threads to use for parallel operations
+    ///
+    /// # Returns
+    /// Result indicating success or failure of thread pool initialization
+    pub fn set_thread_pool_size(num_threads: usize) -> Result<(), rayon::ThreadPoolBuildError> {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build_global()
     }
 }
 
