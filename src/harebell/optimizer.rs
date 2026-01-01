@@ -3298,39 +3298,38 @@ impl Optimizer {
             // Choose the cheaper orientation
             let use_left = cost_left < cost_right;
 
-            // Sort lines using the chosen comparator
-            // Match C++ loom's LineCmp: direct lookup {a,b} only, XOR with rev flag
-            // CRITICAL: Must ensure total order:
-            //   1. Reflexivity: cmp(a, a) = Equal
-            //   2. Antisymmetry: if cmp(a, b) = Less then cmp(b, a) = Greater
-            //   3. Transitivity: if cmp(a, b) = Less and cmp(b, c) = Less then cmp(a, c) = Less
+            // Sort lines using insertion sort - avoids Rust's sort_by total order validation
+            // which panics on non-transitive comparisons (which can happen with greedy guessing)
+            // C++ std::sort has undefined behavior with non-transitive comparisons but doesn't panic;
+            // insertion sort gives us similar tolerance.
             let mut lines = edge.lines.clone();
             let cmp_map = if use_left { &left } else { &right };
             let rev = !use_left; // right uses rev=true in C++ loom
             
-            lines.sort_by(|a, b| {
-                // Reflexivity: equal elements must return Equal
-                if a.line_id == b.line_id {
-                    return std::cmp::Ordering::Equal;
-                }
-                
-                // Look up (a, b) in the map
-                let key = (a.line_id.clone(), b.line_id.clone());
-                if let Some((is_less, _)) = cmp_map.get(&key) {
-                    // C++ loom: return _map.find({a, b})->second.first ^ _rev
-                    // is_less is true if a < b according to guess_order
-                    // If rev, we invert the result
-                    let result = *is_less ^ rev;
-                    if result {
-                        std::cmp::Ordering::Less
+            // Custom insertion sort that handles potentially non-transitive comparisons
+            for i in 1..lines.len() {
+                let mut j = i;
+                while j > 0 {
+                    let key = (lines[j].line_id.clone(), lines[j - 1].line_id.clone());
+                    let should_swap = if lines[j].line_id == lines[j - 1].line_id {
+                        false // equal elements stay in place
+                    } else if let Some((is_less, _)) = cmp_map.get(&key) {
+                        // C++ loom: return _map.find({a, b})->second.first ^ _rev
+                        // is_less here means lines[j] < lines[j-1]
+                        *is_less ^ rev
                     } else {
-                        std::cmp::Ordering::Greater
+                        // Fallback to lexicographic ordering
+                        lines[j].line_id < lines[j - 1].line_id
+                    };
+                    
+                    if should_swap {
+                        lines.swap(j, j - 1);
+                        j -= 1;
+                    } else {
+                        break;
                     }
-                } else {
-                    // Fallback: use lexicographic ordering to ensure total order
-                    a.line_id.cmp(&b.line_id)
                 }
-            });
+            }
 
             cfg.insert(edge_idx, lines);
             settled.insert(edge_idx);
