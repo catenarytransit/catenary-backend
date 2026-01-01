@@ -197,7 +197,7 @@ impl BoundaryNodeTracker {
             .entry(key)
             .or_insert_with(|| {
                 // Use sequential IDs for boundary nodes (managed by shared counter)
-                let id = NodeId::Intersection(*node_id_counter);
+                let id = NodeId::Intersection(0, *node_id_counter);
                 *node_id_counter += 1;
                 id
             })

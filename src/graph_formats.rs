@@ -36,7 +36,8 @@ pub struct LandMass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum NodeId {
     Cluster(usize),
-    Intersection(usize),
+    /// Intersection node with (cluster_id, local_id) tuple to ensure global uniqueness across clusters
+    Intersection(usize, usize),
     Split(usize, usize), // (edge_index, split_index)
 }
 

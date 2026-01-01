@@ -1100,7 +1100,7 @@ fn split_edges_at_points(
             }
 
             // Assign the globally unique ID
-            let new_node_id = NodeId::Intersection(start_id + p_idx);
+            let new_node_id = NodeId::Intersection(0, start_id + p_idx);
 
             if let Some(geom) = get_line_substring(&geo_line, current_frac, frac) {
                 #[allow(deprecated)]
@@ -1605,11 +1605,11 @@ fn collapse_component_impl(
                 let from_node = img_nds
                     .get(&u_id)
                     .copied()
-                    .unwrap_or(NodeId::Intersection(u_id));
+                    .unwrap_or(NodeId::Intersection(0, u_id));
                 let to_node = img_nds
                     .get(&v_id)
                     .copied()
-                    .unwrap_or(NodeId::Intersection(v_id));
+                    .unwrap_or(NodeId::Intersection(0, v_id));
 
                 let segment_len = u_pt.haversine_distance(&v_pt);
                 new_edges.push(GraphEdge {
@@ -1730,10 +1730,10 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
     let mut edge_lengths_deg: Vec<f64> = Vec::with_capacity(edges.len());
 
     for (i, edge) in edges.iter().enumerate() {
-        if let NodeId::Intersection(u) = edge.from {
+        if let NodeId::Intersection(_, u) = edge.from {
             adj.entry(u).or_default().1.push(i);
         }
-        if let NodeId::Intersection(v) = edge.to {
+        if let NodeId::Intersection(_, v) = edge.to {
             adj.entry(v).or_default().0.push(i);
         }
 
@@ -1818,7 +1818,7 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         let start_node = edges[i].from;
         let is_start = match start_node {
             NodeId::Cluster(_) => true,
-            NodeId::Intersection(u_id) => {
+            NodeId::Intersection(_, u_id) => {
                 if let Some((in_list, out_list)) = adj.get(&u_id) {
                     let in_count = count_route_matches(in_list, &edges[i]);
                     let out_count = count_route_matches(out_list, &edges[i]);
@@ -1838,7 +1838,7 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
             let mut curr = i;
             loop {
                 let curr_edge = &edges[curr];
-                if let NodeId::Intersection(v) = curr_edge.to {
+                if let NodeId::Intersection(_, v) = curr_edge.to {
                     // Check if we can traverse THROUGH v
                     if let Some((v_in, v_out)) = adj.get(&v) {
                         let in_count = count_route_matches(v_in, &edges[curr]);
@@ -1885,7 +1885,7 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
             let mut curr = i;
             loop {
                 let curr_edge = &edges[curr];
-                if let NodeId::Intersection(v) = curr_edge.to {
+                if let NodeId::Intersection(_, v) = curr_edge.to {
                     if let Some((v_in, v_out)) = adj.get(&v) {
                         let in_count = count_route_matches(v_in, &edges[curr]);
                         let next_match = find_route_match(v_out, &edges[curr]);

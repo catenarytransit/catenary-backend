@@ -1,5 +1,5 @@
 use crate::edges::{GraphEdge, NodeId, convert_from_geo, convert_to_geo};
-use crate::intercity_split::{LongEdgeRegistry, extract_long_intercity_edges};
+use crate::intercity_split::adaptive_densify_spacing;
 use crate::partitioning::*;
 use ahash::{AHashMap, AHashSet};
 use anyhow::Result;
@@ -13,6 +13,88 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, Mutex};
+
+// ===========================================================================
+// Bounding Box Validation for Debugging Geometry Corruption
+// ===========================================================================
+
+/// Bounding box in the format (min_x, min_y, max_x, max_y)
+type BBox = (f64, f64, f64, f64);
+
+/// Compute bounding box of an edge's geometry
+fn compute_edge_bbox(edge: &GraphEdge) -> BBox {
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for pt in &edge.geometry.points {
+        min_x = min_x.min(pt.x);
+        min_y = min_y.min(pt.y);
+        max_x = max_x.max(pt.x);
+        max_y = max_y.max(pt.y);
+    }
+    (min_x, min_y, max_x, max_y)
+}
+
+/// Validate that an edge's geometry stays within expected bounds.
+/// Returns true if valid, false if corruption detected.
+fn validate_edge_geometry(
+    edge: &GraphEdge,
+    original_bbox: BBox,
+    max_expansion: f64, // Maximum allowed expansion in meters (Web Mercator)
+    context: &str,
+) -> bool {
+    let current_bbox = compute_edge_bbox(edge);
+
+    // Check if bbox has expanded beyond threshold
+    let dx_min = (current_bbox.0 - original_bbox.0).abs();
+    let dy_min = (current_bbox.1 - original_bbox.1).abs();
+    let dx_max = (current_bbox.2 - original_bbox.2).abs();
+    let dy_max = (current_bbox.3 - original_bbox.3).abs();
+
+    let max_delta = dx_min.max(dy_min).max(dx_max).max(dy_max);
+
+    if max_delta > max_expansion {
+        eprintln!("WARNING: Edge geometry corruption detected [{}]", context);
+        eprintln!(
+            "  Original bbox: ({:.1}, {:.1}) - ({:.1}, {:.1})",
+            original_bbox.0, original_bbox.1, original_bbox.2, original_bbox.3
+        );
+        eprintln!(
+            "  Current bbox:  ({:.1}, {:.1}) - ({:.1}, {:.1})",
+            current_bbox.0, current_bbox.1, current_bbox.2, current_bbox.3
+        );
+        eprintln!("  Max delta: {:.1}m, threshold: {:.1}m", max_delta, max_expansion);
+        eprintln!("  Routes: {:?}", edge.routes);
+        eprintln!("  From: {:?}, To: {:?}", edge.from, edge.to);
+        return false;
+    }
+    true
+}
+
+/// Validate a batch of edges against their original bboxes.
+/// Returns count of corrupted edges found.
+fn validate_edge_batch(
+    edges: &[GraphEdge],
+    original_bboxes: &HashMap<usize, BBox>,
+    max_expansion: f64,
+    context: &str,
+) -> usize {
+    let mut corrupted_count = 0;
+    for (idx, edge) in edges.iter().enumerate() {
+        if let Some(&original_bbox) = original_bboxes.get(&idx) {
+            if !validate_edge_geometry(edge, original_bbox, max_expansion, context) {
+                corrupted_count += 1;
+            }
+        }
+    }
+    if corrupted_count > 0 {
+        eprintln!(
+            "=== VALIDATION FAILED [{}]: {} corrupted edges out of {} ===",
+            context,
+            corrupted_count,
+            edges.len()
+        );
+    }
+    corrupted_count
+}
 
 // ===========================================================================
 // Node ID Allocator for parallel cluster processing
@@ -207,6 +289,10 @@ pub struct LineNode {
     pub conn_exc: AHashMap<(String, String), AHashMap<usize, AHashSet<usize>>>,
     // Track how many points have been merged into this node for weighted centroid
     pub merge_count: usize,
+    // CRITICAL: Preserve original NodeId through cluster processing
+    // If Some, use this NodeId when converting back to GraphEdge (boundary nodes)
+    // If None, generate a new NodeId from self.id (internal nodes)
+    pub original_node_id: Option<NodeId>,
 }
 
 impl LineNode {
@@ -217,6 +303,19 @@ impl LineNode {
             adj_list: Vec::new(),
             conn_exc: AHashMap::new(),
             merge_count: 1, // Start at 1 - the initial point
+            original_node_id: None,
+        }
+    }
+
+    /// Create a new LineNode with an original NodeId preserved from input
+    pub fn new_with_original(id: usize, pos: [f64; 2], original_node_id: NodeId) -> Self {
+        Self {
+            id,
+            pos,
+            adj_list: Vec::new(),
+            conn_exc: AHashMap::new(),
+            merge_count: 1,
+            original_node_id: Some(original_node_id),
         }
     }
 
@@ -306,6 +405,16 @@ impl LineGraph {
         let id = self.next_node_id;
         self.next_node_id += 1;
         let node = Rc::new(RefCell::new(LineNode::new(id, pos)));
+        self.nodes.push(Rc::clone(&node));
+        node
+    }
+
+    /// Add a node with an original NodeId preserved from input edges.
+    /// Use this for boundary nodes that need to maintain connectivity across clusters.
+    fn add_nd_with_original(&mut self, pos: [f64; 2], original_node_id: NodeId) -> NodeRef {
+        let id = self.next_node_id;
+        self.next_node_id += 1;
+        let node = Rc::new(RefCell::new(LineNode::new_with_original(id, pos, original_node_id)));
         self.nodes.push(Rc::clone(&node));
         node
     }
@@ -426,9 +535,9 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
             continue;
         }
 
-        let start_node = NodeId::Intersection(node_id_counter);
+        let start_node = NodeId::Intersection(0, node_id_counter);
         node_id_counter += 1;
-        let end_node = NodeId::Intersection(node_id_counter);
+        let end_node = NodeId::Intersection(0, node_id_counter);
         node_id_counter += 1;
 
         // Get actual route IDs for this shape (chateau, route_id)
@@ -476,6 +585,17 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     });
 
     // =========================================================================
+    // VALIDATION: Record original bboxes for corruption detection
+    // =========================================================================
+    println!("Recording original edge bboxes for validation...");
+    let original_bboxes: HashMap<usize, BBox> = raw_edges
+        .iter()
+        .enumerate()
+        .map(|(idx, edge)| (idx, compute_edge_bbox(edge)))
+        .collect();
+    println!("  Recorded {} bboxes", original_bboxes.len());
+
+    // =========================================================================
     // C++ TopoMain.cpp Pipeline (lines 128-185)
     // =========================================================================
     let tight_d_cut = 10.0; // 10 meters (C++ first pass: dCut=10)
@@ -494,17 +614,10 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     // Grid size of 50km creates reasonable geographic regions
     let grid_size_meters = 50000.0; // 50km grid cells
 
-    // CRITICAL: Extract long intercity edges BEFORE partitioning
-    // These are deferred from cluster processing to prevent junction corruption
-    println!("Extracting long intercity edges for deferred processing...");
-    let (short_edges, long_edge_registry) = extract_long_intercity_edges(raw_edges);
-    println!(
-        "  {} edges for cluster processing, {} deferred for post-processing",
-        short_edges.len(),
-        long_edge_registry.len()
-    );
-
-    let components = partition_by_geography(short_edges, grid_size_meters, &mut node_id_counter);
+    // NOTE: All edges (including long intercity) are processed together.
+    // Adaptive densification handles memory by using coarser spacing for long edges.
+    // This enables proper parallel track merging for intercity rail corridors.
+    let components = partition_by_geography(raw_edges, grid_size_meters, &mut node_id_counter);
 
     // Step 2: Further split large components using K-means + mode-aware cutting
     let max_edges_per_cluster = 1000; // Target cluster size
@@ -519,9 +632,6 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     // This is critical because initial edges can be very long (ICE/TGV routes spanning
     // hundreds of km) and K-means may create tiny clusters that explode during densification
     all_clusters = consolidate_small_clusters(all_clusters, min_cluster_size);
-
-    // NOTE: Long intercity edges were already extracted BEFORE partitioning
-    // They are stored in long_edge_registry and will be reattached post-processing
 
     println!(
         "\n=== Processing {} clusters (after consolidation) ===",
@@ -625,11 +735,11 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
                 let mut min_id = usize::MAX;
                 let mut max_id = usize::MIN;
                 for edge in &collapsed {
-                    if let NodeId::Intersection(id) = edge.from {
+                    if let NodeId::Intersection(_, id) = edge.from {
                         min_id = min_id.min(id);
                         max_id = max_id.max(id);
                     }
-                    if let NodeId::Intersection(id) = edge.to {
+                    if let NodeId::Intersection(_, id) = edge.to {
                         min_id = min_id.min(id);
                         max_id = max_id.max(id);
                     }
@@ -665,26 +775,87 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     );
     let mut collapsed = all_collapsed;
 
-    // =========================================================================
-    // CRITICAL: Reattach deferred long intercity edges
-    // =========================================================================
-    // Long edges were extracted before partitioning to prevent junction corruption.
-    // Now we reattach them using spatial queries to find matching endpoints.
-    println!(
-        "Reattaching {} deferred long intercity edges...",
-        long_edge_registry.len()
-    );
-    collapsed = reattach_long_edges(collapsed, long_edge_registry, &mut node_id_counter);
-    println!("After reattachment: {} edges", collapsed.len());
+    // NOTE: All edges (including long intercity) were processed together.
+    // No reattachment needed - adaptive densification handles memory.
 
     // =========================================================================
     // Post-Collapse Reconstruction (matches C++ TopoMain.cpp lines 164-186)
-    // These steps were moved OUT of the loop to match C++ and fix performance.
     // =========================================================================
+
+    // EDGE SANITIZATION: Remove edges with impossible geometry (>500km span)
+    // This catches NodeId collisions that create cross-continent edges
+    const MAX_REASONABLE_EDGE_SPAN: f64 = 500_000.0; // 500km in meters (Web Mercator)
+    let edges_before = collapsed.len();
+    
+    let collapsed: Vec<GraphEdge> = collapsed.into_iter().filter(|edge| {
+        let geom = convert_to_geo(&edge.geometry);
+        if geom.0.len() < 2 {
+            return true; // Keep edges with minimal geometry (will be fixed later)
+        }
+        
+        // Check max span of geometry bbox
+        let bbox = compute_edge_bbox(edge);
+        let width = bbox.2 - bbox.0;
+        let height = bbox.3 - bbox.1;
+        
+        if width > MAX_REASONABLE_EDGE_SPAN || height > MAX_REASONABLE_EDGE_SPAN {
+            // Edge is impossible (e.g., spans France to USA) - remove it
+            false
+        } else {
+            true
+        }
+    }).collect();
+    
+    let edges_removed = edges_before - collapsed.len();
+    if edges_removed > 0 {
+        println!("SANITIZED: Removed {} impossible edges (bbox > 500km)", edges_removed);
+    }
 
     // First reconstruction pass (C++: line 164)
     println!("First reconstruction pass (post-collapse)...");
     let mut graph = graph_from_edges(collapsed, &mut node_id_counter);
+
+    // VALIDATION: Check for corrupted edges AFTER graph_from_edges
+    println!("Checking edges AFTER graph_from_edges for corruption...");
+    let mut bad_edges_after_gfe = 0;
+    for node in &graph.nodes {
+        let node_borrow = node.borrow();
+        for edge_ref in &node_borrow.adj_list {
+            let edge_borrow = edge_ref.borrow();
+            if !Rc::ptr_eq(&edge_borrow.from, node) {
+                continue;
+            }
+            if edge_borrow.geometry.len() >= 2 {
+                let first = &edge_borrow.geometry[0];
+                let last = &edge_borrow.geometry[edge_borrow.geometry.len() - 1];
+                let dx = (last.x - first.x).abs();
+                let dy = (last.y - first.y).abs();
+                if dx > 50_000.0 || dy > 50_000.0 {
+                    bad_edges_after_gfe += 1;
+                    if bad_edges_after_gfe <= 3 {
+                        eprintln!("AFTER graph_from_edges - Bad edge:");
+                        eprintln!("  Edge ID: {}", edge_borrow.id);
+                        eprintln!("  From node: {} pos: ({:.1}, {:.1})", 
+                            edge_borrow.from.borrow().id,
+                            edge_borrow.from.borrow().pos[0],
+                            edge_borrow.from.borrow().pos[1]);
+                        eprintln!("  To node: {} pos: ({:.1}, {:.1})",
+                            edge_borrow.to.borrow().id,
+                            edge_borrow.to.borrow().pos[0],
+                            edge_borrow.to.borrow().pos[1]);
+                        eprintln!("  Geometry first: ({:.1}, {:.1})", first.x, first.y);
+                        eprintln!("  Geometry last: ({:.1}, {:.1})", last.x, last.y);
+                    }
+                }
+            }
+        }
+    }
+    if bad_edges_after_gfe > 0 {
+        eprintln!("=== FOUND {} BAD EDGES AFTER graph_from_edges ===", bad_edges_after_gfe);
+    } else {
+        println!("  All edges passed validation after graph_from_edges");
+    }
+
     // C++ uses maxAggrDistance here (TopoConfig::maxAggrDistance), not segmentLength.
     reconstruct_intersections(&mut graph, normal_d_cut);
 
@@ -726,9 +897,23 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
             let ls = GeoLineString::new(edge_borrow.geometry.clone());
             let weight = ls.euclidean_length();
 
+            // CRITICAL: Use original_node_id for boundary connectivity
+            let from_node_id = edge_borrow
+                .from
+                .borrow()
+                .original_node_id
+                .clone()
+                .unwrap_or_else(|| NodeId::Intersection(0, edge_borrow.from.borrow().id));
+            let to_node_id = edge_borrow
+                .to
+                .borrow()
+                .original_node_id
+                .clone()
+                .unwrap_or_else(|| NodeId::Intersection(0, edge_borrow.to.borrow().id));
+
             collapsed.push(GraphEdge {
-                from: NodeId::Intersection(edge_borrow.from.borrow().id),
-                to: NodeId::Intersection(edge_borrow.to.borrow().id),
+                from: from_node_id,
+                to: to_node_id,
                 geometry: convert_from_geo(&ls),
                 routes: edge_borrow
                     .routes
@@ -740,6 +925,45 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
                 original_edge_index: None,
             });
         }
+    }
+
+    // =========================================================================
+    // VALIDATION: Check for cross-map jumping (edges with unreasonably large bbox)
+    // An edge spanning more than 100km is suspicious (most metro/rail edges are <50km)
+    // =========================================================================
+    println!("Validating output edges for geometry corruption...");
+    let max_reasonable_span = 100_000.0; // 100km in meters (Web Mercator)
+    let mut corrupted_edges = 0;
+    for (idx, edge) in collapsed.iter().enumerate() {
+        let bbox = compute_edge_bbox(edge);
+        let width = bbox.2 - bbox.0;
+        let height = bbox.3 - bbox.1;
+        
+        if width > max_reasonable_span || height > max_reasonable_span {
+            corrupted_edges += 1;
+            eprintln!("WARNING: Suspicious edge #{} with large bbox:", idx);
+            eprintln!("  Bbox: ({:.1}, {:.1}) - ({:.1}, {:.1})", bbox.0, bbox.1, bbox.2, bbox.3);
+            eprintln!("  Size: {:.1}km x {:.1}km", width / 1000.0, height / 1000.0);
+            eprintln!("  Routes: {:?}", edge.routes);
+            eprintln!("  From: {:?}, To: {:?}", edge.from, edge.to);
+            
+            // Print first and last points of geometry for debugging
+            let pts = &edge.geometry.points;
+            if !pts.is_empty() {
+                eprintln!("  First point: ({:.1}, {:.1})", pts[0].x, pts[0].y);
+                eprintln!("  Last point: ({:.1}, {:.1})", pts[pts.len() - 1].x, pts[pts.len() - 1].y);
+            }
+        }
+    }
+    
+    if corrupted_edges > 0 {
+        eprintln!(
+            "=== VALIDATION RESULT: {} edges with suspiciously large bboxes out of {} total ===",
+            corrupted_edges,
+            collapsed.len()
+        );
+    } else {
+        println!("  All {} edges passed bbox validation", collapsed.len());
     }
 
     // =========================================================================
@@ -762,137 +986,7 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     Ok(collapsed)
 }
 
-// After parallel cluster processing, deferred long intercity edges need to be
-// reattached to the processed graph using spatial queries to find matching endpoints.
 
-/// Reattach deferred long intercity edges to the processed graph.
-///
-/// Algorithm:
-/// 1. Build an rtree of endpoint positions from processed edges
-/// 2. For each deferred long edge:
-///    a. Find nearest node in processed graph to edge.from_pos
-///    b. Find nearest node in processed graph to edge.to_pos  
-///    c. Create edge connecting these nodes with original geometry
-/// 3. Return processed edges + reattached long edges
-fn reattach_long_edges(
-    mut edges: Vec<GraphEdge>,
-    registry: LongEdgeRegistry,
-    node_id_counter: &mut usize,
-) -> Vec<GraphEdge> {
-    use rstar::{AABB, RTree};
-
-    if registry.is_empty() {
-        return edges;
-    }
-
-    // Build a map from position -> NodeId for all existing edge endpoints
-    // Quantize positions to 1 meter precision for matching
-    let quantize = |x: f64| -> i64 { (x / 1.0).round() as i64 };
-
-    let mut position_to_node: HashMap<(i64, i64), NodeId> = HashMap::new();
-    let mut node_positions: Vec<([f64; 2], NodeId)> = Vec::new();
-
-    for edge in &edges {
-        // From endpoint
-        if let Some(p) = edge.geometry.points.first() {
-            let key = (quantize(p.x), quantize(p.y));
-            position_to_node.entry(key).or_insert(edge.from);
-            node_positions.push(([p.x, p.y], edge.from));
-        }
-        // To endpoint
-        if let Some(p) = edge.geometry.points.last() {
-            let key = (quantize(p.x), quantize(p.y));
-            position_to_node.entry(key).or_insert(edge.to);
-            node_positions.push(([p.x, p.y], edge.to));
-        }
-    }
-
-    // Build rtree for spatial queries
-    let rtree_items: Vec<rstar::primitives::GeomWithData<[f64; 2], NodeId>> = node_positions
-        .iter()
-        .map(|(pos, node)| rstar::primitives::GeomWithData::new(*pos, *node))
-        .collect();
-    let rtree = RTree::bulk_load(rtree_items);
-
-    let snap_threshold = 100.0; // 100 meters maximum snap distance
-    let mut reattached_count = 0;
-    let mut failed_count = 0;
-
-    for deferred in registry.edges {
-        // Find nearest node to 'from' position
-        let from_pos = [deferred.from_pos.x, deferred.from_pos.y];
-        let from_node = rtree
-            .nearest_neighbor(&from_pos)
-            .filter(|item| {
-                let dx = item.geom()[0] - from_pos[0];
-                let dy = item.geom()[1] - from_pos[1];
-                (dx * dx + dy * dy).sqrt() <= snap_threshold
-            })
-            .map(|item| item.data);
-
-        // Find nearest node to 'to' position
-        let to_pos = [deferred.to_pos.x, deferred.to_pos.y];
-        let to_node = rtree
-            .nearest_neighbor(&to_pos)
-            .filter(|item| {
-                let dx = item.geom()[0] - to_pos[0];
-                let dy = item.geom()[1] - to_pos[1];
-                (dx * dx + dy * dy).sqrt() <= snap_threshold
-            })
-            .map(|item| item.data);
-
-        match (from_node, to_node) {
-            (Some(from), Some(to)) => {
-                // Successfully matched both endpoints - create reattached edge
-                edges.push(GraphEdge {
-                    from,
-                    to,
-                    geometry: deferred.edge.geometry,
-                    routes: deferred.edge.routes,
-                    original_shape_ids: deferred.edge.original_shape_ids,
-                    weight: deferred.edge.weight,
-                    original_edge_index: deferred.edge.original_edge_index,
-                });
-                reattached_count += 1;
-            }
-            _ => {
-                // Could not match one or both endpoints
-                // Create new intersection nodes and attach anyway
-                let new_from = if from_node.is_some() {
-                    from_node.unwrap()
-                } else {
-                    let id = NodeId::Intersection(*node_id_counter);
-                    *node_id_counter += 1;
-                    id
-                };
-                let new_to = if to_node.is_some() {
-                    to_node.unwrap()
-                } else {
-                    let id = NodeId::Intersection(*node_id_counter);
-                    *node_id_counter += 1;
-                    id
-                };
-
-                edges.push(GraphEdge {
-                    from: new_from,
-                    to: new_to,
-                    geometry: deferred.edge.geometry,
-                    routes: deferred.edge.routes,
-                    original_shape_ids: deferred.edge.original_shape_ids,
-                    weight: deferred.edge.weight,
-                    original_edge_index: deferred.edge.original_edge_index,
-                });
-                failed_count += 1;
-            }
-        }
-    }
-
-    println!(
-        "  Reattached {} long edges ({} with new nodes)",
-        reattached_count, failed_count
-    );
-    edges
-}
 
 /// Reconstruct a LineGraph from a list of GraphEdges, respecting existing NodeIds.
 /// This does NOT snap nodes; it assumes edges sharing a NodeId are connected.
@@ -910,13 +1004,14 @@ fn graph_from_edges(edges: Vec<GraphEdge>, next_node_id: &mut usize) -> LineGrap
         let from_pos = geom.0.first().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
         let to_pos = geom.0.last().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
 
-        node_map.entry(edge.from).or_insert_with(|| {
-            // Internal ID is assigned sequentially by graph.add_nd
-            graph.add_nd(from_pos)
+        // CRITICAL: Preserve original NodeIds through reconstruction
+        node_map.entry(edge.from.clone()).or_insert_with(|| {
+            // Create node with original NodeId preserved for boundary connectivity
+            graph.add_nd_with_original(from_pos, edge.from.clone())
         });
         node_map
-            .entry(edge.to)
-            .or_insert_with(|| graph.add_nd(to_pos));
+            .entry(edge.to.clone())
+            .or_insert_with(|| graph.add_nd_with_original(to_pos, edge.to.clone()));
     }
 
     graph.next_node_id = graph.next_node_id.max(*next_node_id);
@@ -1073,30 +1168,44 @@ fn build_initial_linegraph_webmerc(
 
         // Find or create FROM node
         // Use find_best_in_radius to find CLOSEST node without allocating a vector
+        // CRITICAL: Preserve original NodeId for boundary connectivity
         let from_node = {
             if let Some((existing, _)) =
                 geo_idx.find_best_in_radius(from_pos, snap_threshold, |_: &NodeRef, _, _, d_sq| {
                     Some(d_sq)
                 })
             {
+                // When snapping to an existing node, preserve the original NodeId if the existing
+                // node doesn't have one yet (first edge wins) or merge if needed
+                if existing.borrow().original_node_id.is_none() {
+                    existing.borrow_mut().original_node_id = Some(edge.from.clone());
+                }
                 existing
             } else {
-                let node = graph.add_nd(from_pos);
+                // Create new node with original NodeId preserved
+                let node = graph.add_nd_with_original(from_pos, edge.from.clone());
                 geo_idx.add(from_pos, Rc::clone(&node));
                 node
             }
         };
 
         // Find or create TO node
+        // CRITICAL: Preserve original NodeId for boundary connectivity
         let to_node = {
             if let Some((existing, _)) =
                 geo_idx.find_best_in_radius(to_pos, snap_threshold, |_: &NodeRef, _, _, d_sq| {
                     Some(d_sq)
                 })
             {
+                // When snapping to an existing node, preserve the original NodeId if the existing
+                // node doesn't have one yet (first edge wins)
+                if existing.borrow().original_node_id.is_none() {
+                    existing.borrow_mut().original_node_id = Some(edge.to.clone());
+                }
                 existing
             } else {
-                let node = graph.add_nd(to_pos);
+                // Create new node with original NodeId preserved
+                let node = graph.add_nd_with_original(to_pos, edge.to.clone());
                 geo_idx.add(to_pos, Rc::clone(&node));
                 node
             }
@@ -1158,12 +1267,25 @@ fn collapse_shared_segments_from_graph(
             // Use Euclidean length since coordinates are in Web Mercator (meters)
             let weight = ls.euclidean_length();
 
-            let from_id = edge_borrow.from.borrow().id;
-            let to_id = edge_borrow.to.borrow().id;
+            // CRITICAL FIX: Use original_node_id when available to preserve boundary connectivity.
+            // Boundary nodes from cluster splitting have original_node_id set.
+            // Internal nodes created during collapse use their internal id.
+            let from_node_id = edge_borrow
+                .from
+                .borrow()
+                .original_node_id
+                .clone()
+                .unwrap_or_else(|| NodeId::Intersection(0, edge_borrow.from.borrow().id));
+            let to_node_id = edge_borrow
+                .to
+                .borrow()
+                .original_node_id
+                .clone()
+                .unwrap_or_else(|| NodeId::Intersection(0, edge_borrow.to.borrow().id));
 
             edges.push(GraphEdge {
-                from: NodeId::Intersection(from_id),
-                to: NodeId::Intersection(to_id),
+                from: from_node_id,
+                to: to_node_id,
                 geometry: convert_from_geo(&ls),
                 routes: edge_borrow
                     .routes
@@ -1329,9 +1451,11 @@ fn collapse_shared_segments(
             };
             let coords_len = coords.len();
 
-            // ALWAYS densify after simplification (C++: densify(..., SEGL))
-            // This ensures curves maintain their shape by having regularly-spaced points
-            let pl_dense = densify_coords(&coords, seg_len);
+            // ADAPTIVE DENSIFICATION: Use coarser spacing for long edges to bound memory
+            // Short edges (<5km): 5m spacing for accurate curves
+            // Long edges (>5km): Spacing proportional to length (max ~2000 points)
+            let edge_spacing = adaptive_densify_spacing(edge.weight);
+            let pl_dense = densify_coords(&coords, edge_spacing);
 
             // CRITICAL FIX: Ensure we have at least 2 points (start and end) to form a valid edge.
             // If simplification + densification produces fewer than 2 points, fall back to
@@ -1402,8 +1526,15 @@ fn collapse_shared_segments(
                 previous_point = Some(*point);
 
                 // Track image nodes for FROM/TO
+                // CRITICAL FIX: Also set original_node_id on the collapsed node
+                // so that boundary NodeIds are preserved through the collapse algorithm.
+                // Without this, internal nodes get new IDs that can collide across clusters.
                 if i == 0 {
                     if !img_nds.contains_key(&edge.from) {
+                        // Set original_node_id on the collapsed node for boundary preservation
+                        if cur.borrow().original_node_id.is_none() {
+                            cur.borrow_mut().original_node_id = Some(edge.from.clone());
+                        }
                         img_nds.insert(edge.from.clone(), Rc::clone(&cur));
                         img_nds_set.insert(cur.borrow().id);
                         img_from_covered = true;
@@ -1411,6 +1542,10 @@ fn collapse_shared_segments(
                 }
                 if i == pl_len - 1 {
                     if !img_nds.contains_key(&edge.to) {
+                        // Set original_node_id on the collapsed node for boundary preservation
+                        if cur.borrow().original_node_id.is_none() {
+                            cur.borrow_mut().original_node_id = Some(edge.to.clone());
+                        }
                         img_nds.insert(edge.to.clone(), Rc::clone(&cur));
                         img_nds_set.insert(cur.borrow().id);
                         img_to_covered = true;
@@ -1751,8 +1886,8 @@ fn collapse_shared_segments(
                 let to_id = edge_borrow.to.borrow().id;
 
                 new_edges.push(GraphEdge {
-                    from: NodeId::Intersection(from_id),
-                    to: NodeId::Intersection(to_id),
+                    from: NodeId::Intersection(0, from_id),
+                    to: NodeId::Intersection(0, to_id),
                     geometry: convert_from_geo(&ls),
                     // Map back strictly to tuples.
                     // Note: Direction info is effectively lost in GraphEdge export
@@ -4362,10 +4497,10 @@ fn get_geometry_oriented_from(edge: &LineEdge, node: &NodeRef) -> Vec<Coord> {
 
 /// Average node positions based on connected edge geometries (C++: averageNodePositions)
 fn average_node_positions(graph: &mut LineGraph) {
+    let mut nodes_with_distant_edges = 0;
+    
     for node in &graph.nodes {
-        let mut sum_x = 0.0;
-        let mut sum_y = 0.0;
-        let mut count = 0;
+        let mut positions: Vec<[f64; 2]> = Vec::new();
 
         for edge_ref in &node.borrow().adj_list {
             let edge = edge_ref.borrow();
@@ -4375,25 +4510,62 @@ fn average_node_positions(graph: &mut LineGraph) {
             }
 
             // Check if we are connected to the start or end of the edge geometry
-            // The edge object has from/to, but the geometry might be oriented differently?
-            // Usually geometry follows from->to
             if Rc::ptr_eq(&edge.to, node) {
                 // Connected to the END of this edge
                 let last = geom.last().unwrap();
-                sum_x += last.x;
-                sum_y += last.y;
+                positions.push([last.x, last.y]);
             } else {
                 // Connected to the START of this edge
                 let first = geom.first().unwrap();
-                sum_x += first.x;
-                sum_y += first.y;
+                positions.push([first.x, first.y]);
             }
-            count += 1;
         }
 
-        if count > 0 {
-            node.borrow_mut().pos = [sum_x / count as f64, sum_y / count as f64];
+        if positions.is_empty() {
+            continue;
         }
+
+        // Check if any positions are suspiciously far apart (>100km)
+        // This indicates NodeId collision between distant geographic regions
+        let mut max_dist = 0.0f64;
+        for i in 0..positions.len() {
+            for j in (i + 1)..positions.len() {
+                let dx = (positions[i][0] - positions[j][0]).abs();
+                let dy = (positions[i][1] - positions[j][1]).abs();
+                let dist = (dx * dx + dy * dy).sqrt();
+                max_dist = max_dist.max(dist);
+            }
+        }
+        
+        if max_dist > 100_000.0 { // 100km in meters
+            nodes_with_distant_edges += 1;
+            if nodes_with_distant_edges <= 3 {
+                eprintln!("WARNING: Node {} has edges with endpoints {:.1}km apart!", 
+                    node.borrow().id, max_dist / 1000.0);
+                eprintln!("  Positions connected to this node:");
+                for (i, pos) in positions.iter().enumerate() {
+                    eprintln!("    {}: ({:.1}, {:.1})", i, pos[0], pos[1]);
+                }
+                if let Some(orig_id) = &node.borrow().original_node_id {
+                    eprintln!("  Original NodeId: {:?}", orig_id);
+                }
+            }
+            // CRITICAL FIX: Skip averaging for nodes with distant endpoints
+            // This indicates a NodeId collision - averaging would corrupt the position
+            // Keep the node's current position instead of averaging across distant regions
+            continue;
+        }
+
+        // Calculate average position (only for nodes with nearby endpoints)
+        let sum_x: f64 = positions.iter().map(|p| p[0]).sum();
+        let sum_y: f64 = positions.iter().map(|p| p[1]).sum();
+        let count = positions.len();
+
+        node.borrow_mut().pos = [sum_x / count as f64, sum_y / count as f64];
+    }
+    
+    if nodes_with_distant_edges > 0 {
+        eprintln!("=== FOUND {} NODES WITH DISTANT EDGE ENDPOINTS ===", nodes_with_distant_edges);
     }
 }
 
@@ -4423,6 +4595,10 @@ fn reconstruct_intersections(graph: &mut LineGraph, max_aggr_distance: f64) {
             }
 
             let mut edge = edge_ref.borrow_mut();
+            
+            // Get the actual geometry endpoints for comparison
+            let geom_start = edge.geometry.first().map(|c| [c.x, c.y]);
+            let geom_end = edge.geometry.last().map(|c| [c.x, c.y]);
 
             // Cut off the ends (C++: maxAggrDistance)
             let total_len = calc_polyline_length(&edge.geometry);
@@ -4453,20 +4629,46 @@ fn reconstruct_intersections(graph: &mut LineGraph, max_aggr_distance: f64) {
                 edge.geometry.clear();
             }
 
+            // CRITICAL FIX: Check if node position is close to geometry endpoint
+            // If node position is too far (>10km), use geometry's own endpoint instead
+            // This prevents NodeId collision from corrupting geometry
+            const MAX_ENDPOINT_DEVIATION: f64 = 10_000.0; // 10km in meters
+            
+            // Determine actual start point to use
+            let actual_from = if let Some(gs) = geom_start {
+                let dx = (from_pos[0] - gs[0]).abs();
+                let dy = (from_pos[1] - gs[1]).abs();
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist > MAX_ENDPOINT_DEVIATION {
+                    // Node position is wrong - use geometry's own start
+                    Coord { x: gs[0], y: gs[1] }
+                } else {
+                    Coord { x: from_pos[0], y: from_pos[1] }
+                }
+            } else {
+                Coord { x: from_pos[0], y: from_pos[1] }
+            };
+            
+            // Determine actual end point to use
+            let actual_to = if let Some(ge) = geom_end {
+                let dx = (to_pos[0] - ge[0]).abs();
+                let dy = (to_pos[1] - ge[1]).abs();
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist > MAX_ENDPOINT_DEVIATION {
+                    // Node position is wrong - use geometry's own end
+                    Coord { x: ge[0], y: ge[1] }
+                } else {
+                    Coord { x: to_pos[0], y: to_pos[1] }
+                }
+            } else {
+                Coord { x: to_pos[0], y: to_pos[1] }
+            };
+
             // Insert explicit Start point (fromNode)
-            edge.geometry.insert(
-                0,
-                Coord {
-                    x: from_pos[0],
-                    y: from_pos[1],
-                },
-            );
+            edge.geometry.insert(0, actual_from);
 
             // Insert explicit End point (toNode)
-            edge.geometry.push(Coord {
-                x: to_pos[0],
-                y: to_pos[1],
-            });
+            edge.geometry.push(actual_to);
         }
     }
 }

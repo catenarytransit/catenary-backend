@@ -72,7 +72,8 @@ pub fn extract_and_export(
 fn convert_node_id(id: NodeId) -> SerialNodeId {
     match id {
         NodeId::Cluster(i) => SerialNodeId::Cluster(i),
-        NodeId::Intersection(i) => SerialNodeId::Intersection(i),
+        // Pass both cluster_id and local_id - they're now distinct tuple elements
+        NodeId::Intersection(cluster_id, local_id) => SerialNodeId::Intersection(cluster_id, local_id),
         NodeId::Split(e, s) => SerialNodeId::Split(e, s),
     }
 }

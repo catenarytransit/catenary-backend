@@ -62,7 +62,7 @@ pub async fn insert_stations(
         .iter()
         .flat_map(|e| vec![e.from, e.to])
         .filter_map(|n| match n {
-            NodeId::Intersection(id) => Some(id),
+            NodeId::Intersection(_, id) => Some(id),
             _ => None,
         })
         .max()

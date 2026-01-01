@@ -27,10 +27,10 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
     let mut edge_lengths_deg: Vec<f64> = Vec::with_capacity(edges.len());
 
     for (i, edge) in edges.iter().enumerate() {
-        if let NodeId::Intersection(u) = edge.from {
+        if let NodeId::Intersection(_, u) = edge.from {
             adj.entry(u).or_default().1.push(i);
         }
-        if let NodeId::Intersection(v) = edge.to {
+        if let NodeId::Intersection(_, v) = edge.to {
             adj.entry(v).or_default().0.push(i);
         }
 
@@ -104,7 +104,7 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
         let start_node = edges[i].from;
         let is_start = match start_node {
             NodeId::Cluster(_) => true,
-            NodeId::Intersection(u_id) => {
+            NodeId::Intersection(_, u_id) => {
                 if let Some((in_list, out_list)) = adj.get(&u_id) {
                     // Check if this edge is the START of a unique route flow
                     // It is a start if:
@@ -130,7 +130,7 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
             let mut curr = i;
             loop {
                 let curr_edge = &edges[curr];
-                if let NodeId::Intersection(v) = curr_edge.to {
+                if let NodeId::Intersection(_, v) = curr_edge.to {
                     // Check if we can traverse THROUGH v
                     if let Some((v_in, v_out)) = adj.get(&v) {
                         // Must have exactly 1 incoming (me) and 1 outgoing for THIS route
@@ -172,7 +172,7 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
             let mut curr = i;
             loop {
                 let curr_edge = &edges[curr];
-                if let NodeId::Intersection(v) = curr_edge.to {
+                if let NodeId::Intersection(_, v) = curr_edge.to {
                     if let Some((v_in, v_out)) = adj.get(&v) {
                         let in_count = count_route_matches(v_in, &edges[curr]);
                         let next_match = find_route_match(v_out, &edges[curr]);
