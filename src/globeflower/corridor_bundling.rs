@@ -23,6 +23,7 @@
 
 use crate::graph_types::{EdgeRef, LineGraph, NodeRef};
 use crate::route_registry::RouteId;
+use crate::osm_rail_graph;
 use ahash::{AHashMap, AHashSet};
 use geo::Coord;
 use std::rc::Rc;
@@ -176,6 +177,38 @@ pub fn detect_and_bundle_corridors(graph: &LineGraph, config: &CorridorConfig) -
             let max_along = (seed.length + candidate.length) / 2.0;
             if along_dist > max_along {
                 continue;
+            }
+
+            // ===========================================================
+            // OSM VALIDATION FOR CORRIDOR BUNDLING
+            // ===========================================================
+            // Tracks should only be bundled if they actually belong to the same
+            // physical corridor (share junction or same way).
+            // Exception: RER A / Metro 1 case (parallel for >400m, <30m separation)
+            if let Some(osm_index) = osm_rail_graph::get_osm_index() {
+                // Check coverage first
+                let p1 = [seed.midpoint.0, seed.midpoint.1];
+                let p2 = [candidate.midpoint.0, candidate.midpoint.1];
+                
+                if osm_index.is_in_coverage(p1, 500.0) && osm_index.is_in_coverage(p2, 500.0) {
+                    // Check if connected in OSM
+                    // Use larger radius (50m) as these are midpoints
+                    let is_connected = osm_index.share_junction(p1, p2, 50.0).is_some() 
+                        || osm_index.on_same_way(p1, p2, 50.0);
+                        
+                    if !is_connected {
+                        // Not connected in OSM - Check for "RER A / Metro 1" exception
+                        // User specified: <30m distance and >400m length
+                        let is_exception = perp_dist < 30.0 
+                            && seed.length > 400.0 
+                            && candidate.length > 400.0;
+                            
+                        if !is_exception {
+                            // Distinct tracks, not meeting exception - DO NOT BUNDLE
+                            continue;
+                        }
+                    }
+                }
             }
 
             corridor_edges.push(candidate);

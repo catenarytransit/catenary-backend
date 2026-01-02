@@ -10,19 +10,18 @@ use postgis_diesel::types::{LineString, Point};
 use rstar::{AABB, RTree, RTreeObject};
 use std::collections::{HashMap, HashSet};
 
-struct EdgeSpatial {
+/// Lightweight spatial index entry - stores only bbox, not full geometry.
+/// This reduces memory by ~95% vs cloning full geometries (40 bytes vs ~800 bytes per edge).
+struct EdgeBBox {
     index: usize,
-    geom: GeoLineString<f64>,
+    min: [f64; 2],
+    max: [f64; 2],
 }
 
-impl RTreeObject for EdgeSpatial {
+impl RTreeObject for EdgeBBox {
     type Envelope = AABB<[f64; 2]>;
     fn envelope(&self) -> Self::Envelope {
-        let bounding = self.geom.bounding_rect().unwrap();
-        AABB::from_corners(
-            [bounding.min().x, bounding.min().y],
-            [bounding.max().x, bounding.max().y],
-        )
+        AABB::from_corners(self.min, self.max)
     }
 }
 
@@ -36,16 +35,20 @@ pub async fn insert_stations(
         clusters.len()
     );
 
-    // index edges
-    let edge_spatials: Vec<EdgeSpatial> = edges
+    // Build spatial index using only bounding boxes (memory efficient)
+    let edge_bboxes: Vec<EdgeBBox> = edges
         .iter()
         .enumerate()
-        .map(|(i, e)| EdgeSpatial {
-            index: i,
-            geom: convert_to_geo(&e.geometry),
+        .filter_map(|(i, e)| {
+            let geom = convert_to_geo(&e.geometry);
+            geom.bounding_rect().map(|bbox| EdgeBBox {
+                index: i,
+                min: [bbox.min().x, bbox.min().y],
+                max: [bbox.max().x, bbox.max().y],
+            })
         })
         .collect();
-    let tree = RTree::bulk_load(edge_spatials);
+    let tree = RTree::bulk_load(edge_bboxes);
 
     // Build mapping: Cluster ID -> Set of Shape IDs that serve that cluster
     // This is derived from GTFS: Stop -> ItineraryPattern -> ItineraryPatternMeta -> Shape
@@ -94,11 +97,12 @@ pub async fn insert_stations(
 
         for candidate in tree.locate_in_envelope_intersecting(&envelope) {
             let edge = &edges[candidate.index];
-            let geom = &candidate.geom;
+            // Compute geometry on-demand (memory efficient - not stored in RTree)
+            let geom = convert_to_geo(&edge.geometry);
 
             // Project cluster centroid onto edge geometry
             if let Some(frac) = geom.line_locate_point(&pt) {
-                let projected = get_point_on_line(geom, frac);
+                let projected = get_point_on_line(&geom, frac);
                 let dist_deg = projected.haversine_distance(&pt); // degrees? No, haversine is meters.
 
                 // Oops haversine_distance returns meters.

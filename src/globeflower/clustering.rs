@@ -79,6 +79,56 @@ pub async fn cluster_stops(pool: &CatenaryPostgresPool) -> Result<Vec<StopCluste
     Ok(greedy_clustering(valid_stops))
 }
 
+/// Cluster stops filtered by a geographic bounding box (west, south, east, north)
+pub async fn cluster_stops_in_region(
+    pool: &CatenaryPostgresPool,
+    bbox: (f64, f64, f64, f64),
+) -> Result<Vec<StopCluster>> {
+    let mut conn = pool.get().await?;
+
+    use catenary::schema::gtfs::stops::dsl::*;
+
+    let (west, south, east, north) = bbox;
+
+    let all_stops = stops
+        .filter(location_type.eq_any(vec![0, 1])) // StopPoint or Station
+        .filter(point.is_not_null())
+        .select(Stop::as_select())
+        .load::<Stop>(&mut conn)
+        .await?;
+
+    // Filter by bounding box and rail/tram route types
+    let valid_stops: Vec<Stop> = all_stops
+        .into_iter()
+        .filter(|s| {
+            if let Some(p) = &s.point {
+                // Check bounding box
+                let in_bbox = p.x >= west && p.x <= east && p.y >= south && p.y <= north;
+                // Check route types
+                let has_rail = s
+                    .route_types
+                    .iter()
+                    .flatten()
+                    .any(|&t| t == 0 || t == 1 || t == 2);
+                in_bbox && has_rail
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    println!(
+        "Region filter: {} stops in bbox ({:.1}, {:.1}, {:.1}, {:.1})",
+        valid_stops.len(),
+        west,
+        south,
+        east,
+        north
+    );
+
+    Ok(greedy_clustering(valid_stops))
+}
+
 fn greedy_clustering(stops: Vec<Stop>) -> Vec<StopCluster> {
     let mut visited = HashSet::new();
     let mut clusters = Vec::new();

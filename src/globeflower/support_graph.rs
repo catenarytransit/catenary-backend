@@ -1,11 +1,12 @@
+use super::route_registry::{RouteId, RouteRegistry};
 use crate::coord_conversion::*;
 use crate::edges::{GraphEdge, NodeId, convert_from_geo, convert_to_geo};
-use super::route_registry::{RouteRegistry, RouteId};
+use crate::graph_types::*;
 use crate::intercity_split::adaptive_densify_spacing;
+use crate::node_id_allocator::{ChunkedNodeIdTracker, NodeIdAllocator};
+use crate::osm_rail_graph;
 use crate::partitioning::*;
 use crate::validation::*;
-use crate::graph_types::*;
-use crate::node_id_allocator::{ChunkedNodeIdTracker, NodeIdAllocator};
 use ahash::{AHashMap, AHashSet};
 use anyhow::Result;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -18,7 +19,6 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, Mutex};
-
 
 /// Internal edge representation using integer IDs for routes to save memory
 #[derive(Clone, Debug)]
@@ -36,6 +36,23 @@ pub struct CompactedGraphEdge {
 
 /// Build the Support Graph from raw Shapes (Thesis Section 3.2).
 pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<GraphEdge>> {
+    build_support_graph_impl(pool, None).await
+}
+
+/// Build the Support Graph from raw Shapes, filtered by geographic bounding box.
+/// bbox format: (west, south, east, north) in WGS84 degrees.
+pub async fn build_support_graph_in_region(
+    pool: &CatenaryPostgresPool,
+    bbox: (f64, f64, f64, f64),
+) -> Result<Vec<GraphEdge>> {
+    build_support_graph_impl(pool, Some(bbox)).await
+}
+
+/// Internal implementation that handles both global and region-filtered cases.
+async fn build_support_graph_impl(
+    pool: &CatenaryPostgresPool,
+    region_bbox: Option<(f64, f64, f64, f64)>,
+) -> Result<Vec<GraphEdge>> {
     let mut conn = pool.get().await?;
 
     use catenary::schema::gtfs::shapes::dsl::*;
@@ -48,9 +65,38 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
         .load::<catenary::models::Shape>(&mut conn)
         .await?;
 
+    // Filter by region bbox if specified
+    let loaded_shapes: Vec<catenary::models::Shape> =
+        if let Some((west, south, east, north)) = region_bbox {
+            loaded_shapes
+                .into_iter()
+                .filter(|shape| {
+                    // Check if any point of the shape is within the bounding box
+                    // This is a simple centroid check using first point for efficiency
+                    let geom = crate::edges::convert_to_geo(&shape.linestring);
+                    let coords = &geom.0;
+                    if !coords.is_empty() {
+                        let first_coord = &coords[0];
+                        let lon = first_coord.x;
+                        let lat = first_coord.y;
+                        lon >= west && lon <= east && lat >= south && lat <= north
+                    } else {
+                        false
+                    }
+                })
+                .collect()
+        } else {
+            loaded_shapes
+        };
+
     println!(
-        "Loaded {} raw shapes for Support Graph.",
-        loaded_shapes.len()
+        "Loaded {} raw shapes for Support Graph{}.",
+        loaded_shapes.len(),
+        if region_bbox.is_some() {
+            " (region filtered)"
+        } else {
+            ""
+        }
     );
 
     // Load shape->route mappings from direction_pattern_meta
@@ -246,23 +292,21 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
                 // Convert to CompactedGraphEdge using RouteRegistry
                 let compact_cluster: Vec<CompactedGraphEdge> = cluster
                     .iter()
-                    .map(|e| {
-                        CompactedGraphEdge {
-                            from: e.from.clone(),
-                            to: e.to.clone(),
-                            geometry: convert_to_geo(&e.geometry).0,
-                            routes: e
-                                .routes
-                                .iter()
-                                .map(|(c, r, t)| {
-                                    let rid = route_registry
-                                        .get_by_val(c, r)
-                                        .expect("Route not found in registry!");
-                                    (rid, *t)
-                                })
-                                .collect(),
-                            weight: e.weight,
-                        }
+                    .map(|e| CompactedGraphEdge {
+                        from: e.from.clone(),
+                        to: e.to.clone(),
+                        geometry: convert_to_geo(&e.geometry).0,
+                        routes: e
+                            .routes
+                            .iter()
+                            .map(|(c, r, t)| {
+                                let rid = route_registry
+                                    .get_by_val(c, r)
+                                    .expect("Route not found in registry!");
+                                (rid, *t)
+                            })
+                            .collect(),
+                        weight: e.weight,
                     })
                     .collect();
                 drop(cluster); // release memory
@@ -496,10 +540,18 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
     // This final pass ensures all intercity rail corridors have clean geometries.
     println!("Final corridor bundling pass (post-reconstruction)...");
     let final_corridor_config = crate::corridor_bundling::CorridorConfig::default();
-    let final_corridors = crate::corridor_bundling::detect_and_bundle_corridors(&graph, &final_corridor_config);
+    let final_corridors =
+        crate::corridor_bundling::detect_and_bundle_corridors(&graph, &final_corridor_config);
     if !final_corridors.is_empty() {
-        println!("  Found {} corridors in final pass, applying bundled geometries", final_corridors.len());
-        crate::corridor_bundling::apply_corridor_geometries(&mut graph, &final_corridors, &final_corridor_config);
+        println!(
+            "  Found {} corridors in final pass, applying bundled geometries",
+            final_corridors.len()
+        );
+        crate::corridor_bundling::apply_corridor_geometries(
+            &mut graph,
+            &final_corridors,
+            &final_corridor_config,
+        );
     }
 
     // Remove orphan lines again (C++: line 185)
@@ -1074,8 +1126,7 @@ fn collapse_shared_segments(
                     previous_point.map(|prev| [point[0] - prev[0], point[1] - prev[1]]);
 
                 // Collect current edge route modes for compatibility check
-                let current_modes: AHashSet<i32> =
-                    edge.routes.iter().map(|(_, rt)| *rt).collect();
+                let current_modes: AHashSet<i32> = edge.routes.iter().map(|(_, rt)| *rt).collect();
 
                 // Find or create node with span constraints (matches C++: ndCollapseCand)
                 let cur = nd_collapse_cand(
@@ -1338,11 +1389,6 @@ fn collapse_shared_segments(
 
         // =====================================================================
         // Phase 2: Write edge geoms (C++: lines 379-387)
-        // SET ALL EDGES TO STRAIGHT LINES between their endpoints
-        // This is critical - geometries are simplified to straight lines
-        // =====================================================================
-        // =====================================================================
-        // Phase 2: Write edge geoms (C++: lines 379-387)
         // UPDATE edge geoms to project to node positions
         // FIX 3: Preserve curve geometry for longer edges (>50m)
         // Only reset short edges to straight lines
@@ -1403,46 +1449,14 @@ fn collapse_shared_segments(
         println!("Contracting short edges...");
         contract_short_edges(&mut tg_new, d_cut);
 
-        // =====================================================================
-        // CRITICAL: Corridor bundling must run BEFORE any operations that corrupt
-        // geometries through pairwise averaging. The following phases are ordered
-        // specifically to prevent the diamond/polygon artifacts:
-        //
-        // 1. First detect and align corridors (clean geometry)
-        // 2. Then stabilize nodes (preserves clean geometry)
-        // 3. Then fold edges (geometries already aligned, averaging is safe)
-        // =====================================================================
-
-        // Phase 4.1: Bundle intercity rail corridors using PCA (MOVED EARLIER)
-        // Detect parallel track corridors and align geometries to prevent wobbliness
-        // MUST run before fold_parallel_edges which uses pairwise averaging!
-        println!("Bundling intercity rail corridors (PCA-based)...");
-        let corridor_config = crate::corridor_bundling::CorridorConfig::default();
-        let corridors = crate::corridor_bundling::detect_and_bundle_corridors(&tg_new, &corridor_config);
-        if !corridors.is_empty() {
-            println!("  Found {} corridors, applying bundled geometries", corridors.len());
-            crate::corridor_bundling::apply_corridor_geometries(&mut tg_new, &corridors, &corridor_config);
-        }
-
-        // Phase 4.2: Station spread bundling (topological detection) (MOVED EARLIER)
-        // Catches wide terminal stations where tracks diverge→parallel→reconverge
-        println!("Bundling station platform spreads (topological)...");
-        let station_config = crate::station_bundling::StationConfig::default();
-        let station_fixes = crate::station_bundling::detect_and_fix_station_spreads(&mut tg_new, &station_config);
-        if station_fixes > 0 {
-            println!("  Fixed {} station platform spreads", station_fixes);
-        }
-
         // Phase 4.5: Stabilize intercity rail corridors
         // Look ahead 1000m to detect and fix flip-flop patterns where parallel
         // intercity rail tracks split and re-merge rapidly.
-        // Now runs AFTER corridor bundling so geometries are already aligned.
         println!("Stabilizing intercity rail corridors...");
         stabilize_intercity_rail_corridors(&mut tg_new, 1000.0);
 
         // Phase 4.75: Fold duplicate/parallel edges (C++: foldEdges)
         // Merges parallel tracks between the same nodes into a single averaged geometry.
-        // Now safe because PCA corridor bundling already aligned the geometries.
         println!("Folding parallel edges...");
         fold_parallel_edges(&mut tg_new);
 
@@ -1457,45 +1471,10 @@ fn collapse_shared_segments(
         apply_polish_fixes(&mut tg_new, seg_len);
 
         // NOTE: The C++ loop ENDS here.
+        // PCA corridor bundling and station bundling are Rust additions that
+        // belong in the POST-LOOP reconstruction phase, not inside the iteration loop.
+        // Running them every iteration causes exponential geometry growth!
         // reconstruct_intersections, remove_orphan_lines etc happen AFTER loop.
-
-        // =====================================================================
-        // Phase 6.5: DISABLED - This was destroying smoothed geometries!
-        // The code below was overwriting all curved edges with straight lines
-        // AFTER apply_polish_fixes had carefully smoothed them. This caused
-        // jagged lines on curved rail turnings.
-        //
-        // The C++ code writes straight-line geometries at lines 379-387,
-        // but that happens BEFORE the re-collapse and smoothing steps.
-        // Having this AFTER apply_polish_fixes is incorrect.
-        // =====================================================================
-        /*
-        for node in tg_new.get_nds() {
-            let adj_list = node.borrow().adj_list.clone();
-            for edge_ref in adj_list {
-                let is_from = Rc::ptr_eq(&edge_ref.borrow().from, node);
-                if !is_from {
-                    continue;
-                }
-
-                // CRITICAL: Set geometry to straight line from current node positions
-                // Any curves from combine_edges are discarded - we want clean straight lines
-                let from_pos = edge_ref.borrow().from.borrow().pos;
-                let to_pos = edge_ref.borrow().to.borrow().pos;
-
-                edge_ref.borrow_mut().geometry = vec![
-                    Coord {
-                        x: from_pos[0],
-                        y: from_pos[1],
-                    },
-                    Coord {
-                        x: to_pos[0],
-                        y: to_pos[1],
-                    },
-                ];
-            }
-        }
-        */
 
         // Convert back to Vec<GraphEdge>
         let mut new_edges = Vec::new();
@@ -1518,9 +1497,26 @@ fn collapse_shared_segments(
                 let from_id = edge_borrow.from.borrow().id;
                 let to_id = edge_borrow.to.borrow().id;
 
+                // CRITICAL FIX: Use original_node_id when available to preserve boundary connectivity.
+                // Without this, boundary nodes from cluster splitting lose their original NodeIds,
+                // causing edges from distant geographic regions to incorrectly share IDs.
+                // This matches the pattern used in collapse_shared_segments_from_graph (lines 844-855).
+                let from_node_id = edge_borrow
+                    .from
+                    .borrow()
+                    .original_node_id
+                    .clone()
+                    .unwrap_or_else(|| NodeId::Intersection(0, from_id));
+                let to_node_id = edge_borrow
+                    .to
+                    .borrow()
+                    .original_node_id
+                    .clone()
+                    .unwrap_or_else(|| NodeId::Intersection(0, to_id));
+
                 new_edges.push(CompactedGraphEdge {
-                    from: NodeId::Intersection(0, from_id),
-                    to: NodeId::Intersection(0, to_id),
+                    from: from_node_id,
+                    to: to_node_id,
                     geometry: ls.0.clone(),
                     // Map back strictly to tuples.
                     // Note: Direction info is effectively lost in GraphEdge export
@@ -1532,6 +1528,7 @@ fn collapse_shared_segments(
                         .collect(),
                     weight,
                 });
+
                 len_new += weight;
             }
         }
@@ -1662,56 +1659,138 @@ fn nd_collapse_cand_impl(
                 return None;
             }
 
-            // CROSS-INTERSECTION CHECK (Fix 2)
-            // Prevent merging if this would create a plus/X crossing where
-            // the candidate node's edges are perpendicular to our incoming direction
-            if let Some(inc_dir) = incoming_dir {
-                let inc_len = (inc_dir[0] * inc_dir[0] + inc_dir[1] * inc_dir[1]).sqrt();
-                if inc_len > 1e-6 {
-                    let in_norm = (inc_dir[0] / inc_len, inc_dir[1] / inc_len);
+            // ===========================================================
+            // OSM-BASED X-CROSSING DETECTION (replaces angle-based heuristics)
+            // ===========================================================
+            // X-shapes (flyovers/underpasses where tracks cross but don't connect)
+            // are now detected using OSM topology. Tracks should only merge if:
+            // 1. OSM confirms they share a junction at this location, OR
+            // 2. OSM data is not available (fallback to geometry)
+            //
+            // For subway (mode 1), strictly require OSM confirmation.
+            // ===========================================================
 
-                    // Check angles with all edges at candidate node
-                    for edge_ref in &node.borrow().adj_list {
-                        let edge_dir = get_edge_direction_from_node(edge_ref, node);
+            let is_subway_mode = current_modes.contains(&1);
+            let nd_pos = node.borrow().pos;
 
-                        // Calculate cross product for perpendicularity
-                        let cross = (in_norm.0 * edge_dir.1 - in_norm.1 * edge_dir.0).abs();
-                        let dot = (in_norm.0 * edge_dir.0 + in_norm.1 * edge_dir.1).abs();
+            // Check OSM validation if available
+            if let Some(osm_index) = osm_rail_graph::get_osm_index() {
+                // Check if both current point and candidate node are in OSM coverage
+                if osm_index.is_in_coverage(point, 500.0) && osm_index.is_in_coverage(nd_pos, 500.0)
+                {
+                    // OSM validation is applicable - use it for X-shape detection
+                    let search_radius = 25.0; // 25m radius for junction detection
 
-                        // Check if dealing with intercity rail (stricter threshold)
-                        let has_intercity = edge_ref.borrow().routes.iter().any(|r| r.route_type == 2)
-                            || current_modes.contains(&2);
+                    // Check if points share an OSM junction
+                    let share_jct = osm_index.share_junction(point, nd_pos, search_radius);
+                    let same_way = osm_index.on_same_way(point, nd_pos, search_radius);
 
-                        // Perpendicular crossing detection thresholds:
-                        // - Intercity rail: cross > 0.5 && dot < 0.866 (rejects >60° from parallel)
-                        // - Other modes: cross > 0.85 && dot < 0.5 (rejects >58° from perpendicular)
-                        let (cross_thresh, dot_thresh) = if has_intercity {
-                            (0.5, 0.866)  // sin(30°) = 0.5, cos(30°) = 0.866 - stricter for rail
-                        } else {
-                            (0.85, 0.5)   // Original thresholds for subway/tram
-                        };
+                    // For subway: STRICTLY require OSM junction or same way
+                    if is_subway_mode {
+                        if share_jct.is_none() && !same_way {
+                            // Subway tracks don't share OSM infrastructure - reject merge
+                            return None;
+                        }
+                    } else {
+                        // For non-subway: use OSM to detect X-crossings
+                        // If there's a perpendicular geometry AND no OSM connection, reject
+                        if let Some(inc_dir) = incoming_dir {
+                            let inc_len =
+                                (inc_dir[0] * inc_dir[0] + inc_dir[1] * inc_dir[1]).sqrt();
+                            if inc_len > 1e-6 {
+                                let in_norm = (inc_dir[0] / inc_len, inc_dir[1] / inc_len);
 
-                        if cross > cross_thresh && dot < dot_thresh {
-                            // Check if lines CONVERGE (turn into each other) ahead
-                            // by traversing and checking direction changes
-                            let lines_converge = check_lines_converge(edge_ref, in_norm, graph);
+                                // Check angles with edges at candidate node
+                                let mut is_perpendicular = false;
+                                for edge_ref in &node.borrow().adj_list {
+                                    let edge_dir = get_edge_direction_from_node(edge_ref, node);
+                                    let cross =
+                                        (in_norm.0 * edge_dir.1 - in_norm.1 * edge_dir.0).abs();
+                                    let dot =
+                                        (in_norm.0 * edge_dir.0 + in_norm.1 * edge_dir.1).abs();
 
-                            if !lines_converge {
-                                // True perpendicular X-crossing - don't merge
-                                return None;
+                                    // Near-perpendicular: cross > 0.7 (>45°) and dot < 0.7
+                                    if cross > 0.7 && dot < 0.7 {
+                                        is_perpendicular = true;
+                                        break;
+                                    }
+                                }
+
+                                // If geometrically perpendicular AND no OSM connection, it's an X-crossing
+                                if is_perpendicular && share_jct.is_none() && !same_way {
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // ===========================================================
+                    // RELATION-BASED MERGE DECISION
+                    // ===========================================================
+                    // Use OSM route relations to determine if tracks belong to
+                    // the same corridor. This replaces mode-based hysteresis.
+                    // ===========================================================
+                    let dominant_mode = if current_modes.contains(&1) { 1 } 
+                                        else if current_modes.contains(&2) { 2 } 
+                                        else { 0 };
+                    
+                    if let Some(_shared_relations) = osm_index.should_merge_by_relation(
+                        point, nd_pos, 50.0, dominant_mode
+                    ) {
+                        // Relation check passed (or indicates fallback to geometry)
+                        // Continue with distance-based checks below
+                    } else {
+                        // No shared route relation - these are different routes
+                        // Only reject if relation data is comprehensive
+                        // (TEMPORARY: disabled to avoid regression until relation coverage is verified)
+                        // return None;
+                    }
+                }
+            } else {
+                // Fallback: No OSM data - use original angle-based detection
+                if let Some(inc_dir) = incoming_dir {
+                    let inc_len = (inc_dir[0] * inc_dir[0] + inc_dir[1] * inc_dir[1]).sqrt();
+                    if inc_len > 1e-6 {
+                        let in_norm = (inc_dir[0] / inc_len, inc_dir[1] / inc_len);
+
+                        // Check angles with all edges at candidate node
+                        for edge_ref in &node.borrow().adj_list {
+                            let edge_dir = get_edge_direction_from_node(edge_ref, node);
+
+                            // Calculate cross product for perpendicularity
+                            let cross = (in_norm.0 * edge_dir.1 - in_norm.1 * edge_dir.0).abs();
+                            let dot = (in_norm.0 * edge_dir.0 + in_norm.1 * edge_dir.1).abs();
+
+                            // Check if dealing with intercity rail (stricter threshold)
+                            let has_intercity =
+                                edge_ref.borrow().routes.iter().any(|r| r.route_type == 2)
+                                    || current_modes.contains(&2);
+
+                            let (cross_thresh, dot_thresh) = if has_intercity {
+                                (0.5, 0.866)
+                            } else {
+                                (0.85, 0.5)
+                            };
+
+                            if cross > cross_thresh && dot < dot_thresh {
+                                let lines_converge = check_lines_converge(edge_ref, in_norm, graph);
+                                if !lines_converge {
+                                    return None;
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // HYSTERESIS - Check if this candidate node already has routes
-            // with matching modes. If so, use RELAXED thresholds to create "sticky"
-            // behavior that prevents oscillation between merge states.
+            // SIMPLIFIED HYSTERESIS (relations now handle mode separation)
+            // Since we now use OSM relations to determine route membership,
+            // we can use simpler distance thresholds without mode-specific multipliers.
             //
-            // The idea: once a node starts accumulating routes of a certain mode,
-            // it becomes "sticky" for that mode - easier to keep merging similar modes,
-            // preventing the zigzag where a node alternates between being merged/not-merged.
+            // The new approach:
+            // - Shared mode: 4x threshold (allows nearby tracks to merge)
+            // - Different modes: 0.25x threshold (discourages cross-mode merges)
+            // - Default: 1x threshold
             let mut node_modes = AHashSet::new();
             for edge_ref in &node.borrow().adj_list {
                 for occ in &edge_ref.borrow().routes {
@@ -1723,51 +1802,15 @@ fn nd_collapse_cand_impl(
                 && !node_modes.is_empty()
                 && current_modes.intersection(&node_modes).next().is_some();
 
-            // Check if we're dealing with intercity rail (route_type 2)
-            // Intercity rail has wider corridors and needs larger merge thresholds
-            let has_intercity_rail = current_modes.contains(&2) || node_modes.contains(&2);
-
-            // Base threshold multiplier for intercity rail (corridors are much wider)
-            // INCREASED: 16.0 -> 64.0 to capture parallel tracks more aggressively
-            // This prevents zig-zagging by ensuring parallel tracks stay merged
-            let mode_base_multiplier = if has_intercity_rail { 64.0 } else { 1.0 }; // 8x distance = 64x squared
-
-            // Determine threshold based on hysteresis state
-            // With weighted centroid, we can be more relaxed on thresholds
-            // The weighted averaging will stabilize positions naturally
-            //
-            // ANTI-FLIP-FLOP: For parallel tracks, use stronger hysteresis.
-            // Check merge_count to see if this node is already established (has absorbed points).
-            // Established nodes get even stickier behavior to prevent rapid state changes.
-            // LOWERED THRESHOLD: >= 2 -> >= 1 so nodes become sticky faster
-            let merge_count = node.borrow().merge_count;
-            let is_established_node = merge_count >= 1;
-
             let threshold_sq = if has_shared_mode {
-                // Node already has matching modes - use RELAXED threshold
-                // INCREASED MULTIPLIERS: Make intercity rail MUCH stickier to prevent flip-flopping
-                // Intercity rail established: 64.0 * 144.0 = 9216x squared (96x linear)
-                // Intercity rail new: 64.0 * 64.0 = 4096x squared (64x linear)
-                // Other modes established: 1.0 * 6.25 = 6.25x squared (2.5x linear)
-                // Other modes new: 1.0 * 4.0 = 4.0x squared (2x linear)
-                let hysteresis_mult = if is_established_node {
-                    // Strongly established - very sticky
-                    // INCREASED: 64.0 -> 144.0 for rail, 4.0 -> 6.25 for others
-                    if has_intercity_rail { 144.0 } else { 6.25 } // 12² or 2.5²
-                } else {
-                    // Newly merged - moderately sticky
-                    // INCREASED: 36.0 -> 64.0 for rail, 2.25 -> 4.0 for others
-                    if has_intercity_rail { 64.0 } else { 4.0 } // 8² or 2²
-                };
-                d_cut_sq * mode_base_multiplier * hysteresis_mult
+                // Same mode type - use relaxed threshold for corridor merging
+                d_cut_sq * 4.0 // 2x linear distance
             } else if !current_modes.is_empty() && !node_modes.is_empty() {
-                // Node has DIFFERENT modes only - use VERY strict threshold (~0.316x)
-                // This strongly discourages rail/subway cross-mode merges
-                // For intercity rail crossing other modes, still be strict
-                d_cut_sq * 0.1 // sqrt(0.1) ≈ 0.316x normal distance
+                // Different modes - use strict threshold
+                d_cut_sq * 0.25 // 0.5x linear distance
             } else {
-                // Empty modes or new node - use base threshold (with mode multiplier)
-                d_cut_sq * mode_base_multiplier
+                // Unknown or empty modes - use base threshold
+                d_cut_sq
             };
 
             // C++ line 104: d < dSpanA && d < dSpanB && d < dMax && d < dBest
@@ -2145,12 +2188,7 @@ fn combine_nodes(
 /// Matches C++ LineNodePL::connOccurs (LineNodePL.cpp:128-137)
 ///
 /// Returns true unless there's an explicit connection exception stored at the node.
-fn conn_occurs(
-    node: &NodeRef,
-    line_id: &RouteId,
-    edge_a: &EdgeRef,
-    edge_b: &EdgeRef,
-) -> bool {
+fn conn_occurs(node: &NodeRef, line_id: &RouteId, edge_a: &EdgeRef, edge_b: &EdgeRef) -> bool {
     // First check if line exists on both edges
     let has_a = edge_a.borrow().routes.iter().any(|r| r.line_id == *line_id);
     let has_b = edge_b.borrow().routes.iter().any(|r| r.line_id == *line_id);
@@ -2336,21 +2374,21 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
         // Require strict conditions for subway+rail merge:
         // 1. Entire segment must stay within 20m over at least 200m of parallel distance
         // 2. Must be parallel (angle check)
-        
+
         const MAX_SUBWAY_RAIL_DISTANCE: f64 = 20.0; // meters
         const MIN_PARALLEL_LENGTH: f64 = 200.0; // meters
-        
+
         // Check parallelism - edges should be nearly anti-parallel or parallel
         let angle_deg = calc_edge_angle_degrees(a, b);
         if angle_deg > 10.0 && angle_deg < 170.0 {
             // Not parallel enough - reject
             return false;
         }
-        
+
         // Check if segments stay consistently close over at least 200m
         let geom_a = &a.borrow().geometry;
         let geom_b = &b.borrow().geometry;
-        
+
         if !check_segments_stay_close(
             geom_a,
             geom_b,
@@ -2360,7 +2398,7 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
             // Lines don't stay close enough over sufficient distance - reject
             return false;
         }
-        
+
         // All conditions met - allow merge
     }
 
@@ -3015,7 +3053,7 @@ fn closest_point_distance_to_geom(geom_a: &[Coord], geom_b: &[Coord]) -> f64 {
 }
 
 /// Check if two geometries stay within max_distance of each other for at least min_length.
-/// Samples points along both geometries and checks that over a continuous segment of 
+/// Samples points along both geometries and checks that over a continuous segment of
 /// at least min_length meters, all sampled points stay within max_distance.
 fn check_segments_stay_close(
     geom_a: &[Coord],
@@ -3031,14 +3069,14 @@ fn check_segments_stay_close(
     const SAMPLE_INTERVAL: f64 = 10.0;
     let mut sampled_points = Vec::new();
     let mut cumulative_dist = 0.0;
-    
+
     sampled_points.push((geom_a[0], 0.0));
-    
+
     for i in 1..geom_a.len() {
         let dx = geom_a[i].x - geom_a[i - 1].x;
         let dy = geom_a[i].y - geom_a[i - 1].y;
         let seg_len = (dx * dx + dy * dy).sqrt();
-        
+
         let num_samples = (seg_len / SAMPLE_INTERVAL).ceil() as usize;
         for j in 1..=num_samples {
             let t = (j as f64) / (num_samples as f64);
@@ -3048,44 +3086,44 @@ fn check_segments_stay_close(
             sampled_points.push((Coord { x, y }, cumulative_dist));
         }
     }
-    
+
     // For each starting point, check if we can find min_length of close proximity
     for start_idx in 0..sampled_points.len() {
         let start_dist = sampled_points[start_idx].1;
         let mut all_close = true;
         let mut reached_min_length = false;
-        
+
         for end_idx in start_idx..sampled_points.len() {
             let current_dist = sampled_points[end_idx].1;
             let segment_length = current_dist - start_dist;
-            
+
             if segment_length >= min_length {
                 reached_min_length = true;
                 break;
             }
-            
+
             // Check if this point is close to geom_b
             let point = sampled_points[end_idx].0;
             let mut min_dist_to_b = f64::MAX;
-            
+
             for coord_b in geom_b {
                 let dx = point.x - coord_b.x;
                 let dy = point.y - coord_b.y;
                 let dist = (dx * dx + dy * dy).sqrt();
                 min_dist_to_b = min_dist_to_b.min(dist);
             }
-            
+
             if min_dist_to_b > max_distance {
                 all_close = false;
                 break;
             }
         }
-        
+
         if all_close && reached_min_length {
             return true;
         }
     }
-    
+
     false
 }
 
@@ -3322,11 +3360,11 @@ fn geom_avg(geom_a: &[Coord], weight_a: usize, geom_b: &[Coord], weight_b: usize
 }
 
 /// N-way geometry averaging: averages multiple geometries simultaneously
-/// 
+///
 /// This avoids the bias introduced by cascading pairwise averaging where
 /// (A+B)+C ≠ (B+C)+A. When 10+ parallel tracks are folded, pairwise averaging
 /// causes early pairs to disproportionately influence the result.
-/// 
+///
 /// Instead, this function:
 /// 1. Orients all geometries consistently (starting from common_node)
 /// 2. Resamples all to the same number of points (10m sampling)
@@ -3339,42 +3377,45 @@ fn geom_avg_nway(geometries: &[Vec<Coord>], weights: &[usize]) -> Vec<Coord> {
     if geometries.len() == 1 {
         return geometries[0].clone();
     }
-    
+
     // Filter out empty geometries
-    let valid: Vec<(&Vec<Coord>, f64)> = geometries.iter()
+    let valid: Vec<(&Vec<Coord>, f64)> = geometries
+        .iter()
         .zip(weights.iter())
         .filter(|(g, _)| g.len() >= 2)
-        .map(|(g, w)| (g, (*w * *w) as f64))  // Square weights like C++
+        .map(|(g, w)| (g, (*w * *w) as f64)) // Square weights like C++
         .collect();
-    
+
     if valid.is_empty() {
         return geometries.get(0).cloned().unwrap_or_default();
     }
-    
+
     // Find max length to determine number of sample points
-    let max_len: f64 = valid.iter()
+    let max_len: f64 = valid
+        .iter()
         .map(|(g, _)| calc_polyline_length(g))
         .fold(0.0, f64::max);
-    
+
     if max_len < 1.0 {
         return valid[0].0.clone();
     }
-    
+
     // Use 10m sampling (finer than the 20m in geom_avg) for better corridor alignment
     let num_points = ((max_len / 10.0).ceil() as usize + 1).max(2);
-    
+
     // Resample all geometries
-    let resampled: Vec<Vec<Coord>> = valid.iter()
+    let resampled: Vec<Vec<Coord>> = valid
+        .iter()
         .map(|(g, _)| resample_polyline(g, num_points))
         .collect();
-    
+
     let sample_weights: Vec<f64> = valid.iter().map(|(_, w)| *w).collect();
     let total_weight: f64 = sample_weights.iter().sum();
-    
+
     if total_weight == 0.0 {
         return valid[0].0.clone();
     }
-    
+
     // Simultaneous weighted average at each point
     let mut result = Vec::with_capacity(num_points);
     for i in 0..num_points {
@@ -3386,15 +3427,15 @@ fn geom_avg_nway(geometries: &[Vec<Coord>], weights: &[usize]) -> Vec<Coord> {
                 y += geom[i].y * sample_weights[j];
             }
         }
-        result.push(Coord { 
-            x: x / total_weight, 
-            y: y / total_weight 
+        result.push(Coord {
+            x: x / total_weight,
+            y: y / total_weight,
         });
     }
-    
+
     // Apply stronger Chaikin smoothing (2 iterations) for corridor-level smoothness
     let smoothed = chaikin_smooth_coords(&result, 2);
-    
+
     // Simplify at 1m tolerance for clean output
     simplify_coords(&smoothed, 1.0)
 }
@@ -4078,7 +4119,7 @@ fn get_ortho_line_at(coords: &[Coord], frac: f64, length: f64) -> Option<(Coord,
 
 /// Fold parallel edges by averaging their geometries (C++: foldEdges)
 /// When multiple edges share a node and go to the same place, average their geometries
-/// 
+///
 /// IMPROVED: For 3+ parallel edges, uses N-way simultaneous averaging instead of
 /// cascading pairwise averaging to avoid order-dependent bias.
 fn fold_edges_for_node(graph: &mut LineGraph, node: &NodeRef) -> bool {
@@ -4092,7 +4133,10 @@ fn fold_edges_for_node(graph: &mut LineGraph, node: &NodeRef) -> bool {
     for edge_ref in &adj_list {
         let other = edge_ref.borrow().get_other_nd(node);
         let other_id = other.borrow().id;
-        dest_groups.entry(other_id).or_default().push(Rc::clone(edge_ref));
+        dest_groups
+            .entry(other_id)
+            .or_default()
+            .push(Rc::clone(edge_ref));
     }
 
     // Find groups with 2+ edges (parallel edges to same destination)
@@ -4206,9 +4250,7 @@ fn fold_edges_for_node(graph: &mut LineGraph, node: &NodeRef) -> bool {
                 // it's just about whether we need to interpret it differently.
                 // Since we're merging into edge_a, the direction pointer stays valid.
 
-                if let Some(existing_r) =
-                    ea.routes.iter_mut().find(|er| er.line_id == r.line_id)
-                {
+                if let Some(existing_r) = ea.routes.iter_mut().find(|er| er.line_id == r.line_id) {
                     // If directions conflict, make bidirectional
                     let same_direction = match (&existing_r.direction, &new_dir) {
                         (None, None) => true,
@@ -4420,6 +4462,29 @@ fn soft_cleanup(graph: &mut LineGraph, threshold: f64) {
             // "Strange diagonal shapes" suggests we are merging things we shouldn't.
             if dist > threshold {
                 continue;
+            }
+
+            // ===========================================================
+            // OSM VALIDATION FOR NODE CONTRACTION
+            // ===========================================================
+            // Only contract nodes if OSM confirms they are connected/related.
+            // If they are distinct in OSM (e.g., parallel tracks that don't merge),
+            // keep them separate to avoid "soap bubbles".
+            if let Some(osm_index) = osm_rail_graph::get_osm_index() {
+                let p1 = node.borrow().pos;
+                let p2 = to_node.borrow().pos;
+
+                if osm_index.is_in_coverage(p1, 500.0) && osm_index.is_in_coverage(p2, 500.0) {
+                    // Check if they share a junction or are on the same way
+                    // Use a slightly larger radius (50m) to account for data drift
+                    let share_jct = osm_index.share_junction(p1, p2, 50.0);
+                    let same_way = osm_index.on_same_way(p1, p2, 50.0);
+
+                    if share_jct.is_none() && !same_way {
+                        // OSM says these are topologically distinct - DO NOT MERGE
+                        continue;
+                    }
+                }
             }
 
             // CRITICAL (Fix Bug 1): Skip if target is degree-2 (would straighten curves)

@@ -1,5 +1,6 @@
 use crate::clustering::StopCluster;
 use crate::edges::{GraphEdge, NodeId};
+use crate::regions::Region;
 use anyhow::Result;
 use catenary::graph_formats::{
     LandMass, NodeId as SerialNodeId, SerializableExportGraph, SerializableGraphEdge,
@@ -11,10 +12,12 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::BufWriter;
 
-pub fn extract_and_export(
+/// Export graph with optional region suffix in filename
+pub fn extract_and_export_region(
     clusters: &[StopCluster],
     edges: &[GraphEdge],
     restrictions: Vec<TurnRestriction>,
+    region: Option<&Region>,
     export_geojson: bool,
 ) -> Result<()> {
     // 1. Calculate Land Masses (using internal types)
@@ -22,9 +25,18 @@ pub fn extract_and_export(
 
     println!("Identified {} distinct land masses.", land_masses.len());
 
+    // Determine output filenames
+    let (bin_filename, geojson_filename) = match region {
+        Some(r) => (r.output_graph_name(), r.output_geojson_name()),
+        None => (
+            "globeflower_graph.bin".to_string(),
+            "globeflower_graph.geojson".to_string(),
+        ),
+    };
+
     // 2. Export GeoJSON (Debug) - Optional
     if export_geojson {
-        export_to_geojson(clusters, edges)?;
+        export_to_geojson_file(clusters, edges, &geojson_filename)?;
     }
 
     // 3. Convert to Serializable Models
@@ -60,13 +72,23 @@ pub fn extract_and_export(
         restrictions,
     };
 
-    let file = File::create("globeflower_graph.bin")?;
+    let file = File::create(&bin_filename)?;
     let mut writer = BufWriter::new(file);
     bincode::serde::encode_into_std_write(&export_graph, &mut writer, bincode::config::legacy())
         .map_err(|e| anyhow::anyhow!("Bincode serialization failed: {}", e))?;
-    println!("Exported binary graph to globeflower_graph.bin");
+    println!("Exported binary graph to {}", bin_filename);
 
     Ok(())
+}
+
+/// Legacy function for backwards compatibility
+pub fn extract_and_export(
+    clusters: &[StopCluster],
+    edges: &[GraphEdge],
+    restrictions: Vec<TurnRestriction>,
+    export_geojson: bool,
+) -> Result<()> {
+    extract_and_export_region(clusters, edges, restrictions, None, export_geojson)
 }
 
 fn convert_node_id(id: NodeId) -> SerialNodeId {
@@ -98,7 +120,11 @@ fn convert_stop(s: &Stop) -> SerializableStop {
     }
 }
 
-fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()> {
+fn export_to_geojson_file(
+    clusters: &[StopCluster],
+    edges: &[GraphEdge],
+    filename: &str,
+) -> Result<()> {
     let mut features = Vec::new();
 
     // Export Edges
@@ -167,11 +193,11 @@ fn export_to_geojson(clusters: &[StopCluster], edges: &[GraphEdge]) -> Result<()
     };
 
     let geojson = GeoJson::FeatureCollection(collection);
-    let file = File::create("globeflower_graph.geojson")?;
+    let file = File::create(filename)?;
     let mut writer = BufWriter::new(file);
     use std::io::Write;
     writer.write_all(geojson.to_string().as_bytes())?;
-    println!("Exported graph to globeflower_graph.geojson");
+    println!("Exported graph to {}", filename);
     Ok(())
 }
 

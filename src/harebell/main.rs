@@ -27,8 +27,13 @@ enum Command {
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
     },
-    /// Export tasks or debug
-    Export,
+    /// Export tiles for a region
+    Export {
+        /// Region to export (e.g., europe, north-america, japan)
+        /// If not specified, loads globeflower_graph.bin
+        #[arg(long)]
+        region: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -64,11 +69,28 @@ async fn main() -> std::io::Result<()> {
             .run()
             .await
         }
-        Command::Export => {
+        Command::Export { region } => {
             println!("Starting Static MVT Generation...");
 
-            // Load Graph (same as serve)
-            let loader = loader::Loader::new("globeflower_graph.bin".to_string(), pool);
+            // Determine graph file and output directory based on region
+            let (graph_file, output_dir) = match &region {
+                Some(r) => {
+                    let graph_file = format!("globeflower_graph_{}.bin", r);
+                    let output_dir = format!("tiles_output/{}", r);
+                    println!("Processing region: {} (graph file: {})", r, graph_file);
+                    (graph_file, output_dir)
+                }
+                None => {
+                    println!("No region specified, using default globeflower_graph.bin");
+                    (
+                        "globeflower_graph.bin".to_string(),
+                        "tiles_output".to_string(),
+                    )
+                }
+            };
+
+            // Load Graph
+            let loader = loader::Loader::new(graph_file, pool);
             let mut graph = loader.load_graph().await.map_err(|e: anyhow::Error| {
                 std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
             })?;
@@ -88,9 +110,9 @@ async fn main() -> std::io::Result<()> {
             println!("Rebuilding spatial indices after optimization...");
             graph.rebuild_indices();
 
-            println!("Generating tiles...");
+            println!("Generating tiles to {}...", output_dir);
 
-            let generator = generator::Generator::new("tiles_output".to_string());
+            let generator = generator::Generator::new(output_dir);
             generator
                 .generate_all(&graph, 5, 16)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;

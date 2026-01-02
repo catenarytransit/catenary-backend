@@ -87,7 +87,11 @@ impl LineNode {
             adj_list: Vec::new(),
             conn_exc: AHashMap::new(),
             merge_count: 1, // Start at 1 - the initial point
-            original_node_id: None,
+            // CRITICAL FIX: Always set original_node_id to preserve globally unique ID.
+            // This prevents NodeId collisions during cross-cluster merge operations.
+            // The `id` is globally unique (allocated via ChunkedNodeIdTracker), so 
+            // we capture it here to ensure it's preserved through all transformations.
+            original_node_id: Some(NodeId::Intersection(0, id)),
         }
     }
 
