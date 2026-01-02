@@ -735,6 +735,134 @@ impl OsmRailIndex {
     pub fn get_way_railway_type(&self, way_id: i64) -> Option<&String> {
         self.way_to_railway_type.get(&way_id)
     }
+    
+    // =========================================================================
+    // OSM-Accelerated Collapse Methods
+    // =========================================================================
+    
+    /// Snap a position to the nearest OSM junction
+    /// 
+    /// Returns (junction_node_id, snapped_position) if found within radius_m.
+    /// Used to align edge endpoints to actual track junctions.
+    pub fn snap_to_junction(&self, pos: [f64; 2], radius_m: f64) -> Option<(i64, [f64; 2])> {
+        let aabb = AABB::from_corners(
+            [pos[0] - radius_m, pos[1] - radius_m],
+            [pos[0] + radius_m, pos[1] + radius_m],
+        );
+
+        let radius_sq = radius_m * radius_m;
+        let mut best: Option<(i64, [f64; 2], f64)> = None;
+
+        for node in self.node_tree.locate_in_envelope(&aabb) {
+            if !self.junctions.contains(&node.node_id) {
+                continue;
+            }
+
+            let dx = node.pos[0] - pos[0];
+            let dy = node.pos[1] - pos[1];
+            let dist_sq = dx * dx + dy * dy;
+
+            if dist_sq <= radius_sq {
+                match &best {
+                    Some((_, _, best_dist_sq)) if dist_sq >= *best_dist_sq => {}
+                    _ => best = Some((node.node_id, node.pos, dist_sq)),
+                }
+            }
+        }
+
+        best.map(|(id, snap_pos, _)| (id, snap_pos))
+    }
+    
+    /// Find all OSM junctions along a polyline path within a tolerance
+    /// 
+    /// Returns a list of (junction_id, position, distance_along_path) sorted by distance.
+    /// This is used to split edges at junction points.
+    pub fn junctions_along_path(&self, path: &[[f64; 2]], tolerance_m: f64) -> Vec<(i64, [f64; 2], f64)> {
+        if path.len() < 2 {
+            return vec![];
+        }
+        
+        let mut results: Vec<(i64, [f64; 2], f64)> = Vec::new();
+        let mut cumulative_dist = 0.0;
+        
+        for i in 0..path.len() - 1 {
+            let p1 = path[i];
+            let p2 = path[i + 1];
+            let seg_dx = p2[0] - p1[0];
+            let seg_dy = p2[1] - p1[1];
+            let seg_len = (seg_dx * seg_dx + seg_dy * seg_dy).sqrt();
+            
+            if seg_len < 1e-9 {
+                continue;
+            }
+            
+            // Search box around this segment
+            let min_x = p1[0].min(p2[0]) - tolerance_m;
+            let max_x = p1[0].max(p2[0]) + tolerance_m;
+            let min_y = p1[1].min(p2[1]) - tolerance_m;
+            let max_y = p1[1].max(p2[1]) + tolerance_m;
+            
+            let aabb = AABB::from_corners([min_x, min_y], [max_x, max_y]);
+            
+            for node in self.node_tree.locate_in_envelope(&aabb) {
+                if !self.junctions.contains(&node.node_id) {
+                    continue;
+                }
+                
+                // Project junction onto segment
+                let t = ((node.pos[0] - p1[0]) * seg_dx + (node.pos[1] - p1[1]) * seg_dy) 
+                    / (seg_len * seg_len);
+                
+                // Must be on the segment (not extended)
+                if t < 0.0 || t > 1.0 {
+                    continue;
+                }
+                
+                // Calculate closest point on segment
+                let proj_x = p1[0] + t * seg_dx;
+                let proj_y = p1[1] + t * seg_dy;
+                
+                // Check distance from junction to projected point
+                let dist_dx = node.pos[0] - proj_x;
+                let dist_dy = node.pos[1] - proj_y;
+                let dist = (dist_dx * dist_dx + dist_dy * dist_dy).sqrt();
+                
+                if dist <= tolerance_m {
+                    let dist_along = cumulative_dist + t * seg_len;
+                    
+                    // Check if we haven't already added this junction
+                    if !results.iter().any(|(id, _, _)| *id == node.node_id) {
+                        results.push((node.node_id, node.pos, dist_along));
+                    }
+                }
+            }
+            
+            cumulative_dist += seg_len;
+        }
+        
+        // Sort by distance along path
+        results.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+        
+        results
+    }
+    
+    /// Check if there's an OSM junction near the start or end of a path
+    /// 
+    /// Returns (start_junction, end_junction) where each is Option<(id, pos)>
+    pub fn path_endpoint_junctions(&self, path: &[[f64; 2]], radius_m: f64) -> (Option<(i64, [f64; 2])>, Option<(i64, [f64; 2])>) {
+        if path.is_empty() {
+            return (None, None);
+        }
+        
+        let start_jct = self.snap_to_junction(path[0], radius_m);
+        let end_jct = if path.len() > 1 {
+            self.snap_to_junction(*path.last().unwrap(), radius_m)
+        } else {
+            None
+        };
+        
+        (start_jct, end_jct)
+    }
 }
 
 

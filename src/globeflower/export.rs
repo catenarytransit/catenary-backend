@@ -99,6 +99,8 @@ fn convert_node_id(id: NodeId) -> SerialNodeId {
             SerialNodeId::Intersection(cluster_id, local_id)
         }
         NodeId::Split(e, s) => SerialNodeId::Split(e, s),
+        // Convert OSM junction to Intersection with cluster 0 (matches pattern used elsewhere)
+        NodeId::OsmJunction(osm_id) => SerialNodeId::OsmJunction(osm_id),
     }
 }
 

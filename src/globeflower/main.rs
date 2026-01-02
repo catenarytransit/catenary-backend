@@ -9,6 +9,7 @@ mod graph_types;
 mod insertion;
 mod intercity_split;
 mod node_id_allocator;
+mod osm_collapse;
 mod osm_rail_graph;
 mod partition_storage;
 mod partitioning;

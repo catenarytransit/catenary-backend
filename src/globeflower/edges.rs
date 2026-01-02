@@ -1828,6 +1828,7 @@ fn simplify_graph_serial(mut edges: Vec<GraphEdge>) -> Vec<GraphEdge> {
                 }
             }
             NodeId::Split(_, _) => true, // Split nodes are explicit anchors
+            NodeId::OsmJunction(_) => true, // OSM junctions are explicit anchors
         };
 
         if is_start {

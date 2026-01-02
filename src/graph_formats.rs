@@ -39,6 +39,8 @@ pub enum NodeId {
     /// Intersection node with (cluster_id, local_id) tuple to ensure global uniqueness across clusters
     Intersection(usize, usize),
     Split(usize, usize), // (edge_index, split_index)
+    /// OSM junction node ID for OSM-accelerated collapse
+    OsmJunction(i64),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

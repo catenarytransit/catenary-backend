@@ -997,6 +997,22 @@ fn collapse_shared_segments(
 ) -> Vec<CompactedGraphEdge> {
     use std::cmp::Ordering;
 
+    // =========================================================================
+    // OSM-ACCELERATED PATH
+    // =========================================================================
+    // When OSM data is available, use junction-based collapse for ~10x memory savings.
+    // This avoids expensive 5m densification + iterative collapse.
+    if let Some(osm_index) = osm_rail_graph::get_osm_index() {
+        if osm_index.junction_count() > 0 {
+            println!("Using OSM-accelerated collapse ({} junctions available)...", 
+                     osm_index.junction_count());
+            return crate::osm_collapse::collapse_with_osm_junctions(edges, osm_index, d_cut);
+        }
+    }
+    
+    // =========================================================================
+    // FALLBACK: Standard iterative collapse with coarsened spacing
+    // =========================================================================
     println!("Building Support Graph via iterative collapse (Topological Mode)...");
 
     for iter in 0..max_iters {
