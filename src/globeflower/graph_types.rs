@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, Mutex};
 use catenary::graph_formats::NodeId;
+use crate::route_registry::RouteId;
 
 
 
@@ -31,7 +32,7 @@ pub enum RouteDirection {
 /// direction: None = bidirectional, Some(node) = directed towards that node
 #[derive(Clone, Debug)]
 pub struct LineOcc {
-    pub line_id: (String, String),
+    pub line_id: RouteId,
     pub route_type: i32,
     /// Direction the line travels. None = bidirectional.
     /// Some(weak_ref) = directed towards the node pointed to.
@@ -41,7 +42,7 @@ pub struct LineOcc {
 
 impl LineOcc {
     pub fn new(
-        line_id: (String, String),
+        line_id: RouteId,
         route_type: i32,
         direction: Option<Weak<RefCell<LineNode>>>,
     ) -> Self {
@@ -53,7 +54,7 @@ impl LineOcc {
     }
 
     /// Create a bidirectional line occurrence
-    pub fn new_bidirectional(line_id: (String, String), route_type: i32) -> Self {
+    pub fn new_bidirectional(line_id: RouteId, route_type: i32) -> Self {
         Self {
             line_id,
             route_type,
@@ -69,7 +70,7 @@ pub struct LineNode {
     pub adj_list: Vec<EdgeRef>,
     // Connection exceptions: lines that cannot continue between certain edge pairs at this node
     // Key: line_id, Value: Map of edge_id -> Set of forbidden target edge_ids
-    pub conn_exc: AHashMap<(String, String), AHashMap<usize, AHashSet<usize>>>,
+    pub conn_exc: AHashMap<RouteId, AHashMap<usize, AHashSet<usize>>>,
     // Track how many points have been merged into this node for weighted centroid
     pub merge_count: usize,
     // CRITICAL: Preserve original NodeId through cluster processing
@@ -107,16 +108,16 @@ impl LineNode {
     }
 
     /// Add a connection exception - line cannot continue from edge_a to edge_b at this node
-    pub fn add_conn_exc(&mut self, line_id: &(String, String), edge_a_id: usize, edge_b_id: usize) {
+    pub fn add_conn_exc(&mut self, line_id: RouteId, edge_a_id: usize, edge_b_id: usize) {
         // Store in both directions for fast lookup (matches C++)
         self.conn_exc
-            .entry(line_id.clone())
+            .entry(line_id)
             .or_default()
             .entry(edge_a_id)
             .or_default()
             .insert(edge_b_id);
         self.conn_exc
-            .entry(line_id.clone())
+            .entry(line_id)
             .or_default()
             .entry(edge_b_id)
             .or_default()
@@ -127,11 +128,11 @@ impl LineNode {
     /// Matches C++ LineNodePL::connOccurs
     pub fn conn_occurs_check(
         &self,
-        line_id: &(String, String),
+        line_id: RouteId,
         edge_a_id: usize,
         edge_b_id: usize,
     ) -> bool {
-        if let Some(exc_map) = self.conn_exc.get(line_id) {
+        if let Some(exc_map) = self.conn_exc.get(&line_id) {
             if let Some(forbidden) = exc_map.get(&edge_a_id) {
                 return !forbidden.contains(&edge_b_id);
             }

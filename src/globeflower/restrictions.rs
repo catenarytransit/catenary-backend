@@ -1,5 +1,6 @@
 use crate::edges::{GraphEdge, NodeId, convert_to_geo};
 use crate::geometry_utils::{get_ortho_line_at_dist, intersection};
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 use anyhow::Result;
 use catenary::graph_formats::TurnRestriction;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -8,8 +9,8 @@ use geo::prelude::*;
 use geo::{Coord, LineString as GeoLineString, Point as GeoPoint};
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
-use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::BinaryHeap;
+use std::sync::{Arc, Mutex};
 
 // ============================================================================
 // Configuration Constants (matching C++ TopoConfig defaults)
@@ -390,9 +391,12 @@ pub async fn infer_from_db(
         .load::<catenary::models::DirectionPatternMeta>(&mut conn)
         .await?;
 
-    let mut pattern_to_shape: HashMap<String, String> = HashMap::new();
-    let mut pattern_to_route: HashMap<String, (String, String)> = HashMap::new();
-    let mut _relevant_shape_ids = HashSet::new();
+    println!("Loaded {} direction pattern metas", metas.len());
+
+    let mut pattern_to_shape: HashMap<String, String> = HashMap::with_capacity(metas.len());
+    let mut pattern_to_route: HashMap<String, (String, String)> =
+        HashMap::with_capacity(metas.len());
+    let mut _relevant_shape_ids = HashSet::with_capacity(metas.len());
 
     for m in metas {
         if let Some(sid) = m.gtfs_shape_id {
@@ -420,8 +424,8 @@ pub async fn infer_from_db(
         shape_map.insert(s.shape_id.clone(), s);
     }
 
-    // Build RouteShapeMap
-    let mut route_shapes: RouteShapeMap = HashMap::new();
+    // Build RouteShapeMap with estimated capacity
+    let mut route_shapes: RouteShapeMap = HashMap::with_capacity(pattern_to_shape.len());
 
     for (pat_id, shape_id) in &pattern_to_shape {
         if let Some(route_key) = pattern_to_route.get(pat_id) {
@@ -431,6 +435,11 @@ pub async fn infer_from_db(
             }
         }
     }
+
+    println!(
+        "Loaded {} route shapes for restriction inference",
+        route_shapes.len()
+    );
 
     Ok(infer_restrictions_dijkstra(
         edges,
@@ -849,54 +858,88 @@ fn build_restriction_graph(
     HashMap<usize, Vec<usize>>,
     HashMap<NodeId, usize>,
 ) {
+    println!("Building restriction graph with {} edges...", edges.len());
+
+    // Pre-collect unique nodes in parallel
+    let unique_nodes_std: std::collections::HashSet<NodeId> = edges
+        .par_iter()
+        .flat_map(|edge| vec![edge.from, edge.to])
+        .collect();
+
+    // Convert to AHashSet for faster subsequent lookups
+    let unique_nodes: HashSet<NodeId> = unique_nodes_std.into_iter().collect();
+
+    println!("Found {} unique nodes", unique_nodes.len());
+
+    // Create node map with pre-allocated capacity
+    let mut node_map: HashMap<NodeId, usize> = HashMap::with_capacity(unique_nodes.len());
     let mut graph = RestrGraph::new();
-    let mut restr_edge_map: HashMap<usize, Vec<usize>> = HashMap::new();
-    let mut node_map: HashMap<NodeId, usize> = HashMap::new();
+    graph.nodes.reserve(unique_nodes.len());
 
-    // Create nodes
-    for edge in edges {
-        let from_geo = convert_to_geo(&edge.geometry);
-        let to_geo = convert_to_geo(&edge.geometry);
-
-        let from_pos = from_geo.0.get(0).map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
-        let to_pos = to_geo
-            .0
-            .get(to_geo.0.len().saturating_sub(1))
-            .map(|c| [c.x, c.y])
-            .unwrap_or([0.0, 0.0]);
-
-        if !node_map.contains_key(&edge.from) {
-            let idx = graph.add_node(from_pos);
-            node_map.insert(edge.from, idx);
-        }
-        if !node_map.contains_key(&edge.to) {
-            let idx = graph.add_node(to_pos);
-            node_map.insert(edge.to, idx);
+    // Create all nodes sequentially (they need sequential indices)
+    for &node_id in &unique_nodes {
+        // Find first edge with this node to get position
+        if let Some(edge) = edges.iter().find(|e| e.from == node_id || e.to == node_id) {
+            let geom = convert_to_geo(&edge.geometry);
+            let pos = if edge.from == node_id {
+                geom.0.get(0).map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0])
+            } else {
+                geom.0
+                    .get(geom.0.len().saturating_sub(1))
+                    .map(|c| [c.x, c.y])
+                    .unwrap_or([0.0, 0.0])
+            };
+            let idx = graph.add_node(pos);
+            node_map.insert(node_id, idx);
         }
     }
 
-    // Create edges (both directions for bidirectional graph)
-    for (edge_idx, edge) in edges.iter().enumerate() {
-        let from_node = node_map[&edge.from];
-        let to_node = node_map[&edge.to];
-        let geom = convert_to_geo(&edge.geometry);
+    println!("Creating graph edges...");
 
-        let lines: HashSet<String> = edge
-            .routes
-            .iter()
-            .map(|(chateau, rid, _)| format!("{}_{}", chateau, rid))
-            .collect();
+    // Pre-compute edge data in parallel
+    let edge_data: Vec<_> = edges
+        .par_iter()
+        .enumerate()
+        .map(|(edge_idx, edge)| {
+            let geom = convert_to_geo(&edge.geometry);
+            let lines: HashSet<String> = edge
+                .routes
+                .iter()
+                .map(|(chateau, rid, _)| format!("{}_{}", chateau, rid))
+                .collect();
+
+            let mut rev_geom = geom.clone();
+            rev_geom.0.reverse();
+
+            (edge_idx, edge.from, edge.to, geom, rev_geom, lines)
+        })
+        .collect();
+
+    println!("Adding {} edge pairs to graph...", edge_data.len());
+
+    // Create restr_edge_map with pre-allocated capacity
+    let mut restr_edge_map: HashMap<usize, Vec<usize>> = HashMap::with_capacity(edges.len());
+    graph.edges.reserve(edges.len() * 2);
+
+    // Add edges sequentially (they need sequential indices)
+    for (edge_idx, from_id, to_id, geom, rev_geom, lines) in edge_data {
+        let from_node = node_map[&from_id];
+        let to_node = node_map[&to_id];
 
         // Add forward edge
-        let idx1 = graph.add_edge(from_node, to_node, geom.clone(), lines.clone());
+        let idx1 = graph.add_edge(from_node, to_node, geom, lines.clone());
         restr_edge_map.entry(edge_idx).or_default().push(idx1);
 
         // Add reverse edge
-        let mut rev_geom = geom.clone();
-        rev_geom.0.reverse();
         let idx2 = graph.add_edge(to_node, from_node, rev_geom, lines);
         restr_edge_map.entry(edge_idx).or_default().push(idx2);
     }
+
+    println!(
+        "Restriction graph built: {} nodes, {} edges",
+        graph.nodes.len(),
+        graph.edges.len()
+    );
 
     (graph, restr_edge_map, node_map)
 }
@@ -938,6 +981,8 @@ fn add_handles(
     restr_edge_map: &HashMap<usize, Vec<usize>>,
     route_shapes: &RouteShapeMap,
 ) -> (HandleMap, HandleMap) {
+    println!("Adding handles with parallel processing...");
+
     let mut handles_a: HandleMap = HashMap::new(); // Handles at 1/3 position
     let mut handles_b: HandleMap = HashMap::new(); // Handles at 2/3 position
 
@@ -945,98 +990,138 @@ fn add_handles(
     let max_dist = 100.0;
     let aggr_dist = 20.0;
 
-    // Request: (GraphEdgeIdx, RestrEdgeIdx, Fraction, SplitPoint, IsHandleA)
-    let mut split_requests: Vec<(usize, usize, f64, GeoPoint<f64>, bool)> = Vec::new();
+    // Limit parallelism to save memory (and avoid too many small allocations)
+    // Use at most 4 threads, or available parallelism
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(4);
 
-    for (orig_idx, orig_edge) in edges.iter().enumerate() {
-        let geom = convert_to_geo(&orig_edge.geometry);
-        #[allow(deprecated)]
-        let len_meters = geom.haversine_length();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .unwrap();
 
-        // Skip very short edges
-        if len_meters < 1.0 {
-            continue;
-        }
+    // Immutable reborrow for parallel access
+    let graph_ref = &*graph;
 
-        let check_pos = (len_meters / 2.0).min(2.0 * aggr_dist);
+    // Group splits by RestrEdge index directly using map-reduce
+    // RestrEdgeIdx -> (GraphEdgeIdx, SplitsWithHandleType)
+    // This replaces the intermediate Vec<split_requests> which consumes lots of memory
+    let splits_by_restr_edge: HashMap<usize, (usize, Vec<(f64, GeoPoint<f64>, bool)>)> = pool
+        .install(|| {
+            edges
+                .par_iter()
+                .enumerate()
+                .fold(
+                    HashMap::new, // Initialize local map
+                    |mut acc: HashMap<usize, (usize, Vec<(f64, GeoPoint<f64>, bool)>)>,
+                     (orig_idx, orig_edge)| {
+                        let geom = convert_to_geo(&orig_edge.geometry);
+                        #[allow(deprecated)]
+                        let len_meters = geom.haversine_length();
 
-        // A handles at 1/3, B handles at 2/3 (matching C++ lines 243-254)
-        let hndl_la_check = get_ortho_line_at_dist(&geom, check_pos, max_dist);
-        let hndl_lb_check = get_ortho_line_at_dist(&geom, len_meters - check_pos, max_dist);
+                        // Skip very short edges
+                        if len_meters < 1.0 {
+                            return acc;
+                        }
 
-        let hndl_la = get_ortho_line_at_dist(&geom, len_meters / 3.0, max_dist);
-        let hndl_lb = get_ortho_line_at_dist(&geom, len_meters * 2.0 / 3.0, max_dist);
+                        let check_pos = (len_meters / 2.0).min(2.0 * aggr_dist);
 
-        for route_key_tuple in &orig_edge.routes {
-            let route_key = &(route_key_tuple.0.clone(), route_key_tuple.1.clone());
-            let line_id = format!("{}_{}", route_key.0, route_key.1);
-            let Some(shapes) = route_shapes.get(route_key) else {
-                continue;
-            };
+                        // A handles at 1/3, B handles at 2/3 (matching C++ lines 243-254)
+                        let hndl_la_check = get_ortho_line_at_dist(&geom, check_pos, max_dist);
+                        let hndl_lb_check =
+                            get_ortho_line_at_dist(&geom, len_meters - check_pos, max_dist);
 
-            for shape in shapes {
-                // Closure to check and collect intersections
-                let mut check_and_collect =
-                    |hndl_opt: Option<geo::Line<f64>>,
-                     check_opt: Option<geo::Line<f64>>,
-                     is_handle_a: bool| {
-                        let Some(hndl_line) = hndl_opt else { return };
-                        let Some(check_line) = check_opt else { return };
+                        let hndl_la = get_ortho_line_at_dist(&geom, len_meters / 3.0, max_dist);
+                        let hndl_lb =
+                            get_ortho_line_at_dist(&geom, len_meters * 2.0 / 3.0, max_dist);
 
-                        let hndl_ls = GeoLineString::from(vec![hndl_line.start, hndl_line.end]);
-                        let check_ls = GeoLineString::from(vec![check_line.start, check_line.end]);
-
-                        if !intersection(&check_ls, shape).is_empty() {
-                            let isects = intersection(&hndl_ls, shape);
-                            let final_isects = if isects.is_empty() {
-                                intersection(&check_ls, shape)
-                            } else {
-                                isects
+                        for route_key_tuple in &orig_edge.routes {
+                            let route_key = &(route_key_tuple.0.clone(), route_key_tuple.1.clone());
+                            let line_id = format!("{}_{}", route_key.0, route_key.1);
+                            let Some(shapes) = route_shapes.get(route_key) else {
+                                continue;
                             };
 
-                            for isect in final_isects {
-                                if let Some(restr_indices) = restr_edge_map.get(&orig_idx) {
-                                    for &r_idx in restr_indices {
-                                        if let Some(r_edge) = &graph.edges[r_idx] {
-                                            if r_edge.lines.contains(&line_id) {
-                                                let frac = r_edge
-                                                    .geom
-                                                    .line_locate_point(&isect)
-                                                    .unwrap_or(0.0);
-                                                split_requests.push((
-                                                    orig_idx,
-                                                    r_idx,
-                                                    frac,
-                                                    isect,
-                                                    is_handle_a,
-                                                ));
+                            for shape in shapes {
+                                // Helper to check and collect intersections
+                                let mut check_and_collect = |hndl_opt: Option<geo::Line<f64>>,
+                                                             check_opt: Option<geo::Line<f64>>,
+                                                             is_handle_a: bool,
+                                                             acc_inner: &mut HashMap<
+                                    usize,
+                                    (usize, Vec<(f64, GeoPoint<f64>, bool)>),
+                                >| {
+                                    let Some(hndl_line) = hndl_opt else { return };
+                                    let Some(check_line) = check_opt else { return };
+
+                                    let hndl_ls =
+                                        GeoLineString::from(vec![hndl_line.start, hndl_line.end]);
+                                    let check_ls =
+                                        GeoLineString::from(vec![check_line.start, check_line.end]);
+
+                                    if !intersection(&check_ls, shape).is_empty() {
+                                        let isects = intersection(&hndl_ls, shape);
+                                        let final_isects = if isects.is_empty() {
+                                            intersection(&check_ls, shape)
+                                        } else {
+                                            isects
+                                        };
+
+                                        for isect in final_isects {
+                                            if let Some(restr_indices) =
+                                                restr_edge_map.get(&orig_idx)
+                                            {
+                                                for &r_idx in restr_indices {
+                                                    if let Some(r_edge) = &graph_ref.edges[r_idx] {
+                                                        if r_edge.lines.contains(&line_id) {
+                                                            let frac = r_edge
+                                                                .geom
+                                                                .line_locate_point(&isect)
+                                                                .unwrap_or(0.0);
+
+                                                            // Filter invalid fractions here same as original loop (0.01..0.99)
+                                                            if frac > 0.01 && frac < 0.99 {
+                                                                acc_inner
+                                                                    .entry(r_idx)
+                                                                    .or_insert((
+                                                                        orig_idx,
+                                                                        Vec::new(),
+                                                                    ))
+                                                                    .1
+                                                                    .push((
+                                                                        frac,
+                                                                        isect,
+                                                                        is_handle_a,
+                                                                    ));
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
-                                }
+                                };
+                                check_and_collect(hndl_la, hndl_la_check, true, &mut acc); // A handles
+                                check_and_collect(hndl_lb, hndl_lb_check, false, &mut acc); // B handles
                             }
                         }
-                    };
-                check_and_collect(hndl_la, hndl_la_check, true); // A handles
-                check_and_collect(hndl_lb, hndl_lb_check, false); // B handles
-            }
-        }
-    }
+                        acc
+                    },
+                )
+                .reduce(HashMap::new, |mut map1, map2| {
+                    // Merge map2 into map1
+                    for (k, (g_idx, v)) in map2 {
+                        let entry = map1.entry(k).or_insert((g_idx, Vec::new()));
+                        entry.1.extend(v);
+                    }
+                    map1
+                })
+        });
 
-    // Group splits by RestrEdge index
-    // RestrEdgeIdx -> (GraphEdgeIdx, SplitsWithHandleType)
-    let mut splits_by_restr_edge: HashMap<usize, (usize, Vec<(f64, GeoPoint<f64>, bool)>)> =
-        HashMap::new();
-
-    for (g_idx, r_idx, frac, pt, is_a) in split_requests {
-        if frac > 0.01 && frac < 0.99 {
-            splits_by_restr_edge
-                .entry(r_idx)
-                .or_insert((g_idx, Vec::new()))
-                .1
-                .push((frac, pt, is_a));
-        }
-    }
+    println!("Collected splits for {} edges", splits_by_restr_edge.len());
+    println!("Applying splits to {} edges...", splits_by_restr_edge.len());
 
     // Apply splits and collect handles into A and B maps
     for (edge_idx, (g_idx, mut splits)) in splits_by_restr_edge {

@@ -13,6 +13,7 @@ mod validation;
 mod collapse_segments;
 mod graph_types;
 mod node_id_allocator;
+mod route_registry;
 
 use anyhow::Result;
 use catenary::postgres_tools::make_async_pool;

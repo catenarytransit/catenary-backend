@@ -1,5 +1,6 @@
 use crate::coord_conversion::*;
 use crate::edges::{GraphEdge, NodeId, convert_from_geo, convert_to_geo};
+use super::route_registry::{RouteRegistry, RouteId};
 use crate::intercity_split::adaptive_densify_spacing;
 use crate::partitioning::*;
 use crate::validation::*;
@@ -17,6 +18,17 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, Mutex};
+
+
+/// Internal edge representation using integer IDs for routes to save memory
+#[derive(Clone, Debug)]
+pub struct CompactedGraphEdge {
+    pub from: NodeId,
+    pub to: NodeId,
+    pub geometry: Vec<Coord>,
+    pub routes: Vec<(RouteId, i32)>, // (id, route_type)
+    pub weight: f64,
+}
 
 // ===========================================================================
 // Build Support Graph
@@ -60,6 +72,15 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
                 .push((m.chateau.clone(), rid.to_string()));
         }
     }
+
+    // Build Route Registry
+    let mut route_registry = RouteRegistry::new();
+    for route_list in shape_to_routes.values() {
+        for (c_val, r_val) in route_list {
+            route_registry.get_or_insert(c_val.to_string(), r_val.to_string());
+        }
+    }
+    let route_registry = Arc::new(route_registry);
 
     // Convert shapes to initial edges
     let mut raw_edges = Vec::new();
@@ -222,6 +243,30 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
                     cluster.len()
                 );
 
+                // Convert to CompactedGraphEdge using RouteRegistry
+                let compact_cluster: Vec<CompactedGraphEdge> = cluster
+                    .iter()
+                    .map(|e| {
+                        CompactedGraphEdge {
+                            from: e.from.clone(),
+                            to: e.to.clone(),
+                            geometry: convert_to_geo(&e.geometry).0,
+                            routes: e
+                                .routes
+                                .iter()
+                                .map(|(c, r, t)| {
+                                    let rid = route_registry
+                                        .get_by_val(c, r)
+                                        .expect("Route not found in registry!");
+                                    (rid, *t)
+                                })
+                                .collect(),
+                            weight: e.weight,
+                        }
+                    })
+                    .collect();
+                drop(cluster); // release memory
+
                 // Create a chunked ID tracker for this cluster (dynamic allocation)
                 let mut id_tracker = ChunkedNodeIdTracker::new(Arc::clone(&allocator));
                 let chunk_start = id_tracker.chunk_start();
@@ -236,7 +281,7 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
 
                 // Build initial graph for this cluster
                 let mut graph = build_initial_linegraph_webmerc_tracked(
-                    &cluster,
+                    &compact_cluster,
                     &mut id_tracker,
                     snap_threshold,
                 );
@@ -291,7 +336,28 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
                     max_id
                 );
 
-                Ok(collapsed)
+                // Convert back to GraphEdge for output
+                let final_edges: Vec<GraphEdge> = collapsed
+                    .into_iter()
+                    .map(|e| GraphEdge {
+                        from: e.from,
+                        to: e.to,
+                        geometry: convert_from_geo(&geo::LineString::new(e.geometry)),
+                        routes: e
+                            .routes
+                            .iter()
+                            .map(|(rid, t)| {
+                                let (c, r) = route_registry.get(*rid).expect("Route ID not found!");
+                                (c.clone(), r.clone(), *t)
+                            })
+                            .collect(),
+                        original_shape_ids: vec![],
+                        weight: e.weight,
+                        original_edge_index: None,
+                    })
+                    .collect();
+
+                Ok(final_edges)
             })
             .collect()
     });
@@ -355,7 +421,7 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
 
     // First reconstruction pass (C++: line 164)
     println!("First reconstruction pass (post-collapse)...");
-    let mut graph = graph_from_edges(collapsed, &mut node_id_counter);
+    let mut graph = graph_from_edges(collapsed, &mut node_id_counter, &route_registry);
 
     // VALIDATION: Check for corrupted edges AFTER graph_from_edges
     println!("Checking edges AFTER graph_from_edges for corruption...");
@@ -467,7 +533,12 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
                 routes: edge_borrow
                     .routes
                     .iter()
-                    .map(|r| (r.line_id.0.clone(), r.line_id.1.clone(), r.route_type))
+                    .map(|r| {
+                        let (c, rid_str) = route_registry
+                            .get(r.line_id)
+                            .expect("Route ID not found during export");
+                        (c.clone(), rid_str.clone(), r.route_type)
+                    })
                     .collect(),
                 original_shape_ids: vec![], // Lost through LineGraph processing
                 weight,
@@ -544,7 +615,11 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
 
 /// Reconstruct a LineGraph from a list of GraphEdges, respecting existing NodeIds.
 /// This does NOT snap nodes; it assumes edges sharing a NodeId are connected.
-fn graph_from_edges(edges: Vec<GraphEdge>, next_node_id: &mut usize) -> LineGraph {
+fn graph_from_edges(
+    edges: Vec<GraphEdge>,
+    next_node_id: &mut usize,
+    route_registry: &RouteRegistry,
+) -> LineGraph {
     // CRITICAL: Use new_with_start_id to ensure new nodes created here don't collide
     let mut graph = LineGraph::new_with_start_id(*next_node_id);
     // Use NodeId as key directly to support all variants (Cluster, Intersection, Split) uniquely
@@ -593,7 +668,9 @@ fn graph_from_edges(edges: Vec<GraphEdge>, next_node_id: &mut usize) -> LineGrap
 
         // Restore routes
         for (chateau, rid, route_type) in &edge.routes {
-            let full_id = (chateau.clone(), rid.clone());
+            let full_id = route_registry
+                .get_by_val(chateau, rid)
+                .expect("Route in edge not found in registry during reconstruction!");
             // Since we lost direction info in GraphEdge export (it's flattened),
             // we have to assume bidirectional here unless we change GraphEdge format.
             // But this function is only used for reconstruction (post-collapse),
@@ -612,81 +689,11 @@ fn graph_from_edges(edges: Vec<GraphEdge>, next_node_id: &mut usize) -> LineGrap
 // Build Initial LineGraph from GraphEdges
 // ===========================================================================
 
-/// Build initial LineGraph by snapping together geometrically close endpoints.
-/// This creates shared nodes where lines meet, matching C++ input format.
-fn build_initial_linegraph(edges: &[GraphEdge], next_node_id: &mut usize) -> LineGraph {
-    // CRITICAL: Use new_with_start_id to ensure unique node IDs across clusters
-    let mut graph = LineGraph::new_with_start_id(*next_node_id);
-    let snap_threshold = 0.00002; // ~2 meters - snap endpoints this close together
-
-    // Spatial index for finding nearby nodes
-    let mut geo_idx = NodeGeoIdx::new(snap_threshold);
-
-    for edge in edges {
-        let geom = convert_to_geo(&edge.geometry);
-        if geom.0.is_empty() {
-            continue;
-        }
-
-        let from_pos = geom.0.first().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
-        let to_pos = geom.0.last().map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0]);
-
-        // Find or create FROM node
-        let from_node = {
-            let neighbors = geo_idx.get(from_pos, snap_threshold);
-            if let Some(existing) = neighbors.first() {
-                Rc::clone(existing)
-            } else {
-                let node = graph.add_nd(from_pos);
-                geo_idx.add(from_pos, Rc::clone(&node));
-                node
-            }
-        };
-
-        // Find or create TO node
-        let to_node = {
-            let neighbors = geo_idx.get(to_pos, snap_threshold);
-            if let Some(existing) = neighbors.first() {
-                Rc::clone(existing)
-            } else {
-                let node = graph.add_nd(to_pos);
-                geo_idx.add(to_pos, Rc::clone(&node));
-                node
-            }
-        };
-
-        // Skip self-loops
-        if Rc::ptr_eq(&from_node, &to_node) {
-            continue;
-        }
-
-        // Create edge with geometry
-        let new_edge = graph.add_edg(&from_node, &to_node);
-        new_edge.borrow_mut().geometry = geom.0.iter().map(|c| Coord { x: c.x, y: c.y }).collect();
-
-        // Add routes WITH DIRECTION - GTFS shapes are directional
-        for (chateau, rid, route_type) in &edge.routes {
-            let full_id = (chateau.clone(), rid.clone());
-            // Direction points to TO node - shape goes from -> to
-            let direction = Some(Rc::downgrade(&to_node));
-            new_edge
-                .borrow_mut()
-                .routes
-                .push(LineOcc::new(full_id, *route_type, direction));
-        }
-    }
-
-    // Propagate counter so subsequent functions get unique IDs
-    *next_node_id = graph.next_node_id;
-
-    graph
-}
-
 /// Build initial LineGraph with Web Mercator coordinates (meters).
 /// snap_threshold is in meters (matching C++ behaviour with projected coordinates).
 /// CRITICAL: Uses next_node_id to ensure globally unique node IDs across clusters.
 fn build_initial_linegraph_webmerc(
-    edges: &[GraphEdge],
+    edges: &[CompactedGraphEdge],
     next_node_id: &mut usize,
     snap_threshold: f64,
 ) -> LineGraph {
@@ -712,7 +719,7 @@ fn build_initial_linegraph_webmerc(
             );
         }
 
-        let geom = convert_to_geo(&edge.geometry);
+        let geom = geo::LineString::new(edge.geometry.clone());
         if geom.0.is_empty() {
             continue;
         }
@@ -775,14 +782,13 @@ fn build_initial_linegraph_webmerc(
         new_edge.borrow_mut().geometry = geom.0.iter().map(|c| Coord { x: c.x, y: c.y }).collect();
 
         // Add routes WITH DIRECTION - GTFS shapes are directional
-        for (chateau, rid, route_type) in &edge.routes {
-            let full_id = (chateau.clone(), rid.clone());
+        for (line_id, route_type) in &edge.routes {
             // Direction points to TO node - shape goes from -> to
             let direction = Some(Rc::downgrade(&to_node));
             new_edge
                 .borrow_mut()
                 .routes
-                .push(LineOcc::new(full_id, *route_type, direction));
+                .push(LineOcc::new(*line_id, *route_type, direction));
         }
     }
 
@@ -805,8 +811,8 @@ fn collapse_shared_segments_from_graph(
     seg_len: f64,
     max_iters: usize,
     next_node_id_counter: &mut usize,
-) -> Vec<GraphEdge> {
-    // Convert LineGraph to Vec<GraphEdge> format
+) -> Vec<CompactedGraphEdge> {
+    // Convert LineGraph to Vec<CompactedGraphEdge> format
     let mut edges = Vec::new();
 
     for node in &graph.nodes {
@@ -837,18 +843,16 @@ fn collapse_shared_segments_from_graph(
                 .clone()
                 .unwrap_or_else(|| NodeId::Intersection(0, edge_borrow.to.borrow().id));
 
-            edges.push(GraphEdge {
+            edges.push(CompactedGraphEdge {
                 from: from_node_id,
                 to: to_node_id,
-                geometry: convert_from_geo(&ls),
+                geometry: ls.0.clone(),
                 routes: edge_borrow
                     .routes
                     .iter()
-                    .map(|r| (r.line_id.0.clone(), r.line_id.1.clone(), r.route_type))
+                    .map(|r| (r.line_id, r.route_type))
                     .collect(),
-                original_shape_ids: vec![], // Lost through LineGraph processing
                 weight,
-                original_edge_index: None,
             });
         }
     }
@@ -863,7 +867,7 @@ fn collapse_shared_segments_from_graph(
 /// Wrapper for build_initial_linegraph_webmerc that uses ChunkedNodeIdTracker.
 /// Simply delegates to existing function and syncs the tracker afterward.
 fn build_initial_linegraph_webmerc_tracked(
-    edges: &[GraphEdge],
+    edges: &[CompactedGraphEdge],
     id_tracker: &mut ChunkedNodeIdTracker,
     snap_threshold: f64,
 ) -> LineGraph {
@@ -885,7 +889,7 @@ fn collapse_shared_segments_from_graph_tracked(
     seg_len: f64,
     max_iters: usize,
     id_tracker: &mut ChunkedNodeIdTracker,
-) -> Vec<GraphEdge> {
+) -> Vec<CompactedGraphEdge> {
     let mut next_node_id = id_tracker.current();
     let result =
         collapse_shared_segments_from_graph(graph, d_cut, seg_len, max_iters, &mut next_node_id);
@@ -900,12 +904,12 @@ fn collapse_shared_segments_from_graph_tracked(
 
 /// Wrapper for collapse_shared_segments that uses ChunkedNodeIdTracker.
 fn collapse_shared_segments_tracked(
-    edges: Vec<GraphEdge>,
+    edges: Vec<CompactedGraphEdge>,
     d_cut: f64,
     seg_len: f64,
     max_iters: usize,
     id_tracker: &mut ChunkedNodeIdTracker,
-) -> Vec<GraphEdge> {
+) -> Vec<CompactedGraphEdge> {
     let mut next_node_id = id_tracker.current();
     let result = collapse_shared_segments(edges, d_cut, seg_len, max_iters, &mut next_node_id);
 
@@ -922,12 +926,12 @@ fn collapse_shared_segments_tracked(
 // ===========================================================================
 
 fn collapse_shared_segments(
-    mut edges: Vec<GraphEdge>,
+    mut edges: Vec<CompactedGraphEdge>,
     d_cut: f64,
     seg_len: f64,
     max_iters: usize,
     next_node_id_counter: &mut usize,
-) -> Vec<GraphEdge> {
+) -> Vec<CompactedGraphEdge> {
     use std::cmp::Ordering;
 
     println!("Building Support Graph via iterative collapse (Topological Mode)...");
@@ -973,7 +977,7 @@ fn collapse_shared_segments(
             // The Rust code was incorrectly using img_nds (NEW graph positions) which shift
             // as nodes merge, causing incorrect span constraints and triangle artifacts
             // between parallel train lines.
-            let geom = convert_to_geo(&edge.geometry);
+            let geom = geo::LineString::new(edge.geometry.clone());
 
             // Use ORIGINAL edge geometry endpoints - matches C++ behavior exactly
             // C++ iterates over edges from the OLD graph (_g->getNds()) and reads node
@@ -1060,7 +1064,7 @@ fn collapse_shared_segments(
 
                 // Collect current edge route modes for compatibility check
                 let current_modes: AHashSet<i32> =
-                    edge.routes.iter().map(|(_, _, rt)| *rt).collect();
+                    edge.routes.iter().map(|(_, rt)| *rt).collect();
 
                 // Find or create node with span constraints (matches C++: ndCollapseCand)
                 let cur = nd_collapse_cand(
@@ -1141,8 +1145,8 @@ fn collapse_shared_segments(
                     // Merge route info WITH DIRECTION
                     // CRITICAL: GTFS shapes are directional - trains travel FROM -> TO
                     // New edge target is `cur`. Route should point to `cur`.
-                    for (chateau, rid, route_type) in &edge.routes {
-                        let full_id = (chateau.clone(), rid.clone());
+                    for (line_id, route_type) in &edge.routes {
+                        let full_id = *line_id;
 
                         // Check if already exists with same direction
                         // We use strict tuple equality now
@@ -1186,8 +1190,8 @@ fn collapse_shared_segments(
                         } else {
                             tg_new.add_edg(from_node, front_node)
                         };
-                        for (chateau, rid, route_type) in &edge.routes {
-                            let full_id = (chateau.clone(), rid.clone());
+                        for (line_id, route_type) in &edge.routes {
+                            let full_id = *line_id;
                             if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
                                 // Direction points to `front` (target of this segment)
                                 let direction = Some(Rc::downgrade(front_node));
@@ -1211,8 +1215,8 @@ fn collapse_shared_segments(
                         } else {
                             tg_new.add_edg(last_node, to_node)
                         };
-                        for (chateau, rid, route_type) in &edge.routes {
-                            let full_id = (chateau.clone(), rid.clone());
+                        for (line_id, route_type) in &edge.routes {
+                            let full_id = *line_id;
                             if !new_e.borrow().routes.iter().any(|r| r.line_id == full_id) {
                                 // Direction points to `to_node` (target of this segment)
                                 let direction = Some(Rc::downgrade(to_node));
@@ -1472,21 +1476,19 @@ fn collapse_shared_segments(
                 let from_id = edge_borrow.from.borrow().id;
                 let to_id = edge_borrow.to.borrow().id;
 
-                new_edges.push(GraphEdge {
+                new_edges.push(CompactedGraphEdge {
                     from: NodeId::Intersection(0, from_id),
                     to: NodeId::Intersection(0, to_id),
-                    geometry: convert_from_geo(&ls),
+                    geometry: ls.0.clone(),
                     // Map back strictly to tuples.
                     // Note: Direction info is effectively lost in GraphEdge export
                     // if GraphEdge doesn't support it, but it was used for simplification.
                     routes: edge_borrow
                         .routes
                         .iter()
-                        .map(|r| (r.line_id.0.clone(), r.line_id.1.clone(), r.route_type))
+                        .map(|r| (r.line_id, r.route_type))
                         .collect(),
-                    original_shape_ids: vec![], // Lost through LineGraph processing
                     weight,
-                    original_edge_index: None,
                 });
                 len_new += weight;
             }
@@ -1672,7 +1674,9 @@ fn nd_collapse_cand_impl(
             let has_intercity_rail = current_modes.contains(&2) || node_modes.contains(&2);
 
             // Base threshold multiplier for intercity rail (corridors are much wider)
-            let mode_base_multiplier = if has_intercity_rail { 16.0 } else { 1.0 }; // 4x distance = 16x squared
+            // INCREASED: 16.0 -> 64.0 to capture parallel tracks more aggressively
+            // This prevents zig-zagging by ensuring parallel tracks stay merged
+            let mode_base_multiplier = if has_intercity_rail { 64.0 } else { 1.0 }; // 8x distance = 64x squared
 
             // Determine threshold based on hysteresis state
             // With weighted centroid, we can be more relaxed on thresholds
@@ -1681,20 +1685,25 @@ fn nd_collapse_cand_impl(
             // ANTI-FLIP-FLOP: For parallel tracks, use stronger hysteresis.
             // Check merge_count to see if this node is already established (has absorbed points).
             // Established nodes get even stickier behavior to prevent rapid state changes.
+            // LOWERED THRESHOLD: >= 2 -> >= 1 so nodes become sticky faster
             let merge_count = node.borrow().merge_count;
-            let is_established_node = merge_count >= 2;
+            let is_established_node = merge_count >= 1;
 
             let threshold_sq = if has_shared_mode {
                 // Node already has matching modes - use RELAXED threshold
-                // Intercity rail: 4x base * 8x hysteresis = 32x total (1024x squared)
-                // Other modes: 1x base * 2x hysteresis = 2x total (4x squared)
+                // INCREASED MULTIPLIERS: Make intercity rail MUCH stickier to prevent flip-flopping
+                // Intercity rail established: 64.0 * 144.0 = 9216x squared (96x linear)
+                // Intercity rail new: 64.0 * 64.0 = 4096x squared (64x linear)
+                // Other modes established: 1.0 * 6.25 = 6.25x squared (2.5x linear)
+                // Other modes new: 1.0 * 4.0 = 4.0x squared (2x linear)
                 let hysteresis_mult = if is_established_node {
                     // Strongly established - very sticky
-                    // "Make Y shaped merges deeper" -> Increase capture radius for Rail
-                    if has_intercity_rail { 64.0 } else { 4.0 } // 8² or 2²
+                    // INCREASED: 64.0 -> 144.0 for rail, 4.0 -> 6.25 for others
+                    if has_intercity_rail { 144.0 } else { 6.25 } // 12² or 2.5²
                 } else {
                     // Newly merged - moderately sticky
-                    if has_intercity_rail { 36.0 } else { 2.25 } // 6² or 1.5²
+                    // INCREASED: 36.0 -> 64.0 for rail, 2.25 -> 4.0 for others
+                    if has_intercity_rail { 64.0 } else { 4.0 } // 8² or 2²
                 };
                 d_cut_sq * mode_base_multiplier * hysteresis_mult
             } else if !current_modes.is_empty() && !node_modes.is_empty() {
@@ -2065,7 +2074,7 @@ fn combine_nodes(
         for (line_id, exc_map) in a_conn_exc {
             for (from_edge_id, forbidden_set) in exc_map {
                 for to_edge_id in forbidden_set {
-                    b_mut.add_conn_exc(&line_id, from_edge_id, to_edge_id);
+                    b_mut.add_conn_exc(line_id, from_edge_id, to_edge_id);
                 }
             }
         }
@@ -2084,7 +2093,7 @@ fn combine_nodes(
 /// Returns true unless there's an explicit connection exception stored at the node.
 fn conn_occurs(
     node: &NodeRef,
-    line_id: &(String, String),
+    line_id: &RouteId,
     edge_a: &EdgeRef,
     edge_b: &EdgeRef,
 ) -> bool {
@@ -2099,7 +2108,7 @@ fn conn_occurs(
     let edge_a_id = edge_a.borrow().id;
     let edge_b_id = edge_b.borrow().id;
     node.borrow()
-        .conn_occurs_check(line_id, edge_a_id, edge_b_id)
+        .conn_occurs_check(*line_id, edge_a_id, edge_b_id)
 }
 
 /// Get the normalized direction vector from a node along an edge (towards the edge interior).
@@ -2261,24 +2270,42 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
     // For same-mode edges: use lenient angle check (allow Y-junctions)
     // For different-mode edges: use stricter angle check (reject most crossings)
 
-    // REGION-BASED SUBWAY VS INTERCITY RAIL LOGIC
-    // In North America: subway and intercity rail CAN merge (they share infrastructure)
-    // Outside North America: they should NEVER merge (underground vs surface/overhead)
+    // SUBWAY VS INTERCITY RAIL LOGIC
+    // Allow merging if they are very close (<20m) AND parallel for significant distance (>200m)
+    // Example: RATP line 9 (subway) and RER line A (intercity rail) run on top of each other
     let has_subway = a_modes.contains(&1) || b_modes.contains(&1);
     let has_intercity_rail = a_modes.contains(&2) || b_modes.contains(&2);
 
     if has_subway && has_intercity_rail {
-        // Check if we're in North America using edge geometry
-        // Use first point of edge A as representative location
-        let geom = &a.borrow().geometry;
-        if !geom.is_empty() {
-            let is_north_america = is_in_north_america_webmercator(geom[0].x, geom[0].y);
-            if !is_north_america {
-                // Outside North America - never merge subway and intercity rail
-                return false;
-            }
-            // In North America - allow merge (fall through to other checks)
+        // Require strict conditions for subway+rail merge:
+        // 1. Entire segment must stay within 20m over at least 200m of parallel distance
+        // 2. Must be parallel (angle check)
+        
+        const MAX_SUBWAY_RAIL_DISTANCE: f64 = 20.0; // meters
+        const MIN_PARALLEL_LENGTH: f64 = 200.0; // meters
+        
+        // Check parallelism - edges should be nearly anti-parallel or parallel
+        let angle_deg = calc_edge_angle_degrees(a, b);
+        if angle_deg > 10.0 && angle_deg < 170.0 {
+            // Not parallel enough - reject
+            return false;
         }
+        
+        // Check if segments stay consistently close over at least 200m
+        let geom_a = &a.borrow().geometry;
+        let geom_b = &b.borrow().geometry;
+        
+        if !check_segments_stay_close(
+            geom_a,
+            geom_b,
+            MAX_SUBWAY_RAIL_DISTANCE,
+            MIN_PARALLEL_LENGTH,
+        ) {
+            // Lines don't stay close enough over sufficient distance - reject
+            return false;
+        }
+        
+        // All conditions met - allow merge
     }
 
     if modes_disjoint {
@@ -2930,6 +2957,81 @@ fn closest_point_distance_to_geom(geom_a: &[Coord], geom_b: &[Coord]) -> f64 {
     min_dist
 }
 
+/// Check if two geometries stay within max_distance of each other for at least min_length.
+/// Samples points along both geometries and checks that over a continuous segment of 
+/// at least min_length meters, all sampled points stay within max_distance.
+fn check_segments_stay_close(
+    geom_a: &[Coord],
+    geom_b: &[Coord],
+    max_distance: f64,
+    min_length: f64,
+) -> bool {
+    if geom_a.is_empty() || geom_b.is_empty() {
+        return false;
+    }
+
+    // Sample points along geom_a at ~10m intervals
+    const SAMPLE_INTERVAL: f64 = 10.0;
+    let mut sampled_points = Vec::new();
+    let mut cumulative_dist = 0.0;
+    
+    sampled_points.push((geom_a[0], 0.0));
+    
+    for i in 1..geom_a.len() {
+        let dx = geom_a[i].x - geom_a[i - 1].x;
+        let dy = geom_a[i].y - geom_a[i - 1].y;
+        let seg_len = (dx * dx + dy * dy).sqrt();
+        
+        let num_samples = (seg_len / SAMPLE_INTERVAL).ceil() as usize;
+        for j in 1..=num_samples {
+            let t = (j as f64) / (num_samples as f64);
+            let x = geom_a[i - 1].x + t * dx;
+            let y = geom_a[i - 1].y + t * dy;
+            cumulative_dist += seg_len / (num_samples as f64);
+            sampled_points.push((Coord { x, y }, cumulative_dist));
+        }
+    }
+    
+    // For each starting point, check if we can find min_length of close proximity
+    for start_idx in 0..sampled_points.len() {
+        let start_dist = sampled_points[start_idx].1;
+        let mut all_close = true;
+        let mut reached_min_length = false;
+        
+        for end_idx in start_idx..sampled_points.len() {
+            let current_dist = sampled_points[end_idx].1;
+            let segment_length = current_dist - start_dist;
+            
+            if segment_length >= min_length {
+                reached_min_length = true;
+                break;
+            }
+            
+            // Check if this point is close to geom_b
+            let point = sampled_points[end_idx].0;
+            let mut min_dist_to_b = f64::MAX;
+            
+            for coord_b in geom_b {
+                let dx = point.x - coord_b.x;
+                let dy = point.y - coord_b.y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                min_dist_to_b = min_dist_to_b.min(dist);
+            }
+            
+            if min_dist_to_b > max_distance {
+                all_close = false;
+                break;
+            }
+        }
+        
+        if all_close && reached_min_length {
+            return true;
+        }
+    }
+    
+    false
+}
+
 /// Calculate total shared distance by traversing connected edges.
 /// For subway angle merging - finds how far two lines share parallel tracks.
 /// Continues along connecting edges while checking if distance to other line stays close.
@@ -2937,13 +3039,13 @@ fn calc_shared_route_distance(edge_a: &EdgeRef, edge_b: &EdgeRef) -> f64 {
     use std::collections::HashSet;
 
     // Get routes from both edges
-    let routes_a: HashSet<(String, String)> = edge_a
+    let routes_a: HashSet<RouteId> = edge_a
         .borrow()
         .routes
         .iter()
         .map(|r| r.line_id.clone())
         .collect();
-    let routes_b: HashSet<(String, String)> = edge_b
+    let routes_b: HashSet<RouteId> = edge_b
         .borrow()
         .routes
         .iter()
@@ -2970,7 +3072,7 @@ fn calc_shared_route_distance(edge_a: &EdgeRef, edge_b: &EdgeRef) -> f64 {
 fn traverse_for_shared_distance(
     start_edge: &EdgeRef,
     other_edge: &EdgeRef,
-    common_routes: &std::collections::HashSet<(String, String)>,
+    common_routes: &std::collections::HashSet<RouteId>,
 ) -> f64 {
     use std::collections::HashSet;
 
