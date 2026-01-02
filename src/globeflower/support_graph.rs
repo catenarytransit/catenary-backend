@@ -1394,6 +1394,12 @@ fn collapse_shared_segments(
         println!("Stabilizing intercity rail corridors...");
         stabilize_intercity_rail_corridors(&mut tg_new, 500.0);
 
+        // Phase 4.75: Fold duplicate/parallel edges (C++: foldEdges)
+        // Critical for rail: merges parallel tracks between the same nodes into a
+        // single averaged geometry and combined route set.
+        println!("Folding parallel edges...");
+        fold_parallel_edges(&mut tg_new);
+
         // Phase 5: Re-collapse again (C++: lines 483-502)
         // May have introduced new degree-2 nodes
         println!("Contracting degree-2 nodes...");
@@ -2616,11 +2622,14 @@ fn combine_edges(edge_a: &EdgeRef, edge_b: &EdgeRef, n: &NodeRef, graph: &mut Li
 
     // Simplify the combined geometry to remove zigzag artifacts (matches C++ simplify)
     // FIX 3: Use length-dependent tolerance to preserve curves on longer edges
-    // Short edges (<100m): 1.0m tolerance (aggresive cleanup)
+    // Very short edges (<30m): 2.0m tolerance (aggressive station de-zigzag)
+    // Short edges (<100m): 1.0m tolerance (aggressive cleanup)
     // Medium edges (100-500m): 0.5m tolerance (balanced)
     // Long edges (>500m): 0.2m tolerance (preserve curves)
     let edge_length = calc_polyline_length(&new_geom);
-    let simplify_tolerance = if edge_length < 100.0 {
+    let simplify_tolerance = if edge_length < 30.0 {
+        2.0
+    } else if edge_length < 100.0 {
         1.0
     } else if edge_length < 500.0 {
         0.5
@@ -3935,6 +3944,34 @@ fn fold_edges_for_node(graph: &mut LineGraph, node: &NodeRef) -> bool {
     false
 }
 
+/// Fold parallel edges across the whole graph (C++: foldEdges).
+///
+/// The project already had `fold_edges_for_node`, but it was never called.
+/// Without this pass, parallel rail tracks (and other duplicate edges between the
+/// same nodes) remain separate, which prevents intercity rail infrastructure from
+/// merging and can create station zig-zag artifacts.
+fn fold_parallel_edges(graph: &mut LineGraph) {
+    for _ in 0..20 {
+        let nodes: Vec<NodeRef> = graph.nodes.iter().map(Rc::clone).collect();
+        let mut changed = false;
+
+        for node in nodes {
+            if node.borrow().get_deg() < 2 {
+                continue;
+            }
+            if fold_edges_for_node(graph, &node) {
+                changed = true;
+            }
+        }
+
+        graph.nodes.retain(|n| n.borrow().get_deg() > 0);
+
+        if !changed {
+            break;
+        }
+    }
+}
+
 /// Apply polish fixes to the graph - INSIDE the iteration loop
 /// Based on C++ collapseShrdSegs lines 421-481 (edge artifact removal)
 fn apply_polish_fixes(graph: &mut LineGraph, _max_aggr_distance: f64) {
@@ -4532,6 +4569,10 @@ fn average_node_positions(graph: &mut LineGraph) {
 /// 1. Average node positions
 /// 2. Trim/Extend edge geometries to meet exactly at the new node positions
 fn reconstruct_intersections(graph: &mut LineGraph, max_aggr_distance: f64) {
+    // Fold before repositioning nodes so we don't reconstruct intersections for
+    // duplicated parallel edges that should have been one.
+    fold_parallel_edges(graph);
+
     // 1. Center nodes based on current edge geometries
     average_node_positions(graph);
 
