@@ -876,19 +876,36 @@ fn build_restriction_graph(
     let mut graph = RestrGraph::new();
     graph.nodes.reserve(unique_nodes.len());
 
-    // Create all nodes sequentially (they need sequential indices)
-    for &node_id in &unique_nodes {
-        // Find first edge with this node to get position
-        if let Some(edge) = edges.iter().find(|e| e.from == node_id || e.to == node_id) {
+    // Pre-compute node positions in a single pass over edges: O(E) instead of O(N*E)
+    // This avoids the expensive edges.iter().find() call for each node
+    let node_positions: HashMap<NodeId, [f64; 2]> = {
+        let mut positions: HashMap<NodeId, [f64; 2]> = HashMap::with_capacity(unique_nodes.len());
+        for edge in edges {
             let geom = convert_to_geo(&edge.geometry);
-            let pos = if edge.from == node_id {
-                geom.0.get(0).map(|c| [c.x, c.y]).unwrap_or([0.0, 0.0])
-            } else {
-                geom.0
-                    .get(geom.0.len().saturating_sub(1))
-                    .map(|c| [c.x, c.y])
-                    .unwrap_or([0.0, 0.0])
-            };
+            // Only insert if not already present (first edge wins, matching original behavior)
+            // Use explicit indexing to avoid diesel trait conflicts with .first()/.last()
+            positions.entry(edge.from).or_insert_with(|| {
+                if !geom.0.is_empty() {
+                    [geom.0[0].x, geom.0[0].y]
+                } else {
+                    [0.0, 0.0]
+                }
+            });
+            positions.entry(edge.to).or_insert_with(|| {
+                if !geom.0.is_empty() {
+                    let last_idx = geom.0.len() - 1;
+                    [geom.0[last_idx].x, geom.0[last_idx].y]
+                } else {
+                    [0.0, 0.0]
+                }
+            });
+        }
+        positions
+    };
+
+    // Create all nodes sequentially (they need sequential indices): O(N)
+    for &node_id in &unique_nodes {
+        if let Some(&pos) = node_positions.get(&node_id) {
             let idx = graph.add_node(pos);
             node_map.insert(node_id, idx);
         }

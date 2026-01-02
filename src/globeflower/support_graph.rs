@@ -491,6 +491,17 @@ pub async fn build_support_graph(pool: &CatenaryPostgresPool) -> Result<Vec<Grap
         reconstruct_intersections(&mut graph, normal_d_cut);
     }
 
+    // FINAL CORRIDOR BUNDLING PASS (post-reconstruction)
+    // Some corridors may have been missed or corrupted during reconstruction.
+    // This final pass ensures all intercity rail corridors have clean geometries.
+    println!("Final corridor bundling pass (post-reconstruction)...");
+    let final_corridor_config = crate::corridor_bundling::CorridorConfig::default();
+    let final_corridors = crate::corridor_bundling::detect_and_bundle_corridors(&graph, &final_corridor_config);
+    if !final_corridors.is_empty() {
+        println!("  Found {} corridors in final pass, applying bundled geometries", final_corridors.len());
+        crate::corridor_bundling::apply_corridor_geometries(&mut graph, &final_corridors, &final_corridor_config);
+    }
+
     // Remove orphan lines again (C++: line 185)
     println!("Remove orphan lines again...");
     remove_orphan_lines(&mut graph);
@@ -1392,15 +1403,46 @@ fn collapse_shared_segments(
         println!("Contracting short edges...");
         contract_short_edges(&mut tg_new, d_cut);
 
+        // =====================================================================
+        // CRITICAL: Corridor bundling must run BEFORE any operations that corrupt
+        // geometries through pairwise averaging. The following phases are ordered
+        // specifically to prevent the diamond/polygon artifacts:
+        //
+        // 1. First detect and align corridors (clean geometry)
+        // 2. Then stabilize nodes (preserves clean geometry)
+        // 3. Then fold edges (geometries already aligned, averaging is safe)
+        // =====================================================================
+
+        // Phase 4.1: Bundle intercity rail corridors using PCA (MOVED EARLIER)
+        // Detect parallel track corridors and align geometries to prevent wobbliness
+        // MUST run before fold_parallel_edges which uses pairwise averaging!
+        println!("Bundling intercity rail corridors (PCA-based)...");
+        let corridor_config = crate::corridor_bundling::CorridorConfig::default();
+        let corridors = crate::corridor_bundling::detect_and_bundle_corridors(&tg_new, &corridor_config);
+        if !corridors.is_empty() {
+            println!("  Found {} corridors, applying bundled geometries", corridors.len());
+            crate::corridor_bundling::apply_corridor_geometries(&mut tg_new, &corridors, &corridor_config);
+        }
+
+        // Phase 4.2: Station spread bundling (topological detection) (MOVED EARLIER)
+        // Catches wide terminal stations where tracks diverge→parallel→reconverge
+        println!("Bundling station platform spreads (topological)...");
+        let station_config = crate::station_bundling::StationConfig::default();
+        let station_fixes = crate::station_bundling::detect_and_fix_station_spreads(&mut tg_new, &station_config);
+        if station_fixes > 0 {
+            println!("  Fixed {} station platform spreads", station_fixes);
+        }
+
         // Phase 4.5: Stabilize intercity rail corridors
-        // Look ahead 500m to detect and fix flip-flop patterns where parallel
-        // intercity rail tracks split and re-merge rapidly
+        // Look ahead 1000m to detect and fix flip-flop patterns where parallel
+        // intercity rail tracks split and re-merge rapidly.
+        // Now runs AFTER corridor bundling so geometries are already aligned.
         println!("Stabilizing intercity rail corridors...");
-        stabilize_intercity_rail_corridors(&mut tg_new, 500.0);
+        stabilize_intercity_rail_corridors(&mut tg_new, 1000.0);
 
         // Phase 4.75: Fold duplicate/parallel edges (C++: foldEdges)
-        // Critical for rail: merges parallel tracks between the same nodes into a
-        // single averaged geometry and combined route set.
+        // Merges parallel tracks between the same nodes into a single averaged geometry.
+        // Now safe because PCA corridor bundling already aligned the geometries.
         println!("Folding parallel edges...");
         fold_parallel_edges(&mut tg_new);
 
@@ -1636,8 +1678,20 @@ fn nd_collapse_cand_impl(
                         let cross = (in_norm.0 * edge_dir.1 - in_norm.1 * edge_dir.0).abs();
                         let dot = (in_norm.0 * edge_dir.0 + in_norm.1 * edge_dir.1).abs();
 
-                        // Check for perpendicular crossing (cross > 0.85, dot < 0.5)
-                        if cross > 0.85 && dot < 0.5 {
+                        // Check if dealing with intercity rail (stricter threshold)
+                        let has_intercity = edge_ref.borrow().routes.iter().any(|r| r.route_type == 2)
+                            || current_modes.contains(&2);
+
+                        // Perpendicular crossing detection thresholds:
+                        // - Intercity rail: cross > 0.5 && dot < 0.866 (rejects >60° from parallel)
+                        // - Other modes: cross > 0.85 && dot < 0.5 (rejects >58° from perpendicular)
+                        let (cross_thresh, dot_thresh) = if has_intercity {
+                            (0.5, 0.866)  // sin(30°) = 0.5, cos(30°) = 0.866 - stricter for rail
+                        } else {
+                            (0.85, 0.5)   // Original thresholds for subway/tram
+                        };
+
+                        if cross > cross_thresh && dot < dot_thresh {
                             // Check if lines CONVERGE (turn into each other) ahead
                             // by traversing and checking direction changes
                             let lines_converge = check_lines_converge(edge_ref, in_norm, graph);
@@ -2214,7 +2268,8 @@ fn check_edge_angle_for_merge_lenient(a: &EdgeRef, b: &EdgeRef) -> bool {
 }
 
 /// Strict angle check for merging Rail lines.
-/// Rejects merges if deviations are > 30 degrees (abs_dot < 0.866).
+/// Rejects merges if deviations are > 20 degrees (abs_dot < 0.94).
+/// STRICTER than before (was 0.85 / 31°) to prevent subtle angle artifacts.
 /// This discourages sharp turns/merges on rail lines which should be smooth.
 fn check_edge_angle_strict_merge(a: &EdgeRef, b: &EdgeRef) -> bool {
     // Find shared node
@@ -2235,8 +2290,9 @@ fn check_edge_angle_strict_merge(a: &EdgeRef, b: &EdgeRef) -> bool {
     let dot = dir_a.0 * dir_b.0 + dir_a.1 * dir_b.1;
     let abs_dot = dot.abs();
 
-    // Strict: 0.85 threshold = reject angles > 31° from parallel/anti-parallel
-    abs_dot >= 0.85
+    // Stricter: 0.94 threshold = reject angles > 20° from parallel/anti-parallel
+    // cos(20°) ≈ 0.94 - much stricter than previous 0.85 (31°)
+    abs_dot >= 0.94
 }
 
 /// Matches C++ MapConstructor::lineEq
@@ -2774,8 +2830,9 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph, d_cut: f64) {
 
         // INTERCITY RAIL ANGLE CHECK (Fix for near-90° collapses)
         // For intercity rail (route type 2), reject collapsing edges that form
-        // angles > 45° from parallel/anti-parallel. This prevents unnatural
-        // sharp turns in rail geometry.
+        // angles > 30° from parallel/anti-parallel. This prevents unnatural
+        // sharp turns in rail geometry. Stricter than the previous 45° threshold
+        // to catch more subtle angle merging issues.
         {
             let has_intercity_rail = edge_a.borrow().routes.iter().any(|r| r.route_type == 2)
                 || edge_b.borrow().routes.iter().any(|r| r.route_type == 2);
@@ -2783,9 +2840,9 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph, d_cut: f64) {
             if has_intercity_rail {
                 let angle_deg = calc_edge_angle_degrees(edge_a, edge_b);
                 // Angle 0° = straight through (anti-parallel), 90° = perpendicular
-                // Reject if angle is > 45° from straight (i.e., in range 45° to 135°)
-                // This is stricter than the 31° check in line_eq (0.85 threshold)
-                if angle_deg > 45.0 && angle_deg < 135.0 {
+                // Reject if angle is > 30° from straight (i.e., in range 30° to 150°)
+                // STRICTER than before (was 45°-135°) to prevent 90° merging artifacts
+                if angle_deg > 30.0 && angle_deg < 150.0 {
                     continue;
                 }
             }
@@ -3262,6 +3319,84 @@ fn geom_avg(geom_a: &[Coord], weight_a: usize, geom_b: &[Coord], weight_b: usize
 
     // Simplify the result
     simplify_coords(&smoothed, 0.5)
+}
+
+/// N-way geometry averaging: averages multiple geometries simultaneously
+/// 
+/// This avoids the bias introduced by cascading pairwise averaging where
+/// (A+B)+C ≠ (B+C)+A. When 10+ parallel tracks are folded, pairwise averaging
+/// causes early pairs to disproportionately influence the result.
+/// 
+/// Instead, this function:
+/// 1. Orients all geometries consistently (starting from common_node)
+/// 2. Resamples all to the same number of points (10m sampling)
+/// 3. Computes weighted average at each point (weight² by route count)
+/// 4. Applies Chaikin smoothing for a clean result
+fn geom_avg_nway(geometries: &[Vec<Coord>], weights: &[usize]) -> Vec<Coord> {
+    if geometries.is_empty() {
+        return Vec::new();
+    }
+    if geometries.len() == 1 {
+        return geometries[0].clone();
+    }
+    
+    // Filter out empty geometries
+    let valid: Vec<(&Vec<Coord>, f64)> = geometries.iter()
+        .zip(weights.iter())
+        .filter(|(g, _)| g.len() >= 2)
+        .map(|(g, w)| (g, (*w * *w) as f64))  // Square weights like C++
+        .collect();
+    
+    if valid.is_empty() {
+        return geometries.get(0).cloned().unwrap_or_default();
+    }
+    
+    // Find max length to determine number of sample points
+    let max_len: f64 = valid.iter()
+        .map(|(g, _)| calc_polyline_length(g))
+        .fold(0.0, f64::max);
+    
+    if max_len < 1.0 {
+        return valid[0].0.clone();
+    }
+    
+    // Use 10m sampling (finer than the 20m in geom_avg) for better corridor alignment
+    let num_points = ((max_len / 10.0).ceil() as usize + 1).max(2);
+    
+    // Resample all geometries
+    let resampled: Vec<Vec<Coord>> = valid.iter()
+        .map(|(g, _)| resample_polyline(g, num_points))
+        .collect();
+    
+    let sample_weights: Vec<f64> = valid.iter().map(|(_, w)| *w).collect();
+    let total_weight: f64 = sample_weights.iter().sum();
+    
+    if total_weight == 0.0 {
+        return valid[0].0.clone();
+    }
+    
+    // Simultaneous weighted average at each point
+    let mut result = Vec::with_capacity(num_points);
+    for i in 0..num_points {
+        let mut x = 0.0;
+        let mut y = 0.0;
+        for (j, geom) in resampled.iter().enumerate() {
+            if i < geom.len() {
+                x += geom[i].x * sample_weights[j];
+                y += geom[i].y * sample_weights[j];
+            }
+        }
+        result.push(Coord { 
+            x: x / total_weight, 
+            y: y / total_weight 
+        });
+    }
+    
+    // Apply stronger Chaikin smoothing (2 iterations) for corridor-level smoothness
+    let smoothed = chaikin_smooth_coords(&result, 2);
+    
+    // Simplify at 1m tolerance for clean output
+    simplify_coords(&smoothed, 1.0)
 }
 
 /// Resample a polyline to have exactly n points
@@ -3942,105 +4077,173 @@ fn get_ortho_line_at(coords: &[Coord], frac: f64, length: f64) -> Option<(Coord,
 }
 
 /// Fold parallel edges by averaging their geometries (C++: foldEdges)
-/// When two edges share a node and go to the same place, average their geometries
+/// When multiple edges share a node and go to the same place, average their geometries
+/// 
+/// IMPROVED: For 3+ parallel edges, uses N-way simultaneous averaging instead of
+/// cascading pairwise averaging to avoid order-dependent bias.
 fn fold_edges_for_node(graph: &mut LineGraph, node: &NodeRef) -> bool {
     let adj_list = node.borrow().adj_list.clone();
     if adj_list.len() < 2 {
         return false;
     }
 
-    // Check for pairs of edges going to the same node
-    for i in 0..adj_list.len() {
-        for j in i + 1..adj_list.len() {
-            let edge_a = &adj_list[i];
-            let edge_b = &adj_list[j];
+    // Group edges by destination node
+    let mut dest_groups: AHashMap<usize, Vec<EdgeRef>> = AHashMap::new();
+    for edge_ref in &adj_list {
+        let other = edge_ref.borrow().get_other_nd(node);
+        let other_id = other.borrow().id;
+        dest_groups.entry(other_id).or_default().push(Rc::clone(edge_ref));
+    }
 
-            let other_a = edge_a.borrow().get_other_nd(node);
-            let other_b = edge_b.borrow().get_other_nd(node);
+    // Find groups with 2+ edges (parallel edges to same destination)
+    for (dest_id, edges) in dest_groups {
+        if edges.len() < 2 {
+            continue;
+        }
 
-            // If they go to the same node, fold them
-            if Rc::ptr_eq(&other_a, &other_b) {
-                // Average geometries weighted by route count
-                // Orient both geometries to start from 'node'
-                let (geom_a, weight_a) = {
-                    let e = edge_a.borrow();
-                    (get_geometry_oriented_from(&e, node), e.routes.len())
-                };
-                let (geom_b, weight_b) = {
-                    let e = edge_b.borrow();
-                    (get_geometry_oriented_from(&e, node), e.routes.len())
-                };
+        // For 3+ parallel edges, use N-way averaging
+        // This is critical for intercity rail corridors with 10+ parallel tracks
+        if edges.len() >= 3 {
+            // Collect oriented geometries and weights
+            let mut geometries: Vec<Vec<Coord>> = Vec::with_capacity(edges.len());
+            let mut weights: Vec<usize> = Vec::with_capacity(edges.len());
 
-                let avg_geom = geom_avg(&geom_a, weight_a, &geom_b, weight_b);
+            for edge_ref in &edges {
+                let e = edge_ref.borrow();
+                geometries.push(get_geometry_oriented_from(&e, node));
+                weights.push(e.routes.len().max(1));
+            }
 
-                // Merge routes from both edges into edge_a
+            // Compute N-way average geometry
+            let avg_geom = geom_avg_nway(&geometries, &weights);
+
+            // Merge all edges into the first one
+            let primary_edge = &edges[0];
+            {
+                let mut primary = primary_edge.borrow_mut();
+
+                // Update geometry, respecting original edge direction
+                if Rc::ptr_eq(&primary.to, node) {
+                    let mut g = avg_geom;
+                    g.reverse();
+                    primary.geometry = g;
+                } else {
+                    primary.geometry = avg_geom;
+                }
+            }
+
+            // Merge routes and remove secondary edges
+            for edge_ref in edges.iter().skip(1) {
+                let routes_to_merge: Vec<LineOcc> = edge_ref.borrow().routes.clone();
+                let other_node = edge_ref.borrow().get_other_nd(node);
+
                 {
-                    let routes_b: Vec<LineOcc> = edge_b.borrow().routes.clone();
-                    let mut ea = edge_a.borrow_mut();
-
-                    // Update geometry, respecting original edge direction
-                    if Rc::ptr_eq(&ea.to, node) {
-                        // Edge points TO node, but avg_geom points FROM node
-                        let mut g = avg_geom;
-                        g.reverse();
-                        ea.geometry = g;
-                    } else {
-                        ea.geometry = avg_geom;
-                    }
-
-                    // For fold_edges_for_node, both edges connect (node, other_node).
-                    // We need to check if they are oriented the same way relative to 'node'.
-                    let ea_to_node = Rc::ptr_eq(&ea.to, node);
-                    let eb_to_node = Rc::ptr_eq(&edge_b.borrow().to, node);
-
-                    let flip = ea_to_node != eb_to_node;
-
-                    for r in routes_b {
-                        let new_dir = r.direction.clone();
-                        // For pointer directions, flipping doesn't change the pointer target,
-                        // it's just about whether we need to interpret it differently.
-                        // Since we're merging into edge_a, the direction pointer stays valid.
-
-                        if let Some(existing_r) =
-                            ea.routes.iter_mut().find(|er| er.line_id == r.line_id)
-                        {
-                            // If directions conflict, make bidirectional
-                            let same_direction = match (&existing_r.direction, &new_dir) {
-                                (None, None) => true,
-                                (Some(a), Some(b)) => {
-                                    if let (Some(na), Some(nb)) = (a.upgrade(), b.upgrade()) {
-                                        Rc::ptr_eq(&na, &nb)
-                                    } else {
-                                        false
-                                    }
-                                }
-                                _ => false,
-                            };
-                            if !same_direction {
-                                existing_r.direction = None; // Become bidirectional
-                            }
-                        } else {
-                            ea.routes.push(LineOcc {
-                                line_id: r.line_id.clone(),
-                                route_type: r.route_type,
-                                direction: new_dir,
-                            });
+                    let mut primary = primary_edge.borrow_mut();
+                    for r in routes_to_merge {
+                        if !primary.routes.iter().any(|er| er.line_id == r.line_id) {
+                            primary.routes.push(r);
                         }
                     }
                 }
 
-                // Remove edge_b from adjacency lists
+                // Remove edge from adjacency lists
                 node.borrow_mut()
                     .adj_list
-                    .retain(|e| !Rc::ptr_eq(e, edge_b));
-                other_b
+                    .retain(|e| !Rc::ptr_eq(e, edge_ref));
+                other_node
                     .borrow_mut()
                     .adj_list
-                    .retain(|e| !Rc::ptr_eq(e, edge_b));
+                    .retain(|e| !Rc::ptr_eq(e, edge_ref));
+            }
 
-                return true;
+            return true;
+        }
+
+        // For exactly 2 parallel edges, use the original pairwise averaging
+        let edge_a = &edges[0];
+        let edge_b = &edges[1];
+
+        let other_a = edge_a.borrow().get_other_nd(node);
+
+        // Average geometries weighted by route count
+        // Orient both geometries to start from 'node'
+        let (geom_a, weight_a) = {
+            let e = edge_a.borrow();
+            (get_geometry_oriented_from(&e, node), e.routes.len())
+        };
+        let (geom_b, weight_b) = {
+            let e = edge_b.borrow();
+            (get_geometry_oriented_from(&e, node), e.routes.len())
+        };
+
+        let avg_geom = geom_avg(&geom_a, weight_a, &geom_b, weight_b);
+
+        // Merge routes from both edges into edge_a
+        {
+            let routes_b: Vec<LineOcc> = edge_b.borrow().routes.clone();
+            let mut ea = edge_a.borrow_mut();
+
+            // Update geometry, respecting original edge direction
+            if Rc::ptr_eq(&ea.to, node) {
+                // Edge points TO node, but avg_geom points FROM node
+                let mut g = avg_geom;
+                g.reverse();
+                ea.geometry = g;
+            } else {
+                ea.geometry = avg_geom;
+            }
+
+            // For fold_edges_for_node, both edges connect (node, other_node).
+            // We need to check if they are oriented the same way relative to 'node'.
+            let ea_to_node = Rc::ptr_eq(&ea.to, node);
+            let eb_to_node = Rc::ptr_eq(&edge_b.borrow().to, node);
+
+            let flip = ea_to_node != eb_to_node;
+
+            for r in routes_b {
+                let new_dir = r.direction.clone();
+                // For pointer directions, flipping doesn't change the pointer target,
+                // it's just about whether we need to interpret it differently.
+                // Since we're merging into edge_a, the direction pointer stays valid.
+
+                if let Some(existing_r) =
+                    ea.routes.iter_mut().find(|er| er.line_id == r.line_id)
+                {
+                    // If directions conflict, make bidirectional
+                    let same_direction = match (&existing_r.direction, &new_dir) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => {
+                            if let (Some(na), Some(nb)) = (a.upgrade(), b.upgrade()) {
+                                Rc::ptr_eq(&na, &nb)
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false,
+                    };
+                    if !same_direction {
+                        existing_r.direction = None; // Become bidirectional
+                    }
+                } else {
+                    ea.routes.push(LineOcc {
+                        line_id: r.line_id.clone(),
+                        route_type: r.route_type,
+                        direction: new_dir,
+                    });
+                }
             }
         }
+
+        // Remove edge_b from adjacency lists
+        node.borrow_mut()
+            .adj_list
+            .retain(|e| !Rc::ptr_eq(e, edge_b));
+        other_a
+            .borrow_mut()
+            .adj_list
+            .retain(|e| !Rc::ptr_eq(e, edge_b));
+
+        return true;
     }
 
     false

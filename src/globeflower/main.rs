@@ -14,6 +14,8 @@ mod collapse_segments;
 mod graph_types;
 mod node_id_allocator;
 mod route_registry;
+mod corridor_bundling;
+mod station_bundling;
 
 use anyhow::Result;
 use catenary::postgres_tools::make_async_pool;
