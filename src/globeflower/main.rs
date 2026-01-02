@@ -8,6 +8,11 @@ mod partition_storage;
 mod partitioning;
 mod restrictions;
 mod support_graph;
+mod coord_conversion;
+mod validation;
+mod collapse_segments;
+mod graph_types;
+mod node_id_allocator;
 
 use anyhow::Result;
 use catenary::postgres_tools::make_async_pool;

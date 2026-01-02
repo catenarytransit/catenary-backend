@@ -1,5 +1,5 @@
 use crate::edges::{convert_from_geo, convert_to_geo, GraphEdge, NodeId};
-use crate::support_graph::{LineNode, NodeRef};
+use crate::graph_types::{LineNode, NodeRef};
 use ahash::AHashMap;
 use anyhow::Result;
 use geo::{Coord, EuclideanLength, LineString as GeoLineString, Point as GeoPoint};
