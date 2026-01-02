@@ -1,5 +1,5 @@
 use crate::graph::{LineOnEdge, RenderGraph};
-use geo::{Coord, Rect};
+use geo::{Coord, LineString as GeoLineString, Rect, Simplify};
 use log::{debug, info};
 use mvt::{GeomData, GeomEncoder, Tile};
 use pointy::BBox;
@@ -121,8 +121,20 @@ impl TileGenerator {
                     continue;
                 }
 
-                // Project clipped points to tile coordinates
-                let tile_points: Vec<(f64, f64)> = clipped_coords
+                // Apply line simplification for lower zoom levels
+                // This reduces complexity and creates smoother lines at zoomed-out views
+                let smoothed_coords = if let Some(epsilon) = Self::get_simplification_epsilon(z) {
+                    Self::simplify_coords(&clipped_coords, epsilon)
+                } else {
+                    clipped_coords
+                };
+
+                if smoothed_coords.len() < 2 {
+                    continue;
+                }
+
+                // Project smoothed points to tile coordinates
+                let tile_points: Vec<(f64, f64)> = smoothed_coords
                     .iter()
                     .map(|c| Self::project_to_tile(c.x, c.y, z, x, y, extent))
                     .collect();
@@ -411,6 +423,36 @@ impl TileGenerator {
             10..=12 => 25.0,
             _ => 30.0,
         }
+    }
+
+    /// Get the simplification epsilon (in degrees) for a given zoom level.
+    /// Returns None for high zoom levels where no simplification is needed.
+    /// At lower zoom levels, more aggressive simplification creates smoother lines
+    /// by removing unnecessary detail that wouldn't be visible anyway.
+    fn get_simplification_epsilon(z: u8) -> Option<f64> {
+        // Epsilon values in degrees (approx: 0.00001° ≈ 1.1m at equator)
+        // Higher epsilon = more simplification = smoother lines
+        match z {
+            0..=4 => Some(0.001),   // ~111m - very aggressive for world view
+            5..=6 => Some(0.0005),  // ~55m - aggressive for continental view
+            7..=8 => Some(0.0002),  // ~22m - moderate simplification
+            9 => Some(0.0001),      // ~11m - gentle simplification
+            10 => Some(0.00005),    // ~5.5m - very gentle smoothing
+            _ => None,              // No simplification for z >= 11
+        }
+    }
+
+    /// Simplify a coordinate vector using Douglas-Peucker algorithm.
+    /// This reduces the number of points while preserving the overall shape.
+    fn simplify_coords(coords: &[Coord], epsilon: f64) -> Vec<Coord> {
+        if coords.len() < 3 {
+            return coords.to_vec();
+        }
+
+        // Convert to geo LineString, simplify, then convert back
+        let line: GeoLineString<f64> = coords.iter().cloned().collect();
+        let simplified = line.simplify(epsilon);
+        simplified.into_inner()
     }
 
     /// Clip a linestring to a bounding rectangle.

@@ -1,4 +1,4 @@
-use crate::edges::{GraphEdge, NodeId, convert_from_geo, convert_to_geo};
+use crate::edges::{convert_from_geo, convert_to_geo, GraphEdge, NodeId};
 use crate::support_graph::{LineNode, NodeRef};
 use ahash::AHashMap;
 use anyhow::Result;

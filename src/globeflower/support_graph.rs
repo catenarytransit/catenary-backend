@@ -1772,6 +1772,12 @@ fn collapse_shared_segments(
         // SET ALL EDGES TO STRAIGHT LINES between their endpoints
         // This is critical - geometries are simplified to straight lines
         // =====================================================================
+        // =====================================================================
+        // Phase 2: Write edge geoms (C++: lines 379-387)
+        // UPDATE edge geoms to project to node positions
+        // FIX 3: Preserve curve geometry for longer edges (>50m)
+        // Only reset short edges to straight lines
+        // =====================================================================
         for node in tg_new.get_nds() {
             let adj_list = node.borrow().adj_list.clone();
             for edge_ref in adj_list {
@@ -1783,16 +1789,37 @@ fn collapse_shared_segments(
                 let from_pos = edge_ref.borrow().from.borrow().pos;
                 let to_pos = edge_ref.borrow().to.borrow().pos;
 
-                edge_ref.borrow_mut().geometry = vec![
-                    Coord {
-                        x: from_pos[0],
-                        y: from_pos[1],
-                    },
-                    Coord {
-                        x: to_pos[0],
-                        y: to_pos[1],
-                    },
-                ];
+                // Calculate edge length to decide whether to preserve geometry
+                let edge_len = calc_polyline_length(&edge_ref.borrow().geometry);
+
+                if edge_len < 50.0 {
+                    // Short edge - reset to straight line
+                    edge_ref.borrow_mut().geometry = vec![
+                        Coord {
+                            x: from_pos[0],
+                            y: from_pos[1],
+                        },
+                        Coord {
+                            x: to_pos[0],
+                            y: to_pos[1],
+                        },
+                    ];
+                } else {
+                    // Longer edge - update endpoints but preserve interior curve geometry
+                    let mut geom = edge_ref.borrow().geometry.clone();
+                    if geom.len() >= 2 {
+                        geom[0] = Coord {
+                            x: from_pos[0],
+                            y: from_pos[1],
+                        };
+                        let last_idx = geom.len() - 1;
+                        geom[last_idx] = Coord {
+                            x: to_pos[0],
+                            y: to_pos[1],
+                        };
+                        edge_ref.borrow_mut().geometry = geom;
+                    }
+                }
             }
         }
 
@@ -1927,6 +1954,7 @@ fn collapse_shared_segments(
         // and stay in memory forever, eventually causing OOM.
         tg_new.clear();
 
+        // original C++ delta 0.002
         if relative_diff < 0.002 {
             println!("Converged.");
             break;
@@ -2011,6 +2039,8 @@ fn nd_collapse_cand_impl(
 
     let d_cut_sq = effective_d_cut * effective_d_cut;
 
+    let incoming_dir = _incoming_dir; // Now used for Fix 2
+
     // Use callback-based search to avoid Vec allocation (major perf win)
     let best = geo_idx.find_best_in_radius(
         point,
@@ -2026,6 +2056,37 @@ fn nd_collapse_cand_impl(
             // explicitly avoid collapsing into "deleted" nodes.
             if node.borrow().get_deg() == 0 {
                 return None;
+            }
+
+            // CROSS-INTERSECTION CHECK (Fix 2)
+            // Prevent merging if this would create a plus/X crossing where
+            // the candidate node's edges are perpendicular to our incoming direction
+            if let Some(inc_dir) = incoming_dir {
+                let inc_len = (inc_dir[0] * inc_dir[0] + inc_dir[1] * inc_dir[1]).sqrt();
+                if inc_len > 1e-6 {
+                    let in_norm = (inc_dir[0] / inc_len, inc_dir[1] / inc_len);
+
+                    // Check angles with all edges at candidate node
+                    for edge_ref in &node.borrow().adj_list {
+                        let edge_dir = get_edge_direction_from_node(edge_ref, node);
+
+                        // Calculate cross product for perpendicularity
+                        let cross = (in_norm.0 * edge_dir.1 - in_norm.1 * edge_dir.0).abs();
+                        let dot = (in_norm.0 * edge_dir.0 + in_norm.1 * edge_dir.1).abs();
+
+                        // Check for perpendicular crossing (cross > 0.85, dot < 0.5)
+                        if cross > 0.85 && dot < 0.5 {
+                            // Check if lines CONVERGE (turn into each other) ahead
+                            // by traversing and checking direction changes
+                            let lines_converge = check_lines_converge(edge_ref, in_norm, graph);
+
+                            if !lines_converge {
+                                // True perpendicular X-crossing - don't merge
+                                return None;
+                            }
+                        }
+                    }
+                }
             }
 
             // HYSTERESIS - Check if this candidate node already has routes
@@ -2051,7 +2112,7 @@ fn nd_collapse_cand_impl(
             let has_intercity_rail = current_modes.contains(&2) || node_modes.contains(&2);
 
             // Base threshold multiplier for intercity rail (corridors are much wider)
-            let mode_base_multiplier = if has_intercity_rail { 4.0 } else { 1.0 }; // 2x distance = 4x squared
+            let mode_base_multiplier = if has_intercity_rail { 16.0 } else { 1.0 }; // 4x distance = 16x squared
 
             // Determine threshold based on hysteresis state
             // With weighted centroid, we can be more relaxed on thresholds
@@ -2065,15 +2126,15 @@ fn nd_collapse_cand_impl(
 
             let threshold_sq = if has_shared_mode {
                 // Node already has matching modes - use RELAXED threshold
-                // Intercity rail: 2x base * 4x hysteresis = 8x total (64x squared)
+                // Intercity rail: 4x base * 8x hysteresis = 32x total (1024x squared)
                 // Other modes: 1x base * 2x hysteresis = 2x total (4x squared)
                 let hysteresis_mult = if is_established_node {
                     // Strongly established - very sticky
                     // "Make Y shaped merges deeper" -> Increase capture radius for Rail
-                    if has_intercity_rail { 16.0 } else { 4.0 } // 4² or 2²
+                    if has_intercity_rail { 64.0 } else { 4.0 } // 8² or 2²
                 } else {
                     // Newly merged - moderately sticky
-                    if has_intercity_rail { 9.0 } else { 2.25 } // 3² or 1.5²
+                    if has_intercity_rail { 36.0 } else { 2.25 } // 6² or 1.5²
                 };
                 d_cut_sq * mode_base_multiplier * hysteresis_mult
             } else if !current_modes.is_empty() && !node_modes.is_empty() {
@@ -2639,6 +2700,27 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
     // 3. Angle-based crossing detection
     // For same-mode edges: use lenient angle check (allow Y-junctions)
     // For different-mode edges: use stricter angle check (reject most crossings)
+
+    // REGION-BASED SUBWAY VS INTERCITY RAIL LOGIC
+    // In North America: subway and intercity rail CAN merge (they share infrastructure)
+    // Outside North America: they should NEVER merge (underground vs surface/overhead)
+    let has_subway = a_modes.contains(&1) || b_modes.contains(&1);
+    let has_intercity_rail = a_modes.contains(&2) || b_modes.contains(&2);
+
+    if has_subway && has_intercity_rail {
+        // Check if we're in North America using edge geometry
+        // Use first point of edge A as representative location
+        let geom = &a.borrow().geometry;
+        if !geom.is_empty() {
+            let is_north_america = is_in_north_america_webmercator(geom[0].x, geom[0].y);
+            if !is_north_america {
+                // Outside North America - never merge subway and intercity rail
+                return false;
+            }
+            // In North America - allow merge (fall through to other checks)
+        }
+    }
+
     if modes_disjoint {
         // Different route types (e.g. Subway vs Commuter Rail)
         // Only allow merging if edges are nearly anti-parallel (through route)
@@ -2665,6 +2747,29 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
     } else {
         // Same or overlapping route types
 
+        // SUBWAY-SPECIFIC CHECK (Route Type 1) - Fix 1
+        // Subway lines meeting at non-parallel angles should NOT merge unless they
+        // share significant parallel track distance (>100m). This prevents X-shape
+        // crossings (like RATP at Rennes) from being merged while allowing
+        // parallel curve merges (y=x^8 shape, like RATP lines 4/12 at Montparnasse).
+        let has_subway = a_modes.contains(&1) || b_modes.contains(&1);
+
+        if has_subway {
+            let angle_deg = calc_edge_angle_degrees(a, b);
+
+            // If angle > 10 degrees from parallel or anti-parallel, check shared distance
+            // Parallel/anti-parallel = 0° or 180°, so we check if NOT in (0-10) or (170-180)
+            if angle_deg > 10.0 && angle_deg < 170.0 {
+                // Lines are meeting at an angle - require significant parallel track
+                let shared_dist = calc_shared_route_distance(a, b);
+
+                if shared_dist < 100.0 {
+                    // X-shape crossing without enough parallel track - don't merge
+                    return false;
+                }
+            }
+        }
+
         // SPECIAL HANDLING FOR RAIL (Route Type 2)
         // User request: "discourage sharp turns on rail lines compared to subways and trams"
         let has_rail = a_modes.contains(&2) || b_modes.contains(&2);
@@ -2675,8 +2780,9 @@ fn line_eq(a: &EdgeRef, b: &EdgeRef) -> bool {
             if !check_edge_angle_strict_merge(a, b) {
                 return false;
             }
-        } else {
-            // Use lenient angle check for Subway/Tram - only reject true perpendicular X-crossings
+        } else if !has_subway {
+            // Use lenient angle check for Tram only - only reject true perpendicular X-crossings
+            // (Subway already handled above with graph traversal check)
             if !check_edge_angle_for_merge_lenient(a, b) {
                 return false;
             }
@@ -2954,9 +3060,20 @@ fn combine_edges(edge_a: &EdgeRef, edge_b: &EdgeRef, n: &NodeRef, graph: &mut Li
         }
     }
 
-    // Simplify the combined geometry to remove zigzag artifacts (matches C++ simplify(0.5))
-    // This is critical per C++ combineEdges lines 650, 662, 677, 689
-    let simplified_geom = simplify_coords(&new_geom, 0.5);
+    // Simplify the combined geometry to remove zigzag artifacts (matches C++ simplify)
+    // FIX 3: Use length-dependent tolerance to preserve curves on longer edges
+    // Short edges (<100m): 1.0m tolerance (aggresive cleanup)
+    // Medium edges (100-500m): 0.5m tolerance (balanced)
+    // Long edges (>500m): 0.2m tolerance (preserve curves)
+    let edge_length = calc_polyline_length(&new_geom);
+    let simplify_tolerance = if edge_length < 100.0 {
+        1.0
+    } else if edge_length < 500.0 {
+        0.5
+    } else {
+        0.2 // Preserve curves on long rail segments
+    };
+    let simplified_geom = simplify_coords(&new_geom, simplify_tolerance);
 
     // Create new edge
     let new_edge = Rc::new(RefCell::new(LineEdge {
@@ -3065,6 +3182,29 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph, d_cut: f64) {
             }
         }
 
+        // INTERCITY RAIL ANGLE CHECK (Fix for near-90° collapses)
+        // For intercity rail (route type 2), reject collapsing edges that form
+        // angles > 45° from parallel/anti-parallel. This prevents unnatural
+        // sharp turns in rail geometry.
+        {
+            let has_intercity_rail = edge_a
+                .borrow()
+                .routes
+                .iter()
+                .any(|r| r.route_type == 2)
+                || edge_b.borrow().routes.iter().any(|r| r.route_type == 2);
+
+            if has_intercity_rail {
+                let angle_deg = calc_edge_angle_degrees(edge_a, edge_b);
+                // Angle 0° = straight through (anti-parallel), 90° = perpendicular
+                // Reject if angle is > 45° from straight (i.e., in range 45° to 135°)
+                // This is stricter than the 31° check in line_eq (0.85 threshold)
+                if angle_deg > 45.0 && angle_deg < 135.0 {
+                    continue;
+                }
+            }
+        }
+
         combine_edges(edge_a, edge_b, &node, graph);
         total_contracted += 1;
     }
@@ -3079,6 +3219,264 @@ fn collapse_degree_2_nodes_serial(graph: &mut LineGraph, d_cut: f64) {
 /// NOTE: In C++ this logic is commented out and just returns d.
 fn max_d(_num_lines: usize, d_cut: f64) -> f64 {
     d_cut
+}
+
+/// Check if Web Mercator coordinates are in North America.
+/// North America defined as: USA, Canada, Mexico, Central America, Caribbean
+/// Web Mercator bounds (approximate):
+/// - Longitude: -170° to -50° (Pacific to Atlantic, including Caribbean)
+/// - Latitude: 7° to 85° (Panama to Canadian Arctic)
+fn is_in_north_america_webmercator(x: f64, y: f64) -> bool {
+    // Web Mercator (EPSG:3857) coordinate bounds for North America
+    // Longitude -170° to -50° in Web Mercator: approximately -18924313 to -5565974
+    // Latitude 7° to 85° in Web Mercator: approximately 780000 to 19971869
+
+    // Longitude bounds (x)
+    const X_MIN: f64 = -18_924_313.0; // -170° longitude
+    const X_MAX: f64 = -5_565_974.0;  // -50° longitude
+
+    // Latitude bounds (y)  
+    const Y_MIN: f64 = 780_000.0;     // ~7° latitude (Panama)
+    const Y_MAX: f64 = 19_971_869.0;  // ~85° latitude (Canadian Arctic)
+
+    x >= X_MIN && x <= X_MAX && y >= Y_MIN && y <= Y_MAX
+}
+
+/// Check if a crossing edge eventually turns toward the incoming direction.
+/// Returns true if the lines converge (merge is appropriate), false if they
+/// stay perpendicular/diverge (true X-crossing, no merge).
+/// Used for Fix 2: preventing plus-shape intersection bending.
+fn check_lines_converge(
+    crossing_edge: &EdgeRef,
+    incoming_dir: (f64, f64),
+    graph: &LineGraph,
+) -> bool {
+    use std::collections::HashSet;
+
+    let mut visited: HashSet<usize> = HashSet::new();
+    visited.insert(crossing_edge.borrow().id);
+
+    let mut current_edge = Rc::clone(crossing_edge);
+    let mut check_dist = 0.0;
+    const MAX_CHECK_DIST: f64 = 300.0; // Look ahead up to 300m
+
+    while check_dist < MAX_CHECK_DIST {
+        let edge_len = calc_polyline_length(&current_edge.borrow().geometry);
+        check_dist += edge_len;
+
+        // Get direction at end of current edge
+        let to_node = current_edge.borrow().to.clone();
+
+        // Find continuation edge (degree-2 pass-through or closest angle)
+        let next_edges: Vec<EdgeRef> = to_node
+            .borrow()
+            .adj_list
+            .iter()
+            .filter(|e| !visited.contains(&e.borrow().id))
+            .cloned()
+            .collect();
+
+        if next_edges.is_empty() {
+            break;
+        }
+
+        // Pick edge that continues most in same direction
+        let current_dir = get_edge_direction_from_node(&current_edge, &to_node);
+        let mut best_edge: Option<EdgeRef> = None;
+        let mut best_dot = -f64::MAX;
+
+        for e in &next_edges {
+            let e_dir = get_edge_direction_from_node(e, &to_node);
+            // Continuation means going AWAY from the node - negate direction
+            let continuation_dot = -(current_dir.0 * e_dir.0 + current_dir.1 * e_dir.1);
+            if continuation_dot > best_dot {
+                best_dot = continuation_dot;
+                best_edge = Some(Rc::clone(e));
+            }
+        }
+
+        if let Some(next) = best_edge {
+            visited.insert(next.borrow().id);
+
+            // Check if this edge's direction is now more parallel to incoming
+            let next_dir = get_edge_direction_from_node(&next, &to_node);
+            let dot_with_incoming = (next_dir.0 * incoming_dir.0 + next_dir.1 * incoming_dir.1).abs();
+
+            // If angle with incoming is now < 45° (dot > 0.7), lines are converging
+            if dot_with_incoming > 0.7 {
+                return true; // Lines turn into each other - merge OK
+            }
+
+            current_edge = next;
+        } else {
+            break;
+        }
+    }
+
+    false // Lines stay perpendicular - true crossing, don't merge
+}
+
+/// Get the shared node between two edges, if any.
+fn get_shared_node(a: &EdgeRef, b: &EdgeRef) -> Option<NodeRef> {
+    let a_from = &a.borrow().from;
+    let a_to = &a.borrow().to;
+    let b_from = &b.borrow().from;
+    let b_to = &b.borrow().to;
+
+    if Rc::ptr_eq(a_from, b_from) || Rc::ptr_eq(a_from, b_to) {
+        Some(Rc::clone(a_from))
+    } else if Rc::ptr_eq(a_to, b_from) || Rc::ptr_eq(a_to, b_to) {
+        Some(Rc::clone(a_to))
+    } else {
+        None
+    }
+}
+
+/// Calculate angle between two edges at their shared node, in degrees (0-180).
+/// 0° = anti-parallel (through-route), 180° = same direction, 90° = perpendicular
+fn calc_edge_angle_degrees(a: &EdgeRef, b: &EdgeRef) -> f64 {
+    let shr_nd = match get_shared_node(a, b) {
+        Some(n) => n,
+        None => return 90.0, // No shared node = treat as perpendicular
+    };
+
+    let dir_a = get_edge_direction_from_node(a, &shr_nd);
+    let dir_b = get_edge_direction_from_node(b, &shr_nd);
+
+    let dot = dir_a.0 * dir_b.0 + dir_a.1 * dir_b.1;
+    dot.clamp(-1.0, 1.0).acos().to_degrees()
+}
+
+/// Calculate minimum distance between a point on geom_a and any point on geom_b
+fn closest_point_distance_to_geom(geom_a: &[Coord], geom_b: &[Coord]) -> f64 {
+    if geom_a.is_empty() || geom_b.is_empty() {
+        return f64::MAX;
+    }
+
+    let mut min_dist = f64::MAX;
+
+    // Sample points from geom_a
+    for coord_a in geom_a {
+        for coord_b in geom_b {
+            let dx = coord_a.x - coord_b.x;
+            let dy = coord_a.y - coord_b.y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist < min_dist {
+                min_dist = dist;
+            }
+        }
+    }
+
+    min_dist
+}
+
+/// Calculate total shared distance by traversing connected edges.
+/// For subway angle merging - finds how far two lines share parallel tracks.
+/// Continues along connecting edges while checking if distance to other line stays close.
+fn calc_shared_route_distance(edge_a: &EdgeRef, edge_b: &EdgeRef) -> f64 {
+    use std::collections::HashSet;
+
+    // Get routes from both edges
+    let routes_a: HashSet<(String, String)> = edge_a
+        .borrow()
+        .routes
+        .iter()
+        .map(|r| r.line_id.clone())
+        .collect();
+    let routes_b: HashSet<(String, String)> = edge_b
+        .borrow()
+        .routes
+        .iter()
+        .map(|r| r.line_id.clone())
+        .collect();
+
+    // Find common routes
+    let common_routes: HashSet<_> = routes_a.intersection(&routes_b).cloned().collect();
+    if common_routes.is_empty() {
+        return 0.0;
+    }
+
+    // Calculate shared distance by traversing from edge_a while edge_b stays parallel
+    let dist_a = traverse_for_shared_distance(edge_a, edge_b, &common_routes);
+    // Also traverse from edge_b direction to get total shared segment
+    let dist_b = traverse_for_shared_distance(edge_b, edge_a, &common_routes);
+
+    // Return the maximum found (in case of asymmetric traversal)
+    dist_a.max(dist_b)
+}
+
+/// Traverse from start_edge along connected edges, measuring how far other_edge stays parallel.
+/// Checks if distance to other_edge is increasing (diverging) or stable (parallel).
+fn traverse_for_shared_distance(
+    start_edge: &EdgeRef,
+    other_edge: &EdgeRef,
+    common_routes: &std::collections::HashSet<(String, String)>,
+) -> f64 {
+    use std::collections::HashSet;
+
+    let mut total = calc_polyline_length(&start_edge.borrow().geometry);
+    let mut current_edge = Rc::clone(start_edge);
+    let mut visited: HashSet<usize> = HashSet::new();
+    visited.insert(start_edge.borrow().id);
+
+    // Track distance to other line
+    let other_geom: Vec<Coord> = other_edge.borrow().geometry.clone();
+    let mut prev_dist = closest_point_distance_to_geom(&start_edge.borrow().geometry, &other_geom);
+
+    // Maximum traversal depth (50 edges or ~5km typical)
+    for _ in 0..50 {
+        let to_node = current_edge.borrow().to.clone();
+        let next_edges: Vec<EdgeRef> = to_node
+            .borrow()
+            .adj_list
+            .iter()
+            .filter(|e| {
+                let eid = e.borrow().id;
+                if visited.contains(&eid) {
+                    return false;
+                }
+                // Edge must have a route in common_routes
+                e.borrow()
+                    .routes
+                    .iter()
+                    .any(|r| common_routes.contains(&r.line_id))
+            })
+            .cloned()
+            .collect();
+
+        if next_edges.is_empty() {
+            break;
+        }
+
+        // Pick the edge that continues closest to other_edge
+        let mut best_edge: Option<EdgeRef> = None;
+        let mut best_dist = f64::MAX;
+
+        for e in &next_edges {
+            let dist = closest_point_distance_to_geom(&e.borrow().geometry, &other_geom);
+            if dist < best_dist {
+                best_dist = dist;
+                best_edge = Some(Rc::clone(e));
+            }
+        }
+
+        if let Some(next) = best_edge {
+            // Check if distance is increasing (diverging) or stable (parallel)
+            // Allow up to 50m increase or 1.5x multiplier before counting as diverged
+            if best_dist > prev_dist * 1.5 + 50.0 {
+                break; // Lines are diverging, stop counting shared distance
+            }
+
+            total += calc_polyline_length(&next.borrow().geometry);
+            visited.insert(next.borrow().id);
+            current_edge = next;
+            prev_dist = best_dist;
+        } else {
+            break;
+        }
+    }
+
+    total
 }
 
 /// Maximum length for a collapsed segment (500 meters)
@@ -3321,8 +3719,11 @@ fn get_polyline_segment(coords: &[Coord], start_frac: f64, end_frac: f64) -> Vec
             started = true;
         }
 
-        // If we've started, add intermediate points
-        if started && cur_dist >= start_dist && seg_end_dist <= end_dist {
+        // If we've started, add intermediate points (p2) that fall before end_dist
+        // The key is: once started, add p2 if the segment ends before or at end_dist
+        // We need to check seg_end_dist <= end_dist (not cur_dist >= start_dist, which is always 
+        // false in the starting segment where cur_dist < start_dist <= seg_end_dist)
+        if started && seg_end_dist <= end_dist {
             result.push(p2);
         }
 
