@@ -1,9 +1,11 @@
 use geo::prelude::*;
 use geo::{CoordsIter, EuclideanDistance, EuclideanLength, LineString, Point};
 
-/// Loom's AVERAGING_STEP constant (20 metres in WebMercator).
-/// For lat/lon, we approximate 1 degree ≈ 111,111 metres at the equator.
-const AVERAGING_STEP_DEGREES: f64 = 20.0 / 111_111.0;
+/// Loom's AVERAGING_STEP constant.
+/// For coordinate-agnostic operation, we use a fixed number of sample points
+/// rather than a distance-based step. This works for both lat/lng and Web Mercator.
+const MIN_AVERAGING_POINTS: usize = 20;
+const MAX_AVERAGING_POINTS: usize = 100;
 
 /// Get a point at a normalised distance (0.0 to 1.0) along a LineString.
 pub fn get_point_at_ratio(line: &LineString<f64>, ratio: f64) -> Option<Point<f64>> {
@@ -88,9 +90,11 @@ pub fn average_polylines_weighted(
         return lines[0].clone();
     }
 
-    // Distance-based step size matching loom's AVERAGING_STEP
-    // Ensure we generate between 10 and 100 points to avoid excessive output
-    let step_size = (AVERAGING_STEP_DEGREES / max_len).clamp(0.01, 0.1);
+    // Use a fixed number of sample points based on polyline complexity
+    // More complex polylines (more points) get more samples
+    let max_points = lines.iter().map(|l| l.0.len()).max().unwrap_or(2);
+    let num_samples = max_points.max(MIN_AVERAGING_POINTS).min(MAX_AVERAGING_POINTS);
+    let step_size = 1.0 / (num_samples as f64 - 1.0).max(1.0);
 
     // Calculate total weight
     let total_weight: f64 = if let Some(w) = weights {
@@ -256,4 +260,197 @@ fn line_intersection(l1: geo::Line<f64>, l2: geo::Line<f64>) -> Option<Point<f64
     }
 
     None
+}
+
+/// Subtract two 2D vectors
+pub fn sub_2d(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+/// Normalize a 2D vector
+pub fn normalize_2d(v: [f64; 2]) -> [f64; 2] {
+    let len = (v[0] * v[0] + v[1] * v[1]).sqrt();
+    if len > 1e-9 {
+        [v[0] / len, v[1] / len]
+    } else {
+        [0.0, 0.0]
+    }
+}
+
+/// Dot product of two 2D vectors
+pub fn dot_product_2d(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
+}
+
+/// Project a point onto a polyline and return the cumulative distance along the line of the closest point.
+pub fn project_point_to_polyline(
+    point: &geo::Coord, 
+    polyline: &[geo::Coord]
+) -> f64 {
+    if polyline.len() < 2 {
+        return 0.0;
+    }
+    
+    let mut min_dist_sq = f64::MAX;
+    let mut best_dist_along = 0.0;
+    let mut current_dist_along = 0.0;
+    
+    for i in 0..polyline.len() - 1 {
+        let p1 = polyline[i];
+        let p2 = polyline[i+1];
+        
+        let seg_dx = p2.x - p1.x;
+        let seg_dy = p2.y - p1.y;
+        let seg_len_sq = seg_dx*seg_dx + seg_dy*seg_dy;
+        let seg_len = seg_len_sq.sqrt();
+        
+        if seg_len_sq < 1e-9 {
+            // zero length segment, skip
+             current_dist_along += seg_len;
+             continue;
+        }
+        
+        // Project vector (point - p1) onto (p2 - p1)
+        let t = ((point.x - p1.x) * seg_dx + (point.y - p1.y) * seg_dy) / seg_len_sq;
+        
+        // Clamp t to segment [0, 1]
+        let t_clamped = t.max(0.0).min(1.0);
+        
+        let proj_x = p1.x + t_clamped * seg_dx;
+        let proj_y = p1.y + t_clamped * seg_dy; // Fixed calculation reuse
+        
+        let dx = point.x - proj_x;
+        let dy = point.y - proj_y;
+        let dist_sq = dx*dx + dy*dy;
+        
+        if dist_sq < min_dist_sq {
+            min_dist_sq = dist_sq;
+            best_dist_along = current_dist_along + t_clamped * seg_len;
+        }
+        
+        current_dist_along += seg_len;
+    }
+    
+    best_dist_along
+}
+
+/// Calculate the minimum Euclidean distance from a point to a polyline
+pub fn distance_point_to_polyline(
+    point: &geo::Coord, 
+    polyline: &[geo::Coord]
+) -> f64 {
+    if polyline.len() < 2 {
+        return f64::MAX;
+    }
+    
+    let mut min_dist_sq = f64::MAX;
+    
+    for i in 0..polyline.len() - 1 {
+        let p1 = polyline[i];
+        let p2 = polyline[i+1];
+        
+        let seg_dx = p2.x - p1.x;
+        let seg_dy = p2.y - p1.y;
+        let seg_len_sq = seg_dx*seg_dx + seg_dy*seg_dy;
+        
+        if seg_len_sq < 1e-9 {
+             let dx = point.x - p1.x;
+             let dy = point.y - p1.y;
+             min_dist_sq = min_dist_sq.min(dx*dx + dy*dy);
+             continue;
+        }
+        
+        // Project vector (point - p1) onto (p2 - p1)
+        let t = ((point.x - p1.x) * seg_dx + (point.y - p1.y) * seg_dy) / seg_len_sq;
+        let t_clamped = t.max(0.0).min(1.0);
+        
+        let proj_x = p1.x + t_clamped * seg_dx;
+        let proj_y = p1.y + t_clamped * seg_dy;
+        
+        let dx = point.x - proj_x;
+        let dy = point.y - proj_y;
+        min_dist_sq = min_dist_sq.min(dx*dx + dy*dy);
+    }
+    
+    min_dist_sq.sqrt()
+}
+
+/// Calculate the length of a polyline defined by array points
+pub fn polyline_length(path: &[[f64; 2]]) -> f64 {
+    let mut len = 0.0;
+    for i in 0..path.len().saturating_sub(1) {
+        let dx = path[i+1][0] - path[i][0];
+        let dy = path[i+1][1] - path[i][1];
+        len += (dx*dx + dy*dy).sqrt();
+    }
+    len
+}
+
+/// Sample a point along a polyline at a specific distance
+pub fn sample_along_polyline_f64(path: &[[f64; 2]], target_dist: f64) -> [f64; 2] {
+    if path.is_empty() { return [0.0, 0.0]; }
+    
+    let mut accum = 0.0;
+    for i in 0..path.len().saturating_sub(1) {
+        let p1 = path[i];
+        let p2 = path[i+1];
+        let dx = p2[0] - p1[0];
+        let dy = p2[1] - p1[1];
+        let seg_len = (dx*dx + dy*dy).sqrt();
+        
+        if accum + seg_len >= target_dist {
+            let remain = target_dist - accum;
+            let t = if seg_len > 1e-9 { remain / seg_len } else { 0.0 };
+            return [
+                p1[0] + dx * t,
+                p1[1] + dy * t,
+            ];
+        }
+        accum += seg_len;
+    }
+    
+    *path.last().unwrap()
+}
+
+/// Project a point onto a polyline and return distance along path
+pub fn project_point_to_polyline_f64(point: [f64; 2], path: &[[f64; 2]]) -> f64 {
+    if path.len() < 2 { return 0.0; }
+    
+    let mut min_dist_sq = f64::MAX;
+    let mut best_dist_along = 0.0;
+    let mut current_dist_along = 0.0;
+    
+    for i in 0..path.len() - 1 {
+        let p1 = path[i];
+        let p2 = path[i+1];
+        
+        let seg_dx = p2[0] - p1[0];
+        let seg_dy = p2[1] - p1[1];
+        let seg_len_sq = seg_dx*seg_dx + seg_dy*seg_dy;
+        let seg_len = seg_len_sq.sqrt();
+        
+        if seg_len_sq < 1e-9 {
+             current_dist_along += seg_len;
+             continue;
+        }
+        
+        let t = ((point[0] - p1[0]) * seg_dx + (point[1] - p1[1]) * seg_dy) / seg_len_sq;
+        let t_clamped = t.max(0.0).min(1.0);
+        
+        let proj_x = p1[0] + t_clamped * seg_dx;
+        let proj_y = p1[1] + t_clamped * seg_dy;
+        
+        let dx = point[0] - proj_x;
+        let dy = point[1] - proj_y;
+        let dist_sq = dx*dx + dy*dy;
+        
+        if dist_sq < min_dist_sq {
+            min_dist_sq = dist_sq;
+            best_dist_along = current_dist_along + t_clamped * seg_len;
+        }
+        
+        current_dist_along += seg_len;
+    }
+    
+    best_dist_along
 }

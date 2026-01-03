@@ -1,370 +1,497 @@
+
 // ===========================================================================
-// OSM-Accelerated Collapse Algorithm
+// OSM Topological Corridor Collapse
 // ===========================================================================
 //
-// This module provides a memory-efficient alternative to the iterative collapse
-// algorithm. Instead of densifying edges at 5m spacing and iteratively collapsing,
-// it uses OSM junctions as natural merge boundaries.
+// This module implements the topological analysis for railway
+// networks. It replaces the old geometric averaging with a rigorous
+// "Topological Corridor Clustering" approach.
 //
-// Key benefits:
-// - 10x fewer points (50m spacing vs 5m)
-// - Single pass (no iteration)
-// - Junction-bounded segments prevent runaway merges
+// Algorithm:
+// 1. Identify "Relevant Skeleton": 
+//    Find all OSM Ways that are near the input edges.
+// 2. Cluster Skeleton:
+//    Use `osm_topology` to group parallel OSM Ways into Single-Track Corridors.
+//    (Handles Berlin Hbf layers/angles, York Station curvature).
+// 3. Map Match:
+//    Project every input GTFS edge onto the nearest Corridor Cluster.
+// 4. Graph Reconstruction:
+//    Output the Cluster Centerlines as the final edges, preserving OSM Junctions.
 // ===========================================================================
 
 use crate::osm_rail_graph::OsmRailIndex;
+use crate::osm_topology;
 use crate::route_registry::RouteId;
 use crate::support_graph::CompactedGraphEdge;
 use ahash::{AHashMap, AHashSet};
 use catenary::graph_formats::NodeId;
 use geo::Coord;
+use crate::geometry_utils;
 
-/// Junction-aware edge key for grouping merge candidates
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-struct JunctionPair {
-    /// OSM junction ID at start (or hash of position if no junction)
-    from_key: i64,
-    /// OSM junction ID at end (or hash of position if no junction)  
-    to_key: i64,
-}
-
-impl JunctionPair {
-    fn new(from: i64, to: i64) -> Self {
-        // Normalize ordering so (A,B) and (B,A) are the same pair
-        if from <= to {
-            Self { from_key: from, to_key: to }
-        } else {
-            Self { from_key: to, to_key: from }
-        }
-    }
-    
-    /// Create a key from position hashes when no OSM junction found
-    fn from_positions(from_pos: [f64; 2], to_pos: [f64; 2]) -> Self {
-        // Quantize positions to ~10m grid for hashing
-        let from_hash = ((from_pos[0] / 10.0) as i64) ^ (((from_pos[1] / 10.0) as i64) << 20);
-        let to_hash = ((to_pos[0] / 10.0) as i64) ^ (((to_pos[1] / 10.0) as i64) << 20);
-        Self::new(from_hash, to_hash)
-    }
-}
-
-/// Split an edge at OSM junctions along its path
-/// 
-/// Returns a list of edge segments, where each segment runs between junctions
-/// or original endpoints.
-pub fn split_edge_at_junctions(
-    edge: &CompactedGraphEdge,
-    osm_index: &OsmRailIndex,
-    junction_tolerance_m: f64,
-) -> Vec<CompactedGraphEdge> {
-    let path: Vec<[f64; 2]> = edge.geometry.iter().map(|c| [c.x, c.y]).collect();
-    
-    if path.len() < 2 {
-        return vec![edge.clone()];
-    }
-    
-    // Find junctions along this edge's path
-    let junctions = osm_index.junctions_along_path(&path, junction_tolerance_m);
-    
-    if junctions.is_empty() {
-        // No junctions along path - return original edge
-        return vec![edge.clone()];
-    }
-    
-    // Split edge at each junction
-    let mut segments: Vec<CompactedGraphEdge> = Vec::new();
-    let mut current_start_idx = 0;
-    let total_len = calc_path_length(&path);
-    
-    for (jct_id, jct_pos, dist_along) in &junctions {
-        // Find the path index closest to this junction
-        let split_idx = find_path_index_at_distance(&path, *dist_along);
-        
-        if split_idx <= current_start_idx || split_idx >= path.len() - 1 {
-            continue; // Skip if junction is at/before start or at end
-        }
-        
-        // Create segment from current_start to junction
-        let mut seg_geom: Vec<Coord> = path[current_start_idx..=split_idx]
-            .iter()
-            .map(|p| Coord { x: p[0], y: p[1] })
-            .collect();
-        
-        // Snap end to junction position
-        if let Some(last) = seg_geom.last_mut() {
-            *last = Coord { x: jct_pos[0], y: jct_pos[1] };
-        }
-        
-        let seg_from = if current_start_idx == 0 {
-            edge.from.clone()
-        } else {
-            // Use previous junction as from node
-            NodeId::OsmJunction(*jct_id)
-        };
-        
-        segments.push(CompactedGraphEdge {
-            from: seg_from,
-            to: NodeId::OsmJunction(*jct_id),
-            geometry: seg_geom.clone(),
-            routes: edge.routes.clone(),
-            weight: calc_geom_length(&seg_geom),
-        });
-        
-        current_start_idx = split_idx;
-    }
-    
-    // Create final segment from last junction to end
-    if current_start_idx < path.len() - 1 {
-        let mut seg_geom: Vec<Coord> = path[current_start_idx..]
-            .iter()
-            .map(|p| Coord { x: p[0], y: p[1] })
-            .collect();
-        
-        let last_jct_id = junctions.last().map(|(id, _, _)| *id).unwrap_or(0);
-        
-        segments.push(CompactedGraphEdge {
-            from: NodeId::OsmJunction(last_jct_id),
-            to: edge.to.clone(),
-            geometry: seg_geom,
-            routes: edge.routes.clone(),
-            weight: 0.0, // Will be recalculated
-        });
-    }
-    
-    if segments.is_empty() {
-        vec![edge.clone()]
-    } else {
-        segments
-    }
-}
-
-/// Main entry point: OSM-accelerated collapse
-/// 
-/// This replaces the iterative collapse for areas with OSM coverage.
-/// Memory usage is ~10x lower because:
-/// - No dense 5m sampling (uses 50m between junctions)
-/// - Single pass (no iteration)
-/// - Junction-bounded merge decisions
+/// Main entry point for topological collapse
 pub fn collapse_with_osm_junctions(
-    edges: Vec<CompactedGraphEdge>,
-    osm_index: &OsmRailIndex,
+    input_edges: Vec<CompactedGraphEdge>,
     d_cut: f64,
 ) -> Vec<CompactedGraphEdge> {
-    println!("OSM-accelerated collapse: {} edges, {} junctions available", 
-             edges.len(), osm_index.junction_count());
-    
-    // Step 1: Split edges at OSM junctions
-    let mut split_edges: Vec<CompactedGraphEdge> = Vec::new();
-    let junction_tolerance = 25.0; // 25m tolerance for junction snapping
-    
-    for edge in &edges {
-        let segments = split_edge_at_junctions(edge, osm_index, junction_tolerance);
-        split_edges.extend(segments);
+    // 1. Get OSM Index (Ground Truth)
+    let osm_index = match crate::osm_rail_graph::get_osm_index() {
+        Some(idx) => idx,
+        None => {
+            eprintln!("Warning: No OSM index available. Falling back to input edges.");
+            return input_edges;
+        }
+    };
+
+    println!("Starting Topological Corridor Collapse on {} edges...", input_edges.len());
+
+    // 2. Identify Relevant OSM Ways (The Skeleton)
+    // Scan all input edges to find which OSM ways cover them
+    let mut relevant_way_ids: AHashSet<i64> = AHashSet::new();
+    let sample_spacing = 50.0; // Check every 50m
+
+    // Optimization: Pre-filter edges to avoid expansive search?
+    // For now, simple scan.
+    for edge in &input_edges {
+        let mut dist = 0.0;
+        let total_len = calc_len(&edge.geometry);
+        // Ensure at least one check
+        if total_len < sample_spacing {
+            let mid = sample_along_polyline(&edge.geometry, total_len / 2.0);
+            let nearby = osm_index.ways_near_position([mid.x, mid.y], d_cut.max(50.0));
+            for w in nearby { relevant_way_ids.insert(w); }
+        } else {
+            while dist < total_len {
+                let pt = sample_along_polyline(&edge.geometry, dist);
+                // Search radius: d_cut * 2 to catch things slightly further
+                let nearby = osm_index.ways_near_position([pt.x, pt.y], d_cut.max(50.0));
+                for w in nearby {
+                    relevant_way_ids.insert(w);
+                }
+                dist += sample_spacing;
+            }
+        }
+        // Always check end
+        let end = edge.geometry.last().unwrap();
+        let nearby = osm_index.ways_near_position([end.x, end.y], d_cut.max(50.0));
+        for w in nearby {
+            relevant_way_ids.insert(w);
+        }
     }
     
-    println!("  Split into {} junction-bounded segments", split_edges.len());
+    let way_list: Vec<i64> = relevant_way_ids.into_iter().collect();
+    println!("Identified {} relevant OSM ways for skeleton.", way_list.len());
+
+    // 3. Cluster Skeleton into Corridors
+    // This handles the "Berlin Hbf" and "York Station" logic
+    let (clusters, way_to_cluster) = osm_topology::clustering_impl(osm_index, &way_list);
+    println!("Collapsed skeleton into {} corridor clusters.", clusters.len());
+
+    // 4. Map Match Input -> Clusters
+    // We need to track the coverage interval (min_dist, max_dist) for each Route on each Cluster.
+    // Map: ClusterID -> { (RouteId, RouteType) -> (min_dist, max_dist) }
+    let mut cluster_routes: AHashMap<usize, AHashMap<(RouteId, i32), (f64, f64)>> = AHashMap::new();
     
-    // Step 2: Group edges by junction pair for merge detection
-    let mut junction_groups: AHashMap<JunctionPair, Vec<usize>> = AHashMap::new();
+    let mut unmatched_edges: Vec<CompactedGraphEdge> = Vec::new();
     
-    for (idx, edge) in split_edges.iter().enumerate() {
-        let path: Vec<[f64; 2]> = edge.geometry.iter().map(|c| [c.x, c.y]).collect();
-        if path.len() < 2 {
-            continue;
+    // Multi-Cluster Map Matching
+    // Instead of voting for a single "winner" cluster for the whole edge,
+    // we scan along the edge and assign segments to different clusters.
+    // This allows an edge to traverse multiple clusters (e.g. Station -> Line -> Station)
+    // without "losing" the parts that don't match the winner.
+    
+    for edge in input_edges {
+        let total_len = calc_len(&edge.geometry);
+        if total_len < 1.0 { continue; } // Skip tiny edges
+        
+        // Sampling parameters
+        let step = 10.0;
+        let num_samples = (total_len / step).ceil() as usize;
+
+        // 1. Scan edge: (dist, cluster_id)
+        // Group consecutive samples into "Raw Intervals"
+        let mut raw_intervals: Vec<(usize, f64, f64)> = Vec::new(); // (cid, start_dist, end_dist)
+        
+        let mut curr_cid: Option<usize> = None;
+        let mut curr_start = 0.0;
+        let mut last_sample_dist = 0.0;
+        
+        for i in 0..=num_samples {
+             let dist = (i as f64 * step).min(total_len);
+             let pt = sample_along_polyline(&edge.geometry, dist);
+             
+             // Find best cluster for this point
+             let nearby_ways = osm_index.ways_near_position([pt.x, pt.y], 30.0);
+             let mut best_cid = None;
+             let mut min_cluster_dist = f64::MAX;
+             
+             // Only consider clusters that contain the nearby ways
+             for w in nearby_ways {
+                 if let Some(&cid) = way_to_cluster.get(&w) {
+                     // Find distance to this cluster's centerline
+                     if let Some(cluster) = clusters.get(cid) {
+                         let d = geometry_utils::distance_point_to_polyline(&pt, &cluster.centerline);
+                         if d < min_cluster_dist && d < 50.0 { // 50m max snap
+                             min_cluster_dist = d;
+                             best_cid = Some(cid);
+                         }
+                     }
+                 }
+             }
+             
+             // Run Length Encoding
+             match (curr_cid, best_cid) {
+                 (None, Some(new)) => {
+                     // Start new interval
+                     curr_cid = Some(new);
+                     curr_start = dist; 
+                 }
+                 (Some(old), Some(new)) if old != new => {
+                     // Transition: End old, Start new
+                     // Split at midpoint for smoothness
+                     let mid = (last_sample_dist + dist) / 2.0;
+                     raw_intervals.push((old, curr_start, mid));
+                     
+                     curr_cid = Some(new);
+                     curr_start = mid;
+                 }
+                 (Some(old), None) => {
+                     // Transition to void: End old
+                     let mid = (last_sample_dist + dist) / 2.0;
+                     raw_intervals.push((old, curr_start, mid));
+                     curr_cid = None;
+                 }
+                 _ => {} // Continue same state (Some->Some==, None->None)
+             }
+             
+             last_sample_dist = dist;
         }
         
-        // Get junction IDs or position hashes for endpoints
-        let from_jct = osm_index.snap_to_junction(path[0], junction_tolerance);
-        let to_jct = osm_index.snap_to_junction(*path.last().unwrap(), junction_tolerance);
+        // Close last interval if open
+        if let Some(cid) = curr_cid {
+            raw_intervals.push((cid, curr_start, total_len));
+        }
         
-        let key = match (from_jct, to_jct) {
-            (Some((from_id, _)), Some((to_id, _))) => JunctionPair::new(from_id, to_id),
-            (Some((from_id, _)), None) => {
-                let to_hash = position_hash(*path.last().unwrap());
-                JunctionPair::new(from_id, to_hash)
-            }
-            (None, Some((to_id, _))) => {
-                let from_hash = position_hash(path[0]);
-                JunctionPair::new(from_hash, to_id)
-            }
-            (None, None) => JunctionPair::from_positions(path[0], *path.last().unwrap()),
+        if raw_intervals.is_empty() {
+             unmatched_edges.push(edge);
+             continue;
+        }
+        
+        // 2. Register intervals to Clusters
+        for (cid, start_dist, end_dist) in raw_intervals {
+             if end_dist - start_dist < 0.1 { continue; }
+             
+             let cluster_geom = &clusters[cid].centerline;
+             
+             // Project start/end of matched segment onto Cluster Centerline
+             // to find the range [min_d, max_d] on the CLUSTER
+             let pt_start = sample_along_polyline(&edge.geometry, start_dist);
+             let pt_end = sample_along_polyline(&edge.geometry, end_dist);
+             
+             let c_start = geometry_utils::project_point_to_polyline(&pt_start, cluster_geom);
+             let c_end = geometry_utils::project_point_to_polyline(&pt_end, cluster_geom);
+             
+             let (min_d, max_d) = if c_start < c_end {
+                 (c_start, c_end)
+             } else {
+                 (c_end, c_start)
+             };
+             
+             // Register coverage
+             let entry = cluster_routes.entry(cid).or_default();
+             for r in &edge.routes {
+                 entry.entry(*r)
+                      .and_modify(|range| {
+                          range.0 = range.0.min(min_d);
+                          range.1 = range.1.max(max_d);
+                      })
+                      .or_insert((min_d, max_d));
+             }
+        }
+    }
+    
+    println!("Map matching complete. {} unmatched edges.", unmatched_edges.len());
+
+    // 5. Graph Reconstruction using Dynamic Segmentation
+    let mut final_edges: Vec<CompactedGraphEdge> = Vec::new();
+    let mut node_id_counter = 0; 
+    let mut cluster_node_positions: AHashMap<NodeId, Coord> = AHashMap::new();
+
+    for cluster in clusters {
+        let route_intervals = match cluster_routes.get(&cluster.id) {
+            Some(r) if !r.is_empty() => r,
+            _ => continue,
         };
+
+        let full_geom = cluster.centerline;
+        if full_geom.len() < 2 { continue; }
         
-        junction_groups.entry(key).or_default().push(idx);
-    }
-    
-    // Step 3: Merge edges in same junction group that share OSM relations
-    let mut merged_edges: Vec<CompactedGraphEdge> = Vec::new();
-    let mut used: AHashSet<usize> = AHashSet::new();
-    
-    for (_key, indices) in junction_groups {
-        if indices.len() == 1 {
-            // Single edge in group - no merge needed
-            merged_edges.push(split_edges[indices[0]].clone());
-            used.insert(indices[0]);
-            continue;
+        // --- Dynamic Segmentation ---
+        
+        // 1. Gather all "Cut Points"
+        // - OSM Junctions
+        // - Route Start/End points
+        
+        #[derive(Debug, Clone, Copy)]
+        struct CutPoint {
+            dist: f64,
+            is_junction: bool,
+            junction_id: i64,
         }
+
+        let mut cuts: Vec<CutPoint> = Vec::new();
+        let total_path_len = calc_len_f64(&full_geom.iter().map(|c| [c.x, c.y]).collect::<Vec<_>>());
+
+        // A. Add OSM Junctions
+        let path: Vec<[f64; 2]> = full_geom.iter().map(|c| [c.x, c.y]).collect();
+        let junctions = osm_index.junctions_along_path(&path, 20.0); 
+        for (jid, _, dist) in junctions {
+             // Constrain to geometry bounds
+             let d = dist.max(0.0).min(total_path_len);
+             cuts.push(CutPoint { dist: d, is_junction: true, junction_id: jid });
+        }
+
+        // B. Add Route Intervals (Start/End)
+        for (_, (min_d, max_d)) in route_intervals {
+            cuts.push(CutPoint { dist: *min_d, is_junction: false, junction_id: 0 });
+            cuts.push(CutPoint { dist: *max_d, is_junction: false, junction_id: 0 });
+        }
+
+        // C. Always add Start (0.0) and End (total_len)
+        cuts.push(CutPoint { dist: 0.0, is_junction: false, junction_id: 0 });
+        cuts.push(CutPoint { dist: total_path_len, is_junction: false, junction_id: 0 });
+
+        // Sort and Deduplicate
+        cuts.sort_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap_or(std::cmp::Ordering::Equal));
         
-        // Multiple edges between same junctions - check if they should merge
-        // For now, merge all edges between same junction pair (they're parallel tracks)
-        let first_edge = &split_edges[indices[0]];
-        let mut merged = first_edge.clone();
-        
-        // Combine route lists from all edges in group
-        for &idx in &indices[1..] {
-            let other = &split_edges[idx];
-            for route in &other.routes {
-                if !merged.routes.iter().any(|(rid, _)| *rid == route.0) {
-                    merged.routes.push(route.clone());
+        // Merge close cuts (within 1m) to avoid tiny segments
+        // Prefer keeping 'is_junction' true if merging
+        let mut merged_cuts: Vec<CutPoint> = Vec::new();
+        if !cuts.is_empty() {
+            let mut curr = cuts[0];
+            for next in cuts.into_iter().skip(1) {
+                if (next.dist - curr.dist).abs() < 1.0 {
+                    // Merge
+                    if next.is_junction {
+                        curr.is_junction = true;
+                        curr.junction_id = next.junction_id;
+                    }
+                } else {
+                    merged_cuts.push(curr);
+                    curr = next;
                 }
             }
-            used.insert(idx);
+            merged_cuts.push(curr);
         }
-        
-        // Average geometries for merged parallel tracks
-        if indices.len() > 1 {
-            merged.geometry = average_geometries(
-                &indices.iter().map(|&i| &split_edges[i].geometry).collect::<Vec<_>>()
-            );
-        }
-        
-        merged.weight = calc_geom_length(&merged.geometry);
-        merged_edges.push(merged);
-        used.insert(indices[0]);
-    }
-    
-    // Add any edges that weren't in groups
-    for (idx, edge) in split_edges.iter().enumerate() {
-        if !used.contains(&idx) {
-            merged_edges.push(edge.clone());
-        }
-    }
-    
-    println!("  Merged to {} edges", merged_edges.len());
-    
-    merged_edges
-}
 
-/// Densify at coarser 50m spacing (vs 5m in original algorithm)
-pub fn coarse_densify(coords: &[[f64; 2]], spacing: f64) -> Vec<[f64; 2]> {
-    if coords.is_empty() {
-        return vec![];
+        // 2. Create Segments
+        for i in 0..merged_cuts.len().saturating_sub(1) {
+            let start_cut = merged_cuts[i];
+            let end_cut = merged_cuts[i+1];
+            
+            let seg_len = end_cut.dist - start_cut.dist;
+            if seg_len < 0.1 { continue; } // Skip degenerate segments
+
+            let mid_dist = start_cut.dist + seg_len / 2.0;
+
+            // 3. Determine Active Routes for this segment
+            // A route is active if the segment is within its [min, max] interval
+            let mut active_routes: Vec<(RouteId, i32)> = Vec::new();
+            for (r_key, (min_d, max_d)) in route_intervals {
+                // Use a small buffer to handle floating point issues at boundaries
+                if mid_dist >= *min_d && mid_dist <= *max_d {
+                    active_routes.push(*r_key);
+                }
+            }
+
+            if active_routes.is_empty() {
+                // Determine if we should keep empty segments to maintain OSM connectivity?
+                // If it's between two junctions, we probably should keep it (it's track, just unused by GTFS).
+                // But for now, user requested sub-matching to avoid "over-extending". 
+                // So if no GTFS route uses it, we DROP it (unless it's needed for connectivity of other things? No, we rely on routes).
+                // Actually, if we drop it, we break the "background" graph. 
+                // But wait, the input was GTFS edges. If we output an edge with no routes, it's just geometry.
+                // Let's keep it but with empty routes, so it can be used for spatial context if needed?
+                // NO, if we want to fix "matching whole segments", we usually want to remove the parts NOT used.
+                // --> DROP empty segments.
+                continue;
+            }
+
+            // Extract Geometry
+            let sub_geom = extract_sub_geom(&full_geom, start_cut.dist, end_cut.dist);
+            if sub_geom.len() < 2 { continue; }
+
+            // Generate/Reuse Node IDs
+            // Use Junction ID if available, else generate Intersection
+            let u = if start_cut.junction_id != 0 { 
+                NodeId::OsmJunction(start_cut.junction_id) 
+            } else { 
+                NodeId::Intersection(0, node_id_counter) 
+            };
+            if start_cut.junction_id == 0 { node_id_counter += 1; } // Increment if we used a generated ID
+
+            let v = if end_cut.junction_id != 0 { 
+                NodeId::OsmJunction(end_cut.junction_id) 
+            } else { 
+                NodeId::Intersection(0, node_id_counter) 
+            };
+            if end_cut.junction_id == 0 { node_id_counter += 1; }
+
+            // Store positions for snapping
+             cluster_node_positions.insert(u.clone(), sub_geom[0]);
+             cluster_node_positions.insert(v.clone(), *sub_geom.last().unwrap());
+
+            final_edges.push(CompactedGraphEdge {
+                from: u,
+                to: v,
+                routes: active_routes,
+                geometry: sub_geom,
+                weight: seg_len,
+            });
+        }
     }
+
+    // 6. Connectivity Restoration (Fix Missing Segments)
+    // Scan unmatched edges. If their endpoints are close to any cluster node, snap them.
+    // This bridges the gap between the "OSM Skeleton" and "Fallback Geometry".
     
-    let mut result = Vec::with_capacity(coords.len() * 2);
-    result.push(coords[0]);
+    let snap_dist_sq = 20.0 * 20.0; // 20m snap tolerance
     
-    for i in 0..coords.len() - 1 {
-        let p1 = coords[i];
-        let p2 = coords[i + 1];
-        let dx = p2[0] - p1[0];
-        let dy = p2[1] - p1[1];
-        let dist = (dx * dx + dy * dy).sqrt();
+    // Build a simple list for brute-force check
+    // Clone keys/values so we don't consume the map needed for lookups later
+    let cluster_nodes: Vec<(NodeId, Coord)> = cluster_node_positions
+        .iter()
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+    
+    let mut snapped_count = 0;
+    
+    for edge in &mut unmatched_edges {
+        // Check FROM endpoint
+        let start_pt = edge.geometry.first().unwrap();
+        let mut best_u = None;
+        let mut min_d_u = snap_dist_sq;
         
-        if dist > spacing {
-            let num_segments = (dist / spacing).ceil() as usize;
-            for j in 1..num_segments {
-                let frac = j as f64 / num_segments as f64;
-                result.push([p1[0] + dx * frac, p1[1] + dy * frac]);
+        for (nid, pos) in &cluster_nodes {
+            let d_sq = (start_pt.x - pos.x).powi(2) + (start_pt.y - pos.y).powi(2);
+            if d_sq < min_d_u {
+                min_d_u = d_sq;
+                best_u = Some(nid.clone());
             }
         }
-        result.push(p2);
+        
+        if let Some(nid) = best_u {
+            edge.from = nid; // Connect!
+            edge.geometry[0] = cluster_node_positions[&edge.from]; // Snap geometry
+            snapped_count += 1;
+        }
+        
+        // Check TO endpoint
+        let end_pt = edge.geometry.last().unwrap();
+        let mut best_v = None;
+        let mut min_d_v = snap_dist_sq;
+        
+        for (nid, pos) in &cluster_nodes {
+            let d_sq = (end_pt.x - pos.x).powi(2) + (end_pt.y - pos.y).powi(2);
+            if d_sq < min_d_v {
+                min_d_v = d_sq;
+                best_v = Some(nid.clone());
+            }
+        }
+        
+        if let Some(nid) = best_v {
+            edge.to = nid; // Connect!
+            let last = edge.geometry.len() - 1;
+            edge.geometry[last] = cluster_node_positions[&edge.to]; // Snap geometry
+            snapped_count += 1;
+        }
     }
     
-    result
+    println!("Connectivity Restoration: Snapped {} endpoints of unmatched edges.", snapped_count);
+    
+    // 7. Output
+    final_edges.extend(unmatched_edges);
+    
+    println!("Topological Collapse complete. Produced {} edges.", final_edges.len());
+    final_edges
 }
 
-// === Helper functions ===
+// --- Helpers which were previously in file ---
 
-fn calc_path_length(path: &[[f64; 2]]) -> f64 {
-    let mut len = 0.0;
-    for i in 0..path.len().saturating_sub(1) {
-        let dx = path[i + 1][0] - path[i][0];
-        let dy = path[i + 1][1] - path[i][1];
-        len += (dx * dx + dy * dy).sqrt();
-    }
-    len
-}
-
-fn calc_geom_length(geom: &[Coord]) -> f64 {
+fn calc_len(geom: &[Coord]) -> f64 {
     let mut len = 0.0;
     for i in 0..geom.len().saturating_sub(1) {
-        let dx = geom[i + 1].x - geom[i].x;
-        let dy = geom[i + 1].y - geom[i].y;
-        len += (dx * dx + dy * dy).sqrt();
+        let dx = geom[i+1].x - geom[i].x;
+        let dy = geom[i+1].y - geom[i].y;
+        len += (dx*dx + dy*dy).sqrt();
     }
     len
 }
 
-fn find_path_index_at_distance(path: &[[f64; 2]], target_dist: f64) -> usize {
-    let mut cumulative = 0.0;
+fn calc_len_f64(path: &[[f64; 2]]) -> f64 {
+    let mut len = 0.0;
     for i in 0..path.len().saturating_sub(1) {
-        let dx = path[i + 1][0] - path[i][0];
-        let dy = path[i + 1][1] - path[i][1];
-        let seg_len = (dx * dx + dy * dy).sqrt();
+        let dx = path[i+1][0] - path[i][0];
+        let dy = path[i+1][1] - path[i][1];
+        len += (dx*dx + dy*dy).sqrt();
+    }
+    len
+}
+
+fn sample_along_polyline(geom: &[Coord], target_dist: f64) -> Coord {
+    if geom.is_empty() { return Coord { x:0.0, y:0.0 }; }
+    
+    let mut accum = 0.0;
+    for i in 0..geom.len().saturating_sub(1) {
+        let p1 = geom[i];
+        let p2 = geom[i+1];
+        let dx = p2.x - p1.x;
+        let dy = p2.y - p1.y;
+        let seg_len = (dx*dx + dy*dy).sqrt();
         
-        if cumulative + seg_len >= target_dist {
-            return i + 1;
+        if accum + seg_len >= target_dist {
+            let remain = target_dist - accum;
+            let t = if seg_len > 0.001 { remain / seg_len } else { 0.0 };
+            return Coord {
+                x: p1.x + dx * t,
+                y: p1.y + dy * t,
+            };
         }
-        cumulative += seg_len;
-    }
-    path.len().saturating_sub(1)
-}
-
-fn position_hash(pos: [f64; 2]) -> i64 {
-    // Quantize to ~10m grid
-    ((pos[0] / 10.0) as i64) ^ (((pos[1] / 10.0) as i64) << 20)
-}
-
-fn average_geometries(geoms: &[&Vec<Coord>]) -> Vec<Coord> {
-    if geoms.is_empty() {
-        return vec![];
-    }
-    if geoms.len() == 1 {
-        return geoms[0].clone();
+        accum += seg_len;
     }
     
-    // Use first geometry as base, interpolate others onto it
-    let base = geoms[0];
-    let mut result: Vec<Coord> = Vec::with_capacity(base.len());
+    *geom.last().unwrap()
+}
+
+fn extract_sub_geom(geom: &[Coord], start_dist: f64, end_dist: f64) -> Vec<Coord> {
+    // Collect points between start_dist and end_dist
+    let mut result = Vec::new();
     
-    for (i, coord) in base.iter().enumerate() {
-        let mut sum_x = coord.x;
-        let mut sum_y = coord.y;
-        let mut count = 1.0;
+    // Add start point
+    result.push(sample_along_polyline(geom, start_dist));
+    
+    let mut accum = 0.0;
+    for i in 0..geom.len().saturating_sub(1) {
+        let p1 = geom[i];
+        let p2 = geom[i+1];
+        let dx = p2.x - p1.x;
+        let dy = p2.y - p1.y;
+        let seg_len = (dx*dx + dy*dy).sqrt();
         
-        // Find closest point on each other geometry
-        for other in &geoms[1..] {
-            if let Some(closest) = find_closest_point(other, *coord) {
-                sum_x += closest.x;
-                sum_y += closest.y;
-                count += 1.0;
+        // If this segment is fully or partially inside range
+        let seg_start = accum;
+        let seg_end = accum + seg_len;
+        
+        if seg_end > start_dist && seg_start < end_dist {
+            // Include intermediate vertex p2 if it's strictly inside
+            if seg_end < end_dist {
+                result.push(p2);
             }
         }
-        
-        result.push(Coord { x: sum_x / count, y: sum_y / count });
+        accum += seg_len;
     }
+    
+    // Add end point
+    result.push(sample_along_polyline(geom, end_dist));
     
     result
-}
-
-fn find_closest_point(geom: &[Coord], target: Coord) -> Option<Coord> {
-    if geom.is_empty() {
-        return None;
-    }
-    
-    let mut best = geom[0];
-    let mut best_dist_sq = f64::MAX;
-    
-    for coord in geom {
-        let dx = coord.x - target.x;
-        let dy = coord.y - target.y;
-        let dist_sq = dx * dx + dy * dy;
-        
-        if dist_sq < best_dist_sq {
-            best_dist_sq = dist_sq;
-            best = *coord;
-        }
-    }
-    
-    Some(best)
 }

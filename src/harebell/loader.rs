@@ -73,7 +73,7 @@ impl Loader {
             export_graph.clusters.len(),
             export_graph.edges.len()
         );
-
+        
         // 3. Convert to RenderGraph
         let mut nodes = HashMap::new();
 
@@ -293,6 +293,10 @@ impl Loader {
             NodeId::Split(e, s) => {
                 let combined = ((e as i64) << 20) | (s as i64);
                 -(combined + 1_000_000_000) // Offset to avoid collision with Intersection IDs
+            }
+            // OSM Junction nodes: use the OSM node ID with a negative offset
+            NodeId::OsmJunction(osm_id) => {
+                -(osm_id.abs() + 2_000_000_000) // Offset to avoid collision
             }
         }
     }

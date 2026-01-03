@@ -132,6 +132,11 @@ async fn build_support_graph_impl(
     let mut raw_edges = Vec::new();
     let mut node_id_counter = 0;
 
+    // DEBUG: Track shapes with/without routes to diagnose missing geometry
+    let mut shapes_with_routes = 0usize;
+    let mut shapes_without_routes = 0usize;
+    let mut sample_missing_shapes: Vec<(String, String)> = Vec::new();
+
     for shape in loaded_shapes {
         let geom = convert_to_geo(&shape.linestring);
         if geom.0.is_empty() {
@@ -149,6 +154,16 @@ async fn build_support_graph_impl(
             .get(&(shape.chateau.clone(), shape.shape_id.clone()))
             .cloned()
             .unwrap_or_default();
+
+        // DEBUG: Track shapes with/without routes
+        if route_ids.is_empty() {
+            shapes_without_routes += 1;
+            if sample_missing_shapes.len() < 10 {
+                sample_missing_shapes.push((shape.chateau.clone(), shape.shape_id.clone()));
+            }
+        } else {
+            shapes_with_routes += 1;
+        }
 
         // Track original shape provenance
         let original_shape_ids = vec![(shape.chateau.clone(), shape.shape_id)];
@@ -169,6 +184,20 @@ async fn build_support_graph_impl(
             original_edge_index: None,
         });
     }
+
+    // DEBUG: Print route mapping statistics
+    println!("\n=== ROUTE MAPPING DEBUG ===");
+    println!("Shapes with routes: {}", shapes_with_routes);
+    println!("Shapes without routes: {}", shapes_without_routes);
+    if shapes_with_routes + shapes_without_routes > 0 {
+        let pct = 100.0 * shapes_with_routes as f64 / (shapes_with_routes + shapes_without_routes) as f64;
+        println!("Route mapping success rate: {:.1}%", pct);
+    }
+    if !sample_missing_shapes.is_empty() {
+        println!("Sample shapes without routes: {:?}", sample_missing_shapes);
+    }
+    println!("shape_to_routes map has {} entries", shape_to_routes.len());
+    println!("=== END ROUTE MAPPING DEBUG ===\n");
 
     // =========================================================================
     // CRITICAL: Convert all coordinates to Web Mercator (meters)
@@ -1006,7 +1035,11 @@ fn collapse_shared_segments(
         if osm_index.junction_count() > 0 {
             println!("Using OSM-accelerated collapse ({} junctions available)...", 
                      osm_index.junction_count());
-            return crate::osm_collapse::collapse_with_osm_junctions(edges, osm_index, d_cut);
+            // Chain: Use OSM collapse results as input for iterative collapse
+            edges = crate::osm_collapse::collapse_with_osm_junctions(edges, d_cut);
+            
+            // Optimization: If confident, we could return here. 
+            // But for maximum robustness (fixing gaps/residuals), fall through.
         }
     }
     

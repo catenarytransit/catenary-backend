@@ -107,6 +107,16 @@ pub struct OsmRouteInfo {
     pub gtfs_route_id: Option<String>,
 }
 
+/// Station metadata extracted from OSM stop_area relations
+#[derive(Debug, Clone)]
+pub struct OsmStationInfo {
+    pub relation_id: i64,
+    pub name: Option<String>,
+    pub network: Option<String>,
+    pub members: Vec<i64>, // Way/Node IDs of platforms
+    pub bbox: Option<(f64, f64, f64, f64)>, // [min_x, min_y, max_x, max_y]
+}
+
 /// Configuration for OSM rail index loading
 #[derive(Debug, Clone)]
 pub struct OsmRailConfig {
@@ -134,6 +144,28 @@ pub struct OsmRailIndex {
     relation_info: AHashMap<i64, OsmRouteInfo>,
     /// Map from way ID to its railway type tag
     way_to_railway_type: AHashMap<i64, String>,
+    /// Map from way ID to its geometry (list of coordinates)
+    way_geometries: AHashMap<i64, Vec<[f64; 2]>>,
+    /// Map from way ID to its layer/level (default 0)
+    way_layers: AHashMap<i64, i32>,
+    /// List of stations (stop_area relations)
+    stations: Vec<OsmStationInfo>,
+    /// Spatial index for stations
+    station_tree: RTree<RTreeStation>,
+}
+
+/// A station in the spatial index
+#[derive(Debug, Clone)]
+pub struct RTreeStation {
+    pub index: usize, // Index into self.stations
+    pub bbox: AABB<[f64; 2]>,
+}
+
+impl RTreeObject for RTreeStation {
+    type Envelope = AABB<[f64; 2]>;
+    fn envelope(&self) -> Self::Envelope {
+        self.bbox
+    }
 }
 
 impl OsmRailIndex {
@@ -147,6 +179,10 @@ impl OsmRailIndex {
             way_to_relations: AHashMap::new(),
             relation_info: AHashMap::new(),
             way_to_railway_type: AHashMap::new(),
+            way_geometries: AHashMap::new(),
+            way_layers: AHashMap::new(),
+            stations: Vec::new(),
+            station_tree: RTree::new(),
         }
     }
 
@@ -160,10 +196,13 @@ impl OsmRailIndex {
         // Use Vec instead of HashMap to save memory (avoid duplication for RTree)
         let mut nodes: Vec<RTreeNode> = Vec::new();
         let mut node_to_ways: AHashMap<i64, Vec<i64>> = AHashMap::new();
-        let mut ways_all: Vec<(i64, Vec<i64>, String)> = Vec::new(); // (way_id, node_ids, railway_type)
+        // way_id, node_ids, railway_type, layer
+        let mut ways_all: Vec<(i64, Vec<i64>, String, i32)> = Vec::new(); 
         
         // NEW: Collect relations for route-based merge decisions
         let mut relations_all: Vec<(i64, Vec<i64>, OsmRouteInfo)> = Vec::new(); // (relation_id, way_members, info)
+        // NEW: Collect stations
+        let mut stations: Vec<OsmStationInfo> = Vec::new();
 
         let mut min_x = f64::MAX;
         let mut min_y = f64::MAX;
@@ -218,15 +257,22 @@ impl OsmRailIndex {
                             // Only include actual track types
                             if matches!(rtype, "rail" | "subway" | "tram" | "light_rail" | "narrow_gauge") {
                                 let node_ids: Vec<i64> = way.nodes.iter().map(|n| n.0).collect();
-                                ways_all.push((way.id.0, node_ids, rtype.to_string()));
+                                
+                                // Parse layer/level (default 0)
+                                let layer = way.tags.get("layer")
+                                    .or_else(|| way.tags.get("level"))
+                                    .and_then(|v| v.parse::<i32>().ok())
+                                    .unwrap_or(0);
+                                    
+                                ways_all.push((way.id.0, node_ids, rtype.to_string(), layer));
                             }
                         }
                     }
                     OsmObj::Relation(rel) => {
-                        // Check if this is a transit route relation
+                        // Check if this is a transit route relation OR stop_area
                         let rel_type = rel.tags.get("type").map(|v| v.as_str());
                         
-                        // We want type=route or type=route_master
+                        // CASE 1: Route Relations (type=route or type=route_master)
                         if matches!(rel_type, Some("route") | Some("route_master")) {
                             // Get the route type (subway, train, tram, etc.)
                             let route_tag = rel.tags.get("route")
@@ -271,6 +317,33 @@ impl OsmRailIndex {
                                 relations_all.push((rel.id.0, way_members, info));
                             }
                         }
+                        // CASE 2: Station Areas (public_transport=stop_area)
+                        else if matches!(rel_type, Some("public_transport")) {
+                             let pt_tag = rel.tags.get("public_transport").map(|v| v.as_str());
+                             if pt_tag == Some("stop_area") {
+                                // Collect members (platforms, stops)
+                                let members: Vec<i64> = rel.refs.iter()
+                                    .filter_map(|member| {
+                                        if member.member.is_way() {
+                                             Some(member.member.way().unwrap().0)
+                                        } else {
+                                             None // Ignore nodes for now, focus on platform tracks/polygons
+                                        }
+                                    })
+                                    .collect();
+                                
+                                if !members.is_empty() {
+                                     let station = OsmStationInfo {
+                                         relation_id: rel.id.0,
+                                         name: rel.tags.get("name").map(|v| v.to_string()),
+                                         network: rel.tags.get("network").map(|v| v.to_string()),
+                                         members,
+                                         bbox: None, // Will be computed later
+                                     };
+                                     stations.push(station);
+                                }
+                             }
+                        }
                     }
                 }
             }
@@ -288,7 +361,7 @@ impl OsmRailIndex {
 
         // Second pass: build node_to_ways mapping and identify junctions
         println!("Building topology from {} ways...", ways_all.len());
-        for (way_id, node_ids, _railway_type) in &ways_all {
+        for (way_id, node_ids, _railway_type, _layer) in &ways_all {
             for node_id in node_ids {
                 // Only include nodes that exist (were within bbox or not filtered)
                 // Use binary search since we don't have a hash map
@@ -311,6 +384,13 @@ impl OsmRailIndex {
 
         // Build spatial index
         println!("Building spatial index...");
+        
+        // Build map for station processing later (before moving nodes)
+        let mut node_pos_map: AHashMap<i64, [f64; 2]> = AHashMap::with_capacity(nodes.len());
+        for n in &nodes {
+             node_pos_map.insert(n.node_id, n.pos);
+        }
+
         // nodes is already a Vec<RTreeNode>, we can just move it into the tree
         // This avoids the HUGE memory spike of duplicating the list
         let node_count = nodes.len();
@@ -322,10 +402,25 @@ impl OsmRailIndex {
             None
         };
 
-        // Build way_to_railway_type mapping
+        // Build way properties mappings
         let mut way_to_railway_type: AHashMap<i64, String> = AHashMap::new();
-        for (way_id, _, railway_type) in &ways_all {
+        let mut way_geometries: AHashMap<i64, Vec<[f64; 2]>> = AHashMap::new();
+        let mut way_layers: AHashMap<i64, i32> = AHashMap::new();
+        
+        for (way_id, way_node_ids, railway_type, layer) in &ways_all {
             way_to_railway_type.insert(*way_id, railway_type.clone());
+            way_layers.insert(*way_id, *layer);
+            
+            // Reconstruct geometry
+            let mut geometry = Vec::with_capacity(way_node_ids.len());
+            for node_id in way_node_ids {
+                if let Some(pos) = node_pos_map.get(node_id) {
+                    geometry.push(*pos);
+                }
+            }
+            if !geometry.is_empty() {
+                way_geometries.insert(*way_id, geometry);
+            }
         }
         
         // Build relation mappings
@@ -344,13 +439,59 @@ impl OsmRailIndex {
                     .push(relation_id);
             }
         }
+
+        
+        // Process Stations: Compute bboxes and build tree
+        let mut station_items: Vec<RTreeStation> = Vec::new();
+        
+        // This is getting complex to do efficiently. Let's do it:
+        // Build a map of way_id -> &Vec<node_id>
+        let way_nodes_map: AHashMap<i64, &Vec<i64>> = ways_all.iter().map(|(id, nodes, _, _)| (*id, nodes)).collect();
+        // Since we need node positions, let's build map node_id -> pos 
+        // ALREADY BUILT ABOVE
+
+        for (idx, station) in stations.iter_mut().enumerate() {
+             let mut min_x = f64::MAX;
+             let mut min_y = f64::MAX;
+             let mut max_x = f64::MIN;
+             let mut max_y = f64::MIN;
+             let mut has_bounds = false;
+
+             for member_id in &station.members {
+                 if let Some(nodes) = way_nodes_map.get(member_id) {
+                     for node_id in *nodes {
+                         if let Some(pos) = node_pos_map.get(node_id) {
+                             min_x = min_x.min(pos[0]);
+                             min_y = min_y.min(pos[1]);
+                             max_x = max_x.max(pos[0]);
+                             max_y = max_y.max(pos[1]);
+                             has_bounds = true;
+                         }
+                     }
+                 }
+             }
+             
+             if has_bounds {
+                 // Add 50m buffer
+                 let buffer = 50.0;
+                 station.bbox = Some((min_x - buffer, min_y - buffer, max_x + buffer, max_y + buffer));
+                 
+                 station_items.push(RTreeStation {
+                     index: idx,
+                     bbox: AABB::from_corners([min_x - buffer, min_y - buffer], [max_x + buffer, max_y + buffer]),
+                 });
+             }
+        }
+        
+        let station_tree = RTree::bulk_load(station_items);
         
         println!(
-            "Loaded OSM rail index: {} nodes, {} ways, {} junctions, {} route relations",
+            "Loaded OSM rail index: {} nodes, {} ways, {} junctions, {} route relations, {} stations",
             node_count,
             ways_all.len(),
             junctions.len(),
-            relation_info.len()
+            relation_info.len(),
+            stations.len()
         );
 
         Ok(Self {
@@ -361,6 +502,10 @@ impl OsmRailIndex {
             way_to_relations,
             relation_info,
             way_to_railway_type,
+            way_geometries,
+            way_layers,
+            stations,
+            station_tree,
         })
     }
 
@@ -548,13 +693,42 @@ impl OsmRailIndex {
             .collect()
     }
 
+    /// Get all nodes within a bounding box (public accessor)
+    pub fn get_nodes_in_bbox(&self, min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Vec<&RTreeNode> {
+        let aabb = AABB::from_corners(
+            [min_x, min_y],
+            [max_x, max_y]
+        );
+        self.node_tree.locate_in_envelope(&aabb).collect()
+    }
+
+    /// Get ways containing a node
+    pub fn get_node_ways(&self, node_id: i64) -> Option<&Vec<i64>> {
+        self.node_to_ways.get(&node_id)
+    }
+
+    /// Get the railway type of a way (e.g. "rail", "subway", "tram")
+    pub fn get_way_type(&self, way_id: i64) -> Option<&String> {
+        self.way_to_railway_type.get(&way_id)
+    }
+
+    /// Get the geometry of a way
+    pub fn get_way_geometry(&self, way_id: i64) -> Option<&Vec<[f64; 2]>> {
+        self.way_geometries.get(&way_id)
+    }
+
+    /// Get the layer/level of a way
+    pub fn get_way_layer(&self, way_id: i64) -> Option<i32> {
+        self.way_layers.get(&way_id).copied()
+    }
+
     /// Check if a merge should be allowed based on OSM data
     ///
     /// This is the main entry point for merge validation. Returns true if:
     /// 1. Both points share an OSM junction (actual track connection), OR
     /// 2. Both points are on the same OSM way (same track segment)
     ///
-    /// For subway (mode 1), this is strictly enforced.
+    /// For subway (mode 1) and trams (mode 0), this is strictly enforced.
     /// For other modes, the proximity edge case allows merging when tracks are
     /// <30m apart for >400m (handles cases like RER A / Metro Ligne 1).
     pub fn should_allow_merge(
@@ -572,6 +746,7 @@ impl OsmRailIndex {
 
         // For subway, strictly require OSM validation
         let is_subway = mode == 1;
+        let is_tram = mode == 0;
 
         // Check if points share a junction or are on the same way
         if self.share_junction(pos1, pos2, radius_m).is_some() {
@@ -582,8 +757,8 @@ impl OsmRailIndex {
             return true;
         }
 
-        // For subway, deny merge if no OSM connection found
-        if is_subway {
+        // For subway or tram, deny merge if no OSM connection found
+        if is_subway || is_tram {
             return false;
         }
 
@@ -611,8 +786,6 @@ impl OsmRailIndex {
     // =========================================================================
     
     /// Get all OSM ways near a position
-    /// 
-    /// Returns way IDs for ways that have nodes within the radius.
     pub fn ways_near_position(&self, pos: [f64; 2], radius_m: f64) -> Vec<i64> {
         let nodes = self.nodes_in_radius(pos, radius_m);
         
@@ -624,8 +797,89 @@ impl OsmRailIndex {
                 }
             }
         }
-        
         ways.into_iter().collect()
+    }
+
+
+
+    /// Check if two ways share any route relation (e.g. both are part of "Ligne 1")
+    pub fn share_route_relation(&self, way_a: i64, way_b: i64) -> bool {
+        let rels_a = match self.way_to_relations.get(&way_a) {
+            Some(r) => r,
+            None => return false,
+        };
+        
+        let rels_b = match self.way_to_relations.get(&way_b) {
+            Some(r) => r,
+            None => return false,
+        };
+        
+        // Check for intersection
+        for ra in rels_a {
+            if rels_b.contains(ra) {
+                return true;
+            }
+        }
+        
+        false
+    }
+    
+    /// Get all way IDs in the index
+    pub fn get_all_way_ids(&self) -> Vec<i64> {
+        self.way_to_railway_type.keys().copied().collect()
+    }
+
+    /// Find all OSM junctions along a path
+    /// 
+    /// Returns list of (junction_id, position, distance_along_path)
+    pub fn junctions_along_path(&self, path: &[[f64; 2]], search_radius: f64) -> Vec<(i64, [f64; 2], f64)> {
+        let mut results = Vec::new();
+        let mut seen = AHashSet::new();
+        
+        let mut rtree_results = Vec::new();
+
+        // Sample path to find candidates
+        let total_len = crate::geometry_utils::polyline_length(path);
+        let step = 10.0;
+        let steps = (total_len / step).ceil() as usize;
+        
+        for i in 0..=steps {
+            let dist = i as f64 * step;
+            if dist > total_len { break; }
+            
+            let pt = crate::geometry_utils::sample_along_polyline_f64(path, dist);
+            
+            // Manual RTree search to get Node AND Pos
+            let aabb = AABB::from_corners(
+                [pt[0] - search_radius, pt[1] - search_radius],
+                [pt[0] + search_radius, pt[1] + search_radius],
+            );
+            
+            let radius_sq = search_radius * search_radius;
+            
+            for node in self.node_tree.locate_in_envelope(&aabb) {
+                if !self.junctions.contains(&node.node_id) { continue; }
+                
+                let dx = node.pos[0] - pt[0];
+                let dy = node.pos[1] - pt[1];
+                if dx * dx + dy * dy <= radius_sq {
+                    if seen.insert(node.node_id) {
+                        rtree_results.push((node.node_id, node.pos));
+                    }
+                }
+            }
+        }
+        
+        // Process unique results
+        for (jid, pos) in rtree_results {
+             // Project junction onto path to get precise distance
+             let proj_dist = crate::geometry_utils::project_point_to_polyline_f64(pos, path);
+             results.push((jid, pos, proj_dist));
+        }
+        
+        // Sort by distance
+        results.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+        results
     }
     
     /// Get route relations that both positions share
@@ -736,9 +990,28 @@ impl OsmRailIndex {
         self.way_to_railway_type.get(&way_id)
     }
     
-    // =========================================================================
-    // OSM-Accelerated Collapse Methods
-    // =========================================================================
+    /// Find all OSM junctions along a polyline path within a tolerance
+    /// 
+    /// Returns a list of (junction_id, position, distance_along_path) sorted by distance.
+    /// This is used to split edges at junction points.
+
+    
+    // ...
+    
+    // I will use a different StartLine/EndLine to INSERT the new method.
+    // Insertion point: After `get_way_railway_type` (lines 734-737) and before `snap_to_junction` (line 743).
+    
+    /// Get all stations near a position
+    pub fn query_nearby_stations(&self, pos: [f64; 2], radius_m: f64) -> Vec<&OsmStationInfo> {
+        let aabb = AABB::from_corners(
+            [pos[0] - radius_m, pos[1] - radius_m],
+            [pos[0] + radius_m, pos[1] + radius_m],
+        );
+        
+        self.station_tree.locate_in_envelope(&aabb)
+            .map(|item| &self.stations[item.index])
+            .collect()
+    }
     
     /// Snap a position to the nearest OSM junction
     /// 
@@ -773,78 +1046,7 @@ impl OsmRailIndex {
         best.map(|(id, snap_pos, _)| (id, snap_pos))
     }
     
-    /// Find all OSM junctions along a polyline path within a tolerance
-    /// 
-    /// Returns a list of (junction_id, position, distance_along_path) sorted by distance.
-    /// This is used to split edges at junction points.
-    pub fn junctions_along_path(&self, path: &[[f64; 2]], tolerance_m: f64) -> Vec<(i64, [f64; 2], f64)> {
-        if path.len() < 2 {
-            return vec![];
-        }
-        
-        let mut results: Vec<(i64, [f64; 2], f64)> = Vec::new();
-        let mut cumulative_dist = 0.0;
-        
-        for i in 0..path.len() - 1 {
-            let p1 = path[i];
-            let p2 = path[i + 1];
-            let seg_dx = p2[0] - p1[0];
-            let seg_dy = p2[1] - p1[1];
-            let seg_len = (seg_dx * seg_dx + seg_dy * seg_dy).sqrt();
-            
-            if seg_len < 1e-9 {
-                continue;
-            }
-            
-            // Search box around this segment
-            let min_x = p1[0].min(p2[0]) - tolerance_m;
-            let max_x = p1[0].max(p2[0]) + tolerance_m;
-            let min_y = p1[1].min(p2[1]) - tolerance_m;
-            let max_y = p1[1].max(p2[1]) + tolerance_m;
-            
-            let aabb = AABB::from_corners([min_x, min_y], [max_x, max_y]);
-            
-            for node in self.node_tree.locate_in_envelope(&aabb) {
-                if !self.junctions.contains(&node.node_id) {
-                    continue;
-                }
-                
-                // Project junction onto segment
-                let t = ((node.pos[0] - p1[0]) * seg_dx + (node.pos[1] - p1[1]) * seg_dy) 
-                    / (seg_len * seg_len);
-                
-                // Must be on the segment (not extended)
-                if t < 0.0 || t > 1.0 {
-                    continue;
-                }
-                
-                // Calculate closest point on segment
-                let proj_x = p1[0] + t * seg_dx;
-                let proj_y = p1[1] + t * seg_dy;
-                
-                // Check distance from junction to projected point
-                let dist_dx = node.pos[0] - proj_x;
-                let dist_dy = node.pos[1] - proj_y;
-                let dist = (dist_dx * dist_dx + dist_dy * dist_dy).sqrt();
-                
-                if dist <= tolerance_m {
-                    let dist_along = cumulative_dist + t * seg_len;
-                    
-                    // Check if we haven't already added this junction
-                    if !results.iter().any(|(id, _, _)| *id == node.node_id) {
-                        results.push((node.node_id, node.pos, dist_along));
-                    }
-                }
-            }
-            
-            cumulative_dist += seg_len;
-        }
-        
-        // Sort by distance along path
-        results.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
-        
-        results
-    }
+
     
     /// Check if there's an OSM junction near the start or end of a path
     /// 

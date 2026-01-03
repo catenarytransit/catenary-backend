@@ -12,6 +12,62 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::BufWriter;
 
+/// Debug: Check for geometry discontinuities before export
+fn check_geometry_continuity(edges: &[GraphEdge]) {
+    // Build map: NodeId -> Vec of (edge_idx, is_from, geometry_endpoint)
+    let mut node_endpoints: HashMap<NodeId, Vec<(usize, bool, [f64; 2])>> = HashMap::new();
+    
+    for (idx, edge) in edges.iter().enumerate() {
+        if edge.geometry.points.is_empty() { continue; }
+        
+        let first_pt = &edge.geometry.points[0];
+        let last_pt = edge.geometry.points.last().unwrap();
+        
+        node_endpoints.entry(edge.from.clone()).or_default()
+            .push((idx, true, [first_pt.x, first_pt.y]));
+        node_endpoints.entry(edge.to.clone()).or_default()
+            .push((idx, false, [last_pt.x, last_pt.y]));
+    }
+    
+    // Check for discontinuities: edges sharing a node should have matching endpoints
+    let mut discontinuity_count = 0;
+    let mut max_gap = 0.0f64;
+    
+    for (node_id, endpoints) in &node_endpoints {
+        if endpoints.len() < 2 { continue; }
+        
+        // All endpoints at this node should be within ~1m of each other
+        for i in 0..endpoints.len() {
+            for j in (i+1)..endpoints.len() {
+                let p1 = endpoints[i].2;
+                let p2 = endpoints[j].2;
+                let dx = p1[0] - p2[0];
+                let dy = p1[1] - p2[1];
+                let gap = (dx*dx + dy*dy).sqrt();
+                
+                // In Web Mercator meters, gaps > 50m are suspicious
+                if gap > 50.0 {
+                    discontinuity_count += 1;
+                    max_gap = max_gap.max(gap);
+                    
+                    if discontinuity_count <= 5 {
+                        println!("[DBG_GEOM] Discontinuity at {:?}: edge {} ({}) vs edge {} ({}) - gap: {:.1}m",
+                                 node_id, endpoints[i].0, if endpoints[i].1 {"from"} else {"to"},
+                                 endpoints[j].0, if endpoints[j].1 {"from"} else {"to"}, gap);
+                    }
+                }
+            }
+        }
+    }
+    
+    if discontinuity_count > 0 {
+        println!("[DBG_GEOM] Found {} geometry discontinuities (gaps > 50m), max gap: {:.1}m", 
+                 discontinuity_count, max_gap);
+    } else {
+        println!("[DBG_GEOM] No major geometry discontinuities found (all gaps < 50m)");
+    }
+}
+
 /// Export graph with optional region suffix in filename
 pub fn extract_and_export_region(
     clusters: &[StopCluster],
@@ -20,6 +76,9 @@ pub fn extract_and_export_region(
     region: Option<&Region>,
     export_geojson: bool,
 ) -> Result<()> {
+    // DEBUG: Check geometry continuity before export
+    check_geometry_continuity(edges);
+    
     // 1. Calculate Land Masses (using internal types)
     let land_masses = extract_land_masses(clusters, edges);
 
@@ -64,6 +123,13 @@ pub fn extract_and_export_region(
             original_edge_index: e.original_edge_index,
         })
         .collect();
+    
+    // DEBUG: Check for edges with empty routes or geometry before export
+    let edges_with_routes = serial_edges.iter().filter(|e| !e.route_ids.is_empty()).count();
+    let edges_without_routes = serial_edges.iter().filter(|e| e.route_ids.is_empty()).count();
+    let edges_with_geom = serial_edges.iter().filter(|e| e.geometry.len() >= 2).count();
+    println!("[DBG_EXPORT] Exporting {} edges: {} with routes, {} without routes, {} with valid geometry",
+             serial_edges.len(), edges_with_routes, edges_without_routes, edges_with_geom);
 
     let export_graph = SerializableExportGraph {
         land_masses, // LandMass is shared now
