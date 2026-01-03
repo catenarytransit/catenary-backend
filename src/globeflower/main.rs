@@ -1,169 +1,132 @@
-mod clustering;
-mod collapse_segments;
-mod coord_conversion;
-mod corridor_bundling;
-mod edges;
+use anyhow::Result;
+use clap::Parser;
+use log::{debug, error, info, warn};
+use std::path::PathBuf;
+
+mod corridor;
 mod export;
 mod geometry_utils;
-mod graph_types;
-mod insertion;
-mod intercity_split;
-mod node_id_allocator;
-mod osm_collapse;
-mod osm_topology;
-mod osm_rail_graph;
-mod partition_storage;
-mod partitioning;
+mod map_matcher;
+mod osm_loader;
+mod osm_types;
 mod regions;
 mod restrictions;
-mod route_registry;
-mod station_spine;
-mod station_bundling;
+mod station;
 mod support_graph;
-mod validation;
 
-use anyhow::Result;
-use catenary::postgres_tools::make_async_pool;
-use std::sync::Arc;
-
-#[cfg(not(target_env = "msvc"))]
-use tikv_jemallocator::Jemalloc;
-
-#[cfg(not(target_env = "msvc"))]
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
-
-use clap::Parser;
+use corridor::{CorridorBuilder, CorridorConfig, CorridorIndex};
+use osm_loader::OsmRailIndex;
+use osm_types::{Line, LineId};
+use regions::Region;
+use restrictions::TurnRestrictions;
+use station::{StationConfig, StationHandler, cluster_stops};
+use support_graph::{SupportGraph, SupportGraphConfig};
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(
+    author,
+    version,
+    about = "Build overlap-free line graphs from OSM + GTFS"
+)]
 struct Args {
-    /// Path to OSM railway PBF files (comma-separated).
-    /// Can also be set via OSM_RAIL_PBF env var.
-    /// If --region is specified, this can be omitted and the default pattern will be used.
-    #[arg(long, env = "OSM_RAIL_PBF", value_delimiter = ',')]
-    osm_pbf: Option<Vec<String>>,
-
-    /// Process a specific region. Valid options:
-    /// north-america, europe, japan, australia, new-zealand, malaysia-singapore-brunei
+    /// Region to process (europe, north-america, japan, etc.)
     #[arg(long)]
-    region: Option<String>,
+    region: String,
 
-    /// Export result as GeoJSON
-    #[arg(long, env = "EXPORT_GEOJSON")]
-    export_geojson: bool,
+    /// Directory containing OSM PBF files
+    #[arg(long, default_value = ".")]
+    osm_dir: PathBuf,
+
+    /// Output directory for generated files
+    #[arg(long, default_value = ".")]
+    output_dir: PathBuf,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     env_logger::init();
 
     let args = Args::parse();
+    info!("Globeflower starting for region: {}", args.region);
 
-    // Determine which region(s) to process
-    let region = match &args.region {
-        Some(region_str) => Some(
-            region_str
-                .parse::<regions::Region>()
-                .map_err(|e| anyhow::anyhow!(e))?,
-        ),
-        None => None,
-    };
-
-    // Determine OSM PBF paths
-    let osm_pbf_paths = match (&args.osm_pbf, &region) {
-        (Some(paths), _) => Some(paths.clone()),
-        (None, Some(r)) => {
-            // Use expected PBF name for this region
-            let expected_name = r.expected_pbf_name();
-            println!(
-                "No --osm-pbf specified, using default for region: {}",
-                expected_name
-            );
-            Some(vec![expected_name])
-        }
-        (None, None) => None,
-    };
-
-    // Initialize OSM rail index for topology validation
-    osm_rail_graph::init_global_osm_index(osm_pbf_paths);
-
-    println!("Initializing database connection...");
-    let pool = make_async_pool().await.map_err(|e| anyhow::anyhow!(e))?;
-
-    // Get region bbox for filtering (if specified)
-    let region_bbox = region.as_ref().map(|r| r.config().bbox);
-
-    println!("Starting stop clustering...");
-    let clusters = if let Some(bbox) = region_bbox {
-        println!(
-            "Filtering to region: {} (bbox: {:?})",
-            region.as_ref().unwrap(),
-            bbox
-        );
-        clustering::cluster_stops_in_region(&pool, bbox).await?
-    } else {
-        clustering::cluster_stops(&pool).await?
-    };
-
-    println!(
-        "Found {} clusters. Generating Support Graph (Thesis Ch.3)...",
-        clusters.len()
+    // Parse region
+    let region: Region = args
+        .region
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
+    let config = region.config();
+    info!(
+        "Processing region: {} ({:?})",
+        config.display_name, config.bbox
     );
 
-    // 1. Build Support Graph (Geometry merging only)
-    let support_edges = if let Some(bbox) = region_bbox {
-        support_graph::build_support_graph_in_region(&pool, bbox).await?
-    } else {
-        support_graph::build_support_graph(&pool).await?
-    };
-    println!("Built Support Graph with {} edges.", support_edges.len());
+    // Load OSM data
+    let osm_path = args.osm_dir.join(region.expected_pbf_name());
+    info!("Loading OSM from {:?}", osm_path);
 
-    // 2. Insert Stations into Support Graph
-    println!("Inserting stations into Support Graph...");
-    let edges = insertion::insert_stations(support_edges, &clusters, &pool).await?;
-
-    println!("Generated {} final edges.", edges.len());
-
-    println!("Inferring Turn Restrictions...");
-    let restrictions = restrictions::infer_from_db(&pool, &edges).await?;
-
-    println!("Extracting land masses and exporting...");
-    if args.export_geojson {
-        println!("GeoJSON export enabled via flag/env var.");
+    if !osm_path.exists() {
+        error!("OSM file not found: {:?}", osm_path);
+        error!("Expected file: {}", region.expected_pbf_name());
+        return Err(anyhow::anyhow!("OSM PBF file not found"));
     }
 
-    // Export with region suffix if specified
-    export::extract_and_export_region(
-        &clusters,
-        &edges,
-        restrictions,
-        region.as_ref(),
-        args.export_geojson,
-    )?;
+    let osm_index = OsmRailIndex::load_from_pbf(&osm_path)?;
+    info!(
+        "OSM loaded: {} nodes, {} ways, {} atomic edges",
+        osm_index.nodes.len(),
+        osm_index.ways.len(),
+        osm_index.edges.len()
+    );
 
-    println!("Done.");
+    // Build corridor clusters
+    info!("Building corridor clusters...");
+    let corridor_config = CorridorConfig::default();
+    let corridor_builder = CorridorBuilder::new(&osm_index, corridor_config);
+    let corridors = corridor_builder.build_corridors();
+    let corridor_index = CorridorIndex::from_clusters(corridors);
+    info!("Built {} corridor clusters", corridor_index.corridors.len());
 
-    // Debug: Print some clusters
-    for (i, cluster) in clusters.iter().take(5).enumerate() {
-        println!(
-            "Cluster {}: {} stops, Centroid: ({}, {})",
-            i,
-            cluster.stops.len(),
-            cluster.centroid.x,
-            cluster.centroid.y
-        );
+    // Build support graph
+    info!("Building support graph...");
+    let support_config = SupportGraphConfig::default();
+    let mut support_graph = SupportGraph::from_corridors(&corridor_index, &support_config);
+    info!(
+        "Support graph: {} nodes, {} edges",
+        support_graph.nodes.len(),
+        support_graph.edges.len()
+    );
 
-        for stop in &cluster.stops {
-            println!(
-                "   - [{}] {} ({:?})",
-                stop.gtfs_id,
-                stop.name.as_deref().unwrap_or("Unnamed"),
-                stop.route_types
-            );
-        }
-    }
+    // For now, no GTFS data integration - just OSM skeleton
+    // TODO: Add database queries for GTFS shapes/stops when needed
+    let lines: Vec<Line> = Vec::new();
+    let stop_clusters = Vec::new();
+    let matched_sequences: Vec<(LineId, Vec<support_graph::SupportEdgeId>)> = Vec::new();
 
+    // Insert stations (would need GTFS data for real stops)
+    info!("Inserting stations...");
+    let station_config = StationConfig::default();
+    let mut station_handler = StationHandler::new(&mut support_graph, station_config);
+    let inserted_stations = station_handler.insert_stations(&stop_clusters);
+    info!("Inserted {} stations", inserted_stations.len());
+
+    // Build turn restrictions
+    info!("Building turn restrictions...");
+    let restrictions =
+        TurnRestrictions::build_from_edge_sequences(&matched_sequences, &support_graph);
+
+    // Export outputs
+    std::fs::create_dir_all(&args.output_dir)?;
+
+    // GeoJSON export
+    let geojson_path = args.output_dir.join(region.output_geojson_name());
+    export::export_geojson(&support_graph, &lines, &restrictions, &geojson_path)?;
+    info!("Exported GeoJSON to {:?}", geojson_path);
+
+    // Binary export
+    let binary_path = args.output_dir.join(region.output_graph_name());
+    export::export_binary(&support_graph, &restrictions, &binary_path)?;
+    info!("Exported binary to {:?}", binary_path);
+
+    info!("Globeflower complete!");
     Ok(())
 }

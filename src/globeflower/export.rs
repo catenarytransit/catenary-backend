@@ -1,347 +1,275 @@
-use crate::clustering::StopCluster;
-use crate::edges::{GraphEdge, NodeId};
-use crate::regions::Region;
+use crate::osm_types::{Line, LineId};
+use crate::restrictions::TurnRestrictions;
+use crate::support_graph::{SupportEdge, SupportEdgeId, SupportGraph, SupportNode, SupportNodeId};
 use anyhow::Result;
 use catenary::graph_formats::{
-    LandMass, NodeId as SerialNodeId, SerializableExportGraph, SerializableGraphEdge,
-    SerializableStop, SerializableStopCluster, TurnRestriction,
+    LandMass, NodeId, SerializableExportGraph, SerializableGraphEdge, SerializableStop,
+    SerializableStopCluster, TurnRestriction,
 };
-use catenary::models::Stop;
-use geojson::{Feature, FeatureCollection, GeoJson, Geometry, JsonObject, JsonValue, Value};
-use std::collections::{HashMap, HashSet};
+use geojson::{Feature, FeatureCollection, Geometry, JsonObject, JsonValue};
+use log::info;
+use serde_json::json;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::Write;
+use std::path::Path;
 
-/// Debug: Check for geometry discontinuities before export
-fn check_geometry_continuity(edges: &[GraphEdge]) {
-    // Build map: NodeId -> Vec of (edge_idx, is_from, geometry_endpoint)
-    let mut node_endpoints: HashMap<NodeId, Vec<(usize, bool, [f64; 2])>> = HashMap::new();
-    
-    for (idx, edge) in edges.iter().enumerate() {
-        if edge.geometry.points.is_empty() { continue; }
-        
-        let first_pt = &edge.geometry.points[0];
-        let last_pt = edge.geometry.points.last().unwrap();
-        
-        node_endpoints.entry(edge.from.clone()).or_default()
-            .push((idx, true, [first_pt.x, first_pt.y]));
-        node_endpoints.entry(edge.to.clone()).or_default()
-            .push((idx, false, [last_pt.x, last_pt.y]));
-    }
-    
-    // Check for discontinuities: edges sharing a node should have matching endpoints
-    let mut discontinuity_count = 0;
-    let mut max_gap = 0.0f64;
-    
-    for (node_id, endpoints) in &node_endpoints {
-        if endpoints.len() < 2 { continue; }
-        
-        // All endpoints at this node should be within ~1m of each other
-        for i in 0..endpoints.len() {
-            for j in (i+1)..endpoints.len() {
-                let p1 = endpoints[i].2;
-                let p2 = endpoints[j].2;
-                let dx = p1[0] - p2[0];
-                let dy = p1[1] - p2[1];
-                let gap = (dx*dx + dy*dy).sqrt();
-                
-                // In Web Mercator meters, gaps > 50m are suspicious
-                if gap > 50.0 {
-                    discontinuity_count += 1;
-                    max_gap = max_gap.max(gap);
-                    
-                    if discontinuity_count <= 5 {
-                        println!("[DBG_GEOM] Discontinuity at {:?}: edge {} ({}) vs edge {} ({}) - gap: {:.1}m",
-                                 node_id, endpoints[i].0, if endpoints[i].1 {"from"} else {"to"},
-                                 endpoints[j].0, if endpoints[j].1 {"from"} else {"to"}, gap);
-                    }
-                }
-            }
-        }
-    }
-    
-    if discontinuity_count > 0 {
-        println!("[DBG_GEOM] Found {} geometry discontinuities (gaps > 50m), max gap: {:.1}m", 
-                 discontinuity_count, max_gap);
-    } else {
-        println!("[DBG_GEOM] No major geometry discontinuities found (all gaps < 50m)");
-    }
-}
-
-/// Export graph with optional region suffix in filename
-pub fn extract_and_export_region(
-    clusters: &[StopCluster],
-    edges: &[GraphEdge],
-    restrictions: Vec<TurnRestriction>,
-    region: Option<&Region>,
-    export_geojson: bool,
+/// Export the support graph to GeoJSON format matching the paper's spec
+pub fn export_geojson(
+    graph: &SupportGraph,
+    lines: &[Line],
+    restrictions: &TurnRestrictions,
+    output_path: &Path,
 ) -> Result<()> {
-    // DEBUG: Check geometry continuity before export
-    check_geometry_continuity(edges);
-    
-    // 1. Calculate Land Masses (using internal types)
-    let land_masses = extract_land_masses(clusters, edges);
+    info!("Exporting GeoJSON to {:?}", output_path);
 
-    println!("Identified {} distinct land masses.", land_masses.len());
-
-    // Determine output filenames
-    let (bin_filename, geojson_filename) = match region {
-        Some(r) => (r.output_graph_name(), r.output_geojson_name()),
-        None => (
-            "globeflower_graph.bin".to_string(),
-            "globeflower_graph.geojson".to_string(),
-        ),
-    };
-
-    // 2. Export GeoJSON (Debug) - Optional
-    if export_geojson {
-        export_to_geojson_file(clusters, edges, &geojson_filename)?;
-    }
-
-    // 3. Convert to Serializable Models
-    let serial_clusters: Vec<SerializableStopCluster> = clusters
-        .iter()
-        .map(|c| SerializableStopCluster {
-            cluster_id: c.cluster_id,
-            centroid: [c.centroid.x, c.centroid.y],
-            stops: c.stops.iter().map(convert_stop).collect(),
-        })
-        .collect();
-
-    let serial_edges: Vec<SerializableGraphEdge> = edges
-        .iter()
-        .map(|e| SerializableGraphEdge {
-            from: convert_node_id(e.from),
-            to: convert_node_id(e.to),
-            geometry: e.geometry.points.iter().map(|p| [p.x, p.y]).collect(),
-            route_ids: e
-                .routes
-                .iter()
-                .map(|(c, r, _)| (c.clone(), r.clone()))
-                .collect(),
-            weight: e.weight,
-            original_edge_index: e.original_edge_index,
-        })
-        .collect();
-    
-    // DEBUG: Check for edges with empty routes or geometry before export
-    let edges_with_routes = serial_edges.iter().filter(|e| !e.route_ids.is_empty()).count();
-    let edges_without_routes = serial_edges.iter().filter(|e| e.route_ids.is_empty()).count();
-    let edges_with_geom = serial_edges.iter().filter(|e| e.geometry.len() >= 2).count();
-    println!("[DBG_EXPORT] Exporting {} edges: {} with routes, {} without routes, {} with valid geometry",
-             serial_edges.len(), edges_with_routes, edges_without_routes, edges_with_geom);
-
-    let export_graph = SerializableExportGraph {
-        land_masses, // LandMass is shared now
-        edges: serial_edges,
-        clusters: serial_clusters,
-        restrictions,
-    };
-
-    let file = File::create(&bin_filename)?;
-    let mut writer = BufWriter::new(file);
-    bincode::serde::encode_into_std_write(&export_graph, &mut writer, bincode::config::legacy())
-        .map_err(|e| anyhow::anyhow!("Bincode serialization failed: {}", e))?;
-    println!("Exported binary graph to {}", bin_filename);
-
-    Ok(())
-}
-
-/// Legacy function for backwards compatibility
-pub fn extract_and_export(
-    clusters: &[StopCluster],
-    edges: &[GraphEdge],
-    restrictions: Vec<TurnRestriction>,
-    export_geojson: bool,
-) -> Result<()> {
-    extract_and_export_region(clusters, edges, restrictions, None, export_geojson)
-}
-
-fn convert_node_id(id: NodeId) -> SerialNodeId {
-    match id {
-        NodeId::Cluster(i) => SerialNodeId::Cluster(i),
-        // Pass both cluster_id and local_id - they're now distinct tuple elements
-        NodeId::Intersection(cluster_id, local_id) => {
-            SerialNodeId::Intersection(cluster_id, local_id)
-        }
-        NodeId::Split(e, s) => SerialNodeId::Split(e, s),
-        // Convert OSM junction to Intersection with cluster 0 (matches pattern used elsewhere)
-        NodeId::OsmJunction(osm_id) => SerialNodeId::OsmJunction(osm_id),
-    }
-}
-
-fn convert_stop(s: &Stop) -> SerializableStop {
-    SerializableStop {
-        id: s.gtfs_id.clone(),
-        code: s.code.clone(),
-        name: s.name.clone(),
-        description: s.gtfs_desc.clone(),
-        location_type: s.location_type,
-        parent_station: s.parent_station.clone(),
-        zone_id: s.zone_id.clone(),
-        longitude: s.point.as_ref().map(|p| p.x),
-        latitude: s.point.as_ref().map(|p| p.y),
-        timezone: s.timezone.clone(),
-        platform_code: s.platform_code.clone(),
-        level_id: s.level_id.clone(),
-        routes: s.routes.iter().flatten().cloned().collect(),
-    }
-}
-
-fn export_to_geojson_file(
-    clusters: &[StopCluster],
-    edges: &[GraphEdge],
-    filename: &str,
-) -> Result<()> {
     let mut features = Vec::new();
 
-    // Export Edges
-    for edge in edges {
-        let geometry = Geometry::new(Value::LineString(
-            edge.geometry
-                .points
+    // Build line lookup
+    let line_map: std::collections::HashMap<&LineId, &Line> =
+        lines.iter().map(|l| (&l.id, l)).collect();
+
+    // Feature Collection level properties (lines array)
+    let lines_array: Vec<JsonValue> = lines
+        .iter()
+        .map(|line| {
+            json!({
+                "id": line.id.to_string(),
+                "label": line.label,
+                "color": line.color,
+                "direction": line.id.direction
+            })
+        })
+        .collect();
+
+    // Export nodes as Point features
+    for (_, node) in &graph.nodes {
+        let mut props = JsonObject::new();
+        props.insert("id".to_string(), json!(node.id.0.to_string()));
+
+        if let Some(ref label) = node.station_label {
+            props.insert("station_label".to_string(), json!(label));
+        }
+        if let Some(ref station_id) = node.station_id {
+            props.insert("station_id".to_string(), json!(station_id));
+        }
+
+        // Add excluded_conn for this node
+        let exclusions = restrictions.excluded_connections_at_node(node.id, graph);
+        if !exclusions.is_empty() {
+            let exc_array: Vec<JsonValue> = exclusions
                 .iter()
-                .map(|p| {
-                    vec![
-                        (p.x * 100_000_000.0).round() / 100_000_000.0,
-                        (p.y * 100_000_000.0).round() / 100_000_000.0,
-                    ]
+                .map(|exc| {
+                    json!({
+                        "node_from": exc.node_from.0.to_string(),
+                        "node_to": exc.node_to.0.to_string(),
+                        "line": exc.line.to_string()
+                    })
                 })
-                .collect(),
-        ));
+                .collect();
+            props.insert("excluded_conn".to_string(), json!(exc_array));
+        }
 
-        let mut properties = JsonObject::new();
-        // Minimal metadata for visual debugging
-        properties.insert("weight".to_string(), JsonValue::from(edge.weight));
-        properties.insert(
-            "route_ids".to_string(),
-            JsonValue::from(
-                edge.routes
-                    .iter()
-                    .map(|(a, b, _)| format!("{}:{}", a, b))
-                    .collect::<Vec<_>>(),
-            ),
-        );
-
-        features.push(Feature {
-            bbox: None,
-            geometry: Some(geometry),
-            id: None,
-            properties: Some(properties),
-            foreign_members: None,
-        });
-    }
-
-    // Export Clusters
-    for cluster in clusters {
-        let geometry = Geometry::new(Value::Point(vec![
-            (cluster.centroid.x * 100_000_000.0).round() / 100_000_000.0,
-            (cluster.centroid.y * 100_000_000.0).round() / 100_000_000.0,
+        let geometry = Geometry::new(geojson::Value::Point(vec![
+            node.position.0,
+            node.position.1,
         ]));
 
-        let mut properties = JsonObject::new();
-        properties.insert(
-            "cluster_id".to_string(),
-            JsonValue::from(cluster.cluster_id as u64),
-        );
+        features.push(Feature {
+            bbox: None,
+            geometry: Some(geometry),
+            id: None,
+            properties: Some(props),
+            foreign_members: None,
+        });
+    }
+
+    // Export edges as LineString features
+    for (_, edge) in &graph.edges {
+        let mut props = JsonObject::new();
+        props.insert("from".to_string(), json!(edge.from.0.to_string()));
+        props.insert("to".to_string(), json!(edge.to.0.to_string()));
+
+        // Lines on this edge
+        let edge_lines: Vec<JsonValue> = edge
+            .lines
+            .iter()
+            .map(|occ| {
+                let line_info = line_map.get(&occ.line);
+                json!({
+                    "id": occ.line.to_string(),
+                    "label": line_info.map(|l| l.label.as_str()).unwrap_or(""),
+                    "color": line_info.map(|l| l.color.as_str()).unwrap_or("888888"),
+                    "direction": occ.direction_node.map(|n| n.to_string())
+                })
+            })
+            .collect();
+        props.insert("lines".to_string(), json!(edge_lines));
+
+        let coordinates: Vec<Vec<f64>> = edge
+            .geometry
+            .iter()
+            .map(|&(lon, lat)| vec![lon, lat])
+            .collect();
+
+        let geometry = Geometry::new(geojson::Value::LineString(coordinates));
 
         features.push(Feature {
             bbox: None,
             geometry: Some(geometry),
             id: None,
-            properties: Some(properties),
+            properties: Some(props),
             foreign_members: None,
         });
     }
 
-    let collection = FeatureCollection {
+    // Create FeatureCollection with top-level properties
+    let mut fc_props = JsonObject::new();
+    fc_props.insert("lines".to_string(), json!(lines_array));
+
+    let fc = FeatureCollection {
         bbox: None,
         features,
-        foreign_members: None,
+        foreign_members: Some(fc_props),
     };
 
-    let geojson = GeoJson::FeatureCollection(collection);
-    let file = File::create(filename)?;
-    let mut writer = BufWriter::new(file);
-    use std::io::Write;
-    writer.write_all(geojson.to_string().as_bytes())?;
-    println!("Exported graph to {}", filename);
+    // Write to file
+    let mut file = File::create(output_path)?;
+    let json_str = serde_json::to_string_pretty(&fc)?;
+    file.write_all(json_str.as_bytes())?;
+
+    info!("Exported {} features to GeoJSON", fc.features.len());
     Ok(())
 }
 
-fn extract_land_masses(clusters: &[StopCluster], edges: &[GraphEdge]) -> Vec<LandMass> {
-    let mut adj: Vec<Vec<usize>> = vec![vec![]; clusters.len()];
-    for (i, edge) in edges.iter().enumerate() {
-        if let NodeId::Cluster(u) = edge.from {
-            if let NodeId::Cluster(v) = edge.to {
-                adj[u].push(i);
-                adj[v].push(i);
+/// Export to binary format for harebell
+pub fn export_binary(
+    graph: &SupportGraph,
+    restrictions: &TurnRestrictions,
+    output_path: &Path,
+) -> Result<()> {
+    info!("Exporting binary format to {:?}", output_path);
+
+    // Convert support graph to SerializableExportGraph format
+    let mut edges = Vec::new();
+    let mut clusters = Vec::new();
+
+    // Collect station nodes as clusters
+    let mut station_to_cluster: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    for (_, node) in &graph.nodes {
+        if let (Some(station_id), Some(label)) = (&node.station_id, &node.station_label) {
+            if !station_to_cluster.contains_key(station_id) {
+                let cluster_id = clusters.len();
+                station_to_cluster.insert(station_id.clone(), cluster_id);
+
+                clusters.push(SerializableStopCluster {
+                    cluster_id,
+                    centroid: [node.position.0, node.position.1],
+                    stops: vec![SerializableStop {
+                        id: station_id.clone(),
+                        code: None,
+                        name: Some(label.clone()),
+                        description: None,
+                        location_type: 1,
+                        parent_station: None,
+                        zone_id: None,
+                        longitude: Some(node.position.0),
+                        latitude: Some(node.position.1),
+                        timezone: None,
+                        platform_code: None,
+                        level_id: None,
+                        routes: vec![],
+                    }],
+                });
             }
         }
     }
 
-    let mut visited_clusters = vec![false; clusters.len()];
-    let mut land_masses = Vec::new();
-    let mut mass_id_counter = 0;
+    // Convert edges
+    for (_, edge) in &graph.edges {
+        let from_node_id = convert_support_node_to_catenary(edge.from, &graph.nodes);
+        let to_node_id = convert_support_node_to_catenary(edge.to, &graph.nodes);
 
-    for i in 0..clusters.len() {
-        if !visited_clusters[i] {
-            let mut component_clusters = Vec::new();
-            let mut component_edges = HashSet::new();
-            let mut stack = vec![i];
-            visited_clusters[i] = true;
+        let geometry: Vec<[f64; 2]> = edge.geometry.iter().map(|&(lon, lat)| [lon, lat]).collect();
 
-            while let Some(u) = stack.pop() {
-                component_clusters.push(u);
+        let route_ids: Vec<(String, String)> = edge
+            .lines
+            .iter()
+            .map(|occ| (occ.line.chateau.clone(), occ.line.route_id.clone()))
+            .collect();
 
-                for &edge_idx in &adj[u] {
-                    component_edges.insert(edge_idx);
-                    let edge = &edges[edge_idx];
-
-                    let v_opt = match (edge.from, edge.to) {
-                        (NodeId::Cluster(c1), NodeId::Cluster(c2)) => {
-                            if c1 == u {
-                                Some(c2)
-                            } else if c2 == u {
-                                Some(c1)
-                            } else {
-                                None
-                            }
-                        }
-                        _ => None,
-                    };
-
-                    if let Some(v) = v_opt {
-                        if !visited_clusters[v] {
-                            visited_clusters[v] = true;
-                            stack.push(v);
-                        }
-                    }
-                }
-            }
-
-            let stop_count: usize = component_clusters
-                .iter()
-                .map(|&c| clusters[c].stops.len())
-                .sum();
-            let mut unique_routes = HashSet::new();
-            for &e_idx in &component_edges {
-                for r in &edges[e_idx].routes {
-                    unique_routes.insert(r.clone());
-                }
-            }
-
-            land_masses.push(LandMass {
-                id: mass_id_counter,
-                clusters: component_clusters,
-                edges: component_edges.into_iter().collect(),
-                stop_count,
-                route_count: unique_routes.len(),
-            });
-            mass_id_counter += 1;
-        }
+        edges.push(SerializableGraphEdge {
+            from: from_node_id,
+            to: to_node_id,
+            geometry,
+            route_ids,
+            weight: edge.length_m,
+            original_edge_index: None,
+        });
     }
 
-    land_masses.sort_by(|a, b| b.stop_count.cmp(&a.stop_count));
-    land_masses
+    // Build land masses (connected components)
+    let land_masses = build_land_masses(&edges, &clusters);
+
+    // Convert restrictions
+    let turn_restrictions: Vec<TurnRestriction> = Vec::new(); // TODO: Convert from TurnRestrictions
+
+    let export = SerializableExportGraph {
+        land_masses,
+        edges,
+        clusters,
+        restrictions: turn_restrictions,
+    };
+
+    // Serialize with bincode
+    let encoded = bincode::serde::encode_to_vec(&export, bincode::config::standard())?;
+    std::fs::write(output_path, encoded)?;
+
+    info!(
+        "Exported {} edges, {} clusters to binary",
+        export.edges.len(),
+        export.clusters.len()
+    );
+    Ok(())
+}
+
+/// Convert SupportNodeId to catenary's NodeId format
+fn convert_support_node_to_catenary(
+    node_id: SupportNodeId,
+    nodes: &ahash::HashMap<SupportNodeId, SupportNode>,
+) -> NodeId {
+    if let Some(node) = nodes.get(&node_id) {
+        if node.station_id.is_some() {
+            // Use cluster ID format for station nodes
+            NodeId::Cluster(node_id.0 as usize)
+        } else {
+            // Use intersection format for non-station nodes
+            NodeId::Intersection(0, node_id.0 as usize)
+        }
+    } else {
+        NodeId::Intersection(0, node_id.0 as usize)
+    }
+}
+
+/// Build land masses from connected components
+fn build_land_masses(
+    edges: &[SerializableGraphEdge],
+    clusters: &[SerializableStopCluster],
+) -> Vec<LandMass> {
+    // Simple single land mass for now - could use Union-Find for true components
+    let cluster_ids: Vec<usize> = clusters.iter().map(|c| c.cluster_id).collect();
+    let edge_indices: Vec<usize> = (0..edges.len()).collect();
+
+    vec![LandMass {
+        id: 0,
+        clusters: cluster_ids,
+        edges: edge_indices,
+        stop_count: clusters.iter().map(|c| c.stops.len()).sum(),
+        route_count: edges
+            .iter()
+            .flat_map(|e| &e.route_ids)
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+    }]
 }
