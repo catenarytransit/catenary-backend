@@ -283,17 +283,42 @@ pub fn collapse_with_osm_junctions(
             merged_cuts.push(curr);
         }
 
-        // 2. Create Segments
+        // 2. Pre-assign Node IDs to all cut points
+        // This ensures adjacent segments share the same NodeId at their junction.
+        // Previously, node IDs were generated per-segment, causing consecutive segments
+        // to have different IDs for the same cut point, breaking graph connectivity.
+        let cut_node_ids: Vec<NodeId> = merged_cuts
+            .iter()
+            .map(|cut| {
+                if cut.junction_id != 0 {
+                    NodeId::OsmJunction(cut.junction_id)
+                } else {
+                    let id = NodeId::Intersection(0, node_id_counter);
+                    node_id_counter += 1;
+                    id
+                }
+            })
+            .collect();
+
+        // Store positions for all cut points
+        for (i, cut) in merged_cuts.iter().enumerate() {
+            let pos = sample_along_polyline(&full_geom, cut.dist);
+            cluster_node_positions.insert(cut_node_ids[i].clone(), pos);
+        }
+
+        // 3. Create Segments using pre-assigned node IDs
         for i in 0..merged_cuts.len().saturating_sub(1) {
             let start_cut = merged_cuts[i];
-            let end_cut = merged_cuts[i+1];
-            
+            let end_cut = merged_cuts[i + 1];
+
             let seg_len = end_cut.dist - start_cut.dist;
-            if seg_len < 0.1 { continue; } // Skip degenerate segments
+            if seg_len < 0.1 {
+                continue;
+            } // Skip degenerate segments
 
             let mid_dist = start_cut.dist + seg_len / 2.0;
 
-            // 3. Determine Active Routes for this segment
+            // 4. Determine Active Routes for this segment
             // A route is active if the segment is within its [min, max] interval
             let mut active_routes: Vec<(RouteId, i32)> = Vec::new();
             for (r_key, (min_d, max_d)) in route_intervals {
@@ -304,41 +329,19 @@ pub fn collapse_with_osm_junctions(
             }
 
             if active_routes.is_empty() {
-                // Determine if we should keep empty segments to maintain OSM connectivity?
-                // If it's between two junctions, we probably should keep it (it's track, just unused by GTFS).
-                // But for now, user requested sub-matching to avoid "over-extending". 
-                // So if no GTFS route uses it, we DROP it (unless it's needed for connectivity of other things? No, we rely on routes).
-                // Actually, if we drop it, we break the "background" graph. 
-                // But wait, the input was GTFS edges. If we output an edge with no routes, it's just geometry.
-                // Let's keep it but with empty routes, so it can be used for spatial context if needed?
-                // NO, if we want to fix "matching whole segments", we usually want to remove the parts NOT used.
-                // --> DROP empty segments.
+                // DROP empty segments - routes define what's actually used
                 continue;
             }
 
             // Extract Geometry
             let sub_geom = extract_sub_geom(&full_geom, start_cut.dist, end_cut.dist);
-            if sub_geom.len() < 2 { continue; }
+            if sub_geom.len() < 2 {
+                continue;
+            }
 
-            // Generate/Reuse Node IDs
-            // Use Junction ID if available, else generate Intersection
-            let u = if start_cut.junction_id != 0 { 
-                NodeId::OsmJunction(start_cut.junction_id) 
-            } else { 
-                NodeId::Intersection(0, node_id_counter) 
-            };
-            if start_cut.junction_id == 0 { node_id_counter += 1; } // Increment if we used a generated ID
-
-            let v = if end_cut.junction_id != 0 { 
-                NodeId::OsmJunction(end_cut.junction_id) 
-            } else { 
-                NodeId::Intersection(0, node_id_counter) 
-            };
-            if end_cut.junction_id == 0 { node_id_counter += 1; }
-
-            // Store positions for snapping
-             cluster_node_positions.insert(u.clone(), sub_geom[0]);
-             cluster_node_positions.insert(v.clone(), *sub_geom.last().unwrap());
+            // Use pre-assigned node IDs (now guaranteed to be shared between adjacent segments)
+            let u = cut_node_ids[i].clone();
+            let v = cut_node_ids[i + 1].clone();
 
             final_edges.push(CompactedGraphEdge {
                 from: u,
@@ -410,6 +413,44 @@ pub fn collapse_with_osm_junctions(
     
     // 7. Output
     final_edges.extend(unmatched_edges);
+    
+    // 8. Deduplicate edges with same (from, to) pair
+    // Multiple clusters can generate edges to similar endpoints with different geometries.
+    // Merge these to prevent oscillating/duplicate segments in output.
+    let pre_dedup_count = final_edges.len();
+    let mut edge_map: AHashMap<(NodeId, NodeId), CompactedGraphEdge> = AHashMap::new();
+    
+    for edge in final_edges {
+        // Normalize key so (A, B) and (B, A) are treated as the same edge
+        let key = if edge.from < edge.to {
+            (edge.from.clone(), edge.to.clone())
+        } else {
+            (edge.to.clone(), edge.from.clone())
+        };
+        
+        edge_map.entry(key)
+            .and_modify(|existing| {
+                // Merge routes from duplicate
+                for r in &edge.routes {
+                    if !existing.routes.contains(r) {
+                        existing.routes.push(*r);
+                    }
+                }
+                // Keep geometry from edge with more routes (likely more authoritative)
+                if edge.routes.len() > existing.routes.len() {
+                    existing.geometry = edge.geometry.clone();
+                    existing.weight = edge.weight;
+                }
+            })
+            .or_insert(edge);
+    }
+    
+    let final_edges: Vec<CompactedGraphEdge> = edge_map.into_values().collect();
+    
+    if pre_dedup_count != final_edges.len() {
+        println!("Edge deduplication: {} -> {} edges ({} duplicates removed)", 
+                 pre_dedup_count, final_edges.len(), pre_dedup_count - final_edges.len());
+    }
     
     println!("Topological Collapse complete. Produced {} edges.", final_edges.len());
     final_edges
