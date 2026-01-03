@@ -16,7 +16,7 @@
 
 use ahash::{AHashMap, AHashSet};
 use osmpbfreader::{OsmObj, OsmPbfReader};
-use rstar::{AABB, RTree, RTreeObject};
+use rstar::{RTree, RTreeObject, AABB};
 use std::fs::File;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -156,6 +156,8 @@ pub struct OsmRailIndex {
     stations: Vec<OsmStationInfo>,
     /// Spatial index for stations
     station_tree: RTree<RTreeStation>,
+    /// Spatial index for way bounding boxes (O(log n) lookup)
+    way_bbox_tree: RTree<RTreeWayBbox>,
 }
 
 /// A station in the spatial index
@@ -166,6 +168,20 @@ pub struct RTreeStation {
 }
 
 impl RTreeObject for RTreeStation {
+    type Envelope = AABB<[f64; 2]>;
+    fn envelope(&self) -> Self::Envelope {
+        self.bbox
+    }
+}
+
+/// A way bounding box in the spatial index (for efficient ways_near_position)
+#[derive(Debug, Clone)]
+pub struct RTreeWayBbox {
+    pub way_id: i64,
+    pub bbox: AABB<[f64; 2]>,
+}
+
+impl RTreeObject for RTreeWayBbox {
     type Envelope = AABB<[f64; 2]>;
     fn envelope(&self) -> Self::Envelope {
         self.bbox
@@ -187,6 +203,7 @@ impl OsmRailIndex {
             way_layers: AHashMap::new(),
             stations: Vec::new(),
             station_tree: RTree::new(),
+            way_bbox_tree: RTree::new(),
         }
     }
 
@@ -205,7 +222,7 @@ impl OsmRailIndex {
 
         // NEW: Collect relations for route-based merge decisions
         let mut relations_all: Vec<(i64, Vec<i64>, OsmRouteInfo)> = Vec::new(); // (relation_id, way_members, info)
-        // NEW: Collect stations
+                                                                                // NEW: Collect stations
         let mut stations: Vec<OsmStationInfo> = Vec::new();
 
         let mut min_x = f64::MAX;
@@ -514,6 +531,29 @@ impl OsmRailIndex {
 
         let station_tree = RTree::bulk_load(station_items);
 
+        // Build spatial index for way bounding boxes
+        let mut way_bbox_items: Vec<RTreeWayBbox> = Vec::with_capacity(way_geometries.len());
+        for (way_id, geom) in &way_geometries {
+            if geom.is_empty() {
+                continue;
+            }
+            let mut min_x = f64::MAX;
+            let mut min_y = f64::MAX;
+            let mut max_x = f64::MIN;
+            let mut max_y = f64::MIN;
+            for pt in geom {
+                min_x = min_x.min(pt[0]);
+                min_y = min_y.min(pt[1]);
+                max_x = max_x.max(pt[0]);
+                max_y = max_y.max(pt[1]);
+            }
+            way_bbox_items.push(RTreeWayBbox {
+                way_id: *way_id,
+                bbox: AABB::from_corners([min_x, min_y], [max_x, max_y]),
+            });
+        }
+        let way_bbox_tree = RTree::bulk_load(way_bbox_items);
+
         println!(
             "Loaded OSM rail index: {} nodes, {} ways, {} junctions, {} route relations, {} stations",
             node_count,
@@ -535,6 +575,7 @@ impl OsmRailIndex {
             way_layers,
             stations,
             station_tree,
+            way_bbox_tree,
         })
     }
 
@@ -839,41 +880,27 @@ impl OsmRailIndex {
             }
         }
 
-        // Strategy 2: Segment-based search (handles sparse OSM nodes)
-        // Check if the point is within radius of any segment of any way geometry
+        // Strategy 2: Segment-based search using spatial index (handles sparse OSM nodes)
+        // Use RTree to find candidate ways whose bounding box intersects query area
+        let query_aabb = AABB::from_corners(
+            [pos[0] - radius_m, pos[1] - radius_m],
+            [pos[0] + radius_m, pos[1] + radius_m],
+        );
+
         let radius_sq = radius_m * radius_m;
-        for (way_id, geom) in &self.way_geometries {
-            if ways.contains(way_id) {
+        for way_bbox in self.way_bbox_tree.locate_in_envelope_intersecting(&query_aabb) {
+            if ways.contains(&way_bbox.way_id) {
                 continue; // Already found via node search
             }
 
-            // Quick bounding box pre-filter
-            let mut min_x = f64::MAX;
-            let mut min_y = f64::MAX;
-            let mut max_x = f64::MIN;
-            let mut max_y = f64::MIN;
-            for pt in geom {
-                min_x = min_x.min(pt[0]);
-                min_y = min_y.min(pt[1]);
-                max_x = max_x.max(pt[0]);
-                max_y = max_y.max(pt[1]);
-            }
-
-            // Expand bbox by radius and check if point is inside
-            if pos[0] < min_x - radius_m
-                || pos[0] > max_x + radius_m
-                || pos[1] < min_y - radius_m
-                || pos[1] > max_y + radius_m
-            {
-                continue; // Point is outside expanded bounding box
-            }
-
-            // Check distance to each segment
-            for i in 0..geom.len().saturating_sub(1) {
-                let dist_sq = point_to_segment_distance_sq(pos, geom[i], geom[i + 1]);
-                if dist_sq <= radius_sq {
-                    ways.insert(*way_id);
-                    break; // Found, no need to check more segments
+            // Get geometry and check segment distances
+            if let Some(geom) = self.way_geometries.get(&way_bbox.way_id) {
+                for i in 0..geom.len().saturating_sub(1) {
+                    let dist_sq = point_to_segment_distance_sq(pos, geom[i], geom[i + 1]);
+                    if dist_sq <= radius_sq {
+                        ways.insert(way_bbox.way_id);
+                        break; // Found, no need to check more segments
+                    }
                 }
             }
         }
@@ -1041,8 +1068,8 @@ impl OsmRailIndex {
                 return Some(vec![]); // Allow merge on same way
             }
             return Some(vec![]); // TEMPORARY: allow merge to avoid regression
-            // TODO: Once relation coverage is good, change to:
-            // return None; // Different routes - don't merge
+                                 // TODO: Once relation coverage is good, change to:
+                                 // return None; // Different routes - don't merge
         }
 
         // Check mode compatibility for shared relations
