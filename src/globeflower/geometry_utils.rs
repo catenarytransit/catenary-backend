@@ -454,3 +454,66 @@ pub fn project_point_to_polyline_f64(point: [f64; 2], path: &[[f64; 2]]) -> f64 
     
     best_dist_along
 }
+
+/// Project a point onto a polyline and return detailed info:
+/// (projected_point, distance_squared, distance_along_polyline, segment_index)
+pub fn project_point_to_polyline_detailed(
+    point: &[f64; 2], 
+    path: &[[f64; 2]]
+) -> ([f64; 2], f64, f64, usize) {
+    if path.len() < 2 { 
+        return (if !path.is_empty() { path[0] } else { [0.0, 0.0] }, f64::MAX, 0.0, 0); 
+    }
+    
+    let mut min_dist_sq = f64::MAX;
+    let mut best_pt = path[0];
+    let mut best_dist_along = 0.0;
+    let mut best_seg_idx = 0;
+    let mut current_dist_along = 0.0;
+    
+    for i in 0..path.len() - 1 {
+        let p1 = path[i];
+        let p2 = path[i+1];
+        
+        let seg_dx = p2[0] - p1[0];
+        let seg_dy = p2[1] - p1[1];
+        let seg_len_sq = seg_dx*seg_dx + seg_dy*seg_dy;
+        let seg_len = seg_len_sq.sqrt();
+        
+        if seg_len_sq < 1e-9 {
+             // Zero length segment, check distance to point
+             let dx = point[0] - p1[0];
+             let dy = point[1] - p1[1];
+             let d_sq = dx*dx + dy*dy;
+             if d_sq < min_dist_sq {
+                 min_dist_sq = d_sq;
+                 best_pt = p1;
+                 best_dist_along = current_dist_along;
+                 best_seg_idx = i;
+             }
+             current_dist_along += seg_len;
+             continue;
+        }
+        
+        let t = ((point[0] - p1[0]) * seg_dx + (point[1] - p1[1]) * seg_dy) / seg_len_sq;
+        let t_clamped = t.max(0.0).min(1.0);
+        
+        let proj_x = p1[0] + t_clamped * seg_dx;
+        let proj_y = p1[1] + t_clamped * seg_dy; // Fixed calculation reuse
+        
+        let dx = point[0] - proj_x;
+        let dy = point[1] - proj_y;
+        let dist_sq = dx*dx + dy*dy;
+        
+        if dist_sq < min_dist_sq {
+            min_dist_sq = dist_sq;
+            best_pt = [proj_x, proj_y];
+            best_dist_along = current_dist_along + t_clamped * seg_len;
+            best_seg_idx = i;
+        }
+        
+        current_dist_along += seg_len;
+    }
+    
+    (best_pt, min_dist_sq, best_dist_along, best_seg_idx)
+}

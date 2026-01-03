@@ -1036,7 +1036,7 @@ fn collapse_shared_segments(
             println!("Using OSM-accelerated collapse ({} junctions available)...", 
                      osm_index.junction_count());
             // Chain: Use OSM collapse results as input for iterative collapse
-            edges = crate::osm_collapse::collapse_with_osm_junctions(edges, d_cut);
+            edges = crate::osm_collapse::conflate_graph(edges, d_cut, next_node_id_counter);
             
             // Optimization: If confident, we could return here. 
             // But for maximum robustness (fixing gaps/residuals), fall through.

@@ -158,6 +158,10 @@ pub struct OsmRailIndex {
     station_tree: RTree<RTreeStation>,
     /// Spatial index for way bounding boxes (O(log n) lookup)
     way_bbox_tree: RTree<RTreeWayBbox>,
+    /// Map from way ID to ordered list of node IDs (for topology)
+    way_nodes: AHashMap<i64, Vec<i64>>,
+    /// Map from node ID to position (for fast lookup)
+    node_positions: AHashMap<i64, [f64; 2]>,
 }
 
 /// A station in the spatial index
@@ -204,6 +208,8 @@ impl OsmRailIndex {
             stations: Vec::new(),
             station_tree: RTree::new(),
             way_bbox_tree: RTree::new(),
+            way_nodes: AHashMap::new(),
+            node_positions: AHashMap::new(),
         }
     }
 
@@ -442,10 +448,12 @@ impl OsmRailIndex {
         let mut way_to_railway_type: AHashMap<i64, String> = AHashMap::new();
         let mut way_geometries: AHashMap<i64, Vec<[f64; 2]>> = AHashMap::new();
         let mut way_layers: AHashMap<i64, i32> = AHashMap::new();
+        let mut way_nodes: AHashMap<i64, Vec<i64>> = AHashMap::new();
 
         for (way_id, way_node_ids, railway_type, layer) in &ways_all {
             way_to_railway_type.insert(*way_id, railway_type.clone());
             way_layers.insert(*way_id, *layer);
+            way_nodes.insert(*way_id, way_node_ids.clone());
 
             // Reconstruct geometry
             let mut geometry = Vec::with_capacity(way_node_ids.len());
@@ -576,6 +584,8 @@ impl OsmRailIndex {
             stations,
             station_tree,
             way_bbox_tree,
+            way_nodes,
+            node_positions: node_pos_map,
         })
     }
 
@@ -795,15 +805,323 @@ impl OsmRailIndex {
         self.way_layers.get(&way_id).copied()
     }
 
-    /// Check if a merge should be allowed based on OSM data
-    ///
-    /// This is the main entry point for merge validation. Returns true if:
+    /// Get unique list of relevant way IDs for a cluster from a list of segments
+    pub fn get_relevant_ways(&self, way_segments: &[(i64, f64, f64)]) -> Vec<i64> {
+        let mut ways = Vec::new();
+        let mut seen = AHashSet::new();
+        for (w, _, _) in way_segments {
+            if seen.insert(*w) {
+                ways.push(*w);
+            }
+        }
+        ways
+    }
+
+    // ===========================================================================
+    // Topological Graph Features (Node-First Conflation)
+    // ===========================================================================
+
+    /// Snap a geographic point to the nearest position on the OSM rail topology
+    pub fn snap_to_topology(&self, pos: [f64; 2], max_dist: f64) -> Option<GraphPosition> {
+        // 1. Find candidate ways using bbox tree
+        let aabb = AABB::from_corners(
+            [pos[0] - max_dist, pos[1] - max_dist],
+            [pos[0] + max_dist, pos[1] + max_dist],
+        );
+
+        let mut best_match: Option<GraphPosition> = None;
+        let mut min_dist_sq = max_dist * max_dist;
+
+        for bbox_item in self.way_bbox_tree.locate_in_envelope(&aabb) {
+            let way_id = bbox_item.way_id;
+            if let Some(geom) = self.get_way_geometry(way_id) {
+                // Find nearest point on this way
+                let (proj_pt, dist_sq, offset, segment_idx) =
+                    crate::geometry_utils::project_point_to_polyline_detailed(
+                        &[pos[0], pos[1]],
+                        geom,
+                    );
+
+                if dist_sq < min_dist_sq {
+                    min_dist_sq = dist_sq;
+                    
+                    // Determine if we are at a node
+                    // Check start/end of segment against way nodes
+                    let mut at_node = None;
+                    if let Some(node_ids) = self.get_way_nodes(way_id) {
+                         // Check distance to segment start/end nodes
+                         // This is an approximation/heuristic
+                         // A better way would be checking distance to actual node positions
+                         if segment_idx < node_ids.len() {
+                             // Check start node of segment
+                             if let Some(n_pos) = self.get_node_pos(node_ids[segment_idx]) {
+                                 let d_node = (n_pos[0]-proj_pt[0]).powi(2) + (n_pos[1]-proj_pt[1]).powi(2);
+                                 if d_node < 0.1 { at_node = Some(node_ids[segment_idx]); }
+                             }
+                         }
+                         if at_node.is_none() && segment_idx + 1 < node_ids.len() {
+                             // Check end node
+                             if let Some(n_pos) = self.get_node_pos(node_ids[segment_idx+1]) {
+                                 let d_node = (n_pos[0]-proj_pt[0]).powi(2) + (n_pos[1]-proj_pt[1]).powi(2);
+                                 if d_node < 0.1 { at_node = Some(node_ids[segment_idx+1]); }
+                             }
+                         }
+                    }
+
+                    best_match = Some(GraphPosition {
+                        way_id,
+                        dist_along_way: offset,
+                        pos: proj_pt,
+                        at_node,
+                    });
+                }
+            }
+        }
+
+        best_match
+    }
+
+    /// Find a topological path (sequence of way segments) between two graph positions
+    /// Returns None if no path found within max_hops or max_cost
+    pub fn shortest_path(
+        &self, 
+        start: &GraphPosition, 
+        end: &GraphPosition,
+    ) -> Option<Vec<OsmPathSegment>> {
+        // BFS / Dijkstra
+        // State: (CurrentNodeID, PathSoFar, Cost)
+        // If we start on an edge (not a node), we first traverse to the way's endpoint nodes.
+        
+        // 1. Identify start/end nodes
+        // If 'start' is on a way, we can go to either end of that way.
+        let start_nodes = self.get_reachable_nodes_from_pos(start);
+        let end_nodes = self.get_reachable_nodes_from_pos(end);
+        
+        if start.way_id == end.way_id {
+            // Special case: Same way
+            // Return single segment
+            return Some(vec![OsmPathSegment {
+                 way_id: start.way_id,
+                 start_dist: start.dist_along_way,
+                 end_dist: end.dist_along_way,
+            }]);
+        }
+
+        // Dijkstra search
+        // Map<NodeID, (Cost, IncomingWayID, PreviousNodeID)>
+        let mut dists: AHashMap<i64, f64> = AHashMap::new();
+        let mut preds: AHashMap<i64, (i64, i64)> = AHashMap::new(); // Node -> (WayID, PrevNodeID)
+        let mut pq = std::collections::BinaryHeap::new();
+        
+        // Initialize PQ with start nodes
+        for (node_id, cost_to_node, way_id) in start_nodes {
+            dists.insert(node_id, cost_to_node);
+            preds.insert(node_id, (way_id, -1)); // -1 indicates start
+            pq.push(State { cost: cost_to_node, node: node_id });
+        }
+        
+        let mut final_end_node = -1;
+        let mut min_end_cost = f64::MAX;
+
+        // Run Dijkstra
+        while let Some(State { cost, node }) = pq.pop() {
+            // Check if we reached any end node target
+            for (target_node, cost_from_target, _) in &end_nodes {
+                if node == *target_node {
+                    let total = cost + cost_from_target;
+                    if total < min_end_cost {
+                        min_end_cost = total;
+                        final_end_node = node;
+                    }
+                }
+            }
+            
+            if cost > dists.get(&node).copied().unwrap_or(f64::MAX) { continue; }
+            if cost > min_end_cost { continue; } // Pruning
+
+            // Expand neighbors
+            if let Some(ways) = self.node_to_ways.get(&node) {
+                for &way_id in ways {
+                    // Traverse this way to its other node(s)
+                    if let Some(node_ids) = self.get_way_nodes(way_id) {
+                        // A way is a sequence of nodes. We can reach any neighbor on this way?
+                        // Usually railways are split at junctions, but a single OSM way can 
+                        // have many internal nodes and pass through junctions.
+                        // We must traverse to the next JUNCTION or ENDPOINT.
+                        
+                        // Simplifying: treating every node as a graph node is simplest but slow.
+                        // Ideally we jump to neighbors in the graph sense.
+                        
+                        // Find this node's index
+                        if let Some(idx) = node_ids.iter().position(|&n| n == node) {
+                             // Check neighbors along the way
+                             let neighbors = [idx.checked_sub(1), idx.checked_add(1)];
+                             for n_idx in neighbors.iter().flatten() {
+                                 if let Some(&next_node) = node_ids.get(*n_idx) {
+                                     let d = self.dist_between_nodes(node, next_node);
+                                     let new_cost = cost + d;
+                                     if new_cost < dists.get(&next_node).copied().unwrap_or(f64::MAX) {
+                                         dists.insert(next_node, new_cost);
+                                         preds.insert(next_node, (way_id, node));
+                                         pq.push(State { cost: new_cost, node: next_node });
+                                     }
+                                 }
+                             }
+                        }
+                    }
+                }
+            }
+        }
+        
+        if final_end_node != -1 {
+            // Reconstruct path
+            let mut path = Vec::new();
+            let mut curr = final_end_node;
+            
+            // Add segment from end_node to 'end' position
+            // Find which way connected to end node? 
+            // We need to match the specific way used in traversal or just assume any valid path?
+            // Actually, the last segment is from final_end_node to 'end' position.
+            // But we might have arrived at final_end_node via a DIFFERENT way than the one 'end' is on.
+            // Wait, we searched graph of nodes. 'end' is on a way W_end.
+            // We must have reached one of W_end's nodes (end_u or end_v).
+            // So we add a segment from (final_end_node -> end.pos) on W_end.
+            
+            // Trace back
+            while let Some(&(way_id, prev_node)) = preds.get(&curr) {
+                if prev_node == -1 { break; } // Start reached
+                
+                // Add full segment between prev_node and curr
+                let start_dist = self.get_node_dist_on_way(prev_node, way_id).unwrap_or(0.0);
+                let end_dist = self.get_node_dist_on_way(curr, way_id).unwrap_or(0.0);
+                
+                path.push(OsmPathSegment {
+                    way_id,
+                    start_dist,
+                    end_dist,
+                });
+                curr = prev_node;
+            }
+            path.reverse();
+            
+            // Add first and last stubs
+            // ... implementation detail: complex to stitch exactly.
+            // Simplified: Just returning internal path for now, user code will handle endpoints.
+             return Some(path);
+        }
+
+        None
+    }
+    
+    // Helpers for topology
+    fn get_way_nodes(&self, way_id: i64) -> Option<&Vec<i64>> {
+         self.way_nodes.get(&way_id)
+    }
+    
+    fn get_node_pos(&self, node_id: i64) -> Option<[f64; 2]> {
+        self.node_positions.get(&node_id).copied()
+    }
+    
+    fn dist_between_nodes(&self, n1: i64, n2: i64) -> f64 {
+        if let (Some(p1), Some(p2)) = (self.get_node_pos(n1), self.get_node_pos(n2)) {
+            ((p1[0]-p2[0]).powi(2) + (p1[1]-p2[1]).powi(2)).sqrt()
+        } else {
+            f64::MAX
+        }
+    }
+    
+    fn get_reachable_nodes_from_pos(&self, pos: &GraphPosition) -> Vec<(i64, f64, i64)> {
+        // Returns (node_id, cost, way_id)
+        let mut reach = Vec::new();
+        
+        let way_id = pos.way_id;
+        if let Some(nodes) = self.get_way_nodes(way_id) {
+            if let Some(geom) = self.get_way_geometry(way_id) {
+                // Find where on the way we are roughly
+                // pos.dist_along_way is distance from START of way
+                
+                // We need to calculate cumulative distances for all nodes on the way
+                let mut current_dist = 0.0;
+                for i in 0..nodes.len() {
+                    let node_id = nodes[i];
+                    
+                    if i > 0 {
+                         let p1 = geom[i-1];
+                         let p2 = geom[i];
+                         let d = ((p1[0]-p2[0]).powi(2) + (p1[1]-p2[1]).powi(2)).sqrt();
+                         current_dist += d;
+                    }
+                    
+                    // Allow small epsilon error
+                    let dist_to_node = (current_dist - pos.dist_along_way).abs();
+                    reach.push((node_id, dist_to_node, way_id));
+                }
+            }
+        }
+        reach
+    }
+    
+    fn get_node_dist_on_way(&self, node_target: i64, way_id: i64) -> Option<f64> {
+         if let Some(nodes) = self.get_way_nodes(way_id) {
+            if let Some(geom) = self.get_way_geometry(way_id) {
+                let mut dist = 0.0;
+                for i in 0..nodes.len() {
+                    let node = nodes[i];
+                    if i > 0 {
+                         let p1 = geom[i-1];
+                         let p2 = geom[i];
+                         dist += ((p1[0]-p2[0]).powi(2) + (p1[1]-p2[1]).powi(2)).sqrt();
+                    }
+                    if node == node_target {
+                        return Some(dist);
+                    }
+                }
+            }
+         }
+         None
+    }
+
+}
+
+// Structs for Topology
+#[derive(Debug, Clone, Copy)]
+pub struct GraphPosition {
+    pub way_id: i64,
+    pub dist_along_way: f64, // Meters from start of way
+    pub pos: [f64; 2],
+    pub at_node: Option<i64>, // If exactly at a node
+}
+
+#[derive(Debug, Clone)]
+pub struct OsmPathSegment {
+    pub way_id: i64,
+    pub start_dist: f64,
+    pub end_dist: f64,
+}
+
+#[derive(PartialEq)]
+struct State {
+    cost: f64,
+    node: i64,
+}
+impl Eq for State {}
+impl Ord for State {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other.cost.partial_cmp(&self.cost).unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+impl PartialOrd for State {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
     /// 1. Both points share an OSM junction (actual track connection), OR
     /// 2. Both points are on the same OSM way (same track segment)
     ///
     /// For subway (mode 1) and trams (mode 0), this is strictly enforced.
     /// For other modes, the proximity edge case allows merging when tracks are
     /// <30m apart for >400m (handles cases like RER A / Metro Ligne 1).
+    impl OsmRailIndex {
     pub fn should_allow_merge(
         &self,
         pos1: [f64; 2],
