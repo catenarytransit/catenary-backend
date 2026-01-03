@@ -4,6 +4,7 @@ use crate::osm_types::{AtomicEdge, AtomicEdgeId, RailMode, ZClass};
 use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use log::{debug, info};
 use rayon::prelude::*;
+use rstar::{AABB, RTreeObject};
 
 use serde::{Deserialize, Serialize};
 
@@ -48,6 +49,21 @@ impl Default for CorridorConfig {
             min_overlap_ratio: 0.6,
             centerline_sample_interval: 10.0,
         }
+    }
+}
+
+/// R-tree entry for edge bounding boxes
+struct EdgeBboxEntry {
+    idx: usize,
+    min: [f64; 2],
+    max: [f64; 2],
+}
+
+impl RTreeObject for EdgeBboxEntry {
+    type Envelope = AABB<[f64; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        AABB::from_corners(self.min, self.max)
     }
 }
 
@@ -147,14 +163,28 @@ impl<'a> CorridorBuilder<'a> {
         let n = edge_indices.len();
         let mut uf = UnionFind::new(n);
 
-        // Find parallel pairs and union them
-        // For efficiency, use spatial locality - only check nearby edges
         let edges: Vec<&AtomicEdge> = edge_indices.iter().map(|&i| &self.index.edges[i]).collect();
 
-        // Check all pairs (O(n²) but filtered by spatial proximity)
+        // Build R-tree of edge bounding boxes for efficient spatial queries
+        // This avoids O(n²) comparisons by only checking overlapping edges
+        let rtree = self.build_edge_rtree(&edges);
+
+        // Use the Hausdorff threshold to expand search envelope
+        // Convert meters to approximate degrees (1 degree ≈ 111km at equator)
+        let search_expansion_deg = self.config.max_hausdorff_m / 111_000.0;
+
+        // For each edge, query R-tree for candidates and check parallelism
         for i in 0..n {
-            for j in (i + 1)..n {
-                if self.are_parallel(&edges[i], &edges[j]) {
+            let bbox = Self::edge_bbox(&edges[i].geometry);
+            let expanded = rstar::AABB::from_corners(
+                [bbox.0 - search_expansion_deg, bbox.1 - search_expansion_deg],
+                [bbox.2 + search_expansion_deg, bbox.3 + search_expansion_deg],
+            );
+
+            for entry in rtree.locate_in_envelope_intersecting(&expanded) {
+                let j = entry.idx;
+                // Only check pairs once (j > i) and skip self
+                if j > i && self.are_parallel(&edges[i], &edges[j]) {
                     uf.union(i, j);
                 }
             }
@@ -195,6 +225,41 @@ impl<'a> CorridorBuilder<'a> {
                 }
             })
             .collect()
+    }
+
+    /// Compute bounding box for an edge geometry: (min_lon, min_lat, max_lon, max_lat)
+    fn edge_bbox(geometry: &[(f64, f64)]) -> (f64, f64, f64, f64) {
+        let mut min_lon = f64::INFINITY;
+        let mut min_lat = f64::INFINITY;
+        let mut max_lon = f64::NEG_INFINITY;
+        let mut max_lat = f64::NEG_INFINITY;
+
+        for &(lon, lat) in geometry {
+            min_lon = min_lon.min(lon);
+            min_lat = min_lat.min(lat);
+            max_lon = max_lon.max(lon);
+            max_lat = max_lat.max(lat);
+        }
+
+        (min_lon, min_lat, max_lon, max_lat)
+    }
+
+    /// Build R-tree from edge geometries for spatial queries
+    fn build_edge_rtree(&self, edges: &[&AtomicEdge]) -> rstar::RTree<EdgeBboxEntry> {
+        let entries: Vec<EdgeBboxEntry> = edges
+            .iter()
+            .enumerate()
+            .map(|(idx, edge)| {
+                let (min_lon, min_lat, max_lon, max_lat) = Self::edge_bbox(&edge.geometry);
+                EdgeBboxEntry {
+                    idx,
+                    min: [min_lon, min_lat],
+                    max: [max_lon, max_lat],
+                }
+            })
+            .collect();
+
+        rstar::RTree::bulk_load(entries)
     }
 
     /// Check if two edges are parallel (candidates for merging)
