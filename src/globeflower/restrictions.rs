@@ -992,23 +992,53 @@ fn edge_rpl(graph: &mut RestrGraph, node_idx: usize, old_edge: usize, new_edge: 
 /// Splits edges based on route shape intersections, creating "handles" for precise restriction checking
 /// Returns: (handles_a, handles_b) - A handles at 1/3 position, B handles at 2/3 position
 /// Matches C++ _handlesA/_handlesB separation
+///
+/// OPTIMIZED: Uses chunked streaming to bound memory usage. Instead of collecting all splits
+/// into a massive HashMap, we process edges in chunks and apply splits immediately.
 fn add_handles(
     graph: &mut RestrGraph,
     edges: &[GraphEdge],
     restr_edge_map: &HashMap<usize, Vec<usize>>,
     route_shapes: &RouteShapeMap,
 ) -> (HandleMap, HandleMap) {
-    println!("Adding handles with parallel processing...");
+    println!(
+        "Adding handles with chunked streaming ({} edges)...",
+        edges.len()
+    );
 
-    let mut handles_a: HandleMap = HashMap::new(); // Handles at 1/3 position
-    let mut handles_b: HandleMap = HashMap::new(); // Handles at 2/3 position
+    let mut handles_a: HandleMap = HashMap::new();
+    let mut handles_b: HandleMap = HashMap::new();
 
     // Configuration for handle checking
     let max_dist = 100.0;
     let aggr_dist = 20.0;
 
-    // Limit parallelism to save memory (and avoid too many small allocations)
-    // Use at most 4 threads, or available parallelism
+    // Pre-filter: collect indices of edges that have at least one route in route_shapes
+    // This avoids processing edges that will never produce splits
+    let relevant_indices: Vec<usize> = edges
+        .iter()
+        .enumerate()
+        .filter(|(_, edge)| {
+            edge.routes
+                .iter()
+                .any(|(chateau, rid, _)| route_shapes.contains_key(&(chateau.clone(), rid.clone())))
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+
+    println!(
+        "Pre-filtered to {} edges with matching route shapes",
+        relevant_indices.len()
+    );
+
+    if relevant_indices.is_empty() {
+        return (handles_a, handles_b);
+    }
+
+    // Process in chunks to bound peak memory usage
+    // Chunk size balances parallelism efficiency vs memory usage
+    const CHUNK_SIZE: usize = 2000;
+
     let num_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
@@ -1019,99 +1049,104 @@ fn add_handles(
         .build()
         .unwrap();
 
-    // Immutable reborrow for parallel access
-    let graph_ref = &*graph;
+    let total_chunks = (relevant_indices.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    println!(
+        "Processing in {} chunks of up to {} edges each...",
+        total_chunks, CHUNK_SIZE
+    );
 
-    // Group splits by RestrEdge index directly using map-reduce
-    // RestrEdgeIdx -> (GraphEdgeIdx, SplitsWithHandleType)
-    // This replaces the intermediate Vec<split_requests> which consumes lots of memory
-    let splits_by_restr_edge: HashMap<usize, (usize, Vec<(f64, GeoPoint<f64>, bool)>)> = pool
-        .install(|| {
-            edges
-                .par_iter()
-                .enumerate()
-                .fold(
-                    HashMap::new, // Initialize local map
-                    |mut acc: HashMap<usize, (usize, Vec<(f64, GeoPoint<f64>, bool)>)>,
-                     (orig_idx, orig_edge)| {
-                        let geom = convert_to_geo(&orig_edge.geometry);
-                        #[allow(deprecated)]
-                        let len_meters = geom.haversine_length();
+    for (chunk_num, chunk_indices) in relevant_indices.chunks(CHUNK_SIZE).enumerate() {
+        if chunk_num % 10 == 0 {
+            println!("  Processing chunk {}/{}", chunk_num + 1, total_chunks);
+        }
 
-                        // Skip very short edges
-                        if len_meters < 1.0 {
-                            return acc;
-                        }
+        // Immutable reborrow for parallel access within this chunk
+        let graph_ref = &*graph;
 
-                        let check_pos = (len_meters / 2.0).min(2.0 * aggr_dist);
+        // Collect splits for this chunk only
+        let chunk_splits: HashMap<usize, (usize, Vec<(f64, GeoPoint<f64>, bool)>)> =
+            pool.install(|| {
+                chunk_indices
+                    .par_iter()
+                    .fold(
+                        HashMap::new,
+                        |mut acc: HashMap<usize, (usize, Vec<(f64, GeoPoint<f64>, bool)>)>,
+                         &orig_idx| {
+                            let orig_edge = &edges[orig_idx];
+                            let geom = convert_to_geo(&orig_edge.geometry);
+                            #[allow(deprecated)]
+                            let len_meters = geom.haversine_length();
 
-                        // A handles at 1/3, B handles at 2/3 (matching C++ lines 243-254)
-                        let hndl_la_check = get_ortho_line_at_dist(&geom, check_pos, max_dist);
-                        let hndl_lb_check =
-                            get_ortho_line_at_dist(&geom, len_meters - check_pos, max_dist);
+                            // Skip very short edges
+                            if len_meters < 1.0 {
+                                return acc;
+                            }
 
-                        let hndl_la = get_ortho_line_at_dist(&geom, len_meters / 3.0, max_dist);
-                        let hndl_lb =
-                            get_ortho_line_at_dist(&geom, len_meters * 2.0 / 3.0, max_dist);
+                            let check_pos = (len_meters / 2.0).min(2.0 * aggr_dist);
 
-                        for route_key_tuple in &orig_edge.routes {
-                            let route_key = &(route_key_tuple.0.clone(), route_key_tuple.1.clone());
-                            let line_id = format!("{}_{}", route_key.0, route_key.1);
-                            let Some(shapes) = route_shapes.get(route_key) else {
-                                continue;
-                            };
+                            // Pre-compute all ortho lines once per edge (not per route)
+                            let hndl_la_check = get_ortho_line_at_dist(&geom, check_pos, max_dist);
+                            let hndl_lb_check =
+                                get_ortho_line_at_dist(&geom, len_meters - check_pos, max_dist);
+                            let hndl_la = get_ortho_line_at_dist(&geom, len_meters / 3.0, max_dist);
+                            let hndl_lb =
+                                get_ortho_line_at_dist(&geom, len_meters * 2.0 / 3.0, max_dist);
 
-                            for shape in shapes {
-                                // Helper to check and collect intersections
-                                let mut check_and_collect = |hndl_opt: Option<geo::Line<f64>>,
-                                                             check_opt: Option<geo::Line<f64>>,
-                                                             is_handle_a: bool,
-                                                             acc_inner: &mut HashMap<
-                                    usize,
-                                    (usize, Vec<(f64, GeoPoint<f64>, bool)>),
-                                >| {
-                                    let Some(hndl_line) = hndl_opt else { return };
-                                    let Some(check_line) = check_opt else { return };
+                            // Pre-convert to LineStrings once (avoid repeated allocations)
+                            let hndl_la_ls =
+                                hndl_la.map(|l| GeoLineString::from(vec![l.start, l.end]));
+                            let hndl_lb_ls =
+                                hndl_lb.map(|l| GeoLineString::from(vec![l.start, l.end]));
+                            let check_la_ls =
+                                hndl_la_check.map(|l| GeoLineString::from(vec![l.start, l.end]));
+                            let check_lb_ls =
+                                hndl_lb_check.map(|l| GeoLineString::from(vec![l.start, l.end]));
 
-                                    let hndl_ls =
-                                        GeoLineString::from(vec![hndl_line.start, hndl_line.end]);
-                                    let check_ls =
-                                        GeoLineString::from(vec![check_line.start, check_line.end]);
+                            for route_key_tuple in &orig_edge.routes {
+                                let route_key =
+                                    (route_key_tuple.0.clone(), route_key_tuple.1.clone());
+                                let Some(shapes) = route_shapes.get(&route_key) else {
+                                    continue;
+                                };
+                                let line_id = format!("{}_{}", route_key.0, route_key.1);
 
-                                    if !intersection(&check_ls, shape).is_empty() {
-                                        let isects = intersection(&hndl_ls, shape);
-                                        let final_isects = if isects.is_empty() {
-                                            intersection(&check_ls, shape)
-                                        } else {
-                                            isects
-                                        };
+                                for shape in shapes {
+                                    // Process handle A
+                                    if let (Some(hndl_ls), Some(check_ls)) =
+                                        (&hndl_la_ls, &check_la_ls)
+                                    {
+                                        // Single intersection call, reuse result
+                                        let check_isects = intersection(check_ls, shape);
+                                        if !check_isects.is_empty() {
+                                            let hndl_isects = intersection(hndl_ls, shape);
+                                            let final_isects = if hndl_isects.is_empty() {
+                                                &check_isects
+                                            } else {
+                                                &hndl_isects
+                                            };
 
-                                        for isect in final_isects {
-                                            if let Some(restr_indices) =
-                                                restr_edge_map.get(&orig_idx)
-                                            {
-                                                for &r_idx in restr_indices {
-                                                    if let Some(r_edge) = &graph_ref.edges[r_idx] {
-                                                        if r_edge.lines.contains(&line_id) {
-                                                            let frac = r_edge
-                                                                .geom
-                                                                .line_locate_point(&isect)
-                                                                .unwrap_or(0.0);
-
-                                                            // Filter invalid fractions here same as original loop (0.01..0.99)
-                                                            if frac > 0.01 && frac < 0.99 {
-                                                                acc_inner
-                                                                    .entry(r_idx)
-                                                                    .or_insert((
-                                                                        orig_idx,
-                                                                        Vec::new(),
-                                                                    ))
-                                                                    .1
-                                                                    .push((
-                                                                        frac,
-                                                                        isect,
-                                                                        is_handle_a,
-                                                                    ));
+                                            for isect in final_isects {
+                                                if let Some(restr_indices) =
+                                                    restr_edge_map.get(&orig_idx)
+                                                {
+                                                    for &r_idx in restr_indices {
+                                                        if let Some(r_edge) =
+                                                            &graph_ref.edges[r_idx]
+                                                        {
+                                                            if r_edge.lines.contains(&line_id) {
+                                                                let frac = r_edge
+                                                                    .geom
+                                                                    .line_locate_point(isect)
+                                                                    .unwrap_or(0.0);
+                                                                if frac > 0.01 && frac < 0.99 {
+                                                                    acc.entry(r_idx)
+                                                                        .or_insert((
+                                                                            orig_idx,
+                                                                            Vec::with_capacity(4),
+                                                                        ))
+                                                                        .1
+                                                                        .push((frac, *isect, true));
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -1119,86 +1154,128 @@ fn add_handles(
                                             }
                                         }
                                     }
-                                };
-                                check_and_collect(hndl_la, hndl_la_check, true, &mut acc); // A handles
-                                check_and_collect(hndl_lb, hndl_lb_check, false, &mut acc); // B handles
+
+                                    // Process handle B
+                                    if let (Some(hndl_ls), Some(check_ls)) =
+                                        (&hndl_lb_ls, &check_lb_ls)
+                                    {
+                                        let check_isects = intersection(check_ls, shape);
+                                        if !check_isects.is_empty() {
+                                            let hndl_isects = intersection(hndl_ls, shape);
+                                            let final_isects = if hndl_isects.is_empty() {
+                                                &check_isects
+                                            } else {
+                                                &hndl_isects
+                                            };
+
+                                            for isect in final_isects {
+                                                if let Some(restr_indices) =
+                                                    restr_edge_map.get(&orig_idx)
+                                                {
+                                                    for &r_idx in restr_indices {
+                                                        if let Some(r_edge) =
+                                                            &graph_ref.edges[r_idx]
+                                                        {
+                                                            if r_edge.lines.contains(&line_id) {
+                                                                let frac = r_edge
+                                                                    .geom
+                                                                    .line_locate_point(isect)
+                                                                    .unwrap_or(0.0);
+                                                                if frac > 0.01 && frac < 0.99 {
+                                                                    acc.entry(r_idx)
+                                                                        .or_insert((
+                                                                            orig_idx,
+                                                                            Vec::with_capacity(4),
+                                                                        ))
+                                                                        .1
+                                                                        .push((
+                                                                            frac, *isect, false,
+                                                                        ));
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                            acc
+                        },
+                    )
+                    .reduce(HashMap::new, |mut map1, map2| {
+                        for (k, (g_idx, v)) in map2 {
+                            let entry = map1.entry(k).or_insert((g_idx, Vec::new()));
+                            entry.1.extend(v);
                         }
-                        acc
-                    },
-                )
-                .reduce(HashMap::new, |mut map1, map2| {
-                    // Merge map2 into map1
-                    for (k, (g_idx, v)) in map2 {
-                        let entry = map1.entry(k).or_insert((g_idx, Vec::new()));
-                        entry.1.extend(v);
-                    }
-                    map1
-                })
-        });
+                        map1
+                    })
+            });
 
-    println!("Collected splits for {} edges", splits_by_restr_edge.len());
-    println!("Applying splits to {} edges...", splits_by_restr_edge.len());
+        // Apply splits for this chunk immediately (releases memory before next chunk)
+        for (edge_idx, (g_idx, mut splits)) in chunk_splits {
+            splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            splits.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-4);
 
-    // Apply splits and collect handles into A and B maps
-    for (edge_idx, (g_idx, mut splits)) in splits_by_restr_edge {
-        splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        splits.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-4);
-
-        if splits.is_empty() {
-            continue;
-        }
-
-        let Some(orig_restr_edge) = graph.edges[edge_idx].clone() else {
-            continue;
-        };
-        let mut last_node = orig_restr_edge.from_node;
-        let mut last_frac = 0.0;
-
-        for (frac, pt, is_handle_a) in splits {
-            if (frac - last_frac).abs() < 1e-6 {
+            if splits.is_empty() {
                 continue;
             }
 
-            let new_node_id = graph.add_node([pt.x(), pt.y()]);
+            let Some(orig_restr_edge) = graph.edges[edge_idx].clone() else {
+                continue;
+            };
+            let mut last_node = orig_restr_edge.from_node;
+            let mut last_frac = 0.0;
 
-            let sub_geom = get_sub_geom(&orig_restr_edge.geom, last_frac, frac);
-            let new_edge_idx = graph.add_edge(
+            for (frac, pt, is_handle_a) in splits {
+                if (frac - last_frac).abs() < 1e-6 {
+                    continue;
+                }
+
+                let new_node_id = graph.add_node([pt.x(), pt.y()]);
+                let sub_geom = get_sub_geom(&orig_restr_edge.geom, last_frac, frac);
+                let new_edge_idx = graph.add_edge(
+                    last_node,
+                    new_node_id,
+                    sub_geom,
+                    orig_restr_edge.lines.clone(),
+                );
+
+                if is_handle_a {
+                    handles_a.entry(g_idx).or_default().insert(new_node_id);
+                } else {
+                    handles_b.entry(g_idx).or_default().insert(new_node_id);
+                }
+
+                edge_rpl(graph, last_node, edge_idx, new_edge_idx);
+                edge_rpl(graph, new_node_id, edge_idx, new_edge_idx);
+
+                last_node = new_node_id;
+                last_frac = frac;
+            }
+
+            // Final segment
+            let sub_geom = get_sub_geom(&orig_restr_edge.geom, last_frac, 1.0);
+            let final_edge_idx = graph.add_edge(
                 last_node,
-                new_node_id,
+                orig_restr_edge.to_node,
                 sub_geom,
                 orig_restr_edge.lines.clone(),
             );
 
-            // Add handle to appropriate map based on position (A or B)
-            if is_handle_a {
-                handles_a.entry(g_idx).or_default().insert(new_node_id);
-            } else {
-                handles_b.entry(g_idx).or_default().insert(new_node_id);
-            }
+            edge_rpl(graph, last_node, edge_idx, final_edge_idx);
+            edge_rpl(graph, orig_restr_edge.to_node, edge_idx, final_edge_idx);
 
-            edge_rpl(graph, last_node, edge_idx, new_edge_idx);
-            edge_rpl(graph, new_node_id, edge_idx, new_edge_idx);
-
-            last_node = new_node_id;
-            last_frac = frac;
+            graph.del_edge(edge_idx);
         }
-
-        // Final segment
-        let sub_geom = get_sub_geom(&orig_restr_edge.geom, last_frac, 1.0);
-        let final_edge_idx = graph.add_edge(
-            last_node,
-            orig_restr_edge.to_node,
-            sub_geom,
-            orig_restr_edge.lines.clone(),
-        );
-
-        edge_rpl(graph, last_node, edge_idx, final_edge_idx);
-        edge_rpl(graph, orig_restr_edge.to_node, edge_idx, final_edge_idx);
-
-        graph.del_edge(edge_idx);
     }
 
+    println!(
+        "Handles complete: {} A-handles, {} B-handles",
+        handles_a.len(),
+        handles_b.len()
+    );
     (handles_a, handles_b)
 }
 
