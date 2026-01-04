@@ -371,22 +371,77 @@ impl<'a> CorridorBuilder<'a> {
 
             let total_len = geometry_utils::polyline_length_metric(&metric_geoms[i]);
 
-            for w in edge_splits.windows(2) {
-                let s = w[0];
-                let e = w[1];
-                let len = (e - s).abs() * total_len;
-                if len > 5.0 {
-                    // Min 5m fragment
-                    fragments.push(Fragment {
-                        edge_idx: i,
-                        start_frac: s,
-                        end_frac: e,
-                        start_m: s * total_len,
-                        end_m: e * total_len,
-                        anchor_start: false,
-                        anchor_end: false,
-                    });
+            // Linear sweep to accumulate fragments until >= 5.0m
+            // This prevents holes from dropped slivers
+            let mut j = 0;
+            while j < edge_splits.len() - 1 {
+                let start_idx = j;
+                let mut end_idx = j + 1;
+
+                // Find next split that makes segment >= 5m
+                while end_idx < edge_splits.len() {
+                    let len = (edge_splits[end_idx] - edge_splits[start_idx]).abs() * total_len;
+                    if len >= 5.0 {
+                        break;
+                    }
+                    end_idx += 1;
                 }
+
+                // If we ran out of splits and didn't reach 5m, we have to handle the tail.
+                if end_idx == edge_splits.len() {
+                    // The remainder [start_idx .. last] is < 5m.
+                    // Merge into the PREVIOUS fragment if it exists and is on the same edge.
+                    let last_idx = edge_splits.len() - 1;
+                    let last_frac = edge_splits[last_idx];
+
+                    if let Some(last_frag) = fragments.last_mut() {
+                        if last_frag.edge_idx == i {
+                            // Merge into previous
+                            last_frag.end_frac = last_frac;
+                            last_frag.end_m = last_frag.end_frac * total_len;
+                        } else {
+                            // First fragment of the edge, but it's tiny (entire edge < 5m).
+                            // Keep it to preserve connectivity.
+                            fragments.push(Fragment {
+                                edge_idx: i,
+                                start_frac: edge_splits[start_idx],
+                                end_frac: last_frac,
+                                start_m: edge_splits[start_idx] * total_len,
+                                end_m: last_frac * total_len,
+                                anchor_start: false,
+                                anchor_end: false,
+                            });
+                        }
+                    } else {
+                        // Very first fragment overall and it's tiny?
+                        fragments.push(Fragment {
+                            edge_idx: i,
+                            start_frac: edge_splits[start_idx],
+                            end_frac: last_frac,
+                            start_m: edge_splits[start_idx] * total_len,
+                            end_m: last_frac * total_len,
+                            anchor_start: false,
+                            anchor_end: false,
+                        });
+                    }
+                    break; // Done with this edge
+                }
+
+                // Normal case: found a split at end_idx that satisfies length
+                let s = edge_splits[start_idx];
+                let e = edge_splits[end_idx];
+
+                fragments.push(Fragment {
+                    edge_idx: i,
+                    start_frac: s,
+                    end_frac: e,
+                    start_m: s * total_len,
+                    end_m: e * total_len,
+                    anchor_start: false,
+                    anchor_end: false,
+                });
+
+                j = end_idx;
             }
         }
 

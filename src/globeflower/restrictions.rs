@@ -37,44 +37,58 @@ impl TurnRestrictions {
         graph: &SupportGraph,
     ) {
         info!(
-            "Recording transitions from {} matched shapes",
+            "Recording transitions from {} matched shapes (using full edge trace)",
             matches.len()
         );
 
         let mut allowed_count = 0;
 
         for matched in matches {
-            for (osm_node, in_atomic, out_atomic) in &matched.transitions {
-                // Find corresponding support edges
-                let in_candidates = atomic_to_support.get(in_atomic);
-                let out_candidates = atomic_to_support.get(out_atomic);
+            // Reconstruct the sequence of support edges traversed
+            let mut support_sequence: Vec<SupportEdgeId> = Vec::new();
 
-                if let (Some(in_edges), Some(out_edges)) = (in_candidates, out_candidates) {
-                    for &s_in in in_edges {
-                        for &s_out in out_edges {
-                            // Valid transition only if they share a node
-                            if let (Some(e_in), Some(e_out)) =
-                                (graph.edges.get(&s_in), graph.edges.get(&s_out))
-                            {
-                                let shared_node = if e_in.to == e_out.from || e_in.to == e_out.to {
-                                    e_in.to
-                                } else if e_in.from == e_out.from || e_in.from == e_out.to {
-                                    e_in.from
-                                } else {
-                                    continue;
-                                };
-
-                                // Record as allowed
-                                if self
-                                    .allowed
-                                    .entry((shared_node, matched.line_id.clone()))
-                                    .or_default()
-                                    .insert((s_in, s_out))
-                                {
-                                    allowed_count += 1;
-                                }
-                            }
+            for atomic_id in &matched.edges {
+                if let Some(support_edges) = atomic_to_support.get(atomic_id) {
+                    for &se in support_edges {
+                        // Append if not same as last (to avoid self-loops if multiple atomics map to same support edge)
+                        if support_sequence.last() != Some(&se) {
+                            support_sequence.push(se);
                         }
+                    }
+                }
+            }
+
+            // Record transitions between consecutive support edges in the sequence
+            for window in support_sequence.windows(2) {
+                let s_in = window[0];
+                let s_out = window[1];
+
+                // Check connectivity
+                if let (Some(e_in), Some(e_out)) = (graph.edges.get(&s_in), graph.edges.get(&s_out))
+                {
+                    // Find shared node
+                    let shared_node = if e_in.to == e_out.from || e_in.to == e_out.to {
+                        e_in.to
+                    } else if e_in.from == e_out.from || e_in.from == e_out.to {
+                        e_in.from
+                    } else {
+                        // Disconnected in support graph (gap?)
+                        // We might want to bridge if close?
+                        // For now, only record strict connected transitions.
+                        // Gaps might occur if intermediate atomic edges were fully collapsed.
+                        // But if we skipped them in the loop, we are now looking at the next available one.
+                        // If that one is physically connected to previous, we are good.
+                        continue;
+                    };
+
+                    // Record
+                    if self
+                        .allowed
+                        .entry((shared_node, matched.line_id.clone()))
+                        .or_default()
+                        .insert((s_in, s_out))
+                    {
+                        allowed_count += 1;
                     }
                 }
             }

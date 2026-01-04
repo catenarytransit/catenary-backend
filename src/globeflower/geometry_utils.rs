@@ -674,3 +674,8 @@ pub fn sample_along_polyline(coords: &[(f64, f64)], interval_m: f64) -> Vec<(f64
     // Map matcher usually wants equidistant points.
     res
 }
+
+/// Squared Euclidean distance between two points
+pub fn dist_sq(a: (f64, f64), b: (f64, f64)) -> f64 {
+    (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)
+}

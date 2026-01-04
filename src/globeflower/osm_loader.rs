@@ -157,6 +157,15 @@ impl OsmRailIndex {
             }
         }
 
+        // Sanity check for missing referenced nodes
+        let missing = node_ids.iter().filter(|id| !nodes.contains_key(id)).count();
+        if missing > 0 {
+            warn!(
+                "PBF missing {} referenced rail nodes -> expect breaks unless handled",
+                missing
+            );
+        }
+
         Ok((nodes, ways))
     }
 
@@ -211,17 +220,15 @@ impl OsmRailIndex {
         nodes: &HashMap<OsmNodeId, OsmNode>,
         ways: &HashMap<OsmWayId, OsmRailWay>,
     ) -> (Vec<AtomicEdge>, HashMap<OsmNodeId, Vec<AtomicEdgeId>>) {
-        // Count how many ways reference each node (for junction detection)
+        // 1. Calculate true undirected degree based on topological adjacencies
+        // (Iterate all consecutive pairs).
         let mut node_degree: HashMap<OsmNodeId, u32> = HashMap::new();
         for way in ways.values() {
-            for (i, &node_id) in way.nodes.iter().enumerate() {
-                let entry = node_degree.entry(node_id).or_insert(0);
-                // Endpoints always count, intermediate nodes add 1
-                if i == 0 || i == way.nodes.len() - 1 {
-                    *entry += 1;
-                } else {
-                    *entry += 2; // Passing through counts as 2 for degree
-                }
+            for window in way.nodes.windows(2) {
+                let u = window[0];
+                let v = window[1];
+                *node_degree.entry(u).or_insert(0) += 1;
+                *node_degree.entry(v).or_insert(0) += 1;
             }
         }
 
@@ -229,48 +236,80 @@ impl OsmRailIndex {
         let mut node_adjacency: HashMap<OsmNodeId, Vec<AtomicEdgeId>> = HashMap::new();
 
         for way in ways.values() {
-            let mut segment_start = 0;
             let mut segment_idx = 0u32;
+            let mut run_start = 0;
 
-            for i in 1..way.nodes.len() {
-                let node_id = way.nodes[i];
-                let is_endpoint = i == way.nodes.len() - 1;
-                let is_junction = node_degree.get(&node_id).copied().unwrap_or(0) > 2;
+            // Iterate through nodes and only build edges on contiguous runs of valid nodes
+            while run_start < way.nodes.len() {
+                // Skip nodes without coordinates
+                if !nodes.contains_key(&way.nodes[run_start]) {
+                    run_start += 1;
+                    continue;
+                }
 
-                if is_endpoint || is_junction {
-                    // Create atomic edge from segment_start to i
-                    let edge_nodes: Vec<_> = way.nodes[segment_start..=i].to_vec();
-                    if edge_nodes.len() >= 2 {
-                        let geometry: Vec<(f64, f64)> = edge_nodes
-                            .iter()
-                            .filter_map(|n| nodes.get(n).map(|node| (node.lon, node.lat)))
-                            .collect();
+                // Find end of this contiguous run
+                let mut run_end = run_start;
+                while run_end + 1 < way.nodes.len() && nodes.contains_key(&way.nodes[run_end + 1]) {
+                    run_end += 1;
+                }
 
-                        if geometry.len() >= 2 {
-                            let length = crate::geometry_utils::polyline_length(&geometry);
-                            let edge_id = AtomicEdgeId::from_way_segment(way.id, segment_idx);
+                // Run is [run_start, run_end] (inclusive indices)
+                let run_nodes = &way.nodes[run_start..=run_end];
 
-                            let edge = AtomicEdge {
-                                id: edge_id,
-                                from: edge_nodes[0],
-                                to: *edge_nodes.last().unwrap(),
-                                mode: way.mode,
-                                z_class: way.z_class,
-                                geometry,
-                                source_way: way.id,
-                                length_m: length,
-                            };
+                if run_nodes.len() >= 2 {
+                    // Split this run into atomic edges
+                    let mut seg_start_in_run = 0;
 
-                            node_adjacency.entry(edge.from).or_default().push(edge_id);
-                            node_adjacency.entry(edge.to).or_default().push(edge_id);
+                    for i in 0..run_nodes.len() {
+                        let node_id = run_nodes[i];
+                        // Split logic:
+                        // 1. Endpoints of the run (i==0 or i==end)
+                        // 2. Degree != 2 (Junction or Dead end)
+                        let degree = node_degree.get(&node_id).copied().unwrap_or(0);
+                        let is_split_point = degree != 2;
+                        let is_run_end = i == run_nodes.len() - 1;
 
-                            edges.push(edge);
-                            segment_idx += 1;
+                        if i > 0 && (is_split_point || is_run_end) {
+                            // Emit edge from seg_start_in_run to i
+                            let edge_node_ids = &run_nodes[seg_start_in_run..=i];
+
+                            // Geometry is guaranteed to exist due to run logic
+                            let geometry: Vec<(f64, f64)> = edge_node_ids
+                                .iter()
+                                .map(|id| {
+                                    let n = nodes.get(id).unwrap();
+                                    (n.lon, n.lat)
+                                })
+                                .collect();
+
+                            if geometry.len() >= 2 {
+                                let length = crate::geometry_utils::polyline_length(&geometry);
+                                let edge_id = AtomicEdgeId::from_way_segment(way.id, segment_idx);
+
+                                let edge = AtomicEdge {
+                                    id: edge_id,
+                                    from: edge_node_ids[0],
+                                    to: *edge_node_ids.last().unwrap(),
+                                    mode: way.mode,
+                                    z_class: way.z_class,
+                                    geometry,
+                                    source_way: way.id,
+                                    length_m: length,
+                                };
+
+                                node_adjacency.entry(edge.from).or_default().push(edge_id);
+                                node_adjacency.entry(edge.to).or_default().push(edge_id);
+
+                                edges.push(edge);
+                                segment_idx += 1;
+                            }
+
+                            seg_start_in_run = i;
                         }
                     }
-
-                    segment_start = i;
                 }
+
+                run_start = run_end + 1;
             }
         }
 

@@ -115,3 +115,6 @@ tiles_output/
 
 #Agents
 .agent/
+
+.corridor_tiles
+globwflower_graph*

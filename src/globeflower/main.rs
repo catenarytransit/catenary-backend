@@ -135,14 +135,15 @@ fn main() -> Result<()> {
         tile_size_deg,
         adaptive_sampling: true,
     };
-    let mut support_graph = support_graph::SupportGraph::from_disk_corridors(
+    let support_graph = support_graph::SupportGraph::from_disk_corridors(
         &disk_index,
+        &osm_index,
         &support_config,
         Some(&edge_to_routes),
     )?;
 
     // Enrich with station stops
-    support_graph.enrich_with_stations(&osm_index.pt_index, &support_config);
+    // support_graph.enrich_with_stations(&osm_index.pt_index, &support_config);
 
     // 5. Apply Lines to Support Graph
     // Since we propagated routes through CorridorCluster -> SupportEdge (TODO), we might not need re-matching.
@@ -174,11 +175,11 @@ fn main() -> Result<()> {
     );
 
     // Insert stations
-    info!("Inserting stations...");
-    let station_config = StationConfig::default();
-    let mut station_handler = StationHandler::new(&mut support_graph, station_config);
-    let inserted_stations = station_handler.insert_stations(&stop_clusters);
-    info!("Inserted {} stations", inserted_stations.len());
+    //  info!("Inserting stations...");
+    // let station_config = StationConfig::default();
+    //let mut station_handler = StationHandler::new(&mut support_graph, station_config);
+    //let inserted_stations = station_handler.insert_stations(&stop_clusters);
+    // info!("Inserted {} stations", inserted_stations.len());
 
     // Build turn restrictions
     let mut restrictions = TurnRestrictions::default();

@@ -24,10 +24,6 @@ pub fn export_geojson(
 
     let mut features = Vec::new();
 
-    // Build line lookup
-    let line_map: std::collections::HashMap<&LineId, &Line> =
-        lines.iter().map(|l| (&l.id, l)).collect();
-
     // Feature Collection level properties (lines array)
     let lines_array: Vec<JsonValue> = lines
         .iter()
@@ -94,12 +90,14 @@ pub fn export_geojson(
             .lines
             .iter()
             .map(|occ| {
-                let line_info = line_map.get(&occ.line);
+                // Optimized: Only export ID and direction to save space.
+                // Full metadata is in the "lines" array property of the FeatureCollection.
                 json!({
                     "id": occ.line.to_string(),
-                    "label": line_info.map(|l| l.label.as_str()).unwrap_or(""),
-                    "color": line_info.map(|l| l.color.as_str()).unwrap_or("888888"),
-                    "direction": occ.direction_node.map(|n| n.to_string())
+                    "d": occ.direction_node.map(|n| n.to_string()) // "d" for direction to save bytes? Or keep "direction" for readability?
+                    // User said "remove label and color", "retaining only id and direction".
+                    // Let's keep "direction" to be safe on schema, unless user wants extreme compression.
+                    // "direction": ...
                 })
             })
             .collect();

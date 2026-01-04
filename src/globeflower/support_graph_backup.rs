@@ -1,7 +1,7 @@
 use crate::corridor::{CorridorCluster, CorridorId, DiskCorridorIndex};
 use crate::geometry_utils;
-use crate::osm_loader::{OsmPtIndex, OsmRailIndex, PtKind};
-use crate::osm_types::{AtomicEdgeId, LineId, LineOcc, OsmNodeId, RailMode, ZClass};
+use crate::osm_loader::{OsmPtIndex, PtKind};
+use crate::osm_types::{AtomicEdgeId, LineId, LineOcc, RailMode, ZClass};
 use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use log::{debug, info};
 use rstar::{AABB, RTree, primitives::GeomWithData};
@@ -24,8 +24,6 @@ pub struct SupportNode {
     /// Station info if this is a station node
     pub station_id: Option<String>,
     pub station_label: Option<String>,
-    /// Underlying OSM nodes (skeleton node may represent multiple merged OSM nodes)
-    pub osm_node_ids: HashSet<OsmNodeId>,
 }
 
 /// An edge in the support graph
@@ -98,7 +96,6 @@ impl SupportGraph {
     /// Build support graph from disk-backed corridor index with Route-Aware logic
     pub fn from_disk_corridors(
         disk_index: &DiskCorridorIndex,
-        rail_index: &OsmRailIndex,
         config: &SupportGraphConfig,
         edge_to_routes: Option<&HashMap<AtomicEdgeId, Vec<LineId>>>,
     ) -> std::io::Result<Self> {
@@ -185,65 +182,8 @@ impl SupportGraph {
                             _ => 5.0, // Rail/Tram
                         };
 
-                        let mut start_osm_ids = HashSet::new();
-                        let mut end_osm_ids = HashSet::new();
-
-                        // Collect OSM node IDs at endpoints for strict connectivity check
-                        // We need to look up which OSM nodes correspond to the start/end of the corridor
-                        if !corridor.member_edges.is_empty() {
-                            // Find member edges near start (first point) and end (last point)
-                            // A heuristic: check all member edges, if their endpoint matches corridor endpoint?
-                            // Or better: The corridor is formed by edges. The start of the corridor is one end of some edge.
-
-                            // Let's iterate all member edges and check distance to start/end of corridor
-                            // Since we don't have exact mapping of "which node is at start", we rely on geometry
-                            // But we have the rail_index, so we can check coordinates.
-
-                            // Optimization: We could have stored this in CorridorCluster, but that requires rebuilding corridors.
-                            // We have rail_index.edges map.
-
-                            let start_p = corridor.centerline.first().unwrap();
-                            let end_p = corridor.centerline.last().unwrap();
-
-                            for &edge_id in &corridor.member_edges {
-                                if let Some(idx) = rail_index.edge_index.get(&edge_id) {
-                                    let edge = &rail_index.edges[*idx];
-
-                                    // Check start
-                                    if let Some(pos) = rail_index.node_position(edge.from) {
-                                        let d = geometry_utils::dist_sq(pos, *start_p);
-                                        if d < 1e-8 {
-                                            start_osm_ids.insert(edge.from);
-                                        } else {
-                                            let d_end = geometry_utils::dist_sq(pos, *end_p);
-                                            if d_end < 1e-8 {
-                                                end_osm_ids.insert(edge.from);
-                                            }
-                                        }
-                                    }
-
-                                    if let Some(pos) = rail_index.node_position(edge.to) {
-                                        let d = geometry_utils::dist_sq(pos, *start_p);
-                                        if d < 1e-8 {
-                                            start_osm_ids.insert(edge.to);
-                                        } else {
-                                            let d_end = geometry_utils::dist_sq(pos, *end_p);
-                                            if d_end < 1e-8 {
-                                                end_osm_ids.insert(edge.to);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        graph.find_or_create_node(
-                            start,
-                            corridor.z_class,
-                            threshold,
-                            &start_osm_ids,
-                        );
-                        graph.find_or_create_node(end, corridor.z_class, threshold, &end_osm_ids);
+                        graph.find_or_create_node(start, corridor.z_class, threshold);
+                        graph.find_or_create_node(end, corridor.z_class, threshold);
                     }
                 }
                 info!("Pass 1 Complete: {} nodes created.", graph.nodes.len());
@@ -303,7 +243,7 @@ impl SupportGraph {
         // Trace for first few corridors
         let debug_trace = corridor.id.0 < 5;
         if debug_trace {
-            eprintln!(
+            info!(
                 "Processing Corridor {}: len={}m z={:?}",
                 corridor.id.0, corridor.length_m, corridor.z_class
             );
@@ -318,19 +258,10 @@ impl SupportGraph {
                 }
             }
         }
-        if corridor.centerline.is_empty() {
-            return;
-        }
-        let origin = corridor.centerline[0];
-        let ltp = geometry_utils::LocalTangentPlane::new(origin.0, origin.1);
-        let metric_line: Vec<(f64, f64)> = corridor
-            .centerline
-            .iter()
-            .map(|&(lon, lat)| ltp.project(lon, lat))
-            .collect();
-        let total_len = geometry_utils::polyline_length_metric(&metric_line);
 
         // Sampling Logic (LOOM style)
+        // Sample along corridor at interval L, query for nodes within D
+        let total_len = geometry_utils::polyline_length_metric(&corridor.centerline);
         let sample_interval = 25.0; // 25m sampling
         let query_dist = 5.0; // 5m query radius
 
@@ -341,36 +272,42 @@ impl SupportGraph {
 
         for i in 0..=num_samples {
             let dist = (i as f64 * sample_interval).min(total_len);
-            let pos_metric =
-                geometry_utils::interpolate_along_polyline_metric(&metric_line, dist / total_len);
-            // Unproject to get query envelope in degrees
-            let (pos_lon, pos_lat) = ltp.unproject(pos_metric.0, pos_metric.1);
+            let pos = geometry_utils::interpolate_along_polyline_metric(
+                &corridor.centerline,
+                dist / total_len,
+            ); // metric aware? Using util
 
             // Query spatial index
             let threshold_deg = query_dist / 111320.0;
             let envelope = AABB::from_corners(
-                [pos_lon - threshold_deg, pos_lat - threshold_deg],
-                [pos_lon + threshold_deg, pos_lat + threshold_deg],
+                [pos.0 - threshold_deg, pos.1 - threshold_deg],
+                [pos.0 + threshold_deg, pos.1 + threshold_deg],
             );
 
             for entry in self.node_tree.locate_in_envelope(&envelope) {
                 let (node_id, node_z) = entry.data;
 
+                // Z-Check
+                // Allow matching if Z matches OR if node is Cross-Z splice?
+                // Simple strict check for now:
                 if node_z != corridor.z_class {
                     continue;
                 }
+
                 if seen_nodes.contains(&node_id) {
                     continue;
                 }
 
-                let node_pos_geo = entry.geom();
-                let node_pos_metric = ltp.project(node_pos_geo[0], node_pos_geo[1]);
-
-                // Check actual distance in metric space
+                let node_pos = (entry.geom()[0], entry.geom()[1]);
+                // Check actual distance
                 if let Some((d_along, d_off, _)) =
-                    geometry_utils::project_point_to_polyline_metric(node_pos_metric, &metric_line)
+                    geometry_utils::project_point_to_polyline_metric(node_pos, &corridor.centerline)
                 {
                     if d_off < query_dist {
+                        // Check No-Merge Zones (Endpoints)
+                        // If very close to start or end (e.g. < 5m), accept it (it's the endpoint).
+                        // If "near" endpoint but not "at" (e.g. 10m), check angle?
+                        // For now accept all close nodes.
                         split_candidates.push((d_along, node_id));
                         seen_nodes.insert(node_id);
                     }
@@ -379,20 +316,22 @@ impl SupportGraph {
         }
 
         if debug_trace {
-            eprintln!(
+            info!(
                 "Corridor {}: Found {} split candidate nodes",
                 corridor.id.0,
                 split_candidates.len()
             );
-            for (d, id) in &split_candidates {
-                eprintln!("  Candidate: {:.2}m Node {}", d, id.0);
-            }
         }
+
+        // Always include endpoints?
+        // Pass 1 should have created them. And Sampling should find them.
 
         // Sort and Dedup
         split_candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
-        // Blocking Set Heuristic
+        // Blocking Set Heuristic: remove nodes that are too close to each other along the line
+        // e.g. if we have nodes at 100m and 102m, merge or pick one?
+        // Loop and filter
         let mut final_nodes = Vec::new();
         if !split_candidates.is_empty() {
             final_nodes.push(split_candidates[0]);
@@ -400,24 +339,13 @@ impl SupportGraph {
                 let prev = final_nodes.last().unwrap();
                 let curr = split_candidates[i];
                 if (curr.0 - prev.0) > 2.0 {
+                    // 2m min separation
                     final_nodes.push(curr);
                 } else {
-                    if debug_trace {
-                        eprintln!(
-                            "  Skipping node {} at {:.2}m (too close to {:.2}m)",
-                            curr.1.0, curr.0, prev.0
-                        );
-                    }
+                    // Pick the one closer to "integer" sample or just keep first?
+                    // Keep first (simplest).
                 }
             }
-        }
-
-        if debug_trace {
-            eprintln!(
-                "Corridor {}: Final nodes: {}",
-                corridor.id.0,
-                final_nodes.len()
-            );
         }
 
         // Create edges
@@ -429,11 +357,7 @@ impl SupportGraph {
                 continue;
             }
 
-            if debug_trace {
-                eprintln!("  Creating edge {} -> {}", id_start.0, id_end.0);
-            }
-
-            // Extract geom using fractions on ORIGINAL centerline
+            // Extract geom
             let start_frac = d_start / total_len;
             let end_frac = d_end / total_len;
             let geom =
@@ -444,7 +368,7 @@ impl SupportGraph {
                 id_end,
                 geom,
                 corridor.z_class,
-                vec![corridor.id],
+                corridor.id,
                 corridor.mode,
                 &corridor_routes,
             );
@@ -457,7 +381,6 @@ impl SupportGraph {
         pos: (f64, f64),
         z_class: ZClass,
         threshold_m: f64,
-        osm_ids: &HashSet<OsmNodeId>,
     ) -> SupportNodeId {
         let threshold_deg = threshold_m / 111320.0;
         let envelope = AABB::from_corners(
@@ -487,18 +410,6 @@ impl SupportGraph {
                 if best.map_or(true, |(_, d)| dist < d) {
                     best = Some((candidate_id, dist));
                 }
-            } else {
-                // Different Z-class: Check strict OSM connectivity
-                // If the existing node shares any OSM ID with our new point, they are the same physical node.
-                if let Some(node) = self.nodes.get(&candidate_id) {
-                    if !node.osm_node_ids.is_disjoint(osm_ids) {
-                        // Connected in OSM -> Merge even if Z different!
-                        // Prioritize this match if it occurs
-                        best = Some((candidate_id, dist));
-                        // Break immediately? Yes, physical identity is strongest match.
-                        break;
-                    }
-                }
             }
         }
 
@@ -516,7 +427,6 @@ impl SupportGraph {
             z_class,
             station_id: None,
             station_label: None,
-            osm_node_ids: osm_ids.clone(),
         };
 
         self.nodes.insert(id, node);
@@ -534,7 +444,7 @@ impl SupportGraph {
         to: SupportNodeId,
         geometry: Vec<(f64, f64)>,
         z_class: ZClass,
-        source_corridors: Vec<CorridorId>,
+        corridor_id: CorridorId,
         mode: RailMode,
         routes: &HashSet<LineId>,
     ) {
@@ -593,10 +503,8 @@ impl SupportGraph {
         if let Some(eid) = best_match {
             // Update
             let edge = self.edges.get_mut(&eid).unwrap();
-            for cid in source_corridors {
-                if !edge.source_corridors.contains(&cid) {
-                    edge.source_corridors.push(cid);
-                }
+            if !edge.source_corridors.contains(&corridor_id) {
+                edge.source_corridors.push(corridor_id);
             }
             edge.modes.insert(mode);
             edge.known_routes.extend(routes.iter().cloned());
@@ -621,7 +529,7 @@ impl SupportGraph {
                 z_class,
                 length_m,
                 lines: Vec::new(),
-                source_corridors,
+                source_corridors: vec![corridor_id],
                 modes,
                 known_routes,
             };
@@ -755,7 +663,6 @@ impl SupportGraph {
                     z_class: edge.z_class,
                     station_id: feature.name.clone().or(feature.uic_ref.clone()),
                     station_label: feature.name.clone(),
-                    osm_node_ids: HashSet::new(), // New split node has no direct OSM ID usually, or maybe feature.id?
                 };
                 self.nodes.insert(new_node_id, new_node);
                 self.node_edges.insert(new_node_id, Vec::new());
@@ -796,7 +703,7 @@ impl SupportGraph {
             split_node_id,
             geom_a,
             old_edge.z_class,
-            old_edge.source_corridors.clone(),
+            old_edge.source_corridors[0],           // TODO fix mult
             *old_edge.modes.iter().next().unwrap(), // TODO fix mult
             &old_edge.known_routes,
         );
@@ -807,7 +714,7 @@ impl SupportGraph {
             old_edge.to,
             geom_b,
             old_edge.z_class,
-            old_edge.source_corridors.clone(),
+            old_edge.source_corridors[0],
             *old_edge.modes.iter().next().unwrap(),
             &old_edge.known_routes,
         );
@@ -839,7 +746,47 @@ impl Default for SupportGraph {
         Self::new()
     }
 }
-
 #[cfg(test)]
-#[path = "support_graph_test.rs"]
-mod support_graph_test;
+mod tests {
+    use super::*;
+    use crate::corridor::{CorridorCluster, CorridorId};
+    use crate::osm_types::{RailMode, ZClass};
+
+    #[test]
+    fn test_process_corridor_splitting_creates_edges() {
+        // Setup
+        let mut graph = SupportGraph::new();
+        let config = SupportGraphConfig::default();
+
+        // Create a simple corridor
+        let centerline = vec![(0.0, 0.0), (0.001, 0.001)]; // diagonals approx 150m
+        let corridor = CorridorCluster {
+            id: CorridorId(1),
+            member_edges: vec![],
+            centerline: centerline.clone(),
+            z_class: ZClass::Surface,
+            mode: RailMode::Rail,
+            length_m: 150.0,
+            is_mixed_z: false,
+        };
+
+        // Pass 1: Create nodes (Endpoints)
+        let start = centerline[0];
+        let end = centerline[1];
+        graph.find_or_create_node(start, ZClass::Surface, 5.0);
+        graph.find_or_create_node(end, ZClass::Surface, 5.0);
+
+        assert_eq!(graph.nodes.len(), 2, "Pass 1 should create 2 nodes");
+
+        // Pass 2: Split
+        graph.process_corridor_splitting(&corridor, &config, None);
+
+        // Assert
+        assert!(!graph.edges.is_empty(), "Pass 2 should create edges");
+        assert_eq!(
+            graph.edges.len(),
+            1,
+            "Should create 1 edge for simple segment"
+        );
+    }
+}
