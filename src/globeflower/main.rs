@@ -192,13 +192,6 @@ fn main() -> Result<()> {
         > = ahash::HashMap::new();
 
         // 1. Map Corridor -> Atomic Edges
-        // We know each support edge comes from one or more corridors.
-        // And each corridor comes from one or more atomic edges.
-        // BUT we don't have the full Corridor object anymore (it was on disk).
-        // `SupportEdge` struct has `source_corridors: Vec<CorridorId>`.
-        // We need to re-read corridors?
-        // Wait, looping ALL corridors is expensive if we do it stupidly.
-        // But we have `disk_index`.
 
         // We can iterate the disk index once to build `CorridorId -> Vec<AtomicEdgeId>`.
         let mut corridor_to_atomic: ahash::HashMap<
