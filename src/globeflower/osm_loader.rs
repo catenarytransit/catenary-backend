@@ -42,6 +42,8 @@ pub struct OsmRailIndex {
     pub edge_rtree: RTree<GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, AtomicEdgeId>>,
     /// Spatial index for nodes
     pub node_rtree: RTree<GeomWithData<[f64; 2], OsmNodeId>>,
+    /// Index of public transport features (stops, stations)
+    pub pt_index: OsmPtIndex,
 }
 
 impl OsmRailIndex {
@@ -77,6 +79,9 @@ impl OsmRailIndex {
         let edge_rtree = Self::build_edge_rtree(&edges);
         let node_rtree = Self::build_node_rtree(&nodes);
 
+        // Load PT features (separate pass)
+        let pt_index = OsmPtIndex::load_from_pbf(path)?;
+
         Ok(Self {
             nodes,
             ways,
@@ -85,6 +90,7 @@ impl OsmRailIndex {
             node_adjacency,
             edge_rtree,
             node_rtree,
+            pt_index,
         })
     }
 
@@ -156,6 +162,11 @@ impl OsmRailIndex {
 
     /// Check if a way has a rail-related railway tag
     fn is_rail_way(tags: &Tags) -> bool {
+        if let Some(service) = tags.get("service") {
+            if service == "yard" {
+                return false;
+            }
+        }
         if let Some(railway) = tags.get("railway") {
             RailMode::from_osm_tag(railway)
                 .map(|m| m.is_active_rail())
@@ -167,6 +178,12 @@ impl OsmRailIndex {
 
     /// Parse a way into an OsmRailWay
     fn parse_rail_way(way: &osmpbfreader::Way) -> Option<OsmRailWay> {
+        if let Some(service) = way.tags.get("service") {
+            if service == "yard" {
+                return None;
+            }
+        }
+
         let railway = way.tags.get("railway")?;
         let mode = RailMode::from_osm_tag(railway)?;
         if !mode.is_active_rail() {
@@ -357,5 +374,173 @@ impl OsmRailIndex {
     /// Get node coordinates
     pub fn node_position(&self, node: OsmNodeId) -> Option<(f64, f64)> {
         self.nodes.get(&node).map(|n| (n.lon, n.lat))
+    }
+}
+
+// --- Public Transport Feature Indexing ---
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PtKind {
+    StopPosition, // public_transport=stop_position (highest priority)
+    Platform,     // public_transport=platform or railway=platform
+    Station,      // public_transport=station or railway=station/halt
+    TramStop,     // railway=tram_stop
+    Entrance,     // public_transport=entrance (lower priority)
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PtModeHints {
+    pub is_train: bool,
+    pub is_subway: bool,
+    pub is_tram: bool,
+    pub is_bus: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct OsmPtFeature {
+    pub id: u64, // Original OSM Node/Way/Rel ID (mixed namespace, but usually nodes)
+    pub kind: PtKind,
+    pub coord: (f64, f64),
+    pub name: Option<String>,
+    pub level: Option<f64>, // Changed to f64 to handle "0.5" or similar, though usually int
+    pub layer: Option<i8>,
+    pub mode_hints: PtModeHints,
+    pub uic_ref: Option<String>,
+}
+
+pub struct OsmPtIndex {
+    pub features: HashMap<u64, OsmPtFeature>,
+    /// R-Tree storing feature ID at its lon/lat
+    pub rtree: RTree<GeomWithData<[f64; 2], u64>>,
+}
+
+impl OsmPtIndex {
+    pub fn new() -> Self {
+        Self {
+            features: HashMap::new(),
+            rtree: RTree::new(),
+        }
+    }
+
+    /// Load PT features from PBF.
+    /// This is a separate pass from the rail loader to keep logic clean.
+    /// It scans for nodes/ways/relations with relevant tags.
+    pub fn load_from_pbf(path: &Path) -> anyhow::Result<Self> {
+        info!("Loading public transport features from {:?}", path);
+        let file = File::open(path)?;
+        let mut reader = OsmPbfReader::new(BufReader::new(file));
+
+        let mut features = HashMap::new();
+        let mut rtree_items = Vec::new();
+
+        // Single pass for nodes (most stops are nodes).
+        // For ways (platforms), we need a 2-pass approach if we want centroids,
+        // but for now let's focus on nodes which are the primary anchors for stops.
+
+        // TODO: Full support for Way/Relation platforms requires collecting IDs first.
+        // For "Gare du Nord" refinement, stop_position nodes are the critical piece.
+
+        for obj in reader.iter() {
+            let obj = obj?;
+            match obj {
+                OsmObj::Node(node) => {
+                    if let Some(feature) = Self::parse_pt_node(&node) {
+                        rtree_items.push(GeomWithData::new(
+                            [feature.coord.0, feature.coord.1],
+                            feature.id,
+                        ));
+                        features.insert(feature.id, feature);
+                    }
+                }
+                OsmObj::Way(way) => {
+                    // Platforms are often ways. We can only process them if we have node coords.
+                    // Since this is a streaming single-pass on specific objects, efficient way processing
+                    // is hard without keeping all nodes.
+                    // Strategy: Stick to NODE features for now as recommended for "stop_position".
+                    // If we need platforms, we iterate ways, collect node IDs, re-scan nodes.
+                    // Given the user's advice "Minimum viable... only load public_transport=stop_position nodes",
+                    // we will stick to nodes for speed and simplicity in this refactor step.
+                    // We can verify if this covers "TramStop" (usually nodes) and "Station" (node or area).
+                }
+                _ => {}
+            }
+        }
+
+        info!("Loaded {} public transport feature nodes", features.len());
+        Ok(Self {
+            features,
+            rtree: RTree::bulk_load(rtree_items),
+        })
+    }
+
+    fn parse_pt_node(node: &osmpbfreader::Node) -> Option<OsmPtFeature> {
+        let tags = &node.tags;
+
+        // Determine Kind
+        let kind = if tags.contains("public_transport", "stop_position") {
+            PtKind::StopPosition
+        } else if tags.contains("railway", "tram_stop") {
+            PtKind::TramStop
+        } else if tags.contains("public_transport", "platform")
+            || tags.contains("railway", "platform")
+        {
+            PtKind::Platform
+        } else if tags.contains("railway", "station")
+            || tags.contains("railway", "halt")
+            || tags.contains("public_transport", "station")
+        {
+            PtKind::Station
+        } else if tags.contains("public_transport", "entrance") {
+            // Entrances are useful for matching but not for track snapping usually
+            PtKind::Entrance
+        } else {
+            return None;
+        };
+
+        // Determine Mode Hints
+        let mut hints = PtModeHints::default();
+        if tags.contains("train", "yes") || tags.contains("railway", "station") {
+            hints.is_train = true;
+        }
+        if tags.contains("subway", "yes") || tags.contains("station", "subway") {
+            hints.is_subway = true;
+        }
+        if tags.contains("tram", "yes") || tags.contains("railway", "tram_stop") {
+            hints.is_tram = true;
+        }
+        if tags.contains("bus", "yes") {
+            hints.is_bus = true;
+        }
+
+        // Infer from railway tag itself
+        if let Some(rw) = tags.get("railway") {
+            match rw.as_str() {
+                "subway" => hints.is_subway = true,
+                "tram" => hints.is_tram = true,
+                _ => {}
+            }
+        }
+
+        let name = tags.get("name").map(|s| s.to_string());
+        let uic_ref = tags
+            .get("uic_ref")
+            .or_else(|| tags.get("ref"))
+            .map(|s| s.to_string());
+
+        let level = tags.get("level").and_then(|v| v.parse::<f64>().ok());
+
+        let layer = tags.get("layer").and_then(|v| v.parse::<i8>().ok());
+
+        Some(OsmPtFeature {
+            id: node.id.0 as u64,
+            kind,
+            coord: (node.lon(), node.lat()),
+            name,
+            level,
+            layer,
+            mode_hints: hints,
+            uic_ref,
+        })
     }
 }

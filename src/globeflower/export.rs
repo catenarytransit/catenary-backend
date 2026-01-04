@@ -153,6 +153,10 @@ pub fn export_binary(
     let mut edges = Vec::new();
     let mut clusters = Vec::new();
 
+    // Map SupportEdgeId to index in the edges vector
+    let mut support_edge_id_to_index: std::collections::HashMap<SupportEdgeId, usize> =
+        std::collections::HashMap::new();
+
     // Collect station nodes as clusters
     let mut station_to_cluster: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
@@ -187,7 +191,9 @@ pub fn export_binary(
     }
 
     // Convert edges
-    for (_, edge) in &graph.edges {
+    for (idx, (edge_id, edge)) in graph.edges.iter().enumerate() {
+        support_edge_id_to_index.insert(*edge_id, idx);
+
         let from_node_id = convert_support_node_to_catenary(edge.from, &graph.nodes);
         let to_node_id = convert_support_node_to_catenary(edge.to, &graph.nodes);
 
@@ -212,8 +218,26 @@ pub fn export_binary(
     // Build land masses (connected components)
     let land_masses = build_land_masses(&edges, &clusters);
 
-    // Convert restrictions
-    let turn_restrictions: Vec<TurnRestriction> = Vec::new(); // TODO: Convert from TurnRestrictions
+    // TurnRestriction uses (from_edge_index, to_edge_index, route_id) format
+
+    // Iterate over all nodes to find restrictions
+    let mut turn_restrictions: Vec<TurnRestriction> = Vec::new();
+
+    for (node_id, _) in &graph.nodes {
+        let exclusions = restrictions.excluded_transitions_at_node(*node_id, graph);
+        for (from_edge_id, to_edge_id, line) in exclusions {
+            if let (Some(&from_idx), Some(&to_idx)) = (
+                support_edge_id_to_index.get(&from_edge_id),
+                support_edge_id_to_index.get(&to_edge_id),
+            ) {
+                turn_restrictions.push(TurnRestriction {
+                    from_edge_index: from_idx,
+                    to_edge_index: to_idx,
+                    route_id: (line.chateau, line.route_id),
+                });
+            }
+        }
+    }
 
     let export = SerializableExportGraph {
         land_masses,

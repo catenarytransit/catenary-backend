@@ -30,30 +30,56 @@ impl TurnRestrictions {
     }
 
     /// Record allowed transitions from matched shapes
-    pub fn record_from_matches(&mut self, matches: &[MatchedShape], graph: &SupportGraph) {
+    pub fn record_from_matches(
+        &mut self,
+        matches: &[MatchedShape],
+        atomic_to_support: &HashMap<crate::osm_types::AtomicEdgeId, Vec<SupportEdgeId>>,
+        graph: &SupportGraph,
+    ) {
         info!(
             "Recording transitions from {} matched shapes",
             matches.len()
         );
 
+        let mut allowed_count = 0;
+
         for matched in matches {
-            for (node, in_edge, out_edge) in &matched.transitions {
-                // Map OSM node/edge IDs to support graph IDs
-                // For now, we use a simple heuristic to find corresponding support edges
+            for (osm_node, in_atomic, out_atomic) in &matched.transitions {
+                // Find corresponding support edges
+                let in_candidates = atomic_to_support.get(in_atomic);
+                let out_candidates = atomic_to_support.get(out_atomic);
 
-                // This is a simplification - in a full implementation, we'd track
-                // the mapping from OSM edges to support edges through the corridor index
+                if let (Some(in_edges), Some(out_edges)) = (in_candidates, out_candidates) {
+                    for &s_in in in_edges {
+                        for &s_out in out_edges {
+                            // Valid transition only if they share a node
+                            if let (Some(e_in), Some(e_out)) =
+                                (graph.edges.get(&s_in), graph.edges.get(&s_out))
+                            {
+                                let shared_node = if e_in.to == e_out.from || e_in.to == e_out.to {
+                                    e_in.to
+                                } else if e_in.from == e_out.from || e_in.from == e_out.to {
+                                    e_in.from
+                                } else {
+                                    continue;
+                                };
 
-                // Record the transition as allowed
-                self.allowed
-                    .entry((node_to_support_node(*node), matched.line_id.clone()))
-                    .or_default()
-                    .insert((
-                        edge_to_support_edge(*in_edge),
-                        edge_to_support_edge(*out_edge),
-                    ));
+                                // Record as allowed
+                                if self
+                                    .allowed
+                                    .entry((shared_node, matched.line_id.clone()))
+                                    .or_default()
+                                    .insert((s_in, s_out))
+                                {
+                                    allowed_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
+        info!("Recorded {} allowed transitions", allowed_count);
     }
 
     /// Generate excluded_conn list for a node
@@ -127,6 +153,57 @@ impl TurnRestrictions {
         exclusions
     }
 
+    /// Generate excluded transitions list for a node (returning raw edge IDs)
+    pub fn excluded_transitions_at_node(
+        &self,
+        node_id: SupportNodeId,
+        graph: &SupportGraph,
+    ) -> Vec<(SupportEdgeId, SupportEdgeId, LineId)> {
+        let edges = graph.node_edges.get(&node_id);
+        if edges.is_none() || edges.unwrap().len() < 2 {
+            return vec![];
+        }
+
+        let edges = edges.unwrap();
+        let mut exclusions = Vec::new();
+
+        // For each line at this node
+        let mut lines_at_node: HashSet<LineId> = HashSet::new();
+        for &edge_id in edges {
+            if let Some(edge) = graph.edges.get(&edge_id) {
+                for line_occ in &edge.lines {
+                    lines_at_node.insert(line_occ.line.clone());
+                }
+            }
+        }
+
+        // For each line, check all possible transitions
+        for line_id in lines_at_node {
+            let allowed_key = (node_id, line_id.clone());
+            let allowed_set = self.allowed.get(&allowed_key);
+
+            // All edge pairs at this node
+            for &in_edge_id in edges {
+                for &out_edge_id in edges {
+                    if in_edge_id == out_edge_id {
+                        continue;
+                    }
+
+                    // Check if this transition is allowed
+                    let is_allowed = allowed_set
+                        .map(|set| set.contains(&(in_edge_id, out_edge_id)))
+                        .unwrap_or(false);
+
+                    if !is_allowed {
+                        exclusions.push((in_edge_id, out_edge_id, line_id.clone()));
+                    }
+                }
+            }
+        }
+
+        exclusions
+    }
+
     /// Build restrictions from GTFS-matched edge sequences (simpler approach)
     pub fn build_from_edge_sequences(
         matched_sequences: &[(LineId, Vec<SupportEdgeId>)],
@@ -169,14 +246,4 @@ impl Default for TurnRestrictions {
     fn default() -> Self {
         Self::new()
     }
-}
-
-// Placeholder conversion functions - in full implementation these would use
-// actual mappings from the corridor/support graph construction
-fn node_to_support_node(osm_node: crate::osm_types::OsmNodeId) -> SupportNodeId {
-    SupportNodeId(osm_node.0 as u64)
-}
-
-fn edge_to_support_edge(osm_edge: crate::osm_types::AtomicEdgeId) -> SupportEdgeId {
-    SupportEdgeId(osm_edge.0)
 }
