@@ -508,7 +508,8 @@ impl Optimizer {
                     edge_angles.push((idx, angle));
                 }
                 // Sort
-                edge_angles.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                edge_angles
+                    .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
                 // Rank map
                 let edge_rank: HashMap<usize, usize> = edge_angles
@@ -768,7 +769,9 @@ impl Optimizer {
             line_indices.sort_by(|&a, &b| {
                 let sum_a = ranks.iter().find(|(idx, _)| *idx == a).unwrap().1;
                 let sum_b = ranks.iter().find(|(idx, _)| *idx == b).unwrap().1;
-                sum_b.partial_cmp(&sum_a).unwrap_or(std::cmp::Ordering::Equal) // Descending
+                sum_b
+                    .partial_cmp(&sum_a)
+                    .unwrap_or(std::cmp::Ordering::Equal) // Descending
             });
 
             let new_lines: Vec<LineOnEdge> = line_indices
@@ -2980,7 +2983,9 @@ impl Optimizer {
         edge_angles.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Find noon edge position
-        let noon_pos = edge_angles.iter().position(|(idx, _)| *idx == noon_edge_idx);
+        let noon_pos = edge_angles
+            .iter()
+            .position(|(idx, _)| *idx == noon_edge_idx);
 
         // Reorder starting after noon in clockwise order
         let mut result = Vec::new();
@@ -3305,7 +3310,7 @@ impl Optimizer {
             let mut lines = edge.lines.clone();
             let cmp_map = if use_left { &left } else { &right };
             let rev = !use_left; // right uses rev=true in C++ loom
-            
+
             // Custom insertion sort that handles potentially non-transitive comparisons
             for i in 1..lines.len() {
                 let mut j = i;
@@ -3321,7 +3326,7 @@ impl Optimizer {
                         // Fallback to lexicographic ordering
                         lines[j].line_id < lines[j - 1].line_id
                     };
-                    
+
                     if should_swap {
                         lines.swap(j, j - 1);
                         j -= 1;
@@ -3390,11 +3395,7 @@ impl Optimizer {
                 // Build relative ordering map for edge A
                 let mut ordering: HashMap<String, usize> = HashMap::new();
                 for (i, line) in cfg_a.iter().enumerate() {
-                    let pos = if same_dir {
-                        cfg_a.len() - 1 - i
-                    } else {
-                        i
-                    };
+                    let pos = if same_dir { cfg_a.len() - 1 - i } else { i };
                     ordering.insert(line.line_id.clone(), pos);
                 }
 
@@ -3525,7 +3526,8 @@ impl Optimizer {
                         swapped.swap(p1, p2);
                         cfg.insert(edge_idx, swapped.clone());
 
-                        let new_score = self.compute_edge_score(graph, edge_idx, &cfg, node_to_edges);
+                        let new_score =
+                            self.compute_edge_score(graph, edge_idx, &cfg, node_to_edges);
 
                         if new_score < old_score && old_score - new_score > best_change {
                             best_change = old_score - new_score;

@@ -435,12 +435,12 @@ impl TileGenerator {
         // Epsilon values in degrees (approx: 0.00001° ≈ 1.1m at equator)
         // Higher epsilon = more simplification = smoother lines
         match z {
-            0..=4 => Some(0.001),   // ~111m - very aggressive for world view
-            5..=6 => Some(0.0005),  // ~55m - aggressive for continental view
-            7..=8 => Some(0.0002),  // ~22m - moderate simplification
-            9 => Some(0.0001),      // ~11m - gentle simplification
-            10 => Some(0.00005),    // ~5.5m - very gentle smoothing
-            _ => None,              // No simplification for z >= 11
+            0..=4 => Some(0.001),  // ~111m - very aggressive for world view
+            5..=6 => Some(0.0005), // ~55m - aggressive for continental view
+            7..=8 => Some(0.0002), // ~22m - moderate simplification
+            9 => Some(0.0001),     // ~11m - gentle simplification
+            10 => Some(0.00005),   // ~5.5m - very gentle smoothing
+            _ => None,             // No simplification for z >= 11
         }
     }
 
@@ -680,7 +680,9 @@ impl TileGenerator {
                                 if last_group.0 == line.color {
                                     last_group.1.push(idx);
                                     last_group.2.insert(line.line_id.clone());
-                                    last_group.3.push((line.chateau_id.clone(), line.route_id.clone()));
+                                    last_group
+                                        .3
+                                        .push((line.chateau_id.clone(), line.route_id.clone()));
                                     continue;
                                 }
                             }
@@ -708,35 +710,42 @@ impl TileGenerator {
                     // Match groups that have same color AND share at least one UNRESTRICTED route
                     // This fixes the "ladder" bug where routes that split at junctions were
                     // incorrectly connected across all branch combinations.
-                    for (group1_idx, (color1, line_indices1, ids1, routes1)) in groups1.iter().enumerate() {
+                    for (group1_idx, (color1, line_indices1, ids1, routes1)) in
+                        groups1.iter().enumerate()
+                    {
                         // Find matching group on edge2
                         // Must match color AND have at least one shared line_id
                         let group2_match =
-                            groups2.iter().enumerate().find(|(_, (color2, _, ids2, routes2))| {
-                                if color1 != color2 || ids1.is_disjoint(ids2) {
-                                    return false;
-                                }
-                                // Check if at least one route is NOT restricted between these edges
-                                // A route can transition if it's NOT in the restriction map
-                                for route in routes1 {
-                                    if !routes2.contains(route) {
-                                        continue;
+                            groups2
+                                .iter()
+                                .enumerate()
+                                .find(|(_, (color2, _, ids2, routes2))| {
+                                    if color1 != color2 || ids1.is_disjoint(ids2) {
+                                        return false;
                                     }
-                                    // Check if this route is restricted
-                                    let is_restricted = graph.restrictions
-                                        .get(&(edge1_idx, edge2_idx))
-                                        .map(|r| r.contains(route))
-                                        .unwrap_or(false)
-                                        || graph.restrictions
-                                            .get(&(edge2_idx, edge1_idx))
+                                    // Check if at least one route is NOT restricted between these edges
+                                    // A route can transition if it's NOT in the restriction map
+                                    for route in routes1 {
+                                        if !routes2.contains(route) {
+                                            continue;
+                                        }
+                                        // Check if this route is restricted
+                                        let is_restricted = graph
+                                            .restrictions
+                                            .get(&(edge1_idx, edge2_idx))
                                             .map(|r| r.contains(route))
-                                            .unwrap_or(false);
-                                    if !is_restricted {
-                                        return true; // Found at least one unrestricted shared route
+                                            .unwrap_or(false)
+                                            || graph
+                                                .restrictions
+                                                .get(&(edge2_idx, edge1_idx))
+                                                .map(|r| r.contains(route))
+                                                .unwrap_or(false);
+                                        if !is_restricted {
+                                            return true; // Found at least one unrestricted shared route
+                                        }
                                     }
-                                }
-                                false // All shared routes are restricted
-                            });
+                                    false // All shared routes are restricted
+                                });
 
                         let (group2_idx, (_, _line_indices2, _, _)) = match group2_match {
                             Some(r) => r,
@@ -856,7 +865,7 @@ impl TileGenerator {
                         }
 
                         // Generate Bezier curve
-                        // Cap control distance to cutback distance to prevent bezier from 
+                        // Cap control distance to cutback distance to prevent bezier from
                         // extending beyond the cutback points (matching C++ loom behavior)
                         let cutback_dist = spacing * 2.0;
                         let ctrl_dist = (dist * 0.55).min(cutback_dist);
@@ -906,7 +915,10 @@ impl TileGenerator {
     /// let tiles = vec![(10, 512, 512), (10, 512, 513), (10, 513, 512)];
     /// let results = TileGenerator::generate_tiles_parallel(graph, &tiles);
     /// ```
-    pub fn generate_tiles_parallel(graph: &RenderGraph, tiles: &[(u8, u32, u32)]) -> Vec<GeneratedTile> {
+    pub fn generate_tiles_parallel(
+        graph: &RenderGraph,
+        tiles: &[(u8, u32, u32)],
+    ) -> Vec<GeneratedTile> {
         tiles
             .par_iter()
             .map(|&(z, x, y)| {

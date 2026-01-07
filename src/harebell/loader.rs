@@ -73,7 +73,7 @@ impl Loader {
             export_graph.clusters.len(),
             export_graph.edges.len()
         );
-        
+
         // 3. Convert to RenderGraph
         let mut nodes = HashMap::new();
 

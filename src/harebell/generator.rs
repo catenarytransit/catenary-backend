@@ -3,8 +3,8 @@ use crate::tile_gen::TileGenerator;
 use anyhow::Result;
 use log::info;
 use std::fs;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -25,7 +25,7 @@ impl Generator {
 
         // Use the new parallel API with progress tracking
         let progress = Arc::new(AtomicUsize::new(0));
-        
+
         // Start progress monitoring thread
         let progress_clone = progress.clone();
         let min_z_copy = min_z;
@@ -63,7 +63,12 @@ impl Generator {
 
         // Write tiles to disk (this is I/O bound, so we do it after generation)
         for tile_result in tiles {
-            if let Err(e) = self.write_tile(tile_result.z, tile_result.x, tile_result.y, tile_result.tile) {
+            if let Err(e) = self.write_tile(
+                tile_result.z,
+                tile_result.x,
+                tile_result.y,
+                tile_result.tile,
+            ) {
                 eprintln!(
                     "Failed to write tile {}/{}/{}: {}",
                     tile_result.z, tile_result.x, tile_result.y, e
@@ -73,7 +78,7 @@ impl Generator {
 
         // Signal monitor thread to stop and wait for it
         drop(monitor_handle);
-        
+
         info!("Tile generation complete!");
         Ok(())
     }
@@ -88,7 +93,12 @@ impl Generator {
         println!("Generated {} tiles for zoom level {}", tiles.len(), z);
 
         for tile_result in tiles {
-            if let Err(e) = self.write_tile(tile_result.z, tile_result.x, tile_result.y, tile_result.tile) {
+            if let Err(e) = self.write_tile(
+                tile_result.z,
+                tile_result.x,
+                tile_result.y,
+                tile_result.tile,
+            ) {
                 eprintln!(
                     "Failed to write tile {}/{}/{}: {}",
                     tile_result.z, tile_result.x, tile_result.y, e

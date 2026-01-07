@@ -407,11 +407,77 @@ pub async fn gtfs_process_feed(
 
     let gtfs: Gtfs = match feed_id {
         "f-dpz8-ttc" => {
-            let route_types = vec![gtfs_structures::RouteType::Subway];
+            let mut gtfs = gtfs;
 
-            let gtfs = include_only_route_types(gtfs, route_types, true);
+            let route_ids_to_keep: BTreeSet<String> = gtfs
+                .routes
+                .iter()
+                .filter(|(_route_id, route)| {
+                    route.route_type == gtfs_structures::RouteType::Subway || route.id == "6" // Finch West LRT
+                })
+                .map(|(route_id, _route)| route_id)
+                .cloned()
+                .collect();
 
-            println!("Filtered TTC Subway");
+            println!(
+                "keeping {} routes for TTC (Subway + 6)",
+                route_ids_to_keep.len()
+            );
+
+            let trips_to_keep: BTreeSet<String> = gtfs
+                .trips
+                .iter()
+                .filter(|(_trip_id, trip)| route_ids_to_keep.contains(&trip.route_id))
+                .map(|(trip_id, _trip)| trip_id)
+                .cloned()
+                .collect();
+
+            let mut keep_stop_ids: BTreeSet<String> = BTreeSet::new();
+            let mut keep_shapes: BTreeSet<String> = BTreeSet::new();
+
+            for trip_id in &trips_to_keep {
+                if let Some(trip) = gtfs.trips.get(trip_id) {
+                    for stop_time in &trip.stop_times {
+                        keep_stop_ids.insert(stop_time.stop.id.clone());
+                    }
+
+                    if let Some(shape_id) = &trip.shape_id {
+                        keep_shapes.insert(shape_id.clone());
+                    }
+                }
+            }
+
+            let mut stop_ids_to_add = BTreeSet::new();
+
+            for stop_id in &keep_stop_ids {
+                if let Some(stop) = gtfs.stops.get(stop_id) {
+                    if let Some(parent_station_id) = &stop.parent_station {
+                        stop_ids_to_add.insert(parent_station_id.clone());
+
+                        if let Some(parent_stop) = gtfs.stops.get(parent_station_id) {
+                            if let Some(grandparent_station_id) = &parent_stop.parent_station {
+                                stop_ids_to_add.insert(grandparent_station_id.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            keep_stop_ids.extend(stop_ids_to_add);
+
+            gtfs.routes
+                .retain(|route_id, _| route_ids_to_keep.contains(route_id));
+
+            gtfs.trips
+                .retain(|trip_id, _| trips_to_keep.contains(trip_id));
+
+            gtfs.stops
+                .retain(|stop_id, _| keep_stop_ids.contains(stop_id));
+
+            gtfs.shapes
+                .retain(|shape_id, _| keep_shapes.contains(shape_id));
+
+            println!("Filtered TTC Subway + Finch West LRT");
             gtfs.print_stats();
             gtfs
         }

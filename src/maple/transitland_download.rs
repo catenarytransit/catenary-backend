@@ -234,7 +234,9 @@ async fn try_to_download(
         let mut url_with_key = new_url.clone();
         let separator = if url_with_key.contains('?') { '&' } else { '?' };
         url_with_key.push(separator);
-        url_with_key.push_str("acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e");
+        url_with_key.push_str(
+            "acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e",
+        );
         return client.get(&url_with_key).send().await;
     }
 
