@@ -129,6 +129,21 @@ pub async fn gtfs_process_feed(
     let _ = crate::gtfs_handlers::route_file_fixer::fix_gtfs_route_colors(&path);
 
     match feed_id {
+        "f-gtfs~de" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                Some(vec![String::from("rail"), String::from("subway"), String::from("tram")]),
+                true,
+            )?;
+
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                None,
+                false,
+            )?;
+        }
         "f-dp3-metra" | "f-dr5-mtanyclirr" | "f-dr7-mtanyc~metro~north" | "f-dr5r-mtasubway" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
