@@ -436,29 +436,24 @@ pub async fn download_return_eligible_feeds(
             let total_feeds_to_download = feeds_to_download.len();
             use futures::StreamExt;
 
-            // Group feeds by URL to detect shared downloads (e.g., PTV has 8 feeds from one URL)
-            let mut url_to_primary_feed: HashMap<String, String> = HashMap::new();
-            let mut secondary_feeds: HashMap<String, String> = HashMap::new();
-            for feed in &feeds_to_download {
-                if let Some(primary_feed_id) = url_to_primary_feed.get(&feed.url) {
-                    secondary_feeds.insert(feed.feed_id.clone(), primary_feed_id.clone());
-                } else {
-                    url_to_primary_feed.insert(feed.url.clone(), feed.feed_id.clone());
-                }
-            }
+            // Track downloaded URLs -> file path (for feeds sharing the same URL)
+            // Key: URL, Value: path to downloaded zip
+            let url_downloaded_paths: Arc<tokio::sync::Mutex<HashMap<String, String>>> = 
+                Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
-            if !secondary_feeds.is_empty() {
+            // Count how many feeds share each URL for logging
+            let mut url_feed_count: HashMap<String, usize> = HashMap::new();
+            for feed in &feeds_to_download {
+                *url_feed_count.entry(feed.url.clone()).or_insert(0) += 1;
+            }
+            let shared_url_count = url_feed_count.values().filter(|&&c| c > 1).count();
+            if shared_url_count > 0 {
+                let total_shared_feeds: usize = url_feed_count.values().filter(|&&c| c > 1).sum();
                 println!(
-                    "Detected {} feeds sharing URLs with other feeds (will copy instead of re-download)",
-                    secondary_feeds.len()
+                    "Detected {} shared URLs covering {} feeds (will download once per URL)",
+                    shared_url_count, total_shared_feeds
                 );
             }
-
-            let secondary_feeds = Arc::new(secondary_feeds);
-            
-            // Track when primary downloads complete writing to disk
-            let completed_downloads: Arc<std::sync::Mutex<HashSet<String>>> = 
-                Arc::new(std::sync::Mutex::new(HashSet::new()));
 
             println!(
                 "Downloading {} feeds with {} threads",
@@ -477,8 +472,7 @@ pub async fn download_return_eligible_feeds(
                     let download_progress = Arc::clone(&download_progress);
                     let pool = Arc::clone(pool);
                     let total_bytes_downloaded = Arc::clone(&total_bytes_downloaded);
-                    let secondary_feeds = Arc::clone(&secondary_feeds);
-                    let completed_downloads = Arc::clone(&completed_downloads);
+                    let url_downloaded_paths = Arc::clone(&url_downloaded_paths);
                     let gtfs_temp_storage = gtfs_temp_storage.to_string();
                     async move {
                             
@@ -495,12 +489,11 @@ pub async fn download_return_eligible_feeds(
                                 .expect("Time went backwards")
                                 .as_millis();
 
-                            let mut out = File::create(format!(
-                                    "{}/{}.zip",
-                                    gtfs_temp_storage,
-                                    staticfeed.feed_id.clone()
-                                ))
-                                .expect("failed to create file");
+                            let this_zip_path = format!(
+                                "{}/{}.zip",
+                                gtfs_temp_storage,
+                                staticfeed.feed_id.clone()
+                            );
 
                             let girolle_for_this_feed = match girolle_data {
                                 Some(girolle_data) => girolle_data.get(&staticfeed.feed_id),
@@ -566,68 +559,46 @@ pub async fn download_return_eligible_feeds(
                                 };
                             }
 
-                            // Check if this feed shares a URL with another and the primary already downloaded
-                            if let Some(primary_feed_id) = secondary_feeds.get(&staticfeed.feed_id) {
-                                let primary_zip_path = format!("{}/{}.zip", &gtfs_temp_storage, primary_feed_id);
-                                let this_zip_path = format!("{}/{}.zip", &gtfs_temp_storage, &staticfeed.feed_id);
-                                
-                                // Try to copy from primary for up to 5 minutes (primary may still be downloading)
-                                let max_wait = Duration::from_secs(300);
-                                let check_interval = Duration::from_secs(5);
-                                let wait_start = Instant::now();
-                                
-                                loop {
-                                    // Check if primary has signaled completion
-                                    let download_complete = completed_downloads
-                                        .lock()
-                                        .unwrap()
-                                        .contains(primary_feed_id);
+                            // Check if this URL was already downloaded by another feed
+                            {
+                                let downloaded_lock = url_downloaded_paths.lock().await;
+                                if let Some(cached_path) = downloaded_lock.get(&staticfeed.url) {
+                                    // URL already downloaded, copy from cache
+                                    drop(downloaded_lock);
                                     
-                                    if download_complete {
-                                        match fs::copy(&primary_zip_path, &this_zip_path) {
-                                            Ok(bytes_copied) => {
-                                                let mut download_progress = download_progress.lock().unwrap();
-                                                *download_progress += 1;
-                                                
-                                                println!(
-                                                    "Copied {}/{} [{:.2}%]: {} from {} ({} bytes)",
-                                                    download_progress,
-                                                    total_feeds_to_download,
-                                                    (*download_progress as f32 / total_feeds_to_download as f32) * 100.0,
-                                                    &staticfeed.feed_id,
-                                                    primary_feed_id,
-                                                    bytes_copied
-                                                );
-                                                
-                                                // Read the copied file to compute hash
-                                                if let Ok(data) = fs::read(&this_zip_path) {
-                                                    let hash = seahash::hash(&data);
-                                                    return DownloadedFeedsInformation {
-                                                        feed_id: staticfeed.feed_id.clone(),
-                                                        url: staticfeed.url.clone(),
-                                                        hash: Some(hash),
-                                                        download_timestamp_ms: current_unix_ms_time as u64,
-                                                        operation_success: true,
-                                                        ingest: true,
-                                                        byte_size: Some(bytes_copied),
-                                                        duration_download: Some(wait_start.elapsed().as_millis() as u64),
-                                                        http_response_code: Some("copied".to_string()),
-                                                    };
-                                                }
-                                            }
-                                            Err(e) => {
-                                                println!("Failed to copy {} from {}: {:?}", &staticfeed.feed_id, primary_feed_id, e);
+                                    match fs::copy(&cached_path, &this_zip_path) {
+                                        Ok(bytes_copied) => {
+                                            let mut download_progress = download_progress.lock().unwrap();
+                                            *download_progress += 1;
+                                            
+                                            println!(
+                                                "Reusing {}/{} [{:.2}%]: {} from cached URL ({} bytes)",
+                                                download_progress,
+                                                total_feeds_to_download,
+                                                (*download_progress as f32 / total_feeds_to_download as f32) * 100.0,
+                                                &staticfeed.feed_id,
+                                                bytes_copied
+                                            );
+                                            
+                                            if let Ok(data) = fs::read(&this_zip_path) {
+                                                let hash = seahash::hash(&data);
+                                                return DownloadedFeedsInformation {
+                                                    feed_id: staticfeed.feed_id.clone(),
+                                                    url: staticfeed.url.clone(),
+                                                    hash: Some(hash),
+                                                    download_timestamp_ms: current_unix_ms_time as u64,
+                                                    operation_success: true,
+                                                    ingest: true,
+                                                    byte_size: Some(bytes_copied),
+                                                    duration_download: Some(start.elapsed().as_millis() as u64),
+                                                    http_response_code: Some("cached".to_string()),
+                                                };
                                             }
                                         }
-                                        break;
+                                        Err(e) => {
+                                            println!("Failed to copy from cache for {}: {:?}, will download", &staticfeed.feed_id, e);
+                                        }
                                     }
-                                    
-                                    if wait_start.elapsed() > max_wait {
-                                        println!("Timeout waiting for primary {} to download, will download {} directly", primary_feed_id, &staticfeed.feed_id);
-                                        break;
-                                    }
-                                    
-                                    tokio::time::sleep(check_interval).await;
                                 }
                             }
 
@@ -742,13 +713,16 @@ pub async fn download_return_eligible_feeds(
                                         }
                                        
                                         if answer.ingest {
-                                            let _ = out.write(&(bytes_result));
-                                            
-                                            // Signal completion so secondary feeds can copy
-                                            completed_downloads
-                                                .lock()
-                                                .unwrap()
-                                                .insert(staticfeed.feed_id.clone());
+                                            // Create and write file
+                                            if let Ok(mut out) = File::create(&this_zip_path) {
+                                                let _ = out.write(&(bytes_result));
+                                                
+                                                // Register this URL as downloaded for other feeds to reuse
+                                                url_downloaded_paths
+                                                    .lock()
+                                                    .await
+                                                    .insert(staticfeed.url.clone(), this_zip_path.clone());
+                                            }
                                         }
                                         
                                         let mut download_progress  = download_progress.lock().unwrap();
