@@ -86,6 +86,7 @@ mod connections_lookup;
 mod openrailwaymap_proxy;
 mod shapes;
 mod stop_preview;
+mod osm_station_preview;
 mod text_search;
 mod vehicle_api;
 
@@ -954,6 +955,7 @@ async fn main() -> std::io::Result<()> {
             .service(block_api::block_api)
             .service(size_bbox_zoom_birch)
             .service(stop_preview::query_stops_preview)
+            .service(osm_station_preview::osm_station_preview)
             .service(openrailwaymap_proxy::openrailwaymap_proxy)
             .service(text_search::text_search_v1)
             .service(nominatim_details)
