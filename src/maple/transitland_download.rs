@@ -562,7 +562,7 @@ pub async fn download_return_eligible_feeds(
                             // Check if this URL was already downloaded by another feed
                             {
                                 let downloaded_lock = url_downloaded_paths.lock().await;
-                                if let Some(cached_path) = downloaded_lock.get(&staticfeed.url) {
+                                if let Some(cached_path) = downloaded_lock.get(&staticfeed.url).cloned() {
                                     // URL already downloaded, copy from cache
                                     drop(downloaded_lock);
                                     
