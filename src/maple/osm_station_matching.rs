@@ -25,7 +25,8 @@ pub const TRAM_RADIUS_M: f64 = 200.0;
 pub const SUBWAY_RADIUS_M: f64 = 250.0;
 
 /// Minimum score threshold for accepting a match
-pub const MIN_MATCH_SCORE: f64 = 0.75;
+/// Lowered to 0.4 to allow proximity-based matching when names differ
+pub const MIN_MATCH_SCORE: f64 = 0.4;
 
 /// Batch size for processing stops to avoid OOM
 const STOP_BATCH_SIZE: i64 = 5000;
@@ -271,11 +272,32 @@ fn score_candidate(
     platform_code: Option<&str>,
     radius_m: f64,
 ) -> (f64, bool) {
-    // Compute name similarity using Jaro-Winkler
+    // Compute name similarity
     let name_sim = station
         .name_lower
         .as_ref()
-        .map(|n| jaro_winkler(stop_name_lower, n))
+        .map(|osm_name| {
+            // First try Jaro-Winkler
+            let jw_score = jaro_winkler(stop_name_lower, osm_name);
+            
+            // Also check token-based matching: 
+            // "Paris Est" should match "Paris Gare de l'Est"
+            // Check if all significant words from GTFS name appear in OSM name
+            let gtfs_tokens: Vec<&str> = stop_name_lower
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|t| t.len() >= 2) // Skip very short tokens
+                .collect();
+            
+            let token_match = if !gtfs_tokens.is_empty() {
+                let matches = gtfs_tokens.iter().filter(|t| osm_name.contains(*t)).count();
+                matches as f64 / gtfs_tokens.len() as f64
+            } else {
+                0.0
+            };
+            
+            // Take the better of the two approaches
+            jw_score.max(token_match)
+        })
         .unwrap_or(0.0);
 
     // Compute distance using geo crate
@@ -291,8 +313,9 @@ fn score_candidate(
         .and_then(|pc| station.local_ref.as_ref().map(|lr| lr == pc))
         .unwrap_or(false);
 
-    // Combined score: 70% name similarity, 30% proximity
-    let score = (name_sim * 0.7) + (proximity_score * 0.3);
+    // Combined score: prioritize proximity (70%) over name similarity (30%)
+    // This allows matching nearby stations even when names differ
+    let score = (name_sim * 0.3) + (proximity_score * 0.7);
 
     (score, platform_match)
 }
