@@ -507,7 +507,7 @@ pub async fn match_stops_for_feed(
                     stops_dsl::gtfs_id,
                     stops_dsl::point,
                     stops_dsl::name,
-                    stops_dsl::route_types,
+                    stops_dsl::children_route_types,
                     stops_dsl::platform_code,
                 ))
                 .order(stops_dsl::gtfs_id)
