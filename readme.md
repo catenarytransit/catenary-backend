@@ -168,3 +168,5 @@ When Maple processes GTFS feeds, it automatically matches stops to OSM stations 
 ```bash
 cargo run --bin maple -- --transitland /path/to/transitland-atlas
 ```
+
+ See the Maple readme for more info
