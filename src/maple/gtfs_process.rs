@@ -140,8 +140,8 @@ pub async fn gtfs_process_feed(
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./pfaedle-filtered-germany-latest.osm.pbf",
-                None,
-                false,
+                Some(vec![String::from("bus"), String::from("coach"), String::from("trolleybus")]),
+                true,
             )?;
         }
         "f-dp3-metra" | "f-dr5-mtanyclirr" | "f-dr7-mtanyc~metro~north" | "f-dr5r-mtasubway" => {
@@ -1498,7 +1498,7 @@ pub async fn gtfs_process_feed(
                 })
                 .collect::<Vec<_>>();
 
-            for trip_chunk in trip_pg.chunks(2000) {
+            for trip_chunk in trip_pg.chunks(10000) {
                 t_final.push(trip_chunk.to_vec());
             }
         }
