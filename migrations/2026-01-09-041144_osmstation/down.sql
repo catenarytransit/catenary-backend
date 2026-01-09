@@ -1,8 +1,6 @@
--- Remove new columns from stop_mappings
-ALTER TABLE gtfs.stop_mappings 
-    DROP COLUMN IF EXISTS osm_station_id,
-    DROP COLUMN IF EXISTS osm_station_type,
-    DROP COLUMN IF EXISTS osm_import_id;
+-- Remove osm_station_id from stops
+ALTER TABLE gtfs.stops 
+    DROP COLUMN IF EXISTS osm_station_id;
 
 -- Drop OSM tables
 DROP TABLE IF EXISTS gtfs.osm_stations;

@@ -50,8 +50,6 @@ CREATE INDEX idx_osm_stations_mode ON gtfs.osm_stations (mode_type);
 -- Index for UIC reference lookup
 CREATE INDEX idx_osm_stations_uic ON gtfs.osm_stations (uic_ref) WHERE uic_ref IS NOT NULL;
 
--- Update stop_mappings to reference osm_stations (add columns)
-ALTER TABLE gtfs.stop_mappings 
-    ADD COLUMN osm_station_id BIGINT,
-    ADD COLUMN osm_station_type TEXT,
-    ADD COLUMN osm_import_id INTEGER;
+-- Add OSM station reference directly to stops table
+ALTER TABLE gtfs.stops 
+    ADD COLUMN osm_station_id BIGINT;

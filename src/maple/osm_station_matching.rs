@@ -60,8 +60,6 @@ pub async fn find_osm_stations_near(
     radius_m: f64,
     mode_filter: Option<&str>,
 ) -> Result<Vec<OsmStation>, diesel::result::Error> {
-    use catenary::schema::gtfs::osm_stations::dsl::*;
-    
     // Build the raw SQL query with spatial filter
     let mode_clause = mode_filter
         .map(|m| format!("AND mode_type = '{}'", m))
@@ -83,23 +81,15 @@ pub async fn find_osm_stations_near(
         .await
 }
 
-/// Match result containing the matched station and score
-#[derive(Debug, Clone)]
-pub struct StopMatchResult {
-    pub osm_station: OsmStation,
-    pub score: f64,
-    pub distance_m: f64,
-}
-
 /// Match a single GTFS stop to the best OSM station
-/// Returns the best match if found with score >= MIN_MATCH_SCORE
+/// Returns the best matching osm_station_id if found with score >= MIN_MATCH_SCORE
 pub async fn match_stop_to_osm_station(
     conn: &mut AsyncPgConnection,
     stop_lat: f64,
     stop_lon: f64,
     stop_name: &str,
     route_type: i16,
-) -> Result<Option<StopMatchResult>, Box<dyn Error + Send + Sync>> {
+) -> Result<Option<i64>, Box<dyn Error + Send + Sync>> {
     let mode = match route_type_to_mode(route_type) {
         Some(m) => m,
         None => return Ok(None),
@@ -115,7 +105,7 @@ pub async fn match_stop_to_osm_station(
     }
     
     // Score each candidate
-    let mut best_match: Option<StopMatchResult> = None;
+    let mut best_match: Option<(i64, f64)> = None;
     let stop_name_lower = stop_name.to_lowercase();
     
     for station in candidates {
@@ -136,20 +126,16 @@ pub async fn match_stop_to_osm_station(
         let score = (name_sim * 0.7) + (proximity_score * 0.3);
         
         if score >= MIN_MATCH_SCORE {
-            if best_match.as_ref().map_or(true, |m| score > m.score) {
-                best_match = Some(StopMatchResult {
-                    osm_station: station,
-                    score,
-                    distance_m: distance,
-                });
+            if best_match.as_ref().map_or(true, |(_, s)| score > *s) {
+                best_match = Some((station.osm_id, score));
             }
         }
     }
     
-    Ok(best_match)
+    Ok(best_match.map(|(id, _)| id))
 }
 
-/// Batch match stops for a feed, updating stop_mappings table
+/// Batch match stops for a feed, updating stops.osm_station_id directly
 /// This is called during GTFS import in gtfs_process.rs
 pub async fn match_stops_for_feed(
     conn: &mut AsyncPgConnection,
@@ -158,7 +144,6 @@ pub async fn match_stops_for_feed(
     chateau_id: &str,
 ) -> Result<u64, Box<dyn Error + Send + Sync>> {
     use catenary::schema::gtfs::stops::dsl as stops_dsl;
-    use catenary::schema::gtfs::stop_mappings::dsl as mappings_dsl;
     
     // Get all stops for this feed that have rail/tram/subway routes
     let stops: Vec<(String, Option<postgis_diesel::types::Point>, Option<String>, Vec<Option<i16>>)> = 
@@ -207,34 +192,19 @@ pub async fn match_stops_for_feed(
         
         // Try to match this stop
         match match_stop_to_osm_station(conn, point.y, point.x, &stop_name, route_type).await {
-            Ok(Some(match_result)) => {
-                // Insert or update stop_mapping
-                let mapping_result = diesel::insert_into(mappings_dsl::stop_mappings)
-                    .values((
-                        mappings_dsl::feed_id.eq(feed_id),
-                        mappings_dsl::stop_id.eq(&stop_id),
-                        mappings_dsl::station_id.eq(format!("osm:{}", match_result.osm_station.osm_id)),
-                        mappings_dsl::match_score.eq(match_result.score),
-                        mappings_dsl::match_method.eq("osm_spatial"),
-                        mappings_dsl::active.eq(true),
-                        mappings_dsl::osm_station_id.eq(match_result.osm_station.osm_id),
-                        mappings_dsl::osm_station_type.eq(&match_result.osm_station.osm_type),
-                        mappings_dsl::osm_import_id.eq(match_result.osm_station.import_id),
-                    ))
-                    .on_conflict((mappings_dsl::feed_id, mappings_dsl::stop_id))
-                    .do_update()
-                    .set((
-                        mappings_dsl::station_id.eq(format!("osm:{}", match_result.osm_station.osm_id)),
-                        mappings_dsl::match_score.eq(match_result.score),
-                        mappings_dsl::match_method.eq("osm_spatial"),
-                        mappings_dsl::osm_station_id.eq(match_result.osm_station.osm_id),
-                        mappings_dsl::osm_station_type.eq(&match_result.osm_station.osm_type),
-                        mappings_dsl::osm_import_id.eq(match_result.osm_station.import_id),
-                    ))
-                    .execute(conn)
-                    .await;
+            Ok(Some(osm_station_id)) => {
+                // Update the stop directly with the OSM station ID
+                let update_result = diesel::update(
+                    stops_dsl::stops
+                        .filter(stops_dsl::onestop_feed_id.eq(feed_id))
+                        .filter(stops_dsl::attempt_id.eq(attempt_id))
+                        .filter(stops_dsl::gtfs_id.eq(&stop_id))
+                )
+                .set(stops_dsl::osm_station_id.eq(osm_station_id))
+                .execute(conn)
+                .await;
                 
-                if mapping_result.is_ok() {
+                if update_result.is_ok() {
                     matched_count += 1;
                 }
             }

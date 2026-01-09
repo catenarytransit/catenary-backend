@@ -287,6 +287,7 @@ pub struct Stop {
     pub tts_name: Option<String>,
     //insert with false, then enable after when mark for production
     pub allowed_spatial_query: bool,
+    pub osm_station_id: Option<i64>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
@@ -472,9 +473,6 @@ pub struct StopMapping {
     pub match_score: f64,
     pub match_method: String,
     pub active: bool,
-    pub osm_station_id: Option<i64>,
-    pub osm_station_type: Option<String>,
-    pub osm_import_id: Option<i32>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]

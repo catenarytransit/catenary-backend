@@ -472,9 +472,6 @@ pub mod gtfs {
             match_score -> Float8,
             match_method -> Text,
             active -> Bool,
-            osm_station_id -> Nullable<Int8>,
-            osm_station_type -> Nullable<Text>,
-            osm_import_id -> Nullable<Int4>,
         }
     }
 
@@ -515,6 +512,7 @@ pub mod gtfs {
             tts_name -> Nullable<Text>,
             tts_name_translations -> Nullable<Jsonb>,
             allowed_spatial_query -> Bool,
+            osm_station_id -> Nullable<Int8>,
         }
     }
 
