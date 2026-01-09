@@ -12,6 +12,7 @@ Catenary Backend is a distributed system comprised of microservices operating in
 - **Harebell**: Map tile geometry generator creating line ordering optimised graph maps (LOOM) MVT files.
 - **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times (not started yet)
 - **Birch**: HTTP API server
+- **OSM Station Import**: Imports railway stations from OpenStreetMap PBF files for GTFS stop association
 
 The kubernetes configuration is generated using Helm templates. See Helm's documentation for further information on that.
 
@@ -131,3 +132,41 @@ The following `cargo clippy` rules are enforced.
 
 - **Truffle** reachability analysis
 - **Chinese plum** (needs to pick better syonym for it)
+
+-----------------------------------------------------
+
+### OSM Station Association
+
+The OSM Station Import system associates GTFS railway stops with OpenStreetMap stations. This provides additional metadata like multilingual names, UIC references, and station relationships.
+
+#### Step 1: Import OSM Stations
+
+First, obtain a pre-filtered PBF file containing railway stations (or use one from Geofabrik filtered with osmium):
+
+```bash
+cargo run --bin osmstationimport -- --file /path/to/railstations.osm.pbf
+```
+
+multiple imports can be done sequentially, and will overwrite old data.
+
+```bash
+cargo run --bin osmstationimport -- --file railstations-europe-latest.osm.pbf
+cargo run --bin osmstationimport -- --file railstations-north-america-latest.osm.pbf
+cargo run --bin osmstationimport -- --file railstations-asia-latest.osm.pbf
+```
+
+The importer:
+- Computes SHA256 hash to skip duplicate imports
+- Extracts rail, tram, and subway stations
+- Parses multilingual names (`name:en`, `name:de`, etc.)
+- Stores in `gtfs.osm_stations` table with spatial indexing
+
+#### Step 2: Run Maple Import
+
+When Maple processes GTFS feeds, it automatically matches stops to OSM stations for rail/tram/subway routes:
+
+```bash
+cargo run --bin maple -- --transitland /path/to/transitland-atlas
+```
+
+ See the Maple readme for more info

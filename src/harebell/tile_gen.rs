@@ -1,9 +1,38 @@
 use crate::graph::{LineOnEdge, RenderGraph};
-use geo::{Coord, Rect};
+use geo::{Coord, LineString as GeoLineString, Rect, Simplify};
 use log::{debug, info};
 use mvt::{GeomData, GeomEncoder, Tile};
 use pointy::BBox;
+use rayon::prelude::*;
+use std::collections::HashSet;
 use std::f64::consts::PI;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Result of parallel tile generation
+pub struct GeneratedTile {
+    pub z: u8,
+    pub x: u32,
+    pub y: u32,
+    pub tile: Tile,
+}
+
+/// Configuration for parallel tile generation
+#[derive(Debug, Clone)]
+pub struct ParallelTileConfig {
+    /// Number of threads to use (None = use rayon default)
+    pub num_threads: Option<usize>,
+    /// Buffer percentage for tile bounds (default 0.1 = 10%)
+    pub buffer_pct: f64,
+}
+
+impl Default for ParallelTileConfig {
+    fn default() -> Self {
+        Self {
+            num_threads: None,
+            buffer_pct: 0.1,
+        }
+    }
+}
 
 pub struct TileGenerator;
 
@@ -92,8 +121,20 @@ impl TileGenerator {
                     continue;
                 }
 
-                // Project clipped points to tile coordinates
-                let tile_points: Vec<(f64, f64)> = clipped_coords
+                // Apply line simplification for lower zoom levels
+                // This reduces complexity and creates smoother lines at zoomed-out views
+                let smoothed_coords = if let Some(epsilon) = Self::get_simplification_epsilon(z) {
+                    Self::simplify_coords(&clipped_coords, epsilon)
+                } else {
+                    clipped_coords
+                };
+
+                if smoothed_coords.len() < 2 {
+                    continue;
+                }
+
+                // Project smoothed points to tile coordinates
+                let tile_points: Vec<(f64, f64)> = smoothed_coords
                     .iter()
                     .map(|c| Self::project_to_tile(c.x, c.y, z, x, y, extent))
                     .collect();
@@ -147,17 +188,15 @@ impl TileGenerator {
 
                 let spacing = Self::get_zoom_spacing(z);
 
-                // Group lines to support interlining (specifically for nyct)
-                // Adjacent lines with same color and chateau='nyct' share the same offset slot.
+                // Group lines by color - adjacent lines with same color share the same offset slot.
+                // This allows interlining where routes with the same color overlap.
                 let mut groups: Vec<Vec<&crate::graph::LineOnEdge>> = Vec::new();
                 for line in &edge.lines {
-                    if line.chateau_id == "nyct" {
-                        if let Some(last_group) = groups.last_mut() {
-                            let first = last_group[0];
-                            if first.chateau_id == "nyct" && first.color == line.color {
-                                last_group.push(line);
-                                continue;
-                            }
+                    if let Some(last_group) = groups.last_mut() {
+                        let first = last_group[0];
+                        if first.color == line.color {
+                            last_group.push(line);
+                            continue;
                         }
                     }
                     groups.push(vec![line]);
@@ -191,9 +230,9 @@ impl TileGenerator {
                             .get(&edge.to)
                             .map(|e| e.len())
                             .unwrap_or(1);
-                        
+
                         // Cutback distance scales with number of lines to create room for bezier
-                        let base_cutback = spacing * 0.8;  // Base distance for bezier curves
+                        let base_cutback = spacing * 2.0; // Base distance for bezier curves
                         let start_cutback = if from_degree >= 2 { base_cutback } else { 0.0 };
                         let end_cutback = if to_degree >= 2 { base_cutback } else { 0.0 };
 
@@ -239,7 +278,6 @@ impl TileGenerator {
                             GeomEncoder::new(mvt::GeomType::Linestring).bbox(tile_bbox),
                             |enc, (sx, sy)| enc.point(*sx, *sy),
                         );
-
 
                         let geometry = match encoder_result.and_then(|enc| enc.encode()) {
                             Ok(g) => g,
@@ -380,11 +418,43 @@ impl TileGenerator {
 
     fn get_zoom_spacing(z: u8) -> f64 {
         match z {
-            5..=7 => 15.0,
-            8..=9 => 20.0,
+            5 => 6.0,
+            6 => 8.0,
+            7 => 10.0,
+            8..=9 => 17.0,
             10..=12 => 25.0,
             _ => 30.0,
         }
+    }
+
+    /// Get the simplification epsilon (in degrees) for a given zoom level.
+    /// Returns None for high zoom levels where no simplification is needed.
+    /// At lower zoom levels, more aggressive simplification creates smoother lines
+    /// by removing unnecessary detail that wouldn't be visible anyway.
+    fn get_simplification_epsilon(z: u8) -> Option<f64> {
+        // Epsilon values in degrees (approx: 0.00001° ≈ 1.1m at equator)
+        // Higher epsilon = more simplification = smoother lines
+        match z {
+            0..=4 => Some(0.001),  // ~111m - very aggressive for world view
+            5..=6 => Some(0.0005), // ~55m - aggressive for continental view
+            7..=8 => Some(0.0002), // ~22m - moderate simplification
+            9 => Some(0.0001),     // ~11m - gentle simplification
+            10 => Some(0.00005),   // ~5.5m - very gentle smoothing
+            _ => None,             // No simplification for z >= 11
+        }
+    }
+
+    /// Simplify a coordinate vector using Douglas-Peucker algorithm.
+    /// This reduces the number of points while preserving the overall shape.
+    fn simplify_coords(coords: &[Coord], epsilon: f64) -> Vec<Coord> {
+        if coords.len() < 3 {
+            return coords.to_vec();
+        }
+
+        // Convert to geo LineString, simplify, then convert back
+        let line: GeoLineString<f64> = coords.iter().cloned().collect();
+        let simplified = line.simplify(epsilon);
+        simplified.into_inner()
     }
 
     /// Clip a linestring to a bounding rectangle.
@@ -533,7 +603,7 @@ impl TileGenerator {
     }
 
     /// Generates Bezier curve connections for lines passing through nodes
-    /// Uses graph.restrictions to find valid partner pairs (edges where routes are allowed to connect)
+    /// Matches lines by line_id across edge pairs to find continuous routes
     fn generate_node_connections(
         graph: &RenderGraph,
         z: u8,
@@ -546,179 +616,502 @@ impl TileGenerator {
         let (min_lon, min_lat, max_lon, max_lat) = Self::tile_bounds(z, x, y, 0.1);
         let envelope = rstar::AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
 
-        let nodes_in_tile: Vec<_> = graph
-            .node_tree
-            .locate_in_envelope_intersecting(&envelope)
-            .collect();
-
+        // Query ALL nodes, not just clusters (node_tree only has clusters)
+        // We need to check intersection nodes too
         let spacing = Self::get_zoom_spacing(z);
 
-        for item in nodes_in_tile {
-            let node_id = item.data;
-            if let Some(node) = graph.nodes.get(&node_id) {
-                // Get all edges connected to this node
-                if let Some(edge_indices) = graph.node_to_edges.get(&node_id) {
-                    if edge_indices.len() < 2 {
+        if z < 7 {
+            return layer;
+        }
+
+        // Iterate over all nodes that have at least 2 edges
+        for (&node_id, edge_indices) in &graph.node_to_edges {
+            if edge_indices.len() < 2 {
+                continue;
+            }
+
+            // Check if node is within tile bounds
+            let node = match graph.nodes.get(&node_id) {
+                Some(n) => n,
+                None => continue,
+            };
+
+            // Quick bounds check
+            if node.x < min_lon || node.x > max_lon || node.y < min_lat || node.y > max_lat {
+                continue;
+            }
+
+            // For each pair of edges at this node, find lines that continue across
+            for (i, &edge1_idx) in edge_indices.iter().enumerate() {
+                if edge1_idx >= graph.edges.len() {
+                    continue;
+                }
+                let edge1 = &graph.edges[edge1_idx];
+                if edge1.geometry.len() < 2 {
+                    continue;
+                }
+
+                for &edge2_idx in edge_indices.iter().skip(i + 1) {
+                    if edge2_idx >= graph.edges.len() {
+                        continue;
+                    }
+                    let edge2 = &graph.edges[edge2_idx];
+                    if edge2.geometry.len() < 2 {
                         continue;
                     }
 
-                    // For each pair of edges at this node, check if there are allowed connections
-                    for &edge1_idx in edge_indices {
-                        for &edge2_idx in edge_indices {
-                            if edge1_idx >= edge2_idx {
-                                continue; // Skip self and avoid duplicate pairs
-                            }
-
-                            // Check if there are allowed routes from edge1 to edge2
-                            let allowed_routes: Vec<(String, String)> = {
-                                let mut routes = Vec::new();
-                                if let Some(r) = graph.restrictions.get(&(edge1_idx, edge2_idx)) {
-                                    routes.extend(r.iter().cloned());
-                                }
-                                if let Some(r) = graph.restrictions.get(&(edge2_idx, edge1_idx)) {
-                                    routes.extend(r.iter().cloned());
-                                }
-                                routes
-                            };
-
-                            if allowed_routes.is_empty() {
-                                continue;
-                            }
-
-                            let edge1 = &graph.edges[edge1_idx];
-                            let edge2 = &graph.edges[edge2_idx];
-
-                            if edge1.geometry.len() < 2 || edge2.geometry.len() < 2 {
-                                continue;
-                            }
-
-                            // For each allowed route, find the line on each edge and generate curve
-                            for (route_chateau, route_id) in &allowed_routes {
-                                // Find line position on edge1
-                                let line1_pos = edge1.lines.iter().position(|l| {
-                                    &l.chateau_id == route_chateau && &l.route_id == route_id
-                                });
-                                let line2_pos = edge2.lines.iter().position(|l| {
-                                    &l.chateau_id == route_chateau && &l.route_id == route_id
-                                });
-
-                                let (line1_idx, line2_idx) = match (line1_pos, line2_pos) {
-                                    (Some(i1), Some(i2)) => (i1, i2),
-                                    _ => continue, // Route not on both edges
-                                };
-
-                                let line1 = &edge1.lines[line1_idx];
-
-                                // Calculate tile-space positions and directions for each edge
-                                let calc_point_and_dir = |edge: &crate::graph::Edge, line_idx: usize| -> Option<((f64, f64), (f64, f64))> {
-                                    let n_lines = edge.lines.len();
-                                    if n_lines == 0 {
-                                        return None;
-                                    }
-
-                                    // Direction pointing AWAY from node (into edge)
-                                    let (dx, dy) = if edge.from == node_id {
-                                        let p0 = edge.geometry[0];
-                                        let p1 = edge.geometry[1];
-                                        (p1[0] - p0[0], p1[1] - p0[1])
-                                    } else {
-                                        let len = edge.geometry.len();
-                                        let p_end = edge.geometry[len - 1];
-                                        let p_prev = edge.geometry[len - 2];
-                                        (p_prev[0] - p_end[0], p_prev[1] - p_end[1])
-                                    };
-
-                                    let len_v = (dx * dx + dy * dy).sqrt();
-                                    if len_v < 1e-10 {
-                                        return None;
-                                    }
-                                    let dir = (dx / len_v, dy / len_v);
-
-                                    // Project to tile space
-                                    let (node_tx, node_ty) = Self::project_to_tile(node.x, node.y, z, x, y, tile_extent);
-                                    let epsilon = 0.0001;
-                                    let (h_tx, h_ty) = Self::project_to_tile(
-                                        node.x + dir.0 * epsilon,
-                                        node.y + dir.1 * epsilon,
-                                        z, x, y, tile_extent,
-                                    );
-
-                                    let t_dx = h_tx - node_tx;
-                                    let t_dy = h_ty - node_ty;
-                                    let t_len = (t_dx * t_dx + t_dy * t_dy).sqrt();
-                                    if t_len < 1e-10 {
-                                        return None;
-                                    }
-                                    let (tn_x, tn_y) = (t_dx / t_len, t_dy / t_len);
-
-                                    // Calculate offset for this line
-                                    let shift = (line_idx as f64 - (n_lines as f64 - 1.0) / 2.0) * spacing;
-                                    let norm_x = -tn_y;
-                                    let norm_y = tn_x;
-
-                                    // Point with offset
-                                    let start_x = node_tx + norm_x * shift;
-                                    let start_y = node_ty + norm_y * shift;
-
-                                    // Shorten distance must match edge cutback for seamless connection
-                                    let shorten_dist = spacing * 0.8;
-                                    let p_x = start_x + tn_x * shorten_dist;
-                                    let p_y = start_y + tn_y * shorten_dist;
-
-
-                                    Some(((p_x, p_y), (tn_x, tn_y)))
-                                };
-
-                                let result1 = calc_point_and_dir(edge1, line1_idx);
-                                let result2 = calc_point_and_dir(edge2, line2_idx);
-
-                                let ((p1, dir1), (p2, dir2)) = match (result1, result2) {
-                                    (Some(r1), Some(r2)) => (r1, r2),
-                                    _ => continue,
-                                };
-
-                                // Validate distance
-                                let dist_sq = (p1.0 - p2.0).powi(2) + (p1.1 - p2.1).powi(2);
-                                if dist_sq > 100.0 * 100.0 || dist_sq < 1.0 {
+                    // Build groups for each edge by COLOR
+                    // Returns: Vec of (color, line_indices, Set<line_id>, Vec<(chateau_id, route_id)>)
+                    // The route metadata is needed to check restrictions
+                    let build_groups = |edge: &crate::graph::Edge| -> Vec<(
+                        String,
+                        Vec<usize>,
+                        std::collections::HashSet<String>,
+                        Vec<(String, String)>,
+                    )> {
+                        let mut groups: Vec<(
+                            String,
+                            Vec<usize>,
+                            std::collections::HashSet<String>,
+                            Vec<(String, String)>,
+                        )> = Vec::new();
+                        for (idx, line) in edge.lines.iter().enumerate() {
+                            if let Some(last_group) = groups.last_mut() {
+                                if last_group.0 == line.color {
+                                    last_group.1.push(idx);
+                                    last_group.2.insert(line.line_id.clone());
+                                    last_group
+                                        .3
+                                        .push((line.chateau_id.clone(), line.route_id.clone()));
                                     continue;
                                 }
-
-                                // Generate Bezier curve
-                                // Directions point AWAY from node, so negate for curve tangents
-                                let d_p = (-dir1.0, -dir1.1);
-                                let d_q = (-dir2.0, -dir2.1);
-
-                                let curve = BezierControl::new(p1, p2, d_p, d_q);
-                                let points = curve.points(10);
-
-                                // Encode
-                                let mut encoder = GeomEncoder::new(mvt::GeomType::Linestring)
-                                    .bbox(tile_bbox.clone());
-                                for pt in points {
-                                    let _ = encoder.add_point(pt.0, pt.1);
-                                }
-                                if let Ok(geom) = encoder.encode() {
-                                    let mut feature = layer.into_feature(geom);
-                                    feature.set_id(
-                                        (node_id as u64).wrapping_add(
-                                            edge1_idx as u64 * 1000 + edge2_idx as u64,
-                                        ),
-                                    );
-                                    feature.add_tag_string("line_id", &line1.line_id);
-                                    feature.add_tag_string(
-                                        "color",
-                                        &format!("#{}", line1.color.trim_start_matches('#')),
-                                    );
-                                    feature.add_tag_string("type", "connection");
-                                    layer = feature.into_layer();
-                                }
                             }
+                            let mut set = std::collections::HashSet::new();
+                            set.insert(line.line_id.clone());
+                            groups.push((
+                                line.color.clone(),
+                                vec![idx],
+                                set,
+                                vec![(line.chateau_id.clone(), line.route_id.clone())],
+                            ));
+                        }
+                        groups
+                    };
+
+                    let groups1 = build_groups(edge1);
+                    let groups2 = build_groups(edge2);
+                    let n_groups1 = groups1.len();
+                    let n_groups2 = groups2.len();
+
+                    // Track which color-group pairs we've already drawn beziers for
+                    let mut drawn_pairs: std::collections::HashSet<(usize, usize)> =
+                        std::collections::HashSet::new();
+
+                    // Match groups that have same color AND share at least one UNRESTRICTED route
+                    // This fixes the "ladder" bug where routes that split at junctions were
+                    // incorrectly connected across all branch combinations.
+                    for (group1_idx, (color1, line_indices1, ids1, routes1)) in
+                        groups1.iter().enumerate()
+                    {
+                        // Find matching group on edge2
+                        // Must match color AND have at least one shared line_id
+                        let group2_match =
+                            groups2
+                                .iter()
+                                .enumerate()
+                                .find(|(_, (color2, _, ids2, routes2))| {
+                                    if color1 != color2 || ids1.is_disjoint(ids2) {
+                                        return false;
+                                    }
+                                    // Check if at least one route is NOT restricted between these edges
+                                    // A route can transition if it's NOT in the restriction map
+                                    for route in routes1 {
+                                        if !routes2.contains(route) {
+                                            continue;
+                                        }
+                                        // Check if this route is restricted
+                                        let is_restricted = graph
+                                            .restrictions
+                                            .get(&(edge1_idx, edge2_idx))
+                                            .map(|r| r.contains(route))
+                                            .unwrap_or(false)
+                                            || graph
+                                                .restrictions
+                                                .get(&(edge2_idx, edge1_idx))
+                                                .map(|r| r.contains(route))
+                                                .unwrap_or(false);
+                                        if !is_restricted {
+                                            return true; // Found at least one unrestricted shared route
+                                        }
+                                    }
+                                    false // All shared routes are restricted
+                                });
+
+                        let (group2_idx, (_, _line_indices2, _, _)) = match group2_match {
+                            Some(r) => r,
+                            None => continue,
+                        };
+
+                        // Skip if we've already drawn this pair
+                        if !drawn_pairs.insert((group1_idx, group2_idx)) {
+                            continue;
+                        }
+
+                        // Get a representative line for metadata (first line in the group)
+                        let line1 = &edge1.lines[line_indices1[0]];
+
+                        // Calculate tile-space positions and directions for each edge
+                        let calc_point_and_dir =
+                            |edge: &crate::graph::Edge,
+                             group_idx: usize,
+                             n_groups: usize|
+                             -> Option<((f64, f64), (f64, f64))> {
+                                if n_groups == 0 {
+                                    return None;
+                                }
+
+                                // Get the geometry endpoint at the node
+                                let (node_pt, other_pt) = if edge.from == node_id {
+                                    let p0 = edge.geometry[0];
+                                    let p1 = if edge.geometry.len() > 2 {
+                                        edge.geometry[1]
+                                    } else {
+                                        edge.geometry[1]
+                                    };
+                                    (p0, p1)
+                                } else {
+                                    let len = edge.geometry.len();
+                                    let p_end = edge.geometry[len - 1];
+                                    let p_prev = if len > 2 {
+                                        edge.geometry[len - 2]
+                                    } else {
+                                        edge.geometry[len - 2]
+                                    };
+                                    (p_end, p_prev)
+                                };
+
+                                // Direction pointing AWAY from node (into the edge)
+                                let dx = other_pt[0] - node_pt[0];
+                                let dy = other_pt[1] - node_pt[1];
+
+                                let len_v = (dx * dx + dy * dy).sqrt();
+                                if len_v < 1e-10 {
+                                    return None;
+                                }
+                                let dir = (dx / len_v, dy / len_v);
+
+                                // Project node position to tile space
+                                let (node_tx, node_ty) =
+                                    Self::project_to_tile(node.x, node.y, z, x, y, tile_extent);
+
+                                // Project a point along the direction to get tile-space direction
+                                let epsilon = 0.0001;
+                                let world_along =
+                                    (node.x + dir.0 * epsilon, node.y + dir.1 * epsilon);
+                                let (along_tx, along_ty) = Self::project_to_tile(
+                                    world_along.0,
+                                    world_along.1,
+                                    z,
+                                    x,
+                                    y,
+                                    tile_extent,
+                                );
+
+                                let t_dx = along_tx - node_tx;
+                                let t_dy = along_ty - node_ty;
+                                let t_len = (t_dx * t_dx + t_dy * t_dy).sqrt();
+                                if t_len < 1e-10 {
+                                    return None;
+                                }
+                                // Direction in tile space pointing AWAY from node
+                                let tile_dir = (t_dx / t_len, t_dy / t_len);
+
+                                // CRITICAL: Invert slot index if edge points TOWARDS the node (edge.to == node_id)
+                                // This matches C++ SvgRenderer.cpp lines 321-330:
+                                // aFromInv = edge->getTo() == nd; aSlotFrom = !aFromInv ? slot : (n-1-slot)
+                                let effective_idx = if edge.to == node_id {
+                                    n_groups - 1 - group_idx
+                                } else {
+                                    group_idx
+                                };
+
+                                // Calculate offset for this GROUP
+                                let shift = (effective_idx as f64 - (n_groups as f64 - 1.0) / 2.0)
+                                    * spacing;
+                                let norm_x = -tile_dir.1;
+                                let norm_y = tile_dir.0;
+
+                                // Cutback point
+                                let cutback_dist = spacing * 2.0;
+                                let p_x = node_tx + norm_x * shift + tile_dir.0 * cutback_dist;
+                                let p_y = node_ty + norm_y * shift + tile_dir.1 * cutback_dist;
+
+                                Some(((p_x, p_y), (-tile_dir.0, -tile_dir.1)))
+                            };
+
+                        let result1 = calc_point_and_dir(edge1, group1_idx, n_groups1);
+                        let result2 = calc_point_and_dir(edge2, group2_idx, n_groups2);
+
+                        let ((p1, dir1), (p2, dir2)) = match (result1, result2) {
+                            (Some(r1), Some(r2)) => (r1, r2),
+                            _ => continue,
+                        };
+
+                        // Validate distance
+                        // Reduced max distance to prevent long incorrect connections
+                        let dist = ((p1.0 - p2.0).powi(2) + (p1.1 - p2.1).powi(2)).sqrt();
+                        if dist > 500.0 || dist < 0.5 {
+                            continue;
+                        }
+
+                        // Generate Bezier curve
+                        // Cap control distance to cutback distance to prevent bezier from
+                        // extending beyond the cutback points (matching C++ loom behavior)
+                        let cutback_dist = spacing * 2.0;
+                        let ctrl_dist = (dist * 0.55).min(cutback_dist);
+                        let cp1 = (p1.0 + dir1.0 * ctrl_dist, p1.1 + dir1.1 * ctrl_dist);
+                        let cp2 = (p2.0 + dir2.0 * ctrl_dist, p2.1 + dir2.1 * ctrl_dist);
+
+                        let points = bezier_points(p1, cp1, cp2, p2, 16);
+
+                        let mut encoder =
+                            GeomEncoder::new(mvt::GeomType::Linestring).bbox(tile_bbox.clone());
+                        for pt in &points {
+                            let _ = encoder.add_point(pt.0, pt.1);
+                        }
+                        if let Ok(geom) = encoder.encode() {
+                            let mut feature = layer.into_feature(geom);
+                            feature.set_id((node_id as u64).wrapping_add(
+                                edge1_idx as u64 * 10000
+                                    + edge2_idx as u64 * 100
+                                    + group1_idx as u64,
+                            ));
+                            feature.add_tag_string("line_id", &line1.line_id);
+                            feature.add_tag_string(
+                                "color",
+                                &format!("#{}", line1.color.trim_start_matches('#')),
+                            );
+                            feature.add_tag_string("type", "connection");
+                            layer = feature.into_layer();
                         }
                     }
                 }
             }
         }
         layer
+    }
+
+    // ========== Parallel Tile Generation Methods ==========
+
+    /// Generate multiple tiles in parallel.
+    /// Returns a vector of generated tiles with their coordinates.
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `tiles` - List of (z, x, y) tile coordinates to generate
+    ///
+    /// # Example
+    /// ```ignore
+    /// let tiles = vec![(10, 512, 512), (10, 512, 513), (10, 513, 512)];
+    /// let results = TileGenerator::generate_tiles_parallel(graph, &tiles);
+    /// ```
+    pub fn generate_tiles_parallel(
+        graph: &RenderGraph,
+        tiles: &[(u8, u32, u32)],
+    ) -> Vec<GeneratedTile> {
+        tiles
+            .par_iter()
+            .map(|&(z, x, y)| {
+                let tile = Self::generate_tile(graph, z, x, y);
+                GeneratedTile { z, x, y, tile }
+            })
+            .collect()
+    }
+
+    /// Generate multiple tiles in parallel with progress tracking.
+    /// The progress counter is updated atomically as tiles are completed.
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `tiles` - List of (z, x, y) tile coordinates to generate
+    /// * `progress` - Atomic counter that tracks the number of completed tiles
+    ///
+    /// # Example
+    /// ```ignore
+    /// use std::sync::atomic::{AtomicUsize, Ordering};
+    /// use std::sync::Arc;
+    ///
+    /// let tiles = vec![(10, 512, 512), (10, 512, 513), (10, 513, 512)];
+    /// let progress = Arc::new(AtomicUsize::new(0));
+    /// let total = tiles.len();
+    ///
+    /// // In another thread, monitor progress
+    /// let progress_clone = progress.clone();
+    /// std::thread::spawn(move || {
+    ///     loop {
+    ///         let completed = progress_clone.load(Ordering::Relaxed);
+    ///         println!("Progress: {}/{}", completed, total);
+    ///         if completed >= total { break; }
+    ///         std::thread::sleep(std::time::Duration::from_millis(100));
+    ///     }
+    /// });
+    ///
+    /// let results = TileGenerator::generate_tiles_parallel_with_progress(graph, &tiles, &progress);
+    /// ```
+    pub fn generate_tiles_parallel_with_progress(
+        graph: &RenderGraph,
+        tiles: &[(u8, u32, u32)],
+        progress: &AtomicUsize,
+    ) -> Vec<GeneratedTile> {
+        tiles
+            .par_iter()
+            .map(|&(z, x, y)| {
+                let tile = Self::generate_tile(graph, z, x, y);
+                progress.fetch_add(1, Ordering::Relaxed);
+                GeneratedTile { z, x, y, tile }
+            })
+            .collect()
+    }
+
+    /// Generate all tiles for a specific zoom level in parallel.
+    /// Automatically determines which tiles need to be generated based on the graph's spatial index.
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `z` - Zoom level to generate tiles for
+    ///
+    /// # Returns
+    /// A vector of generated tiles for the specified zoom level
+    pub fn generate_tiles_for_zoom_level(graph: &RenderGraph, z: u8) -> Vec<GeneratedTile> {
+        let tile_coords = Self::collect_tiles_for_zoom(graph, z);
+        info!(
+            "Generating {} tiles for zoom level {} in parallel",
+            tile_coords.len(),
+            z
+        );
+        Self::generate_tiles_parallel(graph, &tile_coords)
+    }
+
+    /// Generate all tiles for a zoom level range in parallel.
+    /// Generates tiles for each zoom level from min_z to max_z (inclusive).
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `min_z` - Minimum zoom level (inclusive)
+    /// * `max_z` - Maximum zoom level (inclusive)
+    ///
+    /// # Returns
+    /// A vector of all generated tiles across all zoom levels
+    pub fn generate_tiles_for_zoom_range(
+        graph: &RenderGraph,
+        min_z: u8,
+        max_z: u8,
+    ) -> Vec<GeneratedTile> {
+        // Collect all tile coordinates for all zoom levels
+        let all_tiles: Vec<(u8, u32, u32)> = (min_z..=max_z)
+            .flat_map(|z| Self::collect_tiles_for_zoom(graph, z))
+            .collect();
+
+        info!(
+            "Generating {} total tiles for zoom levels {}-{} in parallel",
+            all_tiles.len(),
+            min_z,
+            max_z
+        );
+
+        Self::generate_tiles_parallel(graph, &all_tiles)
+    }
+
+    /// Generate all tiles for a zoom level range with progress tracking.
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `min_z` - Minimum zoom level (inclusive)
+    /// * `max_z` - Maximum zoom level (inclusive)
+    /// * `progress` - Atomic counter that tracks the number of completed tiles
+    ///
+    /// # Returns
+    /// A tuple of (total tile count, vector of generated tiles)
+    pub fn generate_tiles_for_zoom_range_with_progress(
+        graph: &RenderGraph,
+        min_z: u8,
+        max_z: u8,
+        progress: &AtomicUsize,
+    ) -> (usize, Vec<GeneratedTile>) {
+        let all_tiles: Vec<(u8, u32, u32)> = (min_z..=max_z)
+            .flat_map(|z| Self::collect_tiles_for_zoom(graph, z))
+            .collect();
+
+        let total = all_tiles.len();
+        info!(
+            "Generating {} total tiles for zoom levels {}-{} in parallel",
+            total, min_z, max_z
+        );
+
+        let tiles = Self::generate_tiles_parallel_with_progress(graph, &all_tiles, progress);
+        (total, tiles)
+    }
+
+    /// Collect all tile coordinates that need to be generated for a zoom level.
+    /// Uses the graph's spatial index to determine which tiles contain data.
+    ///
+    /// # Arguments
+    /// * `graph` - The render graph containing all edge and node data
+    /// * `z` - Zoom level
+    ///
+    /// # Returns
+    /// A vector of (z, x, y) tile coordinates
+    pub fn collect_tiles_for_zoom(graph: &RenderGraph, z: u8) -> Vec<(u8, u32, u32)> {
+        let mut tiles: HashSet<(u32, u32)> = HashSet::new();
+
+        // Query the spatial index to find all edges
+        for item in graph.tree.iter() {
+            let bounds = item.geom();
+            let min_pt = bounds.lower();
+            let max_pt = bounds.upper();
+
+            // Convert lat/lon to tile coordinates
+            let (min_tx, min_ty) = Self::latlon_to_tile(min_pt[1], min_pt[0], z);
+            let (max_tx, max_ty) = Self::latlon_to_tile(max_pt[1], max_pt[0], z);
+
+            // Ensure we iterate from smaller to larger tile coordinates
+            let (tx_start, tx_end) = (min_tx.min(max_tx), min_tx.max(max_tx));
+            let (ty_start, ty_end) = (min_ty.min(max_ty), min_ty.max(max_ty));
+
+            for x in tx_start..=tx_end {
+                for y in ty_start..=ty_end {
+                    tiles.insert((x, y));
+                }
+            }
+        }
+
+        tiles.into_iter().map(|(x, y)| (z, x, y)).collect()
+    }
+
+    /// Convert latitude/longitude to tile coordinates.
+    fn latlon_to_tile(lat: f64, lon: f64, z: u8) -> (u32, u32) {
+        let n = 2.0f64.powi(z as i32);
+        let x = ((lon + 180.0) / 360.0 * n).floor() as u32;
+        let lat_rad = lat.to_radians();
+        let y = ((1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0 * n).floor() as u32;
+        (x, y)
+    }
+
+    /// Set the thread pool size for parallel operations.
+    /// This affects all subsequent parallel tile generation calls.
+    ///
+    /// Note: This function should be called before starting tile generation.
+    /// Calling it during generation may have undefined behavior.
+    ///
+    /// # Arguments
+    /// * `num_threads` - Number of threads to use for parallel operations
+    ///
+    /// # Returns
+    /// Result indicating success or failure of thread pool initialization
+    pub fn set_thread_pool_size(num_threads: usize) -> Result<(), rayon::ThreadPoolBuildError> {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build_global()
     }
 }
 
@@ -817,4 +1210,30 @@ impl BezierControl {
         }
         pts
     }
+}
+
+/// Generate cubic bezier curve points
+/// p0: start point, cp1: control point 1, cp2: control point 2, p1: end point
+fn bezier_points(
+    p0: (f64, f64),
+    cp1: (f64, f64),
+    cp2: (f64, f64),
+    p1: (f64, f64),
+    steps: usize,
+) -> Vec<(f64, f64)> {
+    let mut pts = Vec::with_capacity(steps + 1);
+    for i in 0..=steps {
+        let t = i as f64 / steps as f64;
+        let inv_t = 1.0 - t;
+
+        let b0 = inv_t * inv_t * inv_t;
+        let b1 = 3.0 * inv_t * inv_t * t;
+        let b2 = 3.0 * inv_t * t * t;
+        let b3 = t * t * t;
+
+        let x = b0 * p0.0 + b1 * cp1.0 + b2 * cp2.0 + b3 * p1.0;
+        let y = b0 * p0.1 + b1 * cp1.1 + b2 * cp2.1 + b3 * p1.1;
+        pts.push((x, y));
+    }
+    pts
 }

@@ -154,6 +154,74 @@ fn make_reqwest_client() -> reqwest::Client {
         .unwrap()
 }
 
+/// Creates a client that better mimics a real browser to bypass anti-bot systems
+fn make_browser_like_client() -> reqwest::Client {
+    use reqwest::header::{ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, HeaderMap, HeaderValue};
+
+    let mut default_headers = HeaderMap::new();
+    default_headers.insert(
+        ACCEPT,
+        HeaderValue::from_static(
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        ),
+    );
+    default_headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
+    default_headers.insert(
+        ACCEPT_ENCODING,
+        HeaderValue::from_static("gzip, deflate, br"),
+    );
+    default_headers.insert("Sec-Fetch-Dest", HeaderValue::from_static("document"));
+    default_headers.insert("Sec-Fetch-Mode", HeaderValue::from_static("navigate"));
+    default_headers.insert("Sec-Fetch-Site", HeaderValue::from_static("none"));
+    default_headers.insert("Sec-Fetch-User", HeaderValue::from_static("?1"));
+    default_headers.insert("Upgrade-Insecure-Requests", HeaderValue::from_static("1"));
+    default_headers.insert("Cache-Control", HeaderValue::from_static("max-age=0"));
+
+    reqwest::ClientBuilder::new()
+        .use_rustls_tls()
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        )
+        .default_headers(default_headers)
+        .danger_accept_invalid_certs(true)
+        .deflate(true)
+        .gzip(true)
+        .brotli(true)
+        .cookie_store(true)
+        .timeout(Duration::from_secs(60 * 30))
+        .connect_timeout(Duration::from_secs(20))
+        .build()
+        .unwrap()
+}
+
+/// Visits the homepage of a URL first to obtain cookies and warm up the session
+/// This helps bypass anti-bot systems that require a valid session
+async fn warm_up_homepage(
+    client: &reqwest::Client,
+    parsed_url: &Url,
+) -> Result<(), reqwest::Error> {
+    // Construct homepage URL from the parsed URL
+    let homepage = format!(
+        "{}://{}{}",
+        parsed_url.scheme(),
+        parsed_url.host_str().unwrap_or(""),
+        parsed_url
+            .port()
+            .map(|p| format!(":{}", p))
+            .unwrap_or_default()
+    );
+
+    // Make a GET request to the homepage to obtain session cookies
+    let response = client.get(&homepage).send().await?;
+    // Consume the response body to complete the request
+    let _ = response.bytes().await;
+
+    // Small delay to appear more human-like
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    Ok(())
+}
+
 async fn try_to_download(
     feed_id: &str,
     client: &reqwest::Client,
@@ -164,57 +232,34 @@ async fn try_to_download(
 
     if url.contains("api.odpt.org") && !url.contains("acl:consumerKey") {
         let mut url_with_key = new_url.clone();
-        if url_with_key.contains("?") {
-            url_with_key.push_str(
-                "&acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e",
-            );
-        } else {
-            url_with_key.push_str(
-                "?acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e",
-            );
-        }
+        let separator = if url_with_key.contains('?') { '&' } else { '?' };
+        url_with_key.push(separator);
+        url_with_key.push_str(
+            "acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e",
+        );
         return client.get(&url_with_key).send().await;
     }
 
-    let client = match feed_id {
-        "f-9q5b-torrancetransit" | "f-west~hollywood" | "f-genentech" => reqwest::ClientBuilder::new()
-            .use_rustls_tls()
-            .user_agent(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) Gecko/20100101 Firefox/138.0",
-            )
-            .danger_accept_invalid_certs(true)
-            .deflate(true)
-            .gzip(true)
-            .brotli(true)
-            .cookie_store(true)
-            .build()
-            .unwrap(),
-        _ => client.clone(),
+    // Use browser-like client for feeds that are known to have anti-bot protection
+    let needs_browser_client = matches!(
+        feed_id,
+        "f-9q5b-torrancetransit"
+            | "f-west~hollywood"
+            | "f-genentech"
+            | "f-glendora~ca~us"
+            | "f-dr4e-patco"
+    ) || url.contains("showpublisheddocument")
+        || url.contains("showdocument");
+
+    let client = if needs_browser_client {
+        make_browser_like_client()
+    } else {
+        client.clone()
     };
 
     if feed_id == "f-genentech" {
         let _ = authenticate_genentech(&client).await;
     }
-
-    //the wordpress backup thing
-    let client = match url.contains("showpublisheddocument")
-        || url.contains("showdocument")
-        || feed_id == "f-glendora~ca~us"
-    {
-        true => reqwest::ClientBuilder::new()
-            .use_rustls_tls()
-            .user_agent(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) Gecko/20100101 Firefox/138.0",
-            )
-            .danger_accept_invalid_certs(true)
-            .deflate(true)
-            .gzip(true)
-            .brotli(true)
-            .cookie_store(true)
-            .build()
-            .unwrap(),
-        _ => client.clone(),
-    };
 
     if url.contains("nap.transportes.gob.es") {
         return client
@@ -260,23 +305,20 @@ async fn try_to_download(
         Ok(response) => {
             if response.status() == reqwest::StatusCode::FORBIDDEN {
                 println!(
-                    "Got 403 for {}, trying again with wordpress bypass user agent",
+                    "Got 403 for {}, trying again with browser-like client and homepage warm-up",
                     feed_id
                 );
-                let client = reqwest::ClientBuilder::new()
-            .use_rustls_tls()
-            .user_agent(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) Gecko/20100101 Firefox/138.0",
-            )
-            .danger_accept_invalid_certs(true)
-            .deflate(true)
-            .gzip(true)
-            .brotli(true)
-            .cookie_store(true)
-            .build()
-            .unwrap();
 
-                let request = client.get(&new_url).header("Accept", "*/*");
+                // Create a new browser-like client for this retry
+                let browser_client = make_browser_like_client();
+
+                // Try to warm up by visiting the homepage first to get cookies
+                if let Ok(retry_url) = Url::parse(&new_url) {
+                    let _ = warm_up_homepage(&browser_client, &retry_url).await;
+                }
+
+                // Retry the actual download with the warmed-up client
+                let request = browser_client.get(&new_url).header("Accept", "*/*");
                 let request = add_auth_headers(request, feed_id);
                 return request.await.send().await;
             } else {
@@ -285,20 +327,19 @@ async fn try_to_download(
         }
         Err(error) => {
             println!(
-                "Error with downloading {}: {}, {:?}, trying again",
+                "Error with downloading {}: {}, {:?}, trying again with browser-like client",
                 feed_id, &new_url, error
             );
 
-            //trying again with a different client
+            // Create a browser-like client for retry
+            let browser_client = make_browser_like_client();
 
-            let client = reqwest::ClientBuilder::new()
-                .user_agent("Catenary Maple")
-                .timeout(Duration::from_secs(180))
-                .connect_timeout(Duration::from_secs(20))
-                .build()
-                .unwrap();
+            // Try homepage warm-up before retrying
+            if let Ok(retry_url) = Url::parse(&new_url) {
+                let _ = warm_up_homepage(&browser_client, &retry_url).await;
+            }
 
-            client.get(&new_url).send().await
+            browser_client.get(&new_url).send().await
         }
     }
 }
@@ -753,8 +794,9 @@ fn transform_for_bay_area(x: String) -> String {
 
     if x.contains("api.511.org") {
         let mut a = x;
-
-        a.push_str("&api_key=094f6bc5-9d6a-4529-bfb3-6f1bc4d809d9");
+        let separator = if a.contains('?') { '&' } else { '?' };
+        a.push(separator);
+        a.push_str("api_key=094f6bc5-9d6a-4529-bfb3-6f1bc4d809d9");
 
         a
     } else {

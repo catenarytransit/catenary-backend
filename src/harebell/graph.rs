@@ -44,6 +44,9 @@ pub struct RenderGraph {
     pub collapsed_lines: HashMap<String, Vec<LineOnEdge>>,
     // Adjacency list for curve generation: NodeID -> List of Edge Indices connected to it
     pub node_to_edges: HashMap<i64, Vec<usize>>,
+    // Route groups: (chateau, route_group_id) -> Vec of (route_id, color)
+    // Routes with same short_name or color are grouped together
+    pub route_groups: HashMap<(String, String), Vec<(String, String)>>,
 }
 
 impl RenderGraph {
@@ -56,6 +59,7 @@ impl RenderGraph {
             node_tree: RTree::new(),
             collapsed_lines: HashMap::new(),
             node_to_edges: HashMap::new(),
+            route_groups: HashMap::new(),
         }
     }
 

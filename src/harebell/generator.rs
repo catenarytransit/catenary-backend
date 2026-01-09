@@ -2,10 +2,11 @@ use crate::graph::RenderGraph;
 use crate::tile_gen::TileGenerator;
 use anyhow::Result;
 use log::info;
-use rayon::prelude::*;
-use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
+use std::time::Duration;
 
 pub struct Generator {
     output_dir: String,
@@ -16,60 +17,94 @@ impl Generator {
         Self { output_dir }
     }
 
+    /// Generate all tiles for a zoom range and write them to disk.
+    /// Uses parallel tile generation for improved performance.
     pub fn generate_all(&self, graph: &RenderGraph, min_z: u8, max_z: u8) -> Result<()> {
         info!("Starting generation for levels {}-{}...", min_z, max_z);
         fs::create_dir_all(&self.output_dir)?;
 
-        for z in min_z..=max_z {
-            self.generate_zoom_level(graph, z)?;
+        // Use the new parallel API with progress tracking
+        let progress = Arc::new(AtomicUsize::new(0));
+
+        // Start progress monitoring thread
+        let progress_clone = progress.clone();
+        let min_z_copy = min_z;
+        let max_z_copy = max_z;
+        let monitor_handle = thread::spawn(move || {
+            let mut last_count = 0;
+            loop {
+                thread::sleep(Duration::from_secs(5));
+                let current = progress_clone.load(Ordering::Relaxed);
+                if current > last_count {
+                    info!(
+                        "Progress: {} tiles generated (zoom {}-{})",
+                        current, min_z_copy, max_z_copy
+                    );
+                    last_count = current;
+                }
+                // Check if we should exit (no progress for a while usually means done)
+                // We'll break when the main thread joins us
+                if current == last_count && last_count > 0 {
+                    // Give it one more chance
+                    thread::sleep(Duration::from_secs(2));
+                    if progress_clone.load(Ordering::Relaxed) == current {
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Generate all tiles for all zoom levels in parallel
+        let (total, tiles) = TileGenerator::generate_tiles_for_zoom_range_with_progress(
+            graph, min_z, max_z, &progress,
+        );
+
+        info!("Generated {} tiles, now writing to disk...", total);
+
+        // Write tiles to disk (this is I/O bound, so we do it after generation)
+        for tile_result in tiles {
+            if let Err(e) = self.write_tile(
+                tile_result.z,
+                tile_result.x,
+                tile_result.y,
+                tile_result.tile,
+            ) {
+                eprintln!(
+                    "Failed to write tile {}/{}/{}: {}",
+                    tile_result.z, tile_result.x, tile_result.y, e
+                );
+            }
         }
+
+        // Signal monitor thread to stop and wait for it
+        drop(monitor_handle);
+
+        info!("Tile generation complete!");
         Ok(())
     }
 
-    fn generate_zoom_level(&self, graph: &RenderGraph, z: u8) -> Result<()> {
-        info!("Analyzing tiles for zoom level {}...", z);
+    /// Generate tiles for a single zoom level.
+    /// Uses parallel tile generation for improved performance.
+    pub fn generate_zoom_level(&self, graph: &RenderGraph, z: u8) -> Result<()> {
+        info!("Generating tiles for zoom level {}...", z);
 
-        // identify necessary tiles
-        // We'll query valid tiles by checking the graph elements
-        // This can be optimised by iterating the RTree
+        let tiles = TileGenerator::generate_tiles_for_zoom_level(graph, z);
 
-        // Since we don't have direct access to RTree elements iterator easily (private field?),
-        // `graph.tree` is pub.
-        // We can iterate over all envelopes in the tree.
-        let mut tiles: HashSet<(u32, u32)> = HashSet::new();
+        println!("Generated {} tiles for zoom level {}", tiles.len(), z);
 
-        for item in graph.tree.iter() {
-            let bounds = item.geom(); // AABB
-            // Convert bounds to tile ranges
-            let min_pt = bounds.lower();
-            let max_pt = bounds.upper();
-
-            let (min_tx, min_ty) = Self::latlon_to_tile(min_pt[1], min_pt[0], z);
-            let (max_tx, max_ty) = Self::latlon_to_tile(max_pt[1], max_pt[0], z);
-
-            // Fix: Web Mercator tile Y increases southward, so min_lat gives LARGER tile_y.
-            // Ensure we iterate from smaller to larger tile coordinates.
-            let (tx_start, tx_end) = (min_tx.min(max_tx), min_tx.max(max_tx));
-            let (ty_start, ty_end) = (min_ty.min(max_ty), min_ty.max(max_ty));
-
-            for x in tx_start..=tx_end {
-                for y in ty_start..=ty_end {
-                    tiles.insert((x, y));
-                }
+        for tile_result in tiles {
+            if let Err(e) = self.write_tile(
+                tile_result.z,
+                tile_result.x,
+                tile_result.y,
+                tile_result.tile,
+            ) {
+                eprintln!(
+                    "Failed to write tile {}/{}/{}: {}",
+                    tile_result.z, tile_result.x, tile_result.y, e
+                );
             }
         }
-
-        info!("Generating {} tiles for zoom level {}", tiles.len(), z);
-
-        let tile_vec: Vec<(u32, u32)> = tiles.into_iter().collect();
-
-        tile_vec.par_iter().for_each(|(x, y)| {
-            let tile_data = TileGenerator::generate_tile(graph, z, *x, *y);
-            // Write to disk
-            if let Err(e) = self.write_tile(z, *x, *y, tile_data) {
-                eprintln!("Failed to write tile {}/{}/{}: {}", z, x, y, e);
-            }
-        });
 
         Ok(())
     }
@@ -83,15 +118,5 @@ impl Generator {
             fs::write(path, bytes)?;
         }
         Ok(())
-    }
-
-    fn latlon_to_tile(lat: f64, lon: f64, z: u8) -> (u32, u32) {
-        let n = 2.0f64.powi(z as i32);
-        let x = ((lon + 180.0) / 360.0 * n).floor() as u32;
-        let lat_rad = lat.to_radians();
-        let y = ((1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / std::f64::consts::PI) / 2.0
-            * n)
-            .floor() as u32;
-        (x, y)
     }
 }

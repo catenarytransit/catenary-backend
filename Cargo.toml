@@ -100,6 +100,7 @@ diesel = { version = "2.3.2", features = [
     "r2d2",
     "chrono",
     "postgres",
+    "64-column-tables",
 ] }
 log = "0.4"
 postgis_diesel = "3.0"
@@ -137,10 +138,10 @@ env_logger = "0.11.3"
 ron = "0.12.0"
 regex = "1.10.4"
 fasthash = "0.4.0"
-clap = "4.5"
+clap = { version = "4.5", features = ["derive", "env"] }
 rgb = "0.8.37"
 zotgtfs = "0.3.7"
-amtrak-gtfs-rt = "0.8.4"
+amtrak-gtfs-rt = "0.8.7"
 chrono-tz = { version = "0.10.4", features = ["case-insensitive", "serde"] }
 ping = "0.7.0"
 online = { version = "4.0.2", features = ["tokio-runtime"] }
@@ -301,3 +302,7 @@ path = "src/globeflower/main.rs"
 [[bin]]
 name = "harebell"
 path = "src/harebell/main.rs"
+
+[[bin]]
+name = "osmstationimport"
+path = "src/osmstationimport/main.rs"

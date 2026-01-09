@@ -49,3 +49,27 @@ pub async fn make_async_pool() -> Result<
 fn database_url_for_env() -> String {
     env::var("DATABASE_URL").expect("DATABASE_URL must be set")
 }
+
+pub async fn check_is_active(
+    conn: &mut bb8::PooledConnection<
+        '_,
+        AsyncDieselConnectionManager<diesel_async::AsyncPgConnection>,
+    >,
+) -> bool {
+    use diesel_async::RunQueryDsl;
+    diesel::sql_query("SELECT 1")
+        .execute(&mut **conn)
+        .await
+        .is_ok()
+}
+
+pub async fn check_postgres_alive(
+    pool: &CatenaryPostgresPool,
+) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
+    use diesel_async::RunQueryDsl;
+
+    let mut conn = pool.get().await?;
+    let _ = diesel::sql_query("SELECT 1").execute(&mut conn).await?;
+
+    Ok(())
+}

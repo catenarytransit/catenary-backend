@@ -289,6 +289,47 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.osm_station_imports (import_id) {
+            import_id -> Int4,
+            file_name -> Text,
+            file_hash -> Text,
+            imported_at -> Timestamptz,
+            station_count -> Int4,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.osm_stations (osm_id, osm_type, import_id) {
+            osm_id -> Int8,
+            osm_type -> Text,
+            import_id -> Int4,
+            point -> Geometry,
+            name -> Nullable<Text>,
+            name_translations -> Nullable<Jsonb>,
+            station_type -> Nullable<Text>,
+            railway_tag -> Nullable<Text>,
+            mode_type -> Text,
+            uic_ref -> Nullable<Text>,
+            #[sql_name = "ref"]
+            ref_ -> Nullable<Text>,
+            wikidata -> Nullable<Text>,
+            operator -> Nullable<Text>,
+            network -> Nullable<Text>,
+            level -> Nullable<Text>,
+            local_ref -> Nullable<Text>,
+            parent_osm_id -> Nullable<Int8>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.realtime_feeds (onestop_feed_id) {
             onestop_feed_id -> Text,
             name -> Nullable<Text>,
@@ -474,6 +515,8 @@ pub mod gtfs {
             tts_name -> Nullable<Text>,
             tts_name_translations -> Nullable<Jsonb>,
             allowed_spatial_query -> Bool,
+            osm_station_id -> Nullable<Int8>,
+            osm_platform_id -> Nullable<Int8>,
         }
     }
 
@@ -569,6 +612,7 @@ pub mod gtfs {
         }
     }
 
+    diesel::joinable!(osm_stations -> osm_station_imports (import_id));
     diesel::joinable!(stop_mappings -> stations (station_id));
 
     diesel::allow_tables_to_appear_in_same_query!(
@@ -588,6 +632,8 @@ pub mod gtfs {
         ip_addr_to_geo,
         itinerary_pattern,
         itinerary_pattern_meta,
+        osm_station_imports,
+        osm_stations,
         realtime_feeds,
         realtime_passwords,
         routes,

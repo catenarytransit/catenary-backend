@@ -30,6 +30,44 @@
             border-radius: 4px;
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
         }
+
+        #debug-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: white;
+            padding: 10px;
+            font-family: sans-serif;
+            border-radius: 4px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        #debug-controls strong {
+            display: block;
+            margin-bottom: 8px;
+        }
+
+        .toggle-btn {
+            display: block;
+            width: 100%;
+            padding: 6px 12px;
+            margin: 4px 0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            background: #f5f5f5;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .toggle-btn:hover {
+            background: #e0e0e0;
+        }
+
+        .toggle-btn.active {
+            background: #4CAF50;
+            color: white;
+            border-color: #45a049;
+        }
     </style>
 </head>
 
@@ -38,6 +76,12 @@
     <div id="info">
         <strong>Harebell Local Viewer</strong><br>
         Tiles: <a href="http://127.0.0.1:8080/index.json" target="_blank">http://127.0.0.1:8080</a>
+    </div>
+    <div id="debug-controls">
+        <strong>Debug Filters</strong>
+        <button id="toggle-all" class="toggle-btn active">Show All</button>
+        <button id="toggle-connections" class="toggle-btn">Connections Only</button>
+        <button id="toggle-regular" class="toggle-btn">Regular Only</button>
     </div>
     <script>
         var map = new maplibregl.Map({
@@ -66,8 +110,18 @@
                 'source-layer': 'transit',
                 paint: {
                     'line-color': ['get', 'color'],
-                    'line-width': 4,
-                    'line-opacity': 0.8
+                    'line-width': [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        7,
+                        1.5,
+                        10,
+                        2,
+                        14,
+                        4
+                    ],
+                    'line-opacity': 0.95
                 },
                 layout: {
                     'line-cap': 'round',
@@ -93,40 +147,40 @@
                     'text-halo-width': 2
                 }
             });
-        });
 
-        // Stations Layer
-        map.addLayer({
-            id: 'stations',
-            type: 'circle',
-            source: 'harebell',
-            'source-layer': 'stations',
-            paint: {
-                'circle-radius': 8,
-                'circle-color': '#ffffff',
-                'circle-stroke-width': 2,
-                'circle-stroke-color': '#000000'
-            }
-        });
+            // Stations Layer
+            map.addLayer({
+                id: 'stations',
+                type: 'circle',
+                source: 'harebell',
+                'source-layer': 'stations',
+                paint: {
+                    'circle-radius': 2,
+                    'circle-color': '#ffffff',
+                    'circle-stroke-width': 2,
+                    'circle-stroke-color': '#000000'
+                }
+            });
 
-        // Station Labels
-        map.addLayer({
-            id: 'stations-label',
-            type: 'symbol',
-            source: 'harebell',
-            'source-layer': 'stations',
-            layout: {
-                'text-field': ['get', 'name'],
-                'text-font': ['Barlow-Regular'],
-                'text-size': 12,
-                'text-offset': [0, 1.5],
-                'text-anchor': 'top'
-            },
-            paint: {
-                'text-color': '#000',
-                'text-halo-color': '#fff',
-                'text-halo-width': 2
-            }
+            // Station Labels
+            map.addLayer({
+                id: 'stations-label',
+                type: 'symbol',
+                source: 'harebell',
+                'source-layer': 'stations',
+                layout: {
+                    'text-field': ['get', 'name'],
+                    'text-font': ['Barlow-Regular'],
+                    'text-size': 12,
+                    'text-offset': [0, 1.5],
+                    'text-anchor': 'top'
+                },
+                paint: {
+                    'text-color': '#000',
+                    'text-halo-color': '#fff',
+                    'text-halo-width': 2
+                }
+            });
         });
 
         map.on('click', 'transit-lines', function (e) {
@@ -142,6 +196,36 @@
 
         map.on('mouseleave', 'transit-lines', function () {
             map.getCanvas().style.cursor = '';
+        });
+
+        // Debug filter controls
+        function setActiveButton(activeId) {
+            document.querySelectorAll('.toggle-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(activeId).classList.add('active');
+        }
+
+        document.getElementById('toggle-all').addEventListener('click', function () {
+            setActiveButton('toggle-all');
+            map.setFilter('transit-lines', null);
+            map.setFilter('transit-lines-label', null);
+        });
+
+        document.getElementById('toggle-connections').addEventListener('click', function () {
+            setActiveButton('toggle-connections');
+            // Only show features where type == 'connection'
+            map.setFilter('transit-lines', ['==', ['get', 'type'], 'connection']);
+            map.setFilter('transit-lines-label', ['==', ['get', 'type'], 'connection']);
+        });
+
+        document.getElementById('toggle-regular').addEventListener('click', function () {
+            setActiveButton('toggle-regular');
+            // Show features where type property doesn't exist OR type != 'connection'
+            var regularFilter = ['any',
+                ['!', ['has', 'type']],
+                ['!=', ['get', 'type'], 'connection']
+            ];
+            map.setFilter('transit-lines', regularFilter);
+            map.setFilter('transit-lines-label', regularFilter);
         });
     </script>
 </body>

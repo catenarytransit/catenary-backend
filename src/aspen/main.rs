@@ -91,6 +91,7 @@ use std::io::Read;
 use std::io::Write;
 use std::time::Instant;
 
+mod alerts_processing;
 mod persistence;
 mod track_number;
 
