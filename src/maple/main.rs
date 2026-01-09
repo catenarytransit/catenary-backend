@@ -870,6 +870,50 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
                                         .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
                                     .execute(conn).await;
+
+                                        // Cleanup other incomplete attempts for this feed that may have crashed
+                                        // We only delete attempts that haven't successfully finished; since this
+                                        // attempt failed, we don't have feed_start_date to safely delete successful ones
+                                        use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
+                                        
+                                        let incomplete_attempts = ingested_static
+                                            .filter(catenary::schema::gtfs::ingested_static::dsl::onestop_feed_id.eq(&feed_id))
+                                            .filter(catenary::schema::gtfs::ingested_static::dsl::attempt_id.ne(&attempt_id))
+                                            .filter(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(false))
+                                            .filter(catenary::schema::gtfs::ingested_static::dsl::ingestion_successfully_finished.eq(false))
+                                            .select(catenary::models::IngestedStatic::as_select())
+                                            .load::<catenary::models::IngestedStatic>(conn)
+                                            .await;
+
+                                        if let Ok(incomplete_attempts) = &incomplete_attempts {
+                                            if incomplete_attempts.is_empty() {
+                                                println!("No incomplete attempts to clean up for feed {}", feed_id);
+                                            } else {
+                                                println!("Found {} incomplete attempt(s) to clean up for feed {}", incomplete_attempts.len(), feed_id);
+                                            }
+                                            for other in incomplete_attempts {
+                                                println!("Deleting incomplete attempt {} for feed {} (started at {}, errored={})", 
+                                                    other.attempt_id, feed_id, other.ingest_start_unix_time_ms, other.ingestion_errored);
+                                                let delete_result = delete_attempt_objects(&feed_id, &other.attempt_id, Arc::clone(&arc_conn_pool)).await;
+                                                if delete_result.is_ok() {
+                                                    println!("Successfully deleted objects for attempt {}", other.attempt_id);
+                                                } else {
+                                                    eprintln!("Failed to delete objects for attempt {}: {:?}", other.attempt_id, delete_result.err());
+                                                }
+                                                if let Some(es) = &elasticclient {
+                                                    let es_result = delete_attempt_objects_elasticsearch(&feed_id, &other.attempt_id, es).await;
+                                                    if es_result.is_err() {
+                                                        eprintln!("Failed to delete elasticsearch objects for attempt {}: {:?}", other.attempt_id, es_result.err());
+                                                    }
+                                                }
+                                                let _ = diesel::delete(in_progress_static_ingests
+                                                    .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
+                                                    .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&other.attempt_id)))
+                                                    .execute(conn).await;
+                                            }
+                                        } else {
+                                            eprintln!("Failed to query incomplete attempts for feed {}: {:?}", feed_id, incomplete_attempts.err());
+                                        }
                                     }
                                     }
                                 }
