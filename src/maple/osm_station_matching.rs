@@ -497,8 +497,8 @@ pub async fn match_stops_for_feed(
     let mut all_stops: Vec<StopData> = Vec::new();
 
     loop {
-        // Fetch a batch of stops
-        let stops: Vec<(String, Option<postgis_diesel::types::Point>, Option<String>, Vec<Option<i16>>, Option<String>)> =
+        // Fetch a batch of stops - get both route_types and children_route_types
+        let stops: Vec<(String, Option<postgis_diesel::types::Point>, Option<String>, Vec<Option<i16>>, Vec<Option<i16>>, Option<String>)> =
             stops_dsl::stops
                 .filter(stops_dsl::onestop_feed_id.eq(feed_id))
                 .filter(stops_dsl::attempt_id.eq(attempt_id))
@@ -507,6 +507,7 @@ pub async fn match_stops_for_feed(
                     stops_dsl::gtfs_id,
                     stops_dsl::point,
                     stops_dsl::name,
+                    stops_dsl::route_types,
                     stops_dsl::children_route_types,
                     stops_dsl::platform_code,
                 ))
@@ -523,13 +524,19 @@ pub async fn match_stops_for_feed(
         let batch_len = stops.len() as i64;
 
         // Pre-filter stops that need matching (rail/tram/subway only, with coordinates)
-        for (stop_id, point, name, route_types, platform_code) in stops {
+        for (stop_id, point, name, route_types, children_route_types, platform_code) in stops {
             let Some(point) = point else { continue };
 
-            // Find rail/tram/subway route types for this stop
-            let rail_types: Vec<i16> = route_types
+            // Combine route_types and children_route_types to catch both parent and child stops
+            let all_route_types: Vec<i16> = route_types
                 .into_iter()
+                .chain(children_route_types.into_iter())
                 .filter_map(|rt| rt)
+                .collect();
+
+            // Find rail/tram/subway route types for this stop
+            let rail_types: Vec<i16> = all_route_types
+                .into_iter()
                 .filter(|&rt| rt == 0 || rt == 1 || rt == 2)
                 .collect();
 
@@ -566,6 +573,7 @@ pub async fn match_stops_for_feed(
     }
 
     if all_stops.is_empty() {
+        println!("  OSM matching: no rail/tram/subway stops found for {}", chateau_id);
         return Ok(0);
     }
 
