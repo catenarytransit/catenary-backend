@@ -173,7 +173,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./pfaedle-filtered-great-britain-latest.osm.pbf",
                 None,
-                false,
+                true,
             )?;
         }
         "f-hauts~de~france~du~nord~1"
