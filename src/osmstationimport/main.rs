@@ -77,12 +77,36 @@ fn compute_file_hash(path: &str) -> Result<String, Box<dyn Error + Send + Sync>>
 
 /// Classify mode type based on OSM tags
 fn classify_mode(tags: &osmpbfreader::Tags) -> Option<String> {
+    // Check station=* tag first (most specific indicator)
+    if let Some(station_type) = tags.get("station") {
+        match station_type.as_str() {
+            "subway" => return Some("subway".to_string()),
+            "light_rail" => return Some("light_rail".to_string()),
+            "train" => return Some("rail".to_string()),
+            "monorail" => return Some("monorail".to_string()),
+            "funicular" => return Some("funicular".to_string()),
+            "tram" => return Some("tram".to_string()),
+            _ => {} // Continue to other checks
+        }
+    }
+    
     // Check for subway
     if tags.get("subway").map_or(false, |v| v == "yes")
         || tags.get("railway").map_or(false, |v| v == "subway")
-        || tags.get("station").map_or(false, |v| v == "subway")
     {
         return Some("subway".to_string());
+    }
+    
+    // Check for monorail
+    if tags.get("monorail").map_or(false, |v| v == "yes")
+        || tags.get("railway").map_or(false, |v| v == "monorail")
+    {
+        return Some("monorail".to_string());
+    }
+    
+    // Check for funicular
+    if tags.get("railway").map_or(false, |v| v == "funicular") {
+        return Some("funicular".to_string());
     }
     
     // Check for tram
@@ -110,6 +134,9 @@ fn classify_mode(tags: &osmpbfreader::Tags) -> Option<String> {
     if tags.get("public_transport").is_some() {
         if tags.get("subway").map_or(false, |v| v == "yes") {
             return Some("subway".to_string());
+        }
+        if tags.get("monorail").map_or(false, |v| v == "yes") {
+            return Some("monorail".to_string());
         }
         if tags.get("tram").map_or(false, |v| v == "yes") {
             return Some("tram".to_string());
