@@ -343,7 +343,7 @@ pub async fn departures_at_stop(
 
     let mut futures = Vec::new();
     for (chateau_id_to_search, stop_id_to_search) in &stops_to_search {
-        let pool = Arc::clone(&pool);
+        let pool = pool.get_ref().clone();
         let chateau_id = chateau_id_to_search.clone();
         let stop_ids = stop_id_to_search.clone();
 

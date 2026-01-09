@@ -314,7 +314,7 @@ pub async fn departures_at_osm_station(
 
     let mut futures = Vec::new();
     for (chateau_id_to_search, stop_ids_to_search) in &stops_to_search {
-        let pool = Arc::clone(&pool);
+        let pool = pool.get_ref().clone();
         let chateau_id = chateau_id_to_search.clone();
         let stop_ids = stop_ids_to_search.clone();
         let include_shapes = include_shapes;
