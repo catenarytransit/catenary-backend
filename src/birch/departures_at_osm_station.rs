@@ -39,6 +39,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::join;
@@ -236,26 +237,21 @@ pub async fn departures_at_osm_station(
         });
     }
 
-    // Build stops_to_search map: chateau_id -> [stop_id]
-    let mut stops_to_search: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Build stops_to_search map: chateau_id -> HashSet<stop_id> for O(1) lookups
+    let mut stops_to_search: BTreeMap<String, HashSet<String>> = BTreeMap::new();
     for stop in &linked_stops {
         stops_to_search
             .entry(stop.chateau.clone())
             .or_default()
-            .push(stop.gtfs_id.clone());
+            .insert(stop.gtfs_id.clone());
 
         // Include children
         for child_id in stop.children_ids.iter().filter_map(|x| x.clone()) {
             stops_to_search
                 .entry(stop.chateau.clone())
                 .or_default()
-                .push(child_id);
+                .insert(child_id);
         }
-    }
-
-    for (_, stops) in stops_to_search.iter_mut() {
-        stops.sort();
-        stops.dedup();
     }
 
     // Use the first stop for timezone determination
@@ -316,7 +312,7 @@ pub async fn departures_at_osm_station(
     for (chateau_id_to_search, stop_ids_to_search) in &stops_to_search {
         let pool = pool.get_ref().clone();
         let chateau_id = chateau_id_to_search.clone();
-        let stop_ids = stop_ids_to_search.clone();
+        let stop_ids: Vec<String> = stop_ids_to_search.iter().cloned().collect();
         let include_shapes = include_shapes;
 
         futures.push(async move {
@@ -423,9 +419,9 @@ pub async fn departures_at_osm_station(
                     trips_to_get,
                 );
 
-                let stops_to_search_for_this_chateau = match stops_to_search_for_this_chateau {
-                    Some(stops_to_search_for_this_chateau) => {
-                        stops_to_search_for_this_chateau.to_vec()
+                let stops_to_search_for_this_chateau: Vec<String> = match stops_to_search_for_this_chateau {
+                    Some(stops_set) => {
+                        stops_set.iter().cloned().collect()
                     }
                     None => vec![],
                 };
@@ -666,10 +662,10 @@ pub async fn departures_at_osm_station(
             for valid_trip in valid_trips_vec.iter() {
                 if valid_trip.frequencies.is_none() {
                     for itin_option in valid_trip.itinerary_options.iter() {
-                        // Check if this stop is in our search set
+                        // Check if this stop is in our search set (O(1) with HashSet)
                         let stop_in_search = stops_to_search
                             .get(chateau_id)
-                            .map(|stops| stops.contains(&itin_option.stop_id.to_string()))
+                            .map(|stops| stops.contains(itin_option.stop_id.as_str()))
                             .unwrap_or(false);
 
                         if !stop_in_search {
