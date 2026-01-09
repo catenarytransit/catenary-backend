@@ -455,6 +455,10 @@ pub async fn download_return_eligible_feeds(
             }
 
             let secondary_feeds = Arc::new(secondary_feeds);
+            
+            // Track when primary downloads complete writing to disk
+            let completed_downloads: Arc<std::sync::Mutex<HashSet<String>>> = 
+                Arc::new(std::sync::Mutex::new(HashSet::new()));
 
             println!(
                 "Downloading {} feeds with {} threads",
@@ -474,6 +478,7 @@ pub async fn download_return_eligible_feeds(
                     let pool = Arc::clone(pool);
                     let total_bytes_downloaded = Arc::clone(&total_bytes_downloaded);
                     let secondary_feeds = Arc::clone(&secondary_feeds);
+                    let completed_downloads = Arc::clone(&completed_downloads);
                     let gtfs_temp_storage = gtfs_temp_storage.to_string();
                     async move {
                             
@@ -572,7 +577,13 @@ pub async fn download_return_eligible_feeds(
                                 let wait_start = Instant::now();
                                 
                                 loop {
-                                    if std::path::Path::new(&primary_zip_path).exists() {
+                                    // Check if primary has signaled completion
+                                    let download_complete = completed_downloads
+                                        .lock()
+                                        .unwrap()
+                                        .contains(primary_feed_id);
+                                    
+                                    if download_complete {
                                         match fs::copy(&primary_zip_path, &this_zip_path) {
                                             Ok(bytes_copied) => {
                                                 let mut download_progress = download_progress.lock().unwrap();
@@ -732,6 +743,12 @@ pub async fn download_return_eligible_feeds(
                                        
                                         if answer.ingest {
                                             let _ = out.write(&(bytes_result));
+                                            
+                                            // Signal completion so secondary feeds can copy
+                                            completed_downloads
+                                                .lock()
+                                                .unwrap()
+                                                .insert(staticfeed.feed_id.clone());
                                         }
                                         
                                         let mut download_progress  = download_progress.lock().unwrap();
