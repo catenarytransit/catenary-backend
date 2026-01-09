@@ -236,6 +236,9 @@ async fn create_mapping(
         match_score: score,
         match_method: method.to_string(),
         active: true,
+        osm_station_id: None,
+        osm_station_type: None,
+        osm_import_id: None,
     };
 
     diesel::insert_into(stop_mappings)

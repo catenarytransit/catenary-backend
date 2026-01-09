@@ -1893,6 +1893,18 @@ pub async fn gtfs_process_feed(
         .execute(&mut conn)
         .await?;
 
+    // Match stops to OSM stations (for rail/tram/subway routes)
+    // This runs after stops are inserted and associates them with imported OSM stations
+    if let Err(e) = crate::osm_station_matching::match_stops_for_feed(
+        &mut conn,
+        feed_id,
+        attempt_id,
+        chateau_id,
+    ).await {
+        // Log but don't fail - OSM matching is optional enhancement
+        eprintln!("Warning: OSM station matching failed for {}: {:?}", feed_id, e);
+    }
+
     let ingest_duration = start.elapsed();
     println!(
         "Finished {}, took {:.3}s",

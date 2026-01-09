@@ -472,4 +472,51 @@ pub struct StopMapping {
     pub match_score: f64,
     pub match_method: String,
     pub active: bool,
+    pub osm_station_id: Option<i64>,
+    pub osm_station_type: Option<String>,
+    pub osm_import_id: Option<i32>,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::gtfs::osm_station_imports)]
+pub struct OsmStationImport {
+    pub import_id: i32,
+    pub file_name: String,
+    pub file_hash: String,
+    pub imported_at: chrono::DateTime<chrono::Utc>,
+    pub station_count: i32,
+}
+
+#[derive(Queryable, Selectable, Insertable, QueryableByName, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::osm_stations)]
+pub struct OsmStation {
+    #[diesel(sql_type = diesel::sql_types::Int8)]
+    pub osm_id: i64,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub osm_type: String,
+    #[diesel(sql_type = diesel::sql_types::Int4)]
+    pub import_id: i32,
+    #[diesel(sql_type = postgis_diesel::sql_types::Geometry)]
+    pub point: postgis_diesel::types::Point,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub name: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+    pub name_translations: Option<serde_json::Value>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub station_type: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub railway_tag: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub mode_type: String,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub uic_ref: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    #[diesel(column_name = ref_)]
+    pub ref_: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub wikidata: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub operator: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub network: Option<String>,
 }

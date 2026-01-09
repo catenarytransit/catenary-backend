@@ -301,3 +301,7 @@ path = "src/globeflower/main.rs"
 [[bin]]
 name = "harebell"
 path = "src/harebell/main.rs"
+
+[[bin]]
+name = "osmstationimport"
+path = "src/osmstationimport/main.rs"

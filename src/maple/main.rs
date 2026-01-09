@@ -65,6 +65,7 @@ mod cleanup;
 mod gtfs_handlers;
 mod gtfs_ingestion_sequence;
 mod gtfs_process;
+pub mod osm_station_matching;
 mod refresh_metadata_tables;
 mod shapes_reader;
 mod transitland_download;
