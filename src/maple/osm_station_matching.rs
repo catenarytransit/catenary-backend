@@ -410,11 +410,48 @@ fn match_stop_with_rtree(
         }
     }
     
-    best_platform.map(|(osm_id, parent_id, _, is_platform_match)| {
+    if let Some((osm_id, parent_id, _, is_platform_match)) = best_platform {
         let station_id = parent_id.unwrap_or(osm_id);
         let platform_id = if is_platform_match { Some(osm_id) } else { None };
-        (station_id, platform_id)
-    })
+        return Some((station_id, platform_id));
+    }
+    
+    // Step 4: FINAL FALLBACK - pure proximity match within 500m
+    // If no text-based matches found, match the closest station regardless of name
+    const PROXIMITY_FALLBACK_M: f64 = 500.0;
+    
+    let stop_point = point!(x: stop_lon, y: stop_lat);
+    
+    // Find closest primary station within 500m
+    let closest_station = stations.iter()
+        .map(|s| {
+            let station_point = point!(x: s.x, y: s.y);
+            let distance = stop_point.haversine_distance(&station_point);
+            (s, distance)
+        })
+        .filter(|(_, d)| *d <= PROXIMITY_FALLBACK_M)
+        .min_by(|(_, d1), (_, d2)| d1.partial_cmp(d2).unwrap());
+    
+    if let Some((station, _)) = closest_station {
+        return Some((station.osm_id, None));
+    }
+    
+    // Try closest platform within 500m
+    let closest_platform = platforms.iter()
+        .map(|p| {
+            let platform_point = point!(x: p.x, y: p.y);
+            let distance = stop_point.haversine_distance(&platform_point);
+            (p, distance)
+        })
+        .filter(|(_, d)| *d <= PROXIMITY_FALLBACK_M)
+        .min_by(|(_, d1), (_, d2)| d1.partial_cmp(d2).unwrap());
+    
+    if let Some((platform, _)) = closest_platform {
+        let station_id = platform.parent_osm_id.unwrap_or(platform.osm_id);
+        return Some((station_id, None));
+    }
+    
+    None
 }
 
 // ============================================================================
