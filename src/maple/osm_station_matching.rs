@@ -34,8 +34,9 @@ const STOP_BATCH_SIZE: i64 = 5000;
 const GRID_CELL_SIZE: f64 = 0.1;
 
 /// Maximum radius in degrees (for bounding box expansion)
-/// ~1km at equator is ~0.009 degrees, we use 0.015 for safety
-const MAX_RADIUS_DEG: f64 = 0.015;
+/// Rail radius is 1000m = ~0.009° at equator, but longitude degrees shrink at higher latitudes
+/// Use 0.02° (~2.2km) for safety margin to ensure we capture stations at cell edges
+const MAX_RADIUS_DEG: f64 = 0.02;
 
 /// Map GTFS route_type to mode string
 pub fn route_type_to_mode(route_type: i16) -> Option<&'static str> {
