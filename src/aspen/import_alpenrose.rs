@@ -70,9 +70,7 @@ pub struct MetrolinkPos {
     pub symbol: CompactString,
 }
 
-lazy_static! {
-    static ref TRANSIT_APP_REGEX: Regex = Regex::new(r"(?i)(the )?transit app").unwrap();
-}
+
 
 // Feeds where the vehicle label is more reliable/stable than the vehicle ID.
 const REALTIME_FEEDS_TO_USE_VEHICLE_IDS: [&str; 1] = ["f-ezzx-tbc~rt"];
@@ -1613,69 +1611,17 @@ pub async fn new_rt_data(
                 for alert_entity in alert_updates_gtfs_rt.entity.iter() {
                     if let Some(alert) = &alert_entity.alert {
                         let alert_id = alert_entity.id.clone();
+                        let aspenised_alert: AspenisedAlert = alert.clone().into();
 
-                        let mut alert: AspenisedAlert = alert.clone().into();
+                        let processed_alert = crate::alerts_processing::process_alert(
+                            aspenised_alert,
+                            &alert_id,
+                            chateau_id,
+                            &mut impacted_route_id_to_alert_ids,
+                            &mut impact_trip_id_to_alert_ids,
+                        );
 
-                        // Deduplicate alert content: some agencies repeat the header in the description.
-                        if alert.header_text.is_some() {
-                            if alert.header_text == alert.description_text {
-                                alert.description_text = None;
-                            }
-                        }
-
-                        if let Some(header_text) = &mut alert.header_text {
-                            for a in header_text.translation.iter_mut() {
-                                a.text = TRANSIT_APP_REGEX
-                                    .replace_all(
-                                        &catenary::convert_text_12h_to_24h(&a.text),
-                                        "Catenary Maps",
-                                    )
-                                    .to_string();
-                            }
-                        }
-
-                        if let Some(desc_text) = &mut alert.description_text {
-                            for a in desc_text.translation.iter_mut() {
-                                a.text = TRANSIT_APP_REGEX
-                                    .replace_all(
-                                        &catenary::convert_text_12h_to_24h(&a.text),
-                                        "Catenary Maps",
-                                    )
-                                    .to_string().replace("For Real-Time tracking, please visit rt.scmetro.org.", "")
-                                    .replace("Para el rastreo en tiempo real, por favor visite https://rt.scmetro.org.", "")
-                                    .replace("For real-time tracking, visit https://rt.scmetro.org.", "")
-                                    .replace("Para seguimiento en tiempo real, visite https://rt.scmetro.org.", "");
-                            }
-                        }
-
-                        let alert = alert;
-
-                        for informed_entity in alert.informed_entity.iter() {
-                            if let Some(route_id) = &informed_entity.route_id {
-                                impacted_route_id_to_alert_ids
-                                    .entry(route_id.clone())
-                                    .and_modify(|x| x.push(alert_id.clone()))
-                                    .or_insert(vec![alert_id.clone()]);
-                            }
-
-                            if let Some(trip) = &informed_entity.trip {
-                                if let Some(trip_id) = &trip.trip_id {
-                                    impact_trip_id_to_alert_ids
-                                        .entry(trip_id.clone())
-                                        .and_modify(|x| x.push(alert_id.clone()))
-                                        .or_insert(vec![alert_id.clone()]);
-                                }
-
-                                if let Some(route_id) = &trip.route_id {
-                                    impacted_route_id_to_alert_ids
-                                        .entry(route_id.clone())
-                                        .and_modify(|x| x.push(alert_id.clone()))
-                                        .or_insert(vec![alert_id.clone()]);
-                                }
-                            }
-                        }
-
-                        alerts.insert(alert_id.clone(), alert);
+                        alerts.insert(alert_id.clone(), processed_alert);
                     }
                 }
             }
