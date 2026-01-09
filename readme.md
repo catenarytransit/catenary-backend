@@ -147,6 +147,14 @@ First, obtain a pre-filtered PBF file containing railway stations (or use one fr
 cargo run --bin osmstationimport -- --file /path/to/railstations.osm.pbf
 ```
 
+multiple imports can be done sequentially, and will overwrite old data.
+
+```bash
+cargo run --bin osmstationimport -- --file railstations-europe-latest.osm.pbf
+cargo run --bin osmstationimport -- --file railstations-north-america-latest.osm.pbf
+cargo run --bin osmstationimport -- --file railstations-asia-latest.osm.pbf
+```
+
 The importer:
 - Computes SHA256 hash to skip duplicate imports
 - Extracts rail, tram, and subway stations
