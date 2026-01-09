@@ -288,6 +288,7 @@ pub struct Stop {
     //insert with false, then enable after when mark for production
     pub allowed_spatial_query: bool,
     pub osm_station_id: Option<i64>,
+    pub osm_platform_id: Option<i64>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
@@ -517,4 +518,10 @@ pub struct OsmStation {
     pub operator: Option<String>,
     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
     pub network: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub level: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub local_ref: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Int8>)]
+    pub parent_osm_id: Option<i64>,
 }

@@ -312,6 +312,7 @@ pub async fn stops_into_postgres_and_elastic(
                 },
                 allowed_spatial_query: false,
                 osm_station_id: None,
+                osm_platform_id: None,
             };
 
             insertable_stops.push(stop_pg);

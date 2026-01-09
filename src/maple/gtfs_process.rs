@@ -1893,6 +1893,8 @@ pub async fn gtfs_process_feed(
         .execute(&mut conn)
         .await?;
 
+    println!("matching stops to osm stations");
+
     // Match stops to OSM stations (for rail/tram/subway routes)
     // This runs after stops are inserted and associates them with imported OSM stations
     if let Err(e) = crate::osm_station_matching::match_stops_for_feed(

@@ -100,6 +100,7 @@ diesel = { version = "2.3.2", features = [
     "r2d2",
     "chrono",
     "postgres",
+    "64-column-tables",
 ] }
 log = "0.4"
 postgis_diesel = "3.0"

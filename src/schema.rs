@@ -319,6 +319,9 @@ pub mod gtfs {
             wikidata -> Nullable<Text>,
             operator -> Nullable<Text>,
             network -> Nullable<Text>,
+            level -> Nullable<Text>,
+            local_ref -> Nullable<Text>,
+            parent_osm_id -> Nullable<Int8>,
         }
     }
 
@@ -513,6 +516,7 @@ pub mod gtfs {
             tts_name_translations -> Nullable<Jsonb>,
             allowed_spatial_query -> Bool,
             osm_station_id -> Nullable<Int8>,
+            osm_platform_id -> Nullable<Int8>,
         }
     }
 

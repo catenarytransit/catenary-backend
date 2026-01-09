@@ -37,12 +37,12 @@ use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use clap::Parser;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
-use osmpbfreader::{OsmObj, OsmPbfReader};
+use osmpbfreader::{OsmId, OsmObj, OsmPbfReader, Relation};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Seek};
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
@@ -95,6 +95,13 @@ fn classify_mode(tags: &osmpbfreader::Tags) -> Option<String> {
         return Some("rail".to_string());
     }
     
+    // Check for light_rail
+    if tags.get("light_rail").map_or(false, |v| v == "yes")
+        || tags.get("railway").map_or(false, |v| v == "light_rail")
+    {
+        return Some("light_rail".to_string());
+    }
+    
     // For public_transport tags, try to classify by additional tags
     if tags.get("public_transport").is_some() {
         if tags.get("subway").map_or(false, |v| v == "yes") {
@@ -105,6 +112,9 @@ fn classify_mode(tags: &osmpbfreader::Tags) -> Option<String> {
         }
         if tags.get("train").map_or(false, |v| v == "yes") {
             return Some("rail".to_string());
+        }
+        if tags.get("light_rail").map_or(false, |v| v == "yes") {
+            return Some("light_rail".to_string());
         }
         // Default to rail for unclassified public_transport stations
         return Some("rail".to_string());
@@ -136,21 +146,22 @@ fn get_station_type(tags: &osmpbfreader::Tags) -> Option<String> {
     None
 }
 
-/// Check if this OSM object should be included as a railway station
-fn is_railway_station(tags: &osmpbfreader::Tags) -> bool {
+/// Check if this OSM object should be included as a railway station/platform
+fn is_railway_station_or_platform(tags: &osmpbfreader::Tags) -> bool {
     // Exclude bus-only stations
     if tags.get("highway").map_or(false, |v| v == "bus_stop") 
         && tags.get("railway").is_none() 
         && tags.get("train").is_none()
         && tags.get("tram").is_none()
         && tags.get("subway").is_none()
+        && tags.get("light_rail").is_none()
     {
         return false;
     }
     
     // Include railway stations
     if let Some(railway) = tags.get("railway") {
-        let rail_types = ["station", "halt", "tram_stop", "subway"];
+        let rail_types = ["station", "halt", "tram_stop", "subway", "platform"];
         if rail_types.contains(&railway.as_str()) {
             return true;
         }
@@ -161,13 +172,14 @@ fn is_railway_station(tags: &osmpbfreader::Tags) -> bool {
         return true;
     }
     
-    // Include public_transport stations that are rail/tram/subway
+    // Include public_transport stations/platforms that are rail/tram/subway
     if let Some(pt) = tags.get("public_transport") {
-        if pt == "station" || pt == "stop_position" {
+        if pt == "station" || pt == "stop_position" || pt == "platform" {
             // Only include if it has rail/tram/subway context
             if tags.get("train").is_some()
                 || tags.get("tram").is_some()
                 || tags.get("subway").is_some()
+                || tags.get("light_rail").is_some()
                 || tags.get("railway").is_some()
             {
                 return true;
@@ -176,6 +188,72 @@ fn is_railway_station(tags: &osmpbfreader::Tags) -> bool {
     }
     
     false
+}
+
+/// Check if a relation is a stop_area relation (groups platforms with their parent station)
+fn is_stop_area_relation(tags: &osmpbfreader::Tags) -> bool {
+    tags.get("public_transport").map_or(false, |v| v == "stop_area")
+        || tags.get("type").map_or(false, |v| v == "public_transport" || v == "site")
+}
+
+/// Find the parent station node ID from a stop_area relation
+/// Returns (parent_osm_id, parent_name) where parent is the main station
+fn find_parent_station_in_relation(rel: &Relation, node_set: &HashSet<i64>) -> Option<(i64, Option<String>)> {
+    // First, look for members with role "label" or empty role that are stations
+    // The "label" role typically indicates the main station name node
+    
+    let mut label_node: Option<i64> = None;
+    let mut station_node: Option<i64> = None;
+    
+    for member in &rel.refs {
+        if let OsmId::Node(node_id) = member.member {
+            let id = node_id.0;
+            // Only consider nodes that are in our station set
+            if !node_set.contains(&id) {
+                continue;
+            }
+            
+            let role = member.role.as_str();
+            
+            // "label" role is the primary name node
+            if role == "label" {
+                label_node = Some(id);
+            }
+            // Empty role or "stop" typically indicates the main station
+            else if role.is_empty() || role == "stop" || role == "station" {
+                if station_node.is_none() {
+                    station_node = Some(id);
+                }
+            }
+        }
+    }
+    
+    // Prefer label node, then station node
+    if let Some(id) = label_node {
+        return Some((id, None));
+    }
+    if let Some(id) = station_node {
+        return Some((id, None));
+    }
+    
+    None
+}
+
+/// Get all platform/child node IDs from a stop_area relation
+fn get_platform_nodes_in_relation(rel: &Relation) -> Vec<i64> {
+    let mut platforms = Vec::new();
+    
+    for member in &rel.refs {
+        if let OsmId::Node(node_id) = member.member {
+            let role = member.role.as_str();
+            // Platforms have role "platform" or nodes with local_ref
+            if role == "platform" || role == "stop" || role.is_empty() {
+                platforms.push(node_id.0);
+            }
+        }
+    }
+    
+    platforms
 }
 
 /// Extract multilingual names from tags
@@ -205,6 +283,26 @@ fn extract_name_translations(tags: &osmpbfreader::Tags) -> Option<serde_json::Va
     } else {
         Some(serde_json::to_value(translations).unwrap())
     }
+}
+
+/// Intermediate struct for storing node data during first pass
+#[derive(Clone)]
+struct NodeData {
+    id: i64,
+    lat: f64,
+    lon: f64,
+    name: Option<String>,
+    name_translations: Option<serde_json::Value>,
+    station_type: Option<String>,
+    railway_tag: Option<String>,
+    mode_type: String,
+    uic_ref: Option<String>,
+    ref_: Option<String>,
+    wikidata: Option<String>,
+    operator: Option<String>,
+    network: Option<String>,
+    level: Option<String>,
+    local_ref: Option<String>,
 }
 
 #[tokio::main]
@@ -263,27 +361,36 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let import_id = new_import;
     println!("Import ID: {}", import_id);
     
-    // Parse PBF file
-    println!("Parsing PBF file...");
+    // =========================================================================
+    // PASS 1: Collect all station/platform nodes and stop_area relations
+    // =========================================================================
+    println!("\n=== Pass 1: Collecting nodes and relations ===");
+    
     let file = File::open(&args.file)?;
     let mut reader = OsmPbfReader::new(file);
     
-    let mut stations: Vec<OsmStation> = Vec::new();
-    let mut processed = 0;
-    let mut included = 0;
+    // Maps to store data from first pass
+    let mut node_data: HashMap<i64, NodeData> = HashMap::new();
+    let mut node_ids: HashSet<i64> = HashSet::new();
+    let mut stop_area_relations: Vec<Relation> = Vec::new();
+    
+    let mut processed = 0u64;
+    let mut nodes_found = 0u64;
+    let mut relations_found = 0u64;
     
     for obj_result in reader.iter() {
         let obj = obj_result?;
         processed += 1;
         
-        if processed % 10000 == 0 {
-            print!("\rProcessed {} objects, found {} stations...", processed, included);
+        if processed % 100000 == 0 {
+            print!("\rPass 1: Processed {} objects, found {} nodes, {} relations...", 
+                   processed, nodes_found, relations_found);
             std::io::Write::flush(&mut std::io::stdout())?;
         }
         
         match obj {
             OsmObj::Node(node) => {
-                if !is_railway_station(&node.tags) {
+                if !is_railway_station_or_platform(&node.tags) {
                     continue;
                 }
                 
@@ -292,17 +399,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     None => continue,
                 };
                 
-                included += 1;
+                nodes_found += 1;
+                let id = node.id.0;
+                node_ids.insert(id);
                 
-                let station = OsmStation {
-                    osm_id: node.id.0,
-                    osm_type: "node".to_string(),
-                    import_id,
-                    point: postgis_diesel::types::Point {
-                        x: node.lon(),
-                        y: node.lat(),
-                        srid: Some(4326),
-                    },
+                node_data.insert(id, NodeData {
+                    id,
+                    lat: node.lat(),
+                    lon: node.lon(),
                     name: node.tags.get("name").map(|s| s.to_string()),
                     name_translations: extract_name_translations(&node.tags),
                     station_type: get_station_type(&node.tags),
@@ -313,47 +417,105 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     wikidata: node.tags.get("wikidata").map(|s| s.to_string()),
                     operator: node.tags.get("operator").map(|s| s.to_string()),
                     network: node.tags.get("network").map(|s| s.to_string()),
-                };
-                
-                stations.push(station);
-            }
-            OsmObj::Way(way) => {
-                if !is_railway_station(&way.tags) {
-                    continue;
-                }
-                
-                let mode = match classify_mode(&way.tags) {
-                    Some(m) => m,
-                    None => continue,
-                };
-                
-                // For ways, we need to compute centroid from nodes
-                // For now, skip ways without coordinates (would need node lookup)
-                // This is a simplified implementation
-                included += 1;
-                
-                // Note: In a full implementation, you would look up the nodes
-                // to compute the centroid. For now, we skip ways.
-                // This can be enhanced later.
-                let _ = (way, mode);
+                    level: node.tags.get("level").map(|s| s.to_string()),
+                    local_ref: node.tags.get("local_ref").map(|s| s.to_string()),
+                });
             }
             OsmObj::Relation(rel) => {
-                if !is_railway_station(&rel.tags) {
-                    continue;
+                if is_stop_area_relation(&rel.tags) {
+                    relations_found += 1;
+                    stop_area_relations.push(rel);
                 }
-                
-                // Skip relations for now - would need member lookup
-                let _ = rel;
+            }
+            OsmObj::Way(_) => {
+                // Skip ways for now (would need centroid calculation)
             }
         }
     }
     
-    println!("\nProcessed {} objects, found {} stations", processed, included);
+    println!("\nPass 1 complete: {} nodes, {} stop_area relations", nodes_found, relations_found);
+    
+    // =========================================================================
+    // PASS 2: Build parent mapping from stop_area relations
+    // =========================================================================
+    println!("\n=== Pass 2: Building parent mappings from relations ===");
+    
+    // Map from node_id -> parent_osm_id
+    let mut parent_map: HashMap<i64, i64> = HashMap::new();
+    let mut relations_processed = 0;
+    let mut mappings_created = 0;
+    
+    for rel in &stop_area_relations {
+        relations_processed += 1;
+        
+        // Find the parent station in this relation
+        if let Some((parent_id, _)) = find_parent_station_in_relation(rel, &node_ids) {
+            // Get all platform/child nodes in this relation
+            let platform_nodes = get_platform_nodes_in_relation(rel);
+            
+            for platform_id in platform_nodes {
+                // Don't map a node to itself
+                if platform_id != parent_id && node_ids.contains(&platform_id) {
+                    // Check if this node has local_ref (indicating it's a platform)
+                    if let Some(node) = node_data.get(&platform_id) {
+                        if node.local_ref.is_some() || node.station_type.as_deref() == Some("platform") {
+                            parent_map.insert(platform_id, parent_id);
+                            mappings_created += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    println!("Pass 2 complete: {} relations processed, {} parent mappings created", 
+             relations_processed, mappings_created);
+    
+    // =========================================================================
+    // PASS 3: Create OsmStation records with parent_osm_id populated
+    // =========================================================================
+    println!("\n=== Pass 3: Creating station records ===");
+    
+    let mut stations: Vec<OsmStation> = Vec::new();
+    
+    for (id, data) in &node_data {
+        let parent_osm_id = parent_map.get(id).copied();
+        
+        let station = OsmStation {
+            osm_id: *id,
+            osm_type: "node".to_string(),
+            import_id,
+            point: postgis_diesel::types::Point {
+                x: data.lon,
+                y: data.lat,
+                srid: Some(4326),
+            },
+            name: data.name.clone(),
+            name_translations: data.name_translations.clone(),
+            station_type: data.station_type.clone(),
+            railway_tag: data.railway_tag.clone(),
+            mode_type: data.mode_type.clone(),
+            uic_ref: data.uic_ref.clone(),
+            ref_: data.ref_.clone(),
+            wikidata: data.wikidata.clone(),
+            operator: data.operator.clone(),
+            network: data.network.clone(),
+            level: data.level.clone(),
+            local_ref: data.local_ref.clone(),
+            parent_osm_id,
+        };
+        
+        stations.push(station);
+    }
+    
+    println!("Created {} station records ({} with parent mappings)", 
+             stations.len(), 
+             stations.iter().filter(|s| s.parent_osm_id.is_some()).count());
     
     // Insert stations in batches
     use catenary::schema::gtfs::osm_stations::dsl as stations_dsl;
     
-    println!("Inserting {} stations into database...", stations.len());
+    println!("\nInserting {} stations into database...", stations.len());
     
     let batch_size = 1000;
     for (i, chunk) in stations.chunks(batch_size).enumerate() {
@@ -375,7 +537,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .execute(conn)
         .await?;
     
-    println!("Import complete! {} stations imported.", stations.len());
+    println!("\nImport complete! {} stations imported.", stations.len());
+    println!("  - {} platforms with parent station mappings", 
+             stations.iter().filter(|s| s.parent_osm_id.is_some()).count());
+    println!("  - {} stations without parent (likely top-level stations)", 
+             stations.iter().filter(|s| s.parent_osm_id.is_none()).count());
     
     Ok(())
 }
