@@ -51,6 +51,10 @@ struct Args {
     /// Path to OSM PBF file (pre-filtered with railway station tags)
     #[arg(long)]
     file: String,
+
+    /// Force re-import even if file was already imported
+    #[arg(long, default_value_t = false)]
+    force: bool,
 }
 
 /// Compute SHA256 hash of a file
@@ -340,10 +344,29 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .optional()?;
     
     if let Some(existing) = existing_import {
-        println!("File already imported with {} stations (import_id: {})", 
-                 existing.station_count, existing.import_id);
-        println!("Skipping import.");
-        return Ok(());
+        if args.force {
+            println!("File already imported (import_id: {}), but --force specified. Deleting existing data...", existing.import_id);
+            
+            // Delete existing stations
+            use catenary::schema::gtfs::osm_stations::dsl as stations_dsl;
+            let deleted_count = diesel::delete(stations_dsl::osm_stations
+                .filter(stations_dsl::import_id.eq(existing.import_id)))
+                .execute(conn)
+                .await?;
+            println!("Deleted {} existing stations", deleted_count);
+            
+            // Delete the import record
+            diesel::delete(imports_dsl::osm_station_imports
+                .filter(imports_dsl::import_id.eq(existing.import_id)))
+                .execute(conn)
+                .await?;
+            println!("Deleted import record");
+        } else {
+            println!("File already imported with {} stations (import_id: {})", 
+                     existing.station_count, existing.import_id);
+            println!("Skipping import. Use --force to re-import.");
+            return Ok(());
+        }
     }
     
     // Create import record
