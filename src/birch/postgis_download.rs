@@ -751,11 +751,7 @@ FROM (
         ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
         gtfs.osm_stations
-    W
-        z = z,
-        x = x,
-        
-    
+    WHERE
         (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326))
 ) q", z = z, x = x, y= y)
 }
