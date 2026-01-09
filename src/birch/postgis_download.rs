@@ -535,6 +535,7 @@ fn get_stops_fields() -> std::collections::BTreeMap<String, String> {
         String::from("children_route_types"),
         String::from("smallint[]"),
     );
+    fields.insert(String::from("osm_station_id"), String::from("bigint"));
     fields
 }
 
@@ -639,6 +640,7 @@ FROM (
         route_types,
         children_ids,
         children_route_types,
+        osm_station_id,
         ST_AsMVTGeom(ST_Transform(point, 3857),
         ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM
@@ -677,4 +679,83 @@ FROM (
     WHERE
         (linestring && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND ({where_clause})
 ) q", z = z, x = x, y= y, simplification_threshold = simplification_threshold, where_clause = where_clause)
+}
+
+fn get_osm_stations_fields() -> std::collections::BTreeMap<String, String> {
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(String::from("osm_id"), String::from("bigint"));
+    fields.insert(String::from("osm_type"), String::from("text"));
+    fields.insert(String::from("name"), String::from("text"));
+    fields.insert(String::from("station_type"), String::from("text"));
+    fields.insert(String::from("railway_tag"), String::from("text"));
+    fields.insert(String::from("mode_type"), String::from("text"));
+    fields.insert(String::from("uic_ref"), String::from("text"));
+    fields.insert(String::from("ref"), String::from("text"));
+    fields.insert(String::from("wikidata"), String::from("text"));
+    fields.insert(String::from("operator"), String::from("text"));
+    fields.insert(String::from("network"), String::from("text"));
+    fields
+}
+
+#[actix_web::get("/osm_stations")]
+pub async fn osm_stations_meta(req: HttpRequest) -> impl Responder {
+    serve_tilejson(
+        get_osm_stations_fields(),
+        String::from("osm_stations"),
+        vec![String::from(
+            "https://birch.catenarymaps.org/osm_stations/{z}/{x}/{y}",
+        )],
+        Some(4),
+        Some(19),
+        10000,
+    )
+}
+
+#[actix_web::get("/osm_stations/{z}/{x}/{y}")]
+pub async fn osm_stations(
+    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    path: web::Path<(u8, u32, u32)>,
+    req: HttpRequest,
+) -> impl Responder {
+    let (z, x, y) = path.into_inner();
+
+    if z < 4 {
+        return HttpResponse::BadRequest().body("Zoom level too low");
+    }
+
+    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+    let query_str = build_osm_stations_query(z, x, y);
+    fetch_mvt(sqlx_pool_ref, query_str, 10000).await
+}
+
+        
+fn build_osm_stations_query(z: u8, x: u32, y: u32) -> String {
+    format!("
+    SELECT
+    ST_AsMVT(q, 'data', 4096, 'geom')
+FROM (
+    SELECT
+        osm_id,
+        osm_type,
+        name,
+        station_type,
+        railway_tag,
+        mode_type,
+        uic_ref,
+        ref as ref,
+        wikidata,
+        operator,
+        network,
+        ST_AsMVTGeom(ST_Transform(point, 3857),
+        ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
+    FROM
+        gtfs.osm_stations
+    W
+        z = z,
+        x = x,
+        
+    
+        (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326))
+) q", z = z, x = x, y= y)
 }
