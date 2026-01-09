@@ -46,7 +46,10 @@ mod postgis_download;
 use postgis_download::*;
 mod alerts;
 use alerts::*;
+mod departures_at_osm_station;
 mod departures_at_stop;
+mod departures_shared;
+mod osm_station_lookup;
 mod transfer_calc;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
@@ -923,6 +926,8 @@ async fn main() -> std::io::Result<()> {
             //.service(nearby_departures::nearby_from_coords)
             .service(nearby_departuresv2::nearby_from_coords_v2)
             .service(departures_at_stop::departures_at_stop)
+            .service(departures_at_osm_station::departures_at_osm_station)
+            .service(osm_station_lookup::osm_station_lookup)
             .service(get_vehicle_trip_information::get_trip_init)
             .service(get_vehicle_trip_information::get_trip_rt_update)
             .service(get_vehicle_trip_information::get_vehicle_information)
