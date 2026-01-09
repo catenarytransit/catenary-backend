@@ -1,12 +1,22 @@
 // Copyright Kyler Chin <kyler@catenarymaps.org>
 // Catenary Transit Initiatives
 // OSM Station Matching Module - Matches GTFS stops to OSM stations during import
+//
+// PERFORMANCE OPTIMIZATIONS:
+// - Geographic chunking: Groups stops into ~10km grid cells
+// - R-tree spatial index: O(log n) lookups per chunk instead of O(n)
+// - Batch DB queries: One query per chunk instead of per-stop
+// - Batch updates: One UPDATE per chunk using unnest arrays
+// - Rayon parallelization: Parallel scoring within each chunk
 
 use catenary::models::OsmStation;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use geo::{point, HaversineDistance};
+use rayon::prelude::*;
+use rstar::{RTree, RTreeObject, PointDistance, AABB};
 use strsim::jaro_winkler;
+use std::collections::HashMap;
 use std::error::Error;
 
 /// Proximity thresholds by mode (in meters)
@@ -18,7 +28,14 @@ pub const SUBWAY_RADIUS_M: f64 = 250.0;
 pub const MIN_MATCH_SCORE: f64 = 0.75;
 
 /// Batch size for processing stops to avoid OOM
-const STOP_BATCH_SIZE: i64 = 500;
+const STOP_BATCH_SIZE: i64 = 5000;
+
+/// Grid cell size in degrees (~10km at mid-latitudes)
+const GRID_CELL_SIZE: f64 = 0.1;
+
+/// Maximum radius in degrees (for bounding box expansion)
+/// ~1km at equator is ~0.009 degrees, we use 0.015 for safety
+const MAX_RADIUS_DEG: f64 = 0.015;
 
 /// Map GTFS route_type to mode string
 pub fn route_type_to_mode(route_type: i16) -> Option<&'static str> {
@@ -41,154 +58,308 @@ pub fn get_radius_for_mode(mode: &str) -> f64 {
     }
 }
 
-/// Haversine distance between two points in meters using geo crate
-fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    let p1 = point!(x: lon1, y: lat1);
-    let p2 = point!(x: lon2, y: lat2);
-    p1.haversine_distance(&p2)
+// ============================================================================
+// R-Tree indexed station wrapper
+// ============================================================================
+
+/// Wrapper for OsmStation that implements RTreeObject for spatial indexing
+#[derive(Clone)]
+struct IndexedStation {
+    osm_id: i64,
+    x: f64, // lon
+    y: f64, // lat
+    name_lower: Option<String>,
+    station_type: Option<String>,
+    railway_tag: Option<String>,
+    mode_type: String,
+    local_ref: Option<String>,
+    parent_osm_id: Option<i64>,
 }
 
-/// Find OSM stations within radius of a point (meters), filtered by mode
-pub async fn find_osm_stations_near(
+impl IndexedStation {
+    fn from_osm_station(station: &OsmStation) -> Self {
+        Self {
+            osm_id: station.osm_id,
+            x: station.point.x,
+            y: station.point.y,
+            name_lower: station.name.as_ref().map(|n| n.to_lowercase()),
+            station_type: station.station_type.clone(),
+            railway_tag: station.railway_tag.clone(),
+            mode_type: station.mode_type.clone(),
+            local_ref: station.local_ref.clone(),
+            parent_osm_id: station.parent_osm_id,
+        }
+    }
+
+    fn is_primary_station(&self) -> bool {
+        match self.station_type.as_deref() {
+            Some("station") | Some("halt") => true,
+            _ => match self.railway_tag.as_deref() {
+                Some("station") | Some("halt") => true,
+                _ => false,
+            },
+        }
+    }
+}
+
+impl RTreeObject for IndexedStation {
+    type Envelope = AABB<[f64; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        AABB::from_point([self.x, self.y])
+    }
+}
+
+impl PointDistance for IndexedStation {
+    fn distance_2(&self, point: &[f64; 2]) -> f64 {
+        let dx = self.x - point[0];
+        let dy = self.y - point[1];
+        dx * dx + dy * dy
+    }
+}
+
+// ============================================================================
+// Geographic chunking utilities
+// ============================================================================
+
+/// Grid cell key for geographic chunking
+#[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
+struct GridCell {
+    lat_idx: i32,
+    lon_idx: i32,
+}
+
+impl GridCell {
+    fn from_coords(lat: f64, lon: f64) -> Self {
+        Self {
+            lat_idx: (lat / GRID_CELL_SIZE).floor() as i32,
+            lon_idx: (lon / GRID_CELL_SIZE).floor() as i32,
+        }
+    }
+
+    /// Get bounding box for this cell, expanded by a margin for overlap
+    fn bbox_expanded(&self, margin_deg: f64) -> (f64, f64, f64, f64) {
+        let min_lat = (self.lat_idx as f64) * GRID_CELL_SIZE - margin_deg;
+        let max_lat = ((self.lat_idx + 1) as f64) * GRID_CELL_SIZE + margin_deg;
+        let min_lon = (self.lon_idx as f64) * GRID_CELL_SIZE - margin_deg;
+        let max_lon = ((self.lon_idx + 1) as f64) * GRID_CELL_SIZE + margin_deg;
+        (min_lat, min_lon, max_lat, max_lon)
+    }
+}
+
+// ============================================================================
+// Database queries
+// ============================================================================
+
+/// Fetch OSM stations within a bounding box for specified modes
+async fn fetch_osm_stations_in_bbox(
     conn: &mut AsyncPgConnection,
-    lat: f64,
-    lon: f64,
-    radius_m: f64,
-    mode_filter: Option<&str>,
+    min_lat: f64,
+    min_lon: f64,
+    max_lat: f64,
+    max_lon: f64,
+    modes: &[&str],
 ) -> Result<Vec<OsmStation>, diesel::result::Error> {
-    // Build the raw SQL query with spatial filter
-    // Include new columns: level, local_ref, parent_osm_id
-    let mode_clause = mode_filter
-        .map(|m| format!("AND mode_type = '{}'", m))
-        .unwrap_or_default();
-    
+    if modes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let modes_list = modes
+        .iter()
+        .map(|m| format!("'{}'", m))
+        .collect::<Vec<_>>()
+        .join(", ");
+
     let query = format!(
         r#"
         SELECT osm_id, osm_type, import_id, point, name, name_translations,
                station_type, railway_tag, mode_type, uic_ref, ref AS ref_, 
                wikidata, operator, network, level, local_ref, parent_osm_id
         FROM gtfs.osm_stations
-        WHERE ST_DWithin(point::geography, ST_MakePoint({}, {})::geography, {})
-        {}
+        WHERE point && ST_MakeEnvelope({}, {}, {}, {}, 4326)
+          AND mode_type IN ({})
         "#,
-        lon, lat, radius_m, mode_clause
+        min_lon, min_lat, max_lon, max_lat, modes_list
     );
-    
+
+    diesel::sql_query(query).load::<OsmStation>(conn).await
+}
+
+/// Batch update stops with OSM station and platform IDs using unnest
+async fn batch_update_stops(
+    conn: &mut AsyncPgConnection,
+    feed_id: &str,
+    attempt_id: &str,
+    updates: &[(String, i64, Option<i64>)], // (gtfs_id, station_id, platform_id)
+) -> Result<usize, diesel::result::Error> {
+    if updates.is_empty() {
+        return Ok(0);
+    }
+
+    let gtfs_ids: Vec<&str> = updates.iter().map(|(id, _, _)| id.as_str()).collect();
+    let station_ids: Vec<i64> = updates.iter().map(|(_, sid, _)| *sid).collect();
+    let platform_ids: Vec<Option<i64>> = updates.iter().map(|(_, _, pid)| *pid).collect();
+
+    // Build the platform_ids array string (handling NULLs)
+    let platform_arr: String = platform_ids
+        .iter()
+        .map(|p| match p {
+            Some(id) => id.to_string(),
+            None => "NULL".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let gtfs_arr = gtfs_ids
+        .iter()
+        .map(|s| format!("'{}'", s.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let station_arr = station_ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let query = format!(
+        r#"
+        UPDATE gtfs.stops AS s SET
+            osm_station_id = u.station_id,
+            osm_platform_id = u.platform_id
+        FROM (
+            SELECT * FROM unnest(
+                ARRAY[{}]::text[],
+                ARRAY[{}]::bigint[],
+                ARRAY[{}]::bigint[]
+            ) AS t(gtfs_id, station_id, platform_id)
+        ) AS u
+        WHERE s.gtfs_id = u.gtfs_id
+          AND s.onestop_feed_id = '{}'
+          AND s.attempt_id = '{}'
+        "#,
+        gtfs_arr,
+        station_arr,
+        platform_arr,
+        feed_id.replace('\'', "''"),
+        attempt_id.replace('\'', "''")
+    );
+
     diesel::sql_query(query)
-        .load::<OsmStation>(conn)
+        .execute(conn)
         .await
 }
 
-/// Check if an OSM station is a primary station (railway=station or railway=halt)
-/// These should be preferred over stop_position/platform for the primary match
-fn is_primary_station(station: &OsmStation) -> bool {
-    match station.station_type.as_deref() {
-        Some("station") | Some("halt") => true,
-        _ => {
-            // Also check railway_tag directly
-            match station.railway_tag.as_deref() {
-                Some("station") | Some("halt") => true,
-                _ => false,
-            }
-        }
-    }
+// ============================================================================
+// Matching logic (CPU-bound, parallelizable)
+// ============================================================================
+
+/// Result of matching a single stop
+struct MatchResult {
+    gtfs_id: String,
+    osm_station_id: i64,
+    osm_platform_id: Option<i64>,
 }
 
-/// Match a single GTFS stop to the best OSM station
-/// Returns (osm_station_id, osm_platform_id) if found with score >= MIN_MATCH_SCORE
-/// 
-/// Matching strategy:
-/// 1. First, try to find a matching primary station (railway=station or railway=halt)
-/// 2. If found, also look for a matching platform (via local_ref/platform_code)
-/// 3. Only fall back to stop_position/platform as primary if no station match exists
-pub fn match_stop_to_osm_station_sync(
-    candidates: &[OsmStation],
-    stop_lat: f64,
+/// Score a candidate station against a stop
+fn score_candidate(
+    station: &IndexedStation,
     stop_lon: f64,
+    stop_lat: f64,
+    stop_name_lower: &str,
+    platform_code: Option<&str>,
+    radius_m: f64,
+) -> (f64, bool) {
+    // Compute name similarity using Jaro-Winkler
+    let name_sim = station
+        .name_lower
+        .as_ref()
+        .map(|n| jaro_winkler(stop_name_lower, n))
+        .unwrap_or(0.0);
+
+    // Compute distance using geo crate
+    let p1 = point!(x: stop_lon, y: stop_lat);
+    let p2 = point!(x: station.x, y: station.y);
+    let distance = p1.haversine_distance(&p2);
+
+    // Compute proximity score (1.0 at center, 0.0 at radius edge)
+    let proximity_score = 1.0 - (distance / radius_m).min(1.0);
+
+    // Check for platform match via local_ref
+    let platform_match = platform_code
+        .and_then(|pc| station.local_ref.as_ref().map(|lr| lr == pc))
+        .unwrap_or(false);
+
+    // Combined score: 70% name similarity, 30% proximity
+    let score = (name_sim * 0.7) + (proximity_score * 0.3);
+
+    (score, platform_match)
+}
+
+/// Match a single stop to the best OSM station using R-tree lookup
+fn match_stop_with_rtree(
+    rtree: &RTree<IndexedStation>,
+    stop_lon: f64,
+    stop_lat: f64,
     stop_name: &str,
     platform_code: Option<&str>,
-    radius: f64,
+    radius_m: f64,
+    mode: &str,
 ) -> Option<(i64, Option<i64>)> {
+    let stop_name_lower = stop_name.to_lowercase();
+    
+    // Convert radius from meters to approximate degrees for R-tree query
+    // At worst case (equator), 1 degree ≈ 111km, so radius_m / 111000
+    let radius_deg = radius_m / 111000.0 * 1.5; // 1.5x for safety margin
+    
+    // Query R-tree for nearby candidates
+    let search_box = AABB::from_corners(
+        [stop_lon - radius_deg, stop_lat - radius_deg],
+        [stop_lon + radius_deg, stop_lat + radius_deg],
+    );
+    
+    let candidates: Vec<&IndexedStation> = rtree
+        .locate_in_envelope(&search_box)
+        .filter(|s| s.mode_type == mode)
+        .collect();
+    
     if candidates.is_empty() {
         return None;
     }
     
-    let stop_name_lower = stop_name.to_lowercase();
-    
-    // Separate candidates into stations and platforms
+    // Separate into primary stations and platforms
     let (stations, platforms): (Vec<_>, Vec<_>) = candidates
-        .iter()
-        .partition(|s| is_primary_station(s));
+        .into_iter()
+        .partition(|s| s.is_primary_station());
     
-    /// Score a candidate and return (osm_id, parent_id, score, is_platform_match)
-    fn score_candidate(
-        station: &OsmStation,
-        stop_lat: f64,
-        stop_lon: f64,
-        stop_name_lower: &str,
-        platform_code: Option<&str>,
-        radius: f64,
-    ) -> (i64, Option<i64>, f64, bool) {
-        // Compute name similarity using Jaro-Winkler
-        let name_sim = station
-            .name
-            .as_ref()
-            .map(|n| jaro_winkler(stop_name_lower, &n.to_lowercase()))
-            .unwrap_or(0.0);
-        
-        // Compute distance using geo crate
-        let p1 = geo::point!(x: stop_lon, y: stop_lat);
-        let p2 = geo::point!(x: station.point.x, y: station.point.y);
-        let distance = p1.haversine_distance(&p2);
-        
-        // Compute proximity score (1.0 at center, 0.0 at radius edge)
-        let proximity_score = 1.0 - (distance / radius).min(1.0);
-        
-        // Check for platform match via local_ref
-        let platform_match = platform_code
-            .and_then(|pc| station.local_ref.as_ref().map(|lr| lr == pc))
-            .unwrap_or(false);
-        
-        // Combined score: 70% name similarity, 30% proximity
-        let score = (name_sim * 0.7) + (proximity_score * 0.3);
-        
-        let parent_id = station.parent_osm_id;
-        
-        (station.osm_id, parent_id, score, platform_match)
-    }
-    
-    // Step 1: Try to find the best matching primary station
+    // Step 1: Find best matching primary station
     let mut best_station: Option<(i64, f64)> = None;
     
     for station in &stations {
-        let (osm_id, _, score, _) = score_candidate(
-            station, stop_lat, stop_lon, &stop_name_lower, platform_code, radius
+        let (score, _) = score_candidate(
+            station, stop_lon, stop_lat, &stop_name_lower, platform_code, radius_m
         );
         
         if score >= MIN_MATCH_SCORE {
             if best_station.as_ref().map_or(true, |(_, s)| score > *s) {
-                best_station = Some((osm_id, score));
+                best_station = Some((station.osm_id, score));
             }
         }
     }
     
-    // Step 2: If we found a station match, look for matching platform
+    // Step 2: If station found, look for matching platform
     if let Some((station_id, _)) = best_station {
-        // Look for a platform that matches by local_ref/platform_code
         let mut matching_platform: Option<i64> = None;
         
         if platform_code.is_some() {
             for platform in &platforms {
-                let (osm_id, parent_id, score, is_platform_match) = score_candidate(
-                    platform, stop_lat, stop_lon, &stop_name_lower, platform_code, radius
+                let (score, is_platform_match) = score_candidate(
+                    platform, stop_lon, stop_lat, &stop_name_lower, platform_code, radius_m
                 );
                 
-                // Platform must have matching local_ref and be related to our station
-                // (either directly via parent_osm_id or by proximity/name match)
                 if is_platform_match && score >= MIN_MATCH_SCORE * 0.8 {
-                    // Check if this platform belongs to the matched station
-                    if parent_id == Some(station_id) {
-                        matching_platform = Some(osm_id);
+                    if platform.parent_osm_id == Some(station_id) {
+                        matching_platform = Some(platform.osm_id);
                         break;
                     }
                 }
@@ -198,26 +369,23 @@ pub fn match_stop_to_osm_station_sync(
         return Some((station_id, matching_platform));
     }
     
-    // Step 3: Fallback - no primary station found, try platforms/stop_positions
-    // This handles cases where the OSM data only has platforms, not parent stations
+    // Step 3: Fallback to platforms if no primary station found
     let mut best_platform: Option<(i64, Option<i64>, f64, bool)> = None;
     
     for platform in &platforms {
-        let (osm_id, parent_id, score, is_platform_match) = score_candidate(
-            platform, stop_lat, stop_lon, &stop_name_lower, platform_code, radius
+        let (score, is_platform_match) = score_candidate(
+            platform, stop_lon, stop_lat, &stop_name_lower, platform_code, radius_m
         );
         
-        // Bonus for platform code match in fallback mode
         let adjusted_score = if is_platform_match { score + 0.1 } else { score };
         
         if adjusted_score >= MIN_MATCH_SCORE {
             if best_platform.as_ref().map_or(true, |(_, _, s, _)| adjusted_score > *s) {
-                best_platform = Some((osm_id, parent_id, adjusted_score, is_platform_match));
+                best_platform = Some((platform.osm_id, platform.parent_osm_id, adjusted_score, is_platform_match));
             }
         }
     }
     
-    // If we matched a platform, use its parent if available, otherwise use the platform itself
     best_platform.map(|(osm_id, parent_id, _, is_platform_match)| {
         let station_id = parent_id.unwrap_or(osm_id);
         let platform_id = if is_platform_match { Some(osm_id) } else { None };
@@ -225,19 +393,34 @@ pub fn match_stop_to_osm_station_sync(
     })
 }
 
+// ============================================================================
+// Stop data structures
+// ============================================================================
+
 /// Stop data for batch processing
-struct StopBatch {
+struct StopData {
     gtfs_id: String,
     lat: f64,
     lon: f64,
     name: String,
-    route_type: i16,
+    mode: &'static str,
     platform_code: Option<String>,
 }
 
+// ============================================================================
+// Main entry point
+// ============================================================================
+
 /// Batch match stops for a feed, updating stops.osm_station_id directly
 /// This is called during GTFS import in gtfs_process.rs
-/// Processes stops in chunks to avoid OOM issues
+/// 
+/// Algorithm:
+/// 1. Load stops in batches, group by grid cell
+/// 2. For each grid cell with stops:
+///    a. Fetch OSM stations in the cell's bounding box (single query)
+///    b. Build R-tree index for fast spatial lookup
+///    c. Match all stops in the cell using parallel processing
+///    d. Batch update the database
 pub async fn match_stops_for_feed(
     conn: &mut AsyncPgConnection,
     feed_id: &str,
@@ -245,16 +428,20 @@ pub async fn match_stops_for_feed(
     chateau_id: &str,
 ) -> Result<u64, Box<dyn Error + Send + Sync>> {
     use catenary::schema::gtfs::stops::dsl as stops_dsl;
-    
+
     let mut matched_count: u64 = 0;
     let mut offset: i64 = 0;
     
+    // Collect all stops that need matching first
+    let mut all_stops: Vec<StopData> = Vec::new();
+
     loop {
         // Fetch a batch of stops
-        let stops: Vec<(String, Option<postgis_diesel::types::Point>, Option<String>, Vec<Option<i16>>, Option<String>)> = 
+        let stops: Vec<(String, Option<postgis_diesel::types::Point>, Option<String>, Vec<Option<i16>>, Option<String>)> =
             stops_dsl::stops
                 .filter(stops_dsl::onestop_feed_id.eq(feed_id))
                 .filter(stops_dsl::attempt_id.eq(attempt_id))
+                .filter(stops_dsl::primary_route_type.ne(3))
                 .select((
                     stops_dsl::gtfs_id,
                     stops_dsl::point,
@@ -267,108 +454,186 @@ pub async fn match_stops_for_feed(
                 .offset(offset)
                 .load(conn)
                 .await?;
-        
+
         if stops.is_empty() {
             break;
         }
-        
+
         let batch_len = stops.len() as i64;
-        
+
         // Pre-filter stops that need matching (rail/tram/subway only, with coordinates)
-        let stops_to_match: Vec<StopBatch> = stops
-            .into_iter()
-            .filter_map(|(stop_id, point, name, route_types, platform_code)| {
-                let point = point?;
-                
-                // Find rail/tram/subway route types for this stop
-                let rail_types: Vec<i16> = route_types
-                    .into_iter()
-                    .filter_map(|rt| rt)
-                    .filter(|&rt| rt == 0 || rt == 1 || rt == 2)
-                    .collect();
-                
-                if rail_types.is_empty() {
-                    return None;
-                }
-                
-                // Use the most specific route type (prefer subway > tram > rail)
-                let route_type = if rail_types.contains(&1) {
-                    1 // subway
-                } else if rail_types.contains(&0) {
-                    0 // tram
-                } else {
-                    2 // rail
-                };
-                
-                Some(StopBatch {
-                    gtfs_id: stop_id,
-                    lat: point.y,
-                    lon: point.x,
-                    name: name.unwrap_or_default(),
-                    route_type,
-                    platform_code,
-                })
-            })
-            .collect();
-        
-        // Process each stop in this batch
-        for stop in stops_to_match {
-            let mode = match route_type_to_mode(stop.route_type) {
-                Some(m) => m,
-                None => continue,
-            };
-            
-            let radius = get_radius_for_mode(mode);
-            
-            // Find candidate OSM stations within radius
-            let candidates = match find_osm_stations_near(conn, stop.lat, stop.lon, radius, Some(mode)).await {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error finding OSM stations for stop {}: {:?}", stop.gtfs_id, e);
-                    continue;
-                }
-            };
-            
-            // Match stop to best OSM station
-            if let Some((osm_station_id, osm_platform_id)) = match_stop_to_osm_station_sync(
-                &candidates,
-                stop.lat,
-                stop.lon,
-                &stop.name,
-                stop.platform_code.as_deref(),
-                radius,
-            ) {
-                // Update the stop with OSM station and platform IDs
-                let update_result = diesel::update(
-                    stops_dsl::stops
-                        .filter(stops_dsl::onestop_feed_id.eq(feed_id))
-                        .filter(stops_dsl::attempt_id.eq(attempt_id))
-                        .filter(stops_dsl::gtfs_id.eq(&stop.gtfs_id))
-                )
-                .set((
-                    stops_dsl::osm_station_id.eq(osm_station_id),
-                    stops_dsl::osm_platform_id.eq(osm_platform_id),
-                ))
-                .execute(conn)
-                .await;
-                
-                if update_result.is_ok() {
-                    matched_count += 1;
-                }
+        for (stop_id, point, name, route_types, platform_code) in stops {
+            let Some(point) = point else { continue };
+
+            // Find rail/tram/subway route types for this stop
+            let rail_types: Vec<i16> = route_types
+                .into_iter()
+                .filter_map(|rt| rt)
+                .filter(|&rt| rt == 0 || rt == 1 || rt == 2)
+                .collect();
+
+            if rail_types.is_empty() {
+                continue;
             }
+
+            // Use the most specific route type (prefer subway > tram > rail)
+            let route_type = if rail_types.contains(&1) {
+                1 // subway
+            } else if rail_types.contains(&0) {
+                0 // tram
+            } else {
+                2 // rail
+            };
+
+            let Some(mode) = route_type_to_mode(route_type) else { continue };
+
+            all_stops.push(StopData {
+                gtfs_id: stop_id,
+                lat: point.y,
+                lon: point.x,
+                name: name.unwrap_or_default(),
+                mode,
+                platform_code,
+            });
         }
-        
+
         offset += batch_len;
-        
-        // If we got fewer than the batch size, we're done
+
         if batch_len < STOP_BATCH_SIZE {
             break;
         }
     }
-    
+
+    if all_stops.is_empty() {
+        return Ok(0);
+    }
+
+    println!("  OSM matching: {} rail/tram/subway stops to process for {}", all_stops.len(), chateau_id);
+
+    // Group stops by grid cell
+    let mut cells: HashMap<GridCell, Vec<&StopData>> = HashMap::new();
+    for stop in &all_stops {
+        let cell = GridCell::from_coords(stop.lat, stop.lon);
+        cells.entry(cell).or_default().push(stop);
+    }
+
+    let total_cells = cells.len();
+    println!("  OSM matching: {} geographic cells to process", total_cells);
+
+    // Collect unique modes across all stops
+    let all_modes: Vec<&str> = vec!["rail", "tram", "subway", "light_rail"];
+
+    // Process each grid cell
+    let mut processed_cells = 0;
+    for (cell, cell_stops) in cells {
+        // Get expanded bounding box for this cell
+        let (min_lat, min_lon, max_lat, max_lon) = cell.bbox_expanded(MAX_RADIUS_DEG);
+
+        // Fetch OSM stations for this cell (single query)
+        let osm_stations = match fetch_osm_stations_in_bbox(
+            conn, min_lat, min_lon, max_lat, max_lon, &all_modes
+        ).await {
+            Ok(stations) => stations,
+            Err(e) => {
+                eprintln!("Error fetching OSM stations for cell {:?}: {:?}", cell, e);
+                continue;
+            }
+        };
+
+        processed_cells += 1;
+
+        if osm_stations.is_empty() {
+            continue;
+        }
+
+        // Progress indicator every 10 cells or for cells with many stops
+        if processed_cells % 10 == 0 || cell_stops.len() > 100 {
+            println!("  OSM matching: cell {}/{} - {} stops, {} OSM stations", 
+                processed_cells, total_cells, cell_stops.len(), osm_stations.len());
+        }
+
+        // Build R-tree index (pre-compute lowercase names here)
+        let indexed_stations: Vec<IndexedStation> = osm_stations
+            .iter()
+            .map(IndexedStation::from_osm_station)
+            .collect();
+        
+        let rtree = RTree::bulk_load(indexed_stations);
+
+        // Match all stops in this cell using parallel processing
+        let matches: Vec<MatchResult> = cell_stops
+            .par_iter()
+            .filter_map(|stop| {
+                let radius = get_radius_for_mode(stop.mode);
+                
+                match_stop_with_rtree(
+                    &rtree,
+                    stop.lon,
+                    stop.lat,
+                    &stop.name,
+                    stop.platform_code.as_deref(),
+                    radius,
+                    stop.mode,
+                ).map(|(station_id, platform_id)| MatchResult {
+                    gtfs_id: stop.gtfs_id.clone(),
+                    osm_station_id: station_id,
+                    osm_platform_id: platform_id,
+                })
+            })
+            .collect();
+
+        if matches.is_empty() {
+            continue;
+        }
+
+        // Batch update the database
+        let updates: Vec<(String, i64, Option<i64>)> = matches
+            .into_iter()
+            .map(|m| (m.gtfs_id, m.osm_station_id, m.osm_platform_id))
+            .collect();
+
+        let update_count = updates.len();
+
+        if let Err(e) = batch_update_stops(conn, feed_id, attempt_id, &updates).await {
+            eprintln!("Error batch updating stops for cell {:?}: {:?}", cell, e);
+            continue;
+        }
+
+        matched_count += update_count as u64;
+    }
+
     if matched_count > 0 {
         println!("  OSM station matching: {} stops matched for {}", matched_count, chateau_id);
     }
-    
+
     Ok(matched_count)
+}
+
+// Keep the old function for backwards compatibility if needed elsewhere
+/// Find OSM stations within radius of a point (meters), filtered by mode
+#[allow(dead_code)]
+pub async fn find_osm_stations_near(
+    conn: &mut AsyncPgConnection,
+    lat: f64,
+    lon: f64,
+    radius_m: f64,
+    mode_filter: Option<&str>,
+) -> Result<Vec<OsmStation>, diesel::result::Error> {
+    let mode_clause = mode_filter
+        .map(|m| format!("AND mode_type = '{}'", m))
+        .unwrap_or_default();
+
+    let query = format!(
+        r#"
+        SELECT osm_id, osm_type, import_id, point, name, name_translations,
+               station_type, railway_tag, mode_type, uic_ref, ref AS ref_, 
+               wikidata, operator, network, level, local_ref, parent_osm_id
+        FROM gtfs.osm_stations
+        WHERE ST_DWithin(point::geography, ST_MakePoint({}, {})::geography, {})
+        {}
+        "#,
+        lon, lat, radius_m, mode_clause
+    );
+
+    diesel::sql_query(query).load::<OsmStation>(conn).await
 }
