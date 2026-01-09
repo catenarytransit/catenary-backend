@@ -542,14 +542,17 @@ pub async fn match_stops_for_feed(
 
         processed_cells += 1;
 
-        if osm_stations.is_empty() {
-            continue;
-        }
-
         // Progress indicator every 10 cells or for cells with many stops
         if processed_cells % 10 == 0 || cell_stops.len() > 100 {
             println!("  OSM matching: cell {}/{} - {} stops, {} OSM stations", 
                 processed_cells, total_cells, cell_stops.len(), osm_stations.len());
+        }
+
+        if osm_stations.is_empty() {
+            if cell_stops.len() > 50 {
+                println!("  OSM matching: WARNING - cell {:?} has {} stops but 0 OSM stations", cell, cell_stops.len());
+            }
+            continue;
         }
 
         // Build R-tree index (pre-compute lowercase names here)
@@ -583,6 +586,8 @@ pub async fn match_stops_for_feed(
             .collect();
 
         if matches.is_empty() {
+            println!("  OSM matching: cell {:?} - {} stops tried, 0 matches (score < {})", 
+                cell, cell_stops.len(), MIN_MATCH_SCORE);
             continue;
         }
 
