@@ -553,6 +553,56 @@ struct StopData {
 // Main entry point
 // ============================================================================
 
+/// Propagate OSM station matches from children stops to unmatched parent stations
+/// If a parent station is unmatched but its children are matched, assign the child's
+/// OSM station ID to the parent.
+pub async fn propagate_parent_matches(
+    conn: &mut AsyncPgConnection,
+    feed_id: &str,
+    attempt_id: &str,
+) -> Result<usize, diesel::result::Error> {
+    let query = format!(
+        r#"
+        WITH unmatched_parents AS (
+            SELECT gtfs_id
+            FROM gtfs.stops
+            WHERE onestop_feed_id = '{0}' AND attempt_id = '{1}'
+              AND location_type = 1
+              AND osm_station_id IS NULL
+        ),
+        child_matches AS (
+            SELECT 
+                s.parent_station,
+                s.osm_station_id,
+                COUNT(*) as match_count
+            FROM gtfs.stops s
+            WHERE s.onestop_feed_id = '{0}' AND s.attempt_id = '{1}'
+              AND s.parent_station IS NOT NULL
+              AND s.osm_station_id IS NOT NULL
+              AND s.parent_station IN (SELECT gtfs_id FROM unmatched_parents)
+            GROUP BY s.parent_station, s.osm_station_id
+        ),
+        best_matches AS (
+            SELECT DISTINCT ON (parent_station)
+                parent_station,
+                osm_station_id
+            FROM child_matches
+            ORDER BY parent_station, match_count DESC
+        )
+        UPDATE gtfs.stops s
+        SET osm_station_id = bm.osm_station_id
+        FROM best_matches bm
+        WHERE s.gtfs_id = bm.parent_station
+          AND s.onestop_feed_id = '{0}' 
+          AND s.attempt_id = '{1}'
+        "#,
+        feed_id.replace('\'', "''"),
+        attempt_id.replace('\'', "''")
+    );
+
+    diesel::sql_query(query).execute(conn).await
+}
+
 /// Batch match stops for a feed, updating stops.osm_station_id directly
 /// This is called during GTFS import in gtfs_process.rs
 /// 
@@ -755,6 +805,18 @@ pub async fn match_stops_for_feed(
         }
 
         matched_count += update_count as u64;
+    }
+
+    // Propagate matches to parent stations (post-processing)
+    match propagate_parent_matches(conn, feed_id, attempt_id).await {
+        Ok(count) => {
+            if count > 0 {
+                println!("  OSM matching: Propagated matches to {} parent stations for {}", count, chateau_id);
+            }
+        }
+        Err(e) => {
+            eprintln!("  OSM matching: Error propagating parent matches for {}: {:?}", chateau_id, e);
+        }
     }
 
     if matched_count > 0 {
