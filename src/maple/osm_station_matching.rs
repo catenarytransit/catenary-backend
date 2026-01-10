@@ -39,6 +39,47 @@ const GRID_CELL_SIZE: f64 = 0.1;
 /// Use 0.02° (~2.2km) for safety margin to ensure we capture stations at cell edges
 const MAX_RADIUS_DEG: f64 = 0.02;
 
+/// Get modes that are compatible/related to the given mode
+/// These modes may share stations in real-world scenarios
+pub fn get_compatible_modes(mode: &str) -> Vec<&'static str> {
+    match mode {
+        // Rail stations often serve subway/metro in major cities
+        "rail" => vec!["rail", "subway", "light_rail"],
+        // Subway stations may also be classified as rail or light_rail
+        "subway" => vec!["subway", "rail", "light_rail"],
+        // Tram and light_rail are often interchangeable
+        "tram" => vec!["tram", "light_rail", "subway"],
+        // Light rail can be tram-like or subway-like
+        "light_rail" => vec!["light_rail", "tram", "subway", "rail"],
+        // Monorail is usually standalone
+        "monorail" => vec!["monorail"],
+        // Funicular is usually standalone
+        "funicular" => vec!["funicular"],
+        // Unknown modes - return empty, will still match via scoring
+        _ => vec![],
+    }
+}
+
+/// Check if two modes are compatible (could share a station)
+pub fn modes_are_compatible(mode1: &str, mode2: &str) -> bool {
+    if mode1 == mode2 {
+        return true;
+    }
+    get_compatible_modes(mode1).contains(&mode2)
+}
+
+/// Get a priority score for mode matching (higher = better match)
+/// 0 = no match, 1 = compatible, 2 = exact match
+pub fn mode_match_priority(gtfs_mode: &str, osm_mode: &str) -> u8 {
+    if gtfs_mode == osm_mode {
+        2 // Exact match
+    } else if modes_are_compatible(gtfs_mode, osm_mode) {
+        1 // Compatible mode
+    } else {
+        0 // No match
+    }
+}
+
 /// Map GTFS route_type to mode string
 pub fn route_type_to_mode(route_type: i16) -> Option<&'static str> {
     match route_type {
@@ -321,6 +362,8 @@ fn score_candidate(
 }
 
 /// Match a single stop to the best OSM station using R-tree lookup
+/// Uses compatible mode matching: exact mode matches are preferred, but 
+/// compatible modes (e.g., rail+subway, tram+light_rail) are used as fallback
 fn match_stop_with_rtree(
     rtree: &RTree<IndexedStation>,
     stop_lon: f64,
@@ -342,9 +385,10 @@ fn match_stop_with_rtree(
         [stop_lon + radius_deg, stop_lat + radius_deg],
     );
     
+    // Consider ALL nearby stations regardless of mode - mode matching is used for ranking only
+    // This handles cases where OSM data may have different mode classifications
     let candidates: Vec<&IndexedStation> = rtree
         .locate_in_envelope(&search_box)
-        .filter(|s| s.mode_type == mode)
         .collect();
     
     if candidates.is_empty() {
@@ -357,7 +401,8 @@ fn match_stop_with_rtree(
         .partition(|s| s.is_primary_station());
     
     // Step 1: Find best matching primary station
-    let mut best_station: Option<(i64, f64)> = None;
+    // Prioritize exact mode matches over compatible mode matches
+    let mut best_station: Option<(i64, f64, u8)> = None; // (osm_id, score, mode_priority)
     
     for station in &stations {
         let (score, _) = score_candidate(
@@ -365,14 +410,30 @@ fn match_stop_with_rtree(
         );
         
         if score >= MIN_MATCH_SCORE {
-            if best_station.as_ref().map_or(true, |(_, s)| score > *s) {
-                best_station = Some((station.osm_id, score));
+            let mode_priority = mode_match_priority(mode, &station.mode_type);
+            
+            // Compare by (mode_priority, score) - prefer exact mode, then higher score
+            let dominated = best_station.as_ref().map_or(false, |(_, best_score, best_prio)| {
+                if mode_priority < *best_prio {
+                    // Current has lower priority, skip unless much closer
+                    score <= *best_score + 0.15
+                } else if mode_priority > *best_prio {
+                    // Current has higher priority, always prefer
+                    false
+                } else {
+                    // Same priority, compare by score
+                    score <= *best_score
+                }
+            });
+            
+            if !dominated {
+                best_station = Some((station.osm_id, score, mode_priority));
             }
         }
     }
     
     // Step 2: If station found, look for matching platform
-    if let Some((station_id, _)) = best_station {
+    if let Some((station_id, _, _)) = best_station {
         let mut matching_platform: Option<i64> = None;
         
         if platform_code.is_some() {
@@ -394,7 +455,7 @@ fn match_stop_with_rtree(
     }
     
     // Step 3: Fallback to platforms if no primary station found
-    let mut best_platform: Option<(i64, Option<i64>, f64, bool)> = None;
+    let mut best_platform: Option<(i64, Option<i64>, f64, bool, u8)> = None;
     
     for platform in &platforms {
         let (score, is_platform_match) = score_candidate(
@@ -404,13 +465,25 @@ fn match_stop_with_rtree(
         let adjusted_score = if is_platform_match { score + 0.1 } else { score };
         
         if adjusted_score >= MIN_MATCH_SCORE {
-            if best_platform.as_ref().map_or(true, |(_, _, s, _)| adjusted_score > *s) {
-                best_platform = Some((platform.osm_id, platform.parent_osm_id, adjusted_score, is_platform_match));
+            let mode_priority = mode_match_priority(mode, &platform.mode_type);
+            
+            let dominated = best_platform.as_ref().map_or(false, |(_, _, best_score, _, best_prio)| {
+                if mode_priority < *best_prio {
+                    adjusted_score <= *best_score + 0.15
+                } else if mode_priority > *best_prio {
+                    false
+                } else {
+                    adjusted_score <= *best_score
+                }
+            });
+            
+            if !dominated {
+                best_platform = Some((platform.osm_id, platform.parent_osm_id, adjusted_score, is_platform_match, mode_priority));
             }
         }
     }
     
-    if let Some((osm_id, parent_id, _, is_platform_match)) = best_platform {
+    if let Some((osm_id, parent_id, _, is_platform_match, _)) = best_platform {
         let station_id = parent_id.unwrap_or(osm_id);
         let platform_id = if is_platform_match { Some(osm_id) } else { None };
         return Some((station_id, platform_id));
@@ -418,21 +491,26 @@ fn match_stop_with_rtree(
     
     // Step 4: FINAL FALLBACK - pure proximity match within 500m
     // If no text-based matches found, match the closest station regardless of name
+    // Still prioritize exact mode matches
     const PROXIMITY_FALLBACK_M: f64 = 500.0;
     
     let stop_point = point!(x: stop_lon, y: stop_lat);
     
-    // Find closest primary station within 500m
+    // Find closest primary station within 500m, preferring exact mode matches
     let closest_station = stations.iter()
         .map(|s| {
             let station_point = point!(x: s.x, y: s.y);
             let distance = stop_point.haversine_distance(&station_point);
-            (s, distance)
+            let mode_priority = mode_match_priority(mode, &s.mode_type);
+            (s, distance, mode_priority)
         })
-        .filter(|(_, d)| *d <= PROXIMITY_FALLBACK_M)
-        .min_by(|(_, d1), (_, d2)| d1.partial_cmp(d2).unwrap());
+        .filter(|(_, d, _)| *d <= PROXIMITY_FALLBACK_M)
+        // Sort by mode_priority DESC, then distance ASC
+        .min_by(|(_, d1, p1), (_, d2, p2)| {
+            p2.cmp(p1).then_with(|| d1.partial_cmp(d2).unwrap())
+        });
     
-    if let Some((station, _)) = closest_station {
+    if let Some((station, _, _)) = closest_station {
         return Some((station.osm_id, None));
     }
     
@@ -441,12 +519,15 @@ fn match_stop_with_rtree(
         .map(|p| {
             let platform_point = point!(x: p.x, y: p.y);
             let distance = stop_point.haversine_distance(&platform_point);
-            (p, distance)
+            let mode_priority = mode_match_priority(mode, &p.mode_type);
+            (p, distance, mode_priority)
         })
-        .filter(|(_, d)| *d <= PROXIMITY_FALLBACK_M)
-        .min_by(|(_, d1), (_, d2)| d1.partial_cmp(d2).unwrap());
+        .filter(|(_, d, _)| *d <= PROXIMITY_FALLBACK_M)
+        .min_by(|(_, d1, p1), (_, d2, p2)| {
+            p2.cmp(p1).then_with(|| d1.partial_cmp(d2).unwrap())
+        });
     
-    if let Some((platform, _)) = closest_platform {
+    if let Some((platform, _, _)) = closest_platform {
         let station_id = platform.parent_osm_id.unwrap_or(platform.osm_id);
         return Some((station_id, None));
     }
