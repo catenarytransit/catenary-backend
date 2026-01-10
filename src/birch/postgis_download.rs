@@ -217,6 +217,43 @@ pub async fn other_stops_meta(req: HttpRequest) -> impl Responder {
     )
 }
 
+#[actix_web::get("/unmatched_railstops/{z}/{x}/{y}")]
+pub async fn unmatched_rail_stops(
+    sqlx_pool: web::Data<Arc<sqlx::Pool<sqlx::Postgres>>>,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    path: web::Path<(u8, u32, u32)>,
+    req: HttpRequest,
+) -> impl Responder {
+    let (z, x, y) = path.into_inner();
+
+    if z < 4 {
+        return HttpResponse::BadRequest().body("Zoom level too low");
+    }
+
+    let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
+    let query_str = build_stops_query(
+        z,
+        x,
+        y,
+        "(ARRAY[0,1,2,5,12]::smallint[] && route_types::smallint[] OR ARRAY[0,1,2,5,12]::smallint[] && children_route_types::smallint[]) AND osm_station_id IS NULL AND NOT (chateau = 'sncf' AND gtfs_id LIKE 'StopArea:%')",
+    );
+    fetch_mvt(sqlx_pool_ref, query_str, 1000).await
+}
+
+#[actix_web::get("/unmatched_railstops")]
+pub async fn unmatched_rail_stops_meta(req: HttpRequest) -> impl Responder {
+    serve_tilejson(
+        get_stops_fields(),
+        String::from("unmatched_railstops"),
+        vec![String::from(
+            "https://birch_stops_tiles.catenarymaps.org/unmatched_railstops/{z}/{x}/{y}",
+        )],
+        None,
+        Some(15),
+        10000,
+    )
+}
+
 fn tile_width_degrees_from_z(z: u8) -> f32 {
     360.0 / (2.pow(z + 1) as f32)
 }
