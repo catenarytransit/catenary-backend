@@ -963,6 +963,8 @@ async fn main() -> std::io::Result<()> {
             .service(routesofchateauwithagencyv2)
             .service(osm_stations)
             .service(osm_stations_meta)
+            .service(unmatched_stops)
+            .service(unmatched_stops_meta)
             //   .service(nearby_departuresv2::nearby_from_coords_v2)
             //we do some trolling
             .service(web::redirect(
