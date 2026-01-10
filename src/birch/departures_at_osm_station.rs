@@ -352,6 +352,39 @@ pub async fn departures_at_osm_station(
         make_calendar_structure_from_pg(calender_responses, calendar_dates_responses)
             .unwrap_or_default();
 
+    // OPTIMIZATION: pre-calculate active service IDs
+    // This dramatically reduces the number of trips we need to fetch status for
+    // and the number of trips we need to calculate complex schedules for.
+    let mut active_services_by_chateau: HashMap<String, HashSet<String>> = HashMap::new();
+    
+    // We want to verify service availability in the requested window [greater_than_date_time, greater_than_date_time + req_lookahead]
+    // We add a buffer of 1 day on either side to account for trips spanning midnight or timezone weirdness
+    let check_start_date = greater_than_date_time.date_naive().pred_opt().unwrap();
+    let check_end_date = (greater_than_date_time + req_lookahead)
+        .date_naive()
+        .succ_opt()
+        .unwrap();
+
+    for (chateau_id, services_map) in &calendar_structure {
+        let mut active_services = HashSet::new();
+        for (service_id, service) in services_map {
+            let mut is_active = false;
+            let mut d = check_start_date;
+            while d <= check_end_date {
+                if catenary::datetime_in_service(service, d) {
+                    is_active = true;
+                    break;
+                }
+                d = d.succ_opt().unwrap();
+            }
+
+            if is_active {
+                active_services.insert(service_id.clone());
+            }
+        }
+        active_services_by_chateau.insert(chateau_id.clone(), active_services);
+    }
+
     // Fetch realtime data from aspen
     let mut chateau_metadata = HashMap::new();
     let mut etcd_futures = Vec::new();
@@ -394,10 +427,22 @@ pub async fn departures_at_osm_station(
     for (chateau_id, trips_compressed_data) in &trip_compressed_btreemap_by_chateau {
         if let Some(chateau_metadata_for_c) = chateau_metadata.get(chateau_id) {
             let chateau_id = chateau_id.clone();
+            
+            // Filter trips based on active services
+            let active_services = active_services_by_chateau.get(&chateau_id);
+            
             let trips_to_get = trips_compressed_data
-                .keys()
-                .cloned()
+                .iter()
+                .filter(|(_, trip)| {
+                    // If we have active services info, use it. If not, fallback to including it (safety)
+                    match active_services {
+                        Some(set) => set.contains(trip.service_id.as_str()),
+                        None => true
+                    }
+                })
+                .map(|(k, _)| k.clone())
                 .collect::<Vec<String>>();
+                
             let socket = chateau_metadata_for_c.socket.clone();
 
             let stops_to_search_for_this_chateau = stops_to_search.get(chateau_id.as_str()).clone();
@@ -516,8 +561,16 @@ pub async fn departures_at_osm_station(
 
     for (chateau_id, trips_compressed_data) in &trip_compressed_btreemap_by_chateau {
         let mut valid_trips: HashMap<String, Vec<ValidTripSet>> = HashMap::new();
+        let active_services = active_services_by_chateau.get(chateau_id);
 
         for (trip_id, trip_compressed) in trips_compressed_data.iter() {
+            // Optimization: Skip trips with inactive services
+            if let Some(set) = active_services {
+                if !set.contains(trip_compressed.service_id.as_str()) {
+                    continue;
+                }
+            }
+
             let frequency: Option<catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto> =
                 trip_compressed
                     .frequencies
