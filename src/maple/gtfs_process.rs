@@ -187,7 +187,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
-                false,
+                true,
             )?;
         }
         "f-hauts~de~france~pas~de~calais" => {
