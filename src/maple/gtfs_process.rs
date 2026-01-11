@@ -189,7 +189,7 @@ pub async fn gtfs_process_feed(
                     String::from("coach"),
                     String::from("trolleybus"),
                 ]),
-                false,
+                true,
                 true,
             )?;
         }
