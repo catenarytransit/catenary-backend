@@ -70,8 +70,6 @@ pub struct MetrolinkPos {
     pub symbol: CompactString,
 }
 
-
-
 // Feeds where the vehicle label is more reliable/stable than the vehicle ID.
 const REALTIME_FEEDS_TO_USE_VEHICLE_IDS: [&str; 1] = ["f-ezzx-tbc~rt"];
 

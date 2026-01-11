@@ -45,7 +45,10 @@ use std::sync::Arc;
 use tokio::join;
 
 // Use shared types from departures_shared module
-use crate::departures_shared::{AlertIndex, ItinOption, MovedStopData, ValidTripSet, fetch_stop_data_for_chateau, estimate_service_date};
+use crate::departures_shared::{
+    AlertIndex, ItinOption, MovedStopData, ValidTripSet, estimate_service_date,
+    fetch_stop_data_for_chateau,
+};
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct DeparturesAtOsmStationQuery {
@@ -356,7 +359,7 @@ pub async fn departures_at_osm_station(
     // This dramatically reduces the number of trips we need to fetch status for
     // and the number of trips we need to calculate complex schedules for.
     let mut active_services_by_chateau: HashMap<String, HashSet<String>> = HashMap::new();
-    
+
     // We want to verify service availability in the requested window [greater_than_date_time, greater_than_date_time + req_lookahead]
     // We add a buffer of 1 day on either side to account for trips spanning midnight or timezone weirdness
     let check_start_date = greater_than_date_time.date_naive().pred_opt().unwrap();
@@ -427,22 +430,22 @@ pub async fn departures_at_osm_station(
     for (chateau_id, trips_compressed_data) in &trip_compressed_btreemap_by_chateau {
         if let Some(chateau_metadata_for_c) = chateau_metadata.get(chateau_id) {
             let chateau_id = chateau_id.clone();
-            
+
             // Filter trips based on active services
             let active_services = active_services_by_chateau.get(&chateau_id);
-            
+
             let trips_to_get = trips_compressed_data
                 .iter()
                 .filter(|(_, trip)| {
                     // If we have active services info, use it. If not, fallback to including it (safety)
                     match active_services {
                         Some(set) => set.contains(trip.service_id.as_str()),
-                        None => true
+                        None => true,
                     }
                 })
                 .map(|(k, _)| k.clone())
                 .collect::<Vec<String>>();
-                
+
             let socket = chateau_metadata_for_c.socket.clone();
 
             let stops_to_search_for_this_chateau = stops_to_search.get(chateau_id.as_str()).clone();
@@ -464,12 +467,11 @@ pub async fn departures_at_osm_station(
                     trips_to_get,
                 );
 
-                let stops_to_search_for_this_chateau: Vec<String> = match stops_to_search_for_this_chateau {
-                    Some(stops_set) => {
-                        stops_set.iter().cloned().collect()
-                    }
-                    None => vec![],
-                };
+                let stops_to_search_for_this_chateau: Vec<String> =
+                    match stops_to_search_for_this_chateau {
+                        Some(stops_set) => stops_set.iter().cloned().collect(),
+                        None => vec![],
+                    };
 
                 let nonscheduled_trips_future = client
                     .get_nonscheduled_trips_updates_from_stop_ids(
@@ -739,13 +741,12 @@ pub async fn departures_at_osm_station(
                                 index.search(&valid_trip.route_id, &valid_trip.trip_id);
                             for alert in relevant_alerts {
                                 if alert.effect == Some(1) {
-                                    let event_time = valid_trip
-                                        .reference_start_of_service_date
-                                        .timestamp()
-                                        as u64
-                                        + valid_trip.trip_start_time as u64
-                                        + itin_option.departure_time_since_start.unwrap_or(0)
-                                            as u64;
+                                    let event_time =
+                                        valid_trip.reference_start_of_service_date.timestamp()
+                                            as u64
+                                            + valid_trip.trip_start_time as u64
+                                            + itin_option.departure_time_since_start.unwrap_or(0)
+                                                as u64;
 
                                     let is_active = alert.active_period.iter().any(|ap| {
                                         let start = ap.start.unwrap_or(0);
@@ -781,7 +782,10 @@ pub async fn departures_at_osm_station(
                                             .map(|x| {
                                                 (
                                                     x,
-                                                    gtfs_trip_aspenised.trip_updates.get(x).unwrap(),
+                                                    gtfs_trip_aspenised
+                                                        .trip_updates
+                                                        .get(x)
+                                                        .unwrap(),
                                                 )
                                             })
                                             .filter(|(_x, trip_update)| {
@@ -821,10 +825,8 @@ pub async fn departures_at_osm_station(
                                             trip_deleted = true;
                                         }
 
-                                        if let Some(matching_stu) = trip_update
-                                            .stop_time_update
-                                            .iter()
-                                            .find(|stu| {
+                                        if let Some(matching_stu) =
+                                            trip_update.stop_time_update.iter().find(|stu| {
                                                 stu.stop_sequence
                                                     == Some(itin_option.gtfs_stop_sequence as u16)
                                                     || stu.stop_id.as_ref().map(|s| s.as_str())
@@ -841,7 +843,9 @@ pub async fn departures_at_osm_station(
                                                 platform = Some(plat.to_string());
                                             }
                                             if matching_stu.schedule_relationship
-                                                == Some(AspenisedStopTimeScheduleRelationship::Skipped)
+                                                == Some(
+                                                    AspenisedStopTimeScheduleRelationship::Skipped,
+                                                )
                                             {
                                                 stop_cancelled = true;
                                             }
@@ -859,13 +863,14 @@ pub async fn departures_at_osm_station(
                             },
                         );
 
-                        let scheduled_arrival_time = itin_option.arrival_time_since_start.map(
-                            |arrival_time_since_start| {
-                                valid_trip.reference_start_of_service_date.timestamp() as u64
-                                    + valid_trip.trip_start_time as u64
-                                    + arrival_time_since_start as u64
-                            },
-                        );
+                        let scheduled_arrival_time =
+                            itin_option
+                                .arrival_time_since_start
+                                .map(|arrival_time_since_start| {
+                                    valid_trip.reference_start_of_service_date.timestamp() as u64
+                                        + valid_trip.trip_start_time as u64
+                                        + arrival_time_since_start as u64
+                                });
 
                         let is_last_stop = itin_option.gtfs_stop_sequence
                             == valid_trip

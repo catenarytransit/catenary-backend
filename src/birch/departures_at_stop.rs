@@ -118,7 +118,10 @@ struct NearbyFromStopsResponse {
     pub agencies: BTreeMap<String, BTreeMap<String, catenary::models::Agency>>,
 }
 
-use crate::departures_shared::{AlertIndex, ItinOption, MovedStopData, ValidTripSet, fetch_stop_data_for_chateau, estimate_service_date};
+use crate::departures_shared::{
+    AlertIndex, ItinOption, MovedStopData, ValidTripSet, estimate_service_date,
+    fetch_stop_data_for_chateau,
+};
 
 #[actix_web::get("/departures_at_stop")]
 pub async fn departures_at_stop(

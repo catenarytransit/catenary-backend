@@ -133,14 +133,22 @@ pub async fn gtfs_process_feed(
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
-                Some(vec![String::from("rail"), String::from("subway"), String::from("tram")]),
+                Some(vec![
+                    String::from("rail"),
+                    String::from("subway"),
+                    String::from("tram"),
+                ]),
                 true,
             )?;
 
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./pfaedle-filtered-germany-latest.osm.pbf",
-                Some(vec![String::from("bus"), String::from("coach"), String::from("trolleybus")]),
+                Some(vec![
+                    String::from("bus"),
+                    String::from("coach"),
+                    String::from("trolleybus"),
+                ]),
                 true,
             )?;
         }
@@ -1899,13 +1907,15 @@ pub async fn gtfs_process_feed(
     // Match stops to OSM stations (for rail/tram/subway routes)
     // This runs after stops are inserted and associates them with imported OSM stations
     if let Err(e) = crate::osm_station_matching::match_stops_for_feed(
-        &mut conn,
-        feed_id,
-        attempt_id,
-        chateau_id,
-    ).await {
+        &mut conn, feed_id, attempt_id, chateau_id,
+    )
+    .await
+    {
         // Log but don't fail - OSM matching is optional enhancement
-        eprintln!("Warning: OSM station matching failed for {}: {:?}", feed_id, e);
+        eprintln!(
+            "Warning: OSM station matching failed for {}: {:?}",
+            feed_id, e
+        );
     }
 
     let ingest_duration = start.elapsed();

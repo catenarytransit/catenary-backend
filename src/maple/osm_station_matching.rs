@@ -12,12 +12,12 @@
 use catenary::models::OsmStation;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use geo::{point, HaversineDistance};
+use geo::{HaversineDistance, point};
 use rayon::prelude::*;
-use rstar::{RTree, RTreeObject, PointDistance, AABB};
-use strsim::jaro_winkler;
+use rstar::{AABB, PointDistance, RTree, RTreeObject};
 use std::collections::HashMap;
 use std::error::Error;
+use strsim::jaro_winkler;
 
 /// Proximity thresholds by mode (in meters)
 pub const RAIL_RADIUS_M: f64 = 1000.0;
@@ -83,9 +83,9 @@ pub fn mode_match_priority(gtfs_mode: &str, osm_mode: &str) -> u8 {
 /// Map GTFS route_type to mode string
 pub fn route_type_to_mode(route_type: i16) -> Option<&'static str> {
     match route_type {
-        0 => Some("tram"),      // Tram, Streetcar, Light rail
-        1 => Some("subway"),    // Subway, Metro
-        2 => Some("rail"),      // Rail (intercity, long-distance)
+        0 => Some("tram"),   // Tram, Streetcar, Light rail
+        1 => Some("subway"), // Subway, Metro
+        2 => Some("rail"),   // Rail (intercity, long-distance)
         _ => None,
     }
 }
@@ -288,9 +288,7 @@ async fn batch_update_stops(
         attempt_id.replace('\'', "''")
     );
 
-    diesel::sql_query(query)
-        .execute(conn)
-        .await
+    diesel::sql_query(query).execute(conn).await
 }
 
 // ============================================================================
@@ -320,22 +318,22 @@ fn score_candidate(
         .map(|osm_name| {
             // First try Jaro-Winkler
             let jw_score = jaro_winkler(stop_name_lower, osm_name);
-            
-            // Also check token-based matching: 
+
+            // Also check token-based matching:
             // "Paris Est" should match "Paris Gare de l'Est"
             // Check if all significant words from GTFS name appear in OSM name
             let gtfs_tokens: Vec<&str> = stop_name_lower
                 .split(|c: char| !c.is_alphanumeric())
                 .filter(|t| t.len() >= 2) // Skip very short tokens
                 .collect();
-            
+
             let token_match = if !gtfs_tokens.is_empty() {
                 let matches = gtfs_tokens.iter().filter(|t| osm_name.contains(*t)).count();
                 matches as f64 / gtfs_tokens.len() as f64
             } else {
                 0.0
             };
-            
+
             // Take the better of the two approaches
             jw_score.max(token_match)
         })
@@ -362,7 +360,7 @@ fn score_candidate(
 }
 
 /// Match a single stop to the best OSM station using R-tree lookup
-/// Uses compatible mode matching: exact mode matches are preferred, but 
+/// Uses compatible mode matching: exact mode matches are preferred, but
 /// compatible modes (e.g., rail+subway, tram+light_rail) are used as fallback
 fn match_stop_with_rtree(
     rtree: &RTree<IndexedStation>,
@@ -374,74 +372,83 @@ fn match_stop_with_rtree(
     mode: &str,
 ) -> Option<(i64, Option<i64>)> {
     let stop_name_lower = stop_name.to_lowercase();
-    
+
     // Convert radius from meters to approximate degrees for R-tree query
     // At worst case (equator), 1 degree ≈ 111km, so radius_m / 111000
     let radius_deg = radius_m / 111000.0 * 1.5; // 1.5x for safety margin
-    
+
     // Query R-tree for nearby candidates
     let search_box = AABB::from_corners(
         [stop_lon - radius_deg, stop_lat - radius_deg],
         [stop_lon + radius_deg, stop_lat + radius_deg],
     );
-    
+
     // Consider ALL nearby stations regardless of mode - mode matching is used for ranking only
     // This handles cases where OSM data may have different mode classifications
-    let candidates: Vec<&IndexedStation> = rtree
-        .locate_in_envelope(&search_box)
-        .collect();
-    
+    let candidates: Vec<&IndexedStation> = rtree.locate_in_envelope(&search_box).collect();
+
     if candidates.is_empty() {
         return None;
     }
-    
+
     // Separate into primary stations and platforms
-    let (stations, platforms): (Vec<_>, Vec<_>) = candidates
-        .into_iter()
-        .partition(|s| s.is_primary_station());
-    
+    let (stations, platforms): (Vec<_>, Vec<_>) =
+        candidates.into_iter().partition(|s| s.is_primary_station());
+
     // Step 1: Find best matching primary station
     // Prioritize exact mode matches over compatible mode matches
     let mut best_station: Option<(i64, f64, u8)> = None; // (osm_id, score, mode_priority)
-    
+
     for station in &stations {
         let (score, _) = score_candidate(
-            station, stop_lon, stop_lat, &stop_name_lower, platform_code, radius_m
+            station,
+            stop_lon,
+            stop_lat,
+            &stop_name_lower,
+            platform_code,
+            radius_m,
         );
-        
+
         if score >= MIN_MATCH_SCORE {
             let mode_priority = mode_match_priority(mode, &station.mode_type);
-            
+
             // Compare by (mode_priority, score) - prefer exact mode, then higher score
-            let dominated = best_station.as_ref().map_or(false, |(_, best_score, best_prio)| {
-                if mode_priority < *best_prio {
-                    // Current has lower priority, skip unless much closer
-                    score <= *best_score + 0.15
-                } else if mode_priority > *best_prio {
-                    // Current has higher priority, always prefer
-                    false
-                } else {
-                    // Same priority, compare by score
-                    score <= *best_score
-                }
-            });
-            
+            let dominated = best_station
+                .as_ref()
+                .map_or(false, |(_, best_score, best_prio)| {
+                    if mode_priority < *best_prio {
+                        // Current has lower priority, skip unless much closer
+                        score <= *best_score + 0.15
+                    } else if mode_priority > *best_prio {
+                        // Current has higher priority, always prefer
+                        false
+                    } else {
+                        // Same priority, compare by score
+                        score <= *best_score
+                    }
+                });
+
             if !dominated {
                 best_station = Some((station.osm_id, score, mode_priority));
             }
         }
     }
-    
+
     // Step 2: If station found, look for matching platform
     if let Some((station_id, _, _)) = best_station {
         let mut matching_platform: Option<i64> = None;
-        
+
         if platform_code.is_some() {
             for platform in &platforms {
                 let (score, is_platform_match) = score_candidate(
-                    platform, stop_lon, stop_lat, &stop_name_lower, platform_code, radius_m
+                    platform,
+                    stop_lon,
+                    stop_lat,
+                    &stop_name_lower,
+                    platform_code,
+                    radius_m,
                 );
-                
+
                 if is_platform_match && score >= MIN_MATCH_SCORE * 0.8 {
                     if platform.parent_osm_id == Some(station_id) {
                         matching_platform = Some(platform.osm_id);
@@ -450,54 +457,77 @@ fn match_stop_with_rtree(
                 }
             }
         }
-        
+
         return Some((station_id, matching_platform));
     }
-    
+
     // Step 3: Fallback to platforms if no primary station found
     let mut best_platform: Option<(i64, Option<i64>, f64, bool, u8)> = None;
-    
+
     for platform in &platforms {
         let (score, is_platform_match) = score_candidate(
-            platform, stop_lon, stop_lat, &stop_name_lower, platform_code, radius_m
+            platform,
+            stop_lon,
+            stop_lat,
+            &stop_name_lower,
+            platform_code,
+            radius_m,
         );
-        
-        let adjusted_score = if is_platform_match { score + 0.1 } else { score };
-        
+
+        let adjusted_score = if is_platform_match {
+            score + 0.1
+        } else {
+            score
+        };
+
         if adjusted_score >= MIN_MATCH_SCORE {
             let mode_priority = mode_match_priority(mode, &platform.mode_type);
-            
-            let dominated = best_platform.as_ref().map_or(false, |(_, _, best_score, _, best_prio)| {
-                if mode_priority < *best_prio {
-                    adjusted_score <= *best_score + 0.15
-                } else if mode_priority > *best_prio {
-                    false
-                } else {
-                    adjusted_score <= *best_score
-                }
-            });
-            
+
+            let dominated =
+                best_platform
+                    .as_ref()
+                    .map_or(false, |(_, _, best_score, _, best_prio)| {
+                        if mode_priority < *best_prio {
+                            adjusted_score <= *best_score + 0.15
+                        } else if mode_priority > *best_prio {
+                            false
+                        } else {
+                            adjusted_score <= *best_score
+                        }
+                    });
+
             if !dominated {
-                best_platform = Some((platform.osm_id, platform.parent_osm_id, adjusted_score, is_platform_match, mode_priority));
+                best_platform = Some((
+                    platform.osm_id,
+                    platform.parent_osm_id,
+                    adjusted_score,
+                    is_platform_match,
+                    mode_priority,
+                ));
             }
         }
     }
-    
+
     if let Some((osm_id, parent_id, _, is_platform_match, _)) = best_platform {
         let station_id = parent_id.unwrap_or(osm_id);
-        let platform_id = if is_platform_match { Some(osm_id) } else { None };
+        let platform_id = if is_platform_match {
+            Some(osm_id)
+        } else {
+            None
+        };
         return Some((station_id, platform_id));
     }
-    
+
     // Step 4: FINAL FALLBACK - pure proximity match within 500m
     // If no text-based matches found, match the closest station regardless of name
     // Still prioritize exact mode matches
     const PROXIMITY_FALLBACK_M: f64 = 500.0;
-    
+
     let stop_point = point!(x: stop_lon, y: stop_lat);
-    
+
     // Find closest primary station within 500m, preferring exact mode matches
-    let closest_station = stations.iter()
+    let closest_station = stations
+        .iter()
         .map(|s| {
             let station_point = point!(x: s.x, y: s.y);
             let distance = stop_point.haversine_distance(&station_point);
@@ -506,16 +536,15 @@ fn match_stop_with_rtree(
         })
         .filter(|(_, d, _)| *d <= PROXIMITY_FALLBACK_M)
         // Sort by mode_priority DESC, then distance ASC
-        .min_by(|(_, d1, p1), (_, d2, p2)| {
-            p2.cmp(p1).then_with(|| d1.partial_cmp(d2).unwrap())
-        });
-    
+        .min_by(|(_, d1, p1), (_, d2, p2)| p2.cmp(p1).then_with(|| d1.partial_cmp(d2).unwrap()));
+
     if let Some((station, _, _)) = closest_station {
         return Some((station.osm_id, None));
     }
-    
+
     // Try closest platform within 500m
-    let closest_platform = platforms.iter()
+    let closest_platform = platforms
+        .iter()
         .map(|p| {
             let platform_point = point!(x: p.x, y: p.y);
             let distance = stop_point.haversine_distance(&platform_point);
@@ -523,15 +552,13 @@ fn match_stop_with_rtree(
             (p, distance, mode_priority)
         })
         .filter(|(_, d, _)| *d <= PROXIMITY_FALLBACK_M)
-        .min_by(|(_, d1, p1), (_, d2, p2)| {
-            p2.cmp(p1).then_with(|| d1.partial_cmp(d2).unwrap())
-        });
-    
+        .min_by(|(_, d1, p1), (_, d2, p2)| p2.cmp(p1).then_with(|| d1.partial_cmp(d2).unwrap()));
+
     if let Some((platform, _, _)) = closest_platform {
         let station_id = platform.parent_osm_id.unwrap_or(platform.osm_id);
         return Some((station_id, None));
     }
-    
+
     None
 }
 
@@ -605,7 +632,7 @@ pub async fn propagate_parent_matches(
 
 /// Batch match stops for a feed, updating stops.osm_station_id directly
 /// This is called during GTFS import in gtfs_process.rs
-/// 
+///
 /// Algorithm:
 /// 1. Load stops in batches, group by grid cell
 /// 2. For each grid cell with stops:
@@ -623,30 +650,36 @@ pub async fn match_stops_for_feed(
 
     let mut matched_count: u64 = 0;
     let mut offset: i64 = 0;
-    
+
     // Collect all stops that need matching first
     let mut all_stops: Vec<StopData> = Vec::new();
 
     loop {
         // Fetch a batch of stops - get both route_types and children_route_types
-        let stops: Vec<(String, Option<postgis_diesel::types::Point>, Option<String>, Vec<Option<i16>>, Vec<Option<i16>>, Option<String>)> =
-            stops_dsl::stops
-                .filter(stops_dsl::onestop_feed_id.eq(feed_id))
-                .filter(stops_dsl::attempt_id.eq(attempt_id))
-                .filter(stops_dsl::primary_route_type.ne(3))
-                .select((
-                    stops_dsl::gtfs_id,
-                    stops_dsl::point,
-                    stops_dsl::name,
-                    stops_dsl::route_types,
-                    stops_dsl::children_route_types,
-                    stops_dsl::platform_code,
-                ))
-                .order(stops_dsl::gtfs_id)
-                .limit(STOP_BATCH_SIZE)
-                .offset(offset)
-                .load(conn)
-                .await?;
+        let stops: Vec<(
+            String,
+            Option<postgis_diesel::types::Point>,
+            Option<String>,
+            Vec<Option<i16>>,
+            Vec<Option<i16>>,
+            Option<String>,
+        )> = stops_dsl::stops
+            .filter(stops_dsl::onestop_feed_id.eq(feed_id))
+            .filter(stops_dsl::attempt_id.eq(attempt_id))
+            .filter(stops_dsl::primary_route_type.ne(3))
+            .select((
+                stops_dsl::gtfs_id,
+                stops_dsl::point,
+                stops_dsl::name,
+                stops_dsl::route_types,
+                stops_dsl::children_route_types,
+                stops_dsl::platform_code,
+            ))
+            .order(stops_dsl::gtfs_id)
+            .limit(STOP_BATCH_SIZE)
+            .offset(offset)
+            .load(conn)
+            .await?;
 
         if stops.is_empty() {
             break;
@@ -684,7 +717,9 @@ pub async fn match_stops_for_feed(
                 2 // rail
             };
 
-            let Some(mode) = route_type_to_mode(route_type) else { continue };
+            let Some(mode) = route_type_to_mode(route_type) else {
+                continue;
+            };
 
             all_stops.push(StopData {
                 gtfs_id: stop_id,
@@ -704,11 +739,18 @@ pub async fn match_stops_for_feed(
     }
 
     if all_stops.is_empty() {
-        println!("  OSM matching: no rail/tram/subway stops found for {}", chateau_id);
+        println!(
+            "  OSM matching: no rail/tram/subway stops found for {}",
+            chateau_id
+        );
         return Ok(0);
     }
 
-    println!("  OSM matching: {} rail/tram/subway stops to process for {}", all_stops.len(), chateau_id);
+    println!(
+        "  OSM matching: {} rail/tram/subway stops to process for {}",
+        all_stops.len(),
+        chateau_id
+    );
 
     // Group stops by grid cell
     let mut cells: HashMap<GridCell, Vec<&StopData>> = HashMap::new();
@@ -718,7 +760,10 @@ pub async fn match_stops_for_feed(
     }
 
     let total_cells = cells.len();
-    println!("  OSM matching: {} geographic cells to process", total_cells);
+    println!(
+        "  OSM matching: {} geographic cells to process",
+        total_cells
+    );
 
     // Collect unique modes across all stops
     let all_modes: Vec<&str> = vec!["rail", "tram", "subway", "light_rail"];
@@ -730,27 +775,37 @@ pub async fn match_stops_for_feed(
         let (min_lat, min_lon, max_lat, max_lon) = cell.bbox_expanded(MAX_RADIUS_DEG);
 
         // Fetch OSM stations for this cell (single query)
-        let osm_stations = match fetch_osm_stations_in_bbox(
-            conn, min_lat, min_lon, max_lat, max_lon, &all_modes
-        ).await {
-            Ok(stations) => stations,
-            Err(e) => {
-                eprintln!("Error fetching OSM stations for cell {:?}: {:?}", cell, e);
-                continue;
-            }
-        };
+        let osm_stations =
+            match fetch_osm_stations_in_bbox(conn, min_lat, min_lon, max_lat, max_lon, &all_modes)
+                .await
+            {
+                Ok(stations) => stations,
+                Err(e) => {
+                    eprintln!("Error fetching OSM stations for cell {:?}: {:?}", cell, e);
+                    continue;
+                }
+            };
 
         processed_cells += 1;
 
         // Progress indicator every 10 cells or for cells with many stops
         if processed_cells % 10 == 0 || cell_stops.len() > 100 {
-            println!("  OSM matching: cell {}/{} - {} stops, {} OSM stations", 
-                processed_cells, total_cells, cell_stops.len(), osm_stations.len());
+            println!(
+                "  OSM matching: cell {}/{} - {} stops, {} OSM stations",
+                processed_cells,
+                total_cells,
+                cell_stops.len(),
+                osm_stations.len()
+            );
         }
 
         if osm_stations.is_empty() {
             if cell_stops.len() > 50 {
-                println!("  OSM matching: WARNING - cell {:?} has {} stops but 0 OSM stations", cell, cell_stops.len());
+                println!(
+                    "  OSM matching: WARNING - cell {:?} has {} stops but 0 OSM stations",
+                    cell,
+                    cell_stops.len()
+                );
             }
             continue;
         }
@@ -760,7 +815,7 @@ pub async fn match_stops_for_feed(
             .iter()
             .map(IndexedStation::from_osm_station)
             .collect();
-        
+
         let rtree = RTree::bulk_load(indexed_stations);
 
         // Match all stops in this cell using parallel processing
@@ -768,7 +823,7 @@ pub async fn match_stops_for_feed(
             .par_iter()
             .filter_map(|stop| {
                 let radius = get_radius_for_mode(stop.mode);
-                
+
                 match_stop_with_rtree(
                     &rtree,
                     stop.lon,
@@ -777,7 +832,8 @@ pub async fn match_stops_for_feed(
                     stop.platform_code.as_deref(),
                     radius,
                     stop.mode,
-                ).map(|(station_id, platform_id)| MatchResult {
+                )
+                .map(|(station_id, platform_id)| MatchResult {
                     gtfs_id: stop.gtfs_id.clone(),
                     osm_station_id: station_id,
                     osm_platform_id: platform_id,
@@ -786,8 +842,12 @@ pub async fn match_stops_for_feed(
             .collect();
 
         if matches.is_empty() {
-            println!("  OSM matching: cell {:?} - {} stops tried, 0 matches (score < {})", 
-                cell, cell_stops.len(), MIN_MATCH_SCORE);
+            println!(
+                "  OSM matching: cell {:?} - {} stops tried, 0 matches (score < {})",
+                cell,
+                cell_stops.len(),
+                MIN_MATCH_SCORE
+            );
             continue;
         }
 
@@ -811,16 +871,25 @@ pub async fn match_stops_for_feed(
     match propagate_parent_matches(conn, feed_id, attempt_id).await {
         Ok(count) => {
             if count > 0 {
-                println!("  OSM matching: Propagated matches to {} parent stations for {}", count, chateau_id);
+                println!(
+                    "  OSM matching: Propagated matches to {} parent stations for {}",
+                    count, chateau_id
+                );
             }
         }
         Err(e) => {
-            eprintln!("  OSM matching: Error propagating parent matches for {}: {:?}", chateau_id, e);
+            eprintln!(
+                "  OSM matching: Error propagating parent matches for {}: {:?}",
+                chateau_id, e
+            );
         }
     }
 
     if matched_count > 0 {
-        println!("  OSM station matching: {} stops matched for {}", matched_count, chateau_id);
+        println!(
+            "  OSM station matching: {} stops matched for {}",
+            matched_count, chateau_id
+        );
     }
 
     Ok(matched_count)

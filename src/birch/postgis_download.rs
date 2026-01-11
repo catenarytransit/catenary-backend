@@ -771,9 +771,9 @@ pub async fn osm_stations(
     fetch_mvt(sqlx_pool_ref, query_str, 10000).await
 }
 
-        
 fn build_osm_stations_query(z: u8, x: u32, y: u32) -> String {
-    format!("
+    format!(
+        "
     SELECT
     ST_AsMVT(q, 'data', 4096, 'geom')
 FROM (
@@ -798,5 +798,9 @@ FROM (
         gtfs.osm_stations
     WHERE
         (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326))
-) q", z = z, x = x, y= y)
+) q",
+        z = z,
+        x = x,
+        y = y
+    )
 }

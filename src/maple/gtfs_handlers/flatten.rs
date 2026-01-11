@@ -268,11 +268,15 @@ pub fn flatten_feed(
             let mut file = File::open(&source_path)?;
             let mut buf: Vec<u8> = vec![];
             file.read_to_end(&mut buf)?;
-            let target_dir = PathBuf::from(format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id));
+            let target_dir =
+                PathBuf::from(format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id));
             zip_extract::extract(Cursor::new(buf), &target_dir, true)?;
             delete_zip_files(&format!("{}/{}", gtfs_uncompressed_temp_storage, feed_id))?;
             // Also remove the numbered folder after extraction
-            let folder_to_remove = format!("{}/{}/{}", gtfs_uncompressed_temp_storage, feed_id, subfolder_to_get);
+            let folder_to_remove = format!(
+                "{}/{}/{}",
+                gtfs_uncompressed_temp_storage, feed_id, subfolder_to_get
+            );
             if std::path::Path::new(&folder_to_remove).is_dir() {
                 let _ = fs::remove_dir_all(&folder_to_remove);
             }

@@ -438,7 +438,7 @@ pub async fn download_return_eligible_feeds(
 
             // Track downloaded URLs -> file path (for feeds sharing the same URL)
             // Key: URL, Value: path to downloaded zip
-            let url_downloaded_paths: Arc<tokio::sync::Mutex<HashMap<String, String>>> = 
+            let url_downloaded_paths: Arc<tokio::sync::Mutex<HashMap<String, String>>> =
                 Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
             // Count how many feeds share each URL for logging

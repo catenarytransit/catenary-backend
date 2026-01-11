@@ -84,9 +84,9 @@ use terrain_tiles_proxy::*;
 mod block_api;
 mod connections_lookup;
 mod openrailwaymap_proxy;
+mod osm_station_preview;
 mod shapes;
 mod stop_preview;
-mod osm_station_preview;
 mod text_search;
 mod vehicle_api;
 
