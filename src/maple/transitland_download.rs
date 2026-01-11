@@ -23,6 +23,7 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use tokio::process::Command;
 use tokio::sync::Mutex;
 use url::{ParseError, Url};
 
@@ -222,12 +223,110 @@ async fn warm_up_homepage(
     Ok(())
 }
 
+/// Check if a feed requires authentication (headers, API keys, basic auth, etc.)
+/// Feeds that require auth should NOT use wget fallback since wget won't have credentials
+fn requires_authentication(feed_id: &str, url: &str) -> bool {
+    // Feeds with hardcoded auth headers in add_auth_headers
+    let auth_feeds = [
+        "f-dp3-metra",
+        "f-dqc-wmata~rail",
+        "f-dqc-wmata~bus",
+        "f-rb6b-metrochristchurch",
+        "f-u1-delijn",
+        "f-u3h-koleje~dolnoslaskie",
+        "f-mavcsoport",
+        "f-Linz~Österreich",
+        "f-Vorarlberg~Österreich",
+        "f-Tyrol~Österreich",
+        "f-Oberösterreich~Österreich",
+        "f-Carinthia~Österreich",
+        "f-Styria~Österreich",
+        "f-Ostösterreich~Österreich",
+        "f-9qh-omnitrans",
+        "f-u05-tcl~systral",
+        "f-gtfs~de",
+        "f-dr5-nj~transit~rail",
+    ];
+
+    if auth_feeds.contains(&feed_id) {
+        return true;
+    }
+
+    // URLs that require API keys embedded or special headers
+    if url.contains("api.odpt.org") || url.contains("nap.transportes.gob.es") {
+        return true;
+    }
+
+    false
+}
+
+/// Fallback to wget for downloading files when reqwest fails
+/// This can bypass some server-side restrictions that block reqwest
+async fn try_wget_fallback(url: &str, feed_id: &str) -> Option<bytes::Bytes> {
+    println!(
+        "Attempting wget fallback for {}: {}",
+        feed_id, url
+    );
+
+    // Create a temp file to store the download
+    let temp_path = format!("/tmp/wget_fallback_{}.zip", feed_id);
+
+    // Run wget with common browser-like settings
+    let output = Command::new("wget")
+        .arg("-q")
+        .arg("--timeout=120")
+        .arg("--tries=2")
+        .arg("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .arg("-O")
+        .arg(&temp_path)
+        .arg(url)
+        .output()
+        .await;
+
+    match output {
+        Ok(output) => {
+            if output.status.success() {
+                // Read the downloaded file
+                match tokio::fs::read(&temp_path).await {
+                    Ok(data) => {
+                        // Clean up temp file
+                        let _ = tokio::fs::remove_file(&temp_path).await;
+                        println!("wget fallback successful for {}: {} bytes", feed_id, data.len());
+                        Some(bytes::Bytes::from(data))
+                    }
+                    Err(e) => {
+                        println!("wget fallback failed to read file for {}: {:?}", feed_id, e);
+                        let _ = tokio::fs::remove_file(&temp_path).await;
+                        None
+                    }
+                }
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                println!("wget fallback failed for {}: {}", feed_id, stderr);
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                None
+            }
+        }
+        Err(e) => {
+            println!("wget fallback failed to execute for {}: {:?}", feed_id, e);
+            None
+        }
+    }
+}
+
+/// Custom error type to handle wget fallback results
+#[derive(Debug)]
+pub enum DownloadResult {
+    Response(reqwest::Response),
+    WgetBytes(bytes::Bytes),
+}
+
 async fn try_to_download(
     feed_id: &str,
     client: &reqwest::Client,
     url: &str,
     parsed_url: &Url,
-) -> Result<reqwest::Response, reqwest::Error> {
+) -> Result<DownloadResult, reqwest::Error> {
     let new_url = transform_for_bay_area(url.to_string());
 
     if url.contains("api.odpt.org") && !url.contains("acl:consumerKey") {
@@ -237,7 +336,7 @@ async fn try_to_download(
         url_with_key.push_str(
             "acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e",
         );
-        return client.get(&url_with_key).send().await;
+        return client.get(&url_with_key).send().await.map(DownloadResult::Response);
     }
 
     // Use browser-like client for feeds that are known to have anti-bot protection
@@ -266,7 +365,8 @@ async fn try_to_download(
             .get(url)
             .header("ApiKey", "d6bfc458-3f53-4456-9108-28fa9f97069d")
             .send()
-            .await;
+            .await
+            .map(DownloadResult::Response);
     }
 
     if feed_id == "f-dr5-nj~transit~rail" {
@@ -283,7 +383,7 @@ async fn try_to_download(
 
         let request = add_auth_headers(request, feed_id).await;
 
-        return request.send().await;
+        return request.send().await.map(DownloadResult::Response);
     }
 
     let new_url = match feed_id {
@@ -300,6 +400,12 @@ async fn try_to_download(
     let request = add_auth_headers(request, feed_id);
 
     let response = request.await.send().await;
+
+    // Helper to check if error is connection reset
+    let is_connection_reset = |e: &reqwest::Error| -> bool {
+        let error_str = format!("{:?}", e);
+        error_str.contains("ConnectionReset") || error_str.contains("Connection reset by peer")
+    };
 
     match response {
         Ok(response) => {
@@ -320,12 +426,36 @@ async fn try_to_download(
                 // Retry the actual download with the warmed-up client
                 let request = browser_client.get(&new_url).header("Accept", "*/*");
                 let request = add_auth_headers(request, feed_id);
-                return request.await.send().await;
+                let retry_result = request.await.send().await;
+
+                match retry_result {
+                    Ok(resp) if resp.status() == reqwest::StatusCode::FORBIDDEN => {
+                        // Still 403 after browser-like retry, try wget fallback if no auth required
+                        if !requires_authentication(feed_id, url) {
+                            if let Some(wget_bytes) = try_wget_fallback(&new_url, feed_id).await {
+                                return Ok(DownloadResult::WgetBytes(wget_bytes));
+                            }
+                        }
+                        Ok(DownloadResult::Response(resp))
+                    }
+                    Ok(resp) => Ok(DownloadResult::Response(resp)),
+                    Err(e) => {
+                        // Request failed, try wget fallback if no auth required
+                        if !requires_authentication(feed_id, url) {
+                            if let Some(wget_bytes) = try_wget_fallback(&new_url, feed_id).await {
+                                return Ok(DownloadResult::WgetBytes(wget_bytes));
+                            }
+                        }
+                        Err(e)
+                    }
+                }
             } else {
-                Ok(response)
+                Ok(DownloadResult::Response(response))
             }
         }
         Err(error) => {
+            let connection_reset = is_connection_reset(&error);
+            
             println!(
                 "Error with downloading {}: {}, {:?}, trying again with browser-like client",
                 feed_id, &new_url, error
@@ -339,7 +469,21 @@ async fn try_to_download(
                 let _ = warm_up_homepage(&browser_client, &retry_url).await;
             }
 
-            browser_client.get(&new_url).send().await
+            let retry_result = browser_client.get(&new_url).send().await;
+
+            match retry_result {
+                Ok(resp) => Ok(DownloadResult::Response(resp)),
+                Err(e) => {
+                    // If connection reset or if original was connection reset, try wget fallback
+                    let retry_connection_reset = is_connection_reset(&e);
+                    if (connection_reset || retry_connection_reset) && !requires_authentication(feed_id, url) {
+                        if let Some(wget_bytes) = try_wget_fallback(&new_url, feed_id).await {
+                            return Ok(DownloadResult::WgetBytes(wget_bytes));
+                        }
+                    }
+                    Err(e)
+                }
+            }
         }
     }
 }
@@ -628,12 +772,25 @@ pub async fn download_return_eligible_feeds(
             
                             match response {
                                 // The download request did return a response and the connection did not drop
-                                Ok(response) => {
-                                    answer.http_response_code = Some(response.status().as_str().to_string());
-
-                                    if response.status().is_success() {
-                                    // get raw bytes
-                                    let bytes_result = response.bytes().await;
+                                Ok(download_result) => {
+                                    // Handle both reqwest Response and wget fallback bytes
+                                    let bytes_result: Result<bytes::Bytes, ()> = match download_result {
+                                        DownloadResult::Response(response) => {
+                                            answer.http_response_code = Some(response.status().as_str().to_string());
+                                            if response.status().is_success() {
+                                                response.bytes().await.map_err(|_| ())
+                                            } else {
+                                                let mut download_progress = download_progress.lock().unwrap();
+                                                *download_progress += 1;
+                                                println!("Failed to download {}/{} [{:.2}%]: {} responding with {}, took {:.3}s\nURL: {}",download_progress, total_feeds_to_download, (*download_progress as f32/total_feeds_to_download as f32) * 100.0, &staticfeed.clone().feed_id, response.status().as_str(), duration_ms as f32 / 1000.0, &staticfeed.url);
+                                                return answer;
+                                            }
+                                        }
+                                        DownloadResult::WgetBytes(bytes) => {
+                                            answer.http_response_code = Some("wget".to_string());
+                                            Ok(bytes)
+                                        }
+                                    };
             
                                     if let Ok(bytes_result) = bytes_result {
                                         let data = bytes_result.as_ref();
@@ -729,12 +886,6 @@ pub async fn download_return_eligible_feeds(
                                         *download_progress += 1;
 
                                         println!("Finished writing {}/{} [{:.2}%]: {}, took {:.3}s",download_progress, total_feeds_to_download, (*download_progress as f32/total_feeds_to_download as f32) * 100.0,  &staticfeed.clone().feed_id, duration_ms as f32 / 1000.0);
-                                    }
-                                    } else {
-                                        let mut download_progress  = download_progress.lock().unwrap();
-                                        *download_progress += 1;
-
-                                        println!("Failed to download {}/{} [{:.2}%]: {} responding with {}, took {:.3}s\nURL: {}",download_progress, total_feeds_to_download, (*download_progress as f32/total_feeds_to_download as f32) * 100.0, &staticfeed.clone().feed_id, response.status().as_str(), duration_ms as f32 / 1000.0, &staticfeed.url);
                                     }
                                 }
                                 Err(error) => {
