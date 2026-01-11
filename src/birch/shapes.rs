@@ -167,7 +167,8 @@ pub async fn get_shapes(
                             polyline_results.push(json!({
                                 "chateau": shape.chateau,
                                 "shape_id": shape.shape_id,
-                                "polyline": poly
+                                "polyline": poly,
+                                "color": shape.color
                             }));
                         } else {
                             let geometry = geojson::Geometry::from(&geo_linestring);
@@ -178,6 +179,7 @@ pub async fn get_shapes(
                                 properties: Some(serde_json::Map::from_iter(vec![
                                     ("chateau".to_string(), json!(shape.chateau)),
                                     ("shape_id".to_string(), json!(shape.shape_id)),
+                                    ("color".to_string(), json!(shape.color)),
                                 ])),
                                 foreign_members: None,
                             };
