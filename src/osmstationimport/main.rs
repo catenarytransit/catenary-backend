@@ -633,24 +633,34 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .await?;
 
     // Delete old entries for THIS file now that new data is available
+    // First, find old import IDs for this file
     println!("\nDeleting old entries for file '{}'...", file_name);
-    let deleted_stations = diesel::delete(
-        stations_dsl::osm_stations
-            .filter(stations_dsl::import_id.ne(import_id))
-            .filter(stations_dsl::file_name.eq(&file_name)),
-    )
-    .execute(conn)
-    .await?;
-    println!("Deleted {} old stations", deleted_stations);
+    let old_import_ids: Vec<i32> = imports_dsl::osm_station_imports
+        .filter(imports_dsl::file_name.eq(&file_name))
+        .filter(imports_dsl::import_id.ne(import_id))
+        .select(imports_dsl::import_id)
+        .load(conn)
+        .await?;
 
-    let deleted_imports = diesel::delete(
-        imports_dsl::osm_station_imports
-            .filter(imports_dsl::import_id.ne(import_id))
-            .filter(imports_dsl::file_name.eq(&file_name)),
-    )
-    .execute(conn)
-    .await?;
-    println!("Deleted {} old import records", deleted_imports);
+    if !old_import_ids.is_empty() {
+        // Delete stations with those old import IDs
+        let deleted_stations = diesel::delete(
+            stations_dsl::osm_stations.filter(stations_dsl::import_id.eq_any(&old_import_ids)),
+        )
+        .execute(conn)
+        .await?;
+        println!("Deleted {} old stations", deleted_stations);
+
+        // Delete the old import records
+        let deleted_imports = diesel::delete(
+            imports_dsl::osm_station_imports.filter(imports_dsl::import_id.eq_any(&old_import_ids)),
+        )
+        .execute(conn)
+        .await?;
+        println!("Deleted {} old import records", deleted_imports);
+    } else {
+        println!("No old entries to delete");
+    }
 
     println!("\nImport complete! {} stations imported.", stations.len());
     println!(
