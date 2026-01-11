@@ -1,0 +1,209 @@
+// Copyright Kyler Chin <kyler@catenarymaps.org>
+// Catenary Transit Initiatives
+// Removal of the attribution is not allowed, as covered under the AGPL license
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::fs::{self, File};
+
+#[derive(Serialize, Deserialize)]
+struct RawAgency {
+    agency_id: String,
+    agency_name: String,
+    agency_url: String,
+    agency_timezone: String,
+    agency_lang: Option<String>,
+    agency_phone: Option<String>,
+    agency_fare_url: Option<String>,
+    agency_email: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RawRoute {
+    pub route_id: String,
+    pub route_short_name: Option<String>,
+    pub route_long_name: Option<String>,
+    pub route_desc: Option<String>,
+    pub route_route_type: u8,
+    pub route_url: Option<String>,
+    pub agency_id: Option<String>,
+    pub route_sort_order: Option<u32>,
+    pub route_color: Option<String>,
+    pub route_text_color: Option<String>,
+    pub continuous_pickup: Option<u8>,
+    pub continuous_drop_off: Option<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RawTrip {
+    pub trip_id: String,
+    pub service_id: String,
+    pub route_id: String,
+    pub shape_id: Option<String>,
+    pub trip_headsign: Option<String>,
+    pub trip_short_name: Option<String>,
+    pub direction_id: Option<u8>,
+    pub block_id: Option<String>,
+    pub wheelchair_accessible: Option<u8>,
+    pub bikes_allowed: Option<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RawStopTime {
+    pub trip_id: String,
+    pub arrival_time: Option<String>,
+    pub departure_time: Option<String>,
+    pub stop_id: String,
+    pub stop_sequence: u32,
+    pub stop_headsign: Option<String>,
+    pub pickup_type: Option<u8>,
+    pub drop_off_type: Option<u8>,
+}
+
+/// Remove trips and stop_times for banned agencies from raw GTFS files.
+/// This operates directly on the CSV files in the GTFS folder.
+pub fn remove_banned_agencies(
+    folder_path: &str,
+    banned_agencies: &[&str],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    println!("Removing banned agencies from {}", folder_path);
+
+    // Read agency.txt as csv
+    let agency_file_path = format!("{}/agency.txt", folder_path);
+    let agency_file = File::open(&agency_file_path)
+        .map_err(|e| format!("Unable to open file: {} - {}", agency_file_path, e))?;
+
+    let mut rdr = csv::Reader::from_reader(agency_file);
+
+    let mut agencies: Vec<RawAgency> = Vec::new();
+
+    for result in rdr.deserialize() {
+        if let Ok(record) = result {
+            let record: RawAgency = record;
+            agencies.push(record);
+        }
+    }
+
+    let mut route_ids_to_remove: BTreeSet<String> = BTreeSet::new();
+
+    // Read routes file
+    let routes_file_path = format!("{}/routes.txt", folder_path);
+    let routes_file = File::open(&routes_file_path)
+        .map_err(|e| format!("Unable to open file: {} - {}", routes_file_path, e))?;
+    let mut rdr = csv::Reader::from_reader(routes_file);
+
+    let mut routes = Vec::new();
+
+    for result in rdr.deserialize() {
+        if let Ok(record) = result {
+            let record: RawRoute = record;
+
+            // Check if agency is in banned agencies
+            if banned_agencies.contains(
+                &record
+                    .agency_id
+                    .as_ref()
+                    .unwrap_or(&"".to_string())
+                    .as_str(),
+            ) {
+                route_ids_to_remove.insert(record.route_id.clone());
+            } else {
+                routes.push(record);
+            }
+        }
+    }
+
+    println!("Found {} routes to remove", route_ids_to_remove.len());
+
+    if route_ids_to_remove.is_empty() {
+        println!("No routes to remove, skipping");
+        return Ok(());
+    }
+
+    println!("Fixing trips");
+
+    let mut trip_ids_to_remove = BTreeSet::new();
+
+    // Read trips file
+    let trips_file_path = format!("{}/trips.txt", folder_path);
+    let trips_file = File::open(&trips_file_path)
+        .map_err(|e| format!("Unable to open file: {} - {}", trips_file_path, e))?;
+
+    let mut rdr = csv::Reader::from_reader(trips_file);
+
+    let mut trips = Vec::new();
+
+    for result in rdr.deserialize() {
+        if let Ok(record) = result {
+            let record: RawTrip = record;
+
+            // Check if route is in banned routes
+            if route_ids_to_remove.contains(&record.route_id) {
+                trip_ids_to_remove.insert(record.trip_id.clone());
+            } else {
+                trips.push(record);
+            }
+        }
+    }
+
+    println!("Found {} trips to remove", trip_ids_to_remove.len());
+
+    // Write trips back to file
+    let trips_new_path = format!("{}/trips_cleaned.txt", folder_path);
+
+    let mut writer = csv::Writer::from_path(&trips_new_path)
+        .map_err(|e| format!("Unable to create file: {}", e))?;
+
+    for trip in trips {
+        writer
+            .serialize(trip)
+            .map_err(|e| format!("Unable to write to file: {}", e))?;
+    }
+
+    writer
+        .flush()
+        .map_err(|e| format!("Unable to flush file: {}", e))?;
+
+    fs::rename(&trips_new_path, &trips_file_path)?;
+
+    println!("Fixing stop_times");
+
+    // Read stop_times file and at the same time, write to new file
+    let stop_times_file_path = format!("{}/stop_times.txt", folder_path);
+
+    let stop_times_file = File::open(&stop_times_file_path)
+        .map_err(|e| format!("Unable to open file: {} - {}", stop_times_file_path, e))?;
+
+    let mut rdr = csv::Reader::from_reader(stop_times_file);
+
+    let stop_times_new_path = format!("{}/stop_times_cleaned.txt", folder_path);
+    let mut writer = csv::Writer::from_path(&stop_times_new_path)
+        .map_err(|e| format!("Unable to create file: {}", e))?;
+
+    for result in rdr.deserialize() {
+        if let Ok(record) = result {
+            let record: RawStopTime = record;
+
+            // Check if trip is in banned trips
+            if trip_ids_to_remove.contains(&record.trip_id) {
+                continue;
+            } else {
+                writer
+                    .serialize(record)
+                    .map_err(|e| format!("Unable to write to file: {}", e))?;
+            }
+        } else {
+            eprintln!("Error reading record");
+        }
+    }
+
+    writer
+        .flush()
+        .map_err(|e| format!("Unable to flush file: {}", e))?;
+
+    fs::rename(&stop_times_new_path, &stop_times_file_path)?;
+
+    println!("Finished removing banned agencies from {}", folder_path);
+
+    Ok(())
+}

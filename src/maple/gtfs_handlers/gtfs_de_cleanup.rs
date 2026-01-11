@@ -36,6 +36,8 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "MVV-Ruftaxi",
         "SNCF",
         "SBB",
+        "Hochbahn U-Bahn",
+        "RNV LU-MA (Strab)",
     ];
 
     let to_delete_agencies = Vec::from(to_delete_agencies)

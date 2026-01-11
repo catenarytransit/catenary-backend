@@ -137,6 +137,38 @@ pub async fn gtfs_process_feed(
 
     match feed_id {
         "f-gtfs~de" => {
+            // Remove banned agencies (duplicates from other feeds) before processing
+            let _ = crate::raw_file_agency_remover::remove_banned_agencies(
+                path.as_str(),
+                &[
+                    "SNCF",
+                    "SNCB",
+                    "FlixBus-de",
+                    "FlixTrain-de",
+                    "SBB",
+                    // f-münchner~verkehrsgesellschaft~mvg
+                    "U-Bahn München",
+                    "Stadtwerke München",
+                    "Straßenbahn München",
+                    "Österreichische Bundesbahnen",
+                    "ÖBB",
+                    "Kölner VB",
+                    // f-u281z9-mvv
+                    "Bus München",
+                    "MVV-Regionalbus",
+                    // f-münchner~verkehrsgesellschaft~mvg
+                    "Straßenbahn München",
+                    // covered in f-u0z-vgn
+                    "VGN",
+                    "Bus Nürnberg",
+                    "U-Bahn Nürnberg",
+                    "Berliner Verkehrsbetriebe",
+                    "Karlsruher Verkehrsverbund",
+                    "Hochbahn U-Bahn",
+                    "RNV LU-MA (Strab)",
+                ],
+            );
+
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
