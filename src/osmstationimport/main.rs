@@ -632,16 +632,21 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .execute(conn)
         .await?;
 
-    // Delete old entries now that new data is available
-    println!("\nDeleting old entries...");
-    let deleted_stations =
-        diesel::delete(stations_dsl::osm_stations.filter(stations_dsl::import_id.ne(import_id)))
-            .execute(conn)
-            .await?;
+    // Delete old entries for THIS file now that new data is available
+    println!("\nDeleting old entries for file '{}'...", file_name);
+    let deleted_stations = diesel::delete(
+        stations_dsl::osm_stations
+            .filter(stations_dsl::import_id.ne(import_id))
+            .filter(stations_dsl::file_name.eq(&file_name)),
+    )
+    .execute(conn)
+    .await?;
     println!("Deleted {} old stations", deleted_stations);
 
     let deleted_imports = diesel::delete(
-        imports_dsl::osm_station_imports.filter(imports_dsl::import_id.ne(import_id)),
+        imports_dsl::osm_station_imports
+            .filter(imports_dsl::import_id.ne(import_id))
+            .filter(imports_dsl::file_name.eq(&file_name)),
     )
     .execute(conn)
     .await?;
