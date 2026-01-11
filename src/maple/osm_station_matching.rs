@@ -11,7 +11,7 @@
 
 use catenary::models::OsmStation;
 use diesel::prelude::*;
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use geo::{HaversineDistance, point};
 use rayon::prelude::*;
 use rstar::{AABB, PointDistance, RTree, RTreeObject};
@@ -225,7 +225,17 @@ async fn fetch_osm_stations_in_bbox(
         min_lon, min_lat, max_lon, max_lat, modes_list
     );
 
-    diesel::sql_query(query).load::<OsmStation>(conn).await
+    // Force usage of the spatial index by disabling seqscan for this query
+    // This addresses the concern that Postgres might choose a sequential scan
+    conn.transaction(|conn| {
+        Box::pin(async move {
+            diesel::sql_query("SET LOCAL enable_seqscan = OFF")
+                .execute(conn)
+                .await?;
+            diesel::sql_query(query).load::<OsmStation>(conn).await
+        })
+    })
+    .await
 }
 
 /// Batch update stops with OSM station and platform IDs using unnest
@@ -588,46 +598,87 @@ pub async fn propagate_parent_matches(
     feed_id: &str,
     attempt_id: &str,
 ) -> Result<usize, diesel::result::Error> {
-    let query = format!(
-        r#"
-        WITH unmatched_parents AS (
-            SELECT gtfs_id
-            FROM gtfs.stops
-            WHERE onestop_feed_id = '{0}' AND attempt_id = '{1}'
-              AND location_type = 1
-              AND osm_station_id IS NULL
-        ),
-        child_matches AS (
-            SELECT 
-                s.parent_station,
-                s.osm_station_id,
-                COUNT(*) as match_count
-            FROM gtfs.stops s
-            WHERE s.onestop_feed_id = '{0}' AND s.attempt_id = '{1}'
-              AND s.parent_station IS NOT NULL
-              AND s.osm_station_id IS NOT NULL
-              AND s.parent_station IN (SELECT gtfs_id FROM unmatched_parents)
-            GROUP BY s.parent_station, s.osm_station_id
-        ),
-        best_matches AS (
-            SELECT DISTINCT ON (parent_station)
-                parent_station,
-                osm_station_id
-            FROM child_matches
-            ORDER BY parent_station, match_count DESC
-        )
-        UPDATE gtfs.stops s
-        SET osm_station_id = bm.osm_station_id
-        FROM best_matches bm
-        WHERE s.gtfs_id = bm.parent_station
-          AND s.onestop_feed_id = '{0}' 
-          AND s.attempt_id = '{1}'
-        "#,
-        feed_id.replace('\'', "''"),
-        attempt_id.replace('\'', "''")
+    use catenary::schema::gtfs::stops::dsl as stops_dsl;
+
+    // 1. Fetch child matches: (parent_station, osm_station_id)
+    // We only care about children that have both a parent and a match
+    let child_matches: Vec<(String, i64)> = stops_dsl::stops
+        .filter(stops_dsl::onestop_feed_id.eq(feed_id))
+        .filter(stops_dsl::attempt_id.eq(attempt_id))
+        .filter(stops_dsl::parent_station.is_not_null())
+        .filter(stops_dsl::osm_station_id.is_not_null())
+        .select((stops_dsl::parent_station, stops_dsl::osm_station_id))
+        .load::<(Option<String>, Option<i64>)>(conn)
+        .await?
+        .into_iter()
+        .filter_map(|(p, o)| Some((p?, o?)))
+        .collect();
+
+    if child_matches.is_empty() {
+        return Ok(0);
+    }
+
+    // 2. Aggregate votes in memory: parent_id -> osm_id -> count
+    let mut votes: HashMap<String, HashMap<i64, usize>> = HashMap::new();
+    for (parent_id, osm_id) in child_matches {
+        *votes
+            .entry(parent_id)
+            .or_default()
+            .entry(osm_id)
+            .or_default() += 1;
+    }
+
+    let parent_ids: Vec<&String> = votes.keys().collect();
+
+    // 3. Fetch only unmatched parents that are candidates (have children with matches)
+    // We chunk this to avoid hitting query parameter limits if many parents
+    let mut unmatched_parents: Vec<String> = Vec::new();
+    const FETCH_BATCH_SIZE: usize = 5000;
+
+    for chunk in parent_ids.chunks(FETCH_BATCH_SIZE) {
+        let batch: Vec<String> = stops_dsl::stops
+            .filter(stops_dsl::onestop_feed_id.eq(feed_id))
+            .filter(stops_dsl::attempt_id.eq(attempt_id))
+            .filter(stops_dsl::location_type.eq(1)) // station
+            .filter(stops_dsl::osm_station_id.is_null()) // only update if currently null
+            .filter(stops_dsl::gtfs_id.eq_any(chunk.iter().copied()))
+            .select(stops_dsl::gtfs_id)
+            .load::<String>(conn)
+            .await?;
+        unmatched_parents.extend(batch);
+    }
+
+    if unmatched_parents.is_empty() {
+        return Ok(0);
+    }
+
+    // 4. Determine best match for each unmatched parent
+    let mut updates: Vec<(String, i64, Option<i64>)> = Vec::new();
+
+    for parent_id in unmatched_parents {
+        if let Some(counts) = votes.get(&parent_id) {
+            // Find osm_id with max count (majority vote)
+            if let Some((&best_osm_id, _)) = counts.iter().max_by_key(|&(_, count)| count) {
+                // For parent stations, we generally don't assign a platform_id
+                updates.push((parent_id, best_osm_id, None));
+            }
+        }
+    }
+
+    println!(
+        "  OSM matching: propagating matches to {} parents via children",
+        updates.len()
     );
 
-    diesel::sql_query(query).execute(conn).await
+    // 5. Batch update
+    let mut total_updated = 0;
+    const UPDATE_BATCH_SIZE: usize = 1000;
+
+    for chunk in updates.chunks(UPDATE_BATCH_SIZE) {
+        total_updated += batch_update_stops(conn, feed_id, attempt_id, chunk).await?;
+    }
+
+    Ok(total_updated)
 }
 
 /// Batch match stops for a feed, updating stops.osm_station_id directly
